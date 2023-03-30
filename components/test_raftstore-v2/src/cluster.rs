@@ -10,11 +10,11 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Iterable, KvEngine, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch,
-    ReadOptions, SyncMutable, TabletRegistry, CF_DEFAULT,
+    KvEngine, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, ReadOptions, SyncMutable,
+    TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
 use futures::{compat::Future01CompatExt, executor::block_on, select, Future, FutureExt};
@@ -64,8 +64,6 @@ use tikv_util::{
     worker::LazyWorker,
     HandyRwLock,
 };
-
-use crate::create_test_engine;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -311,20 +309,6 @@ pub trait Simulator<EK: KvEngine> {
     }
 }
 
-pub type EngineCreator<EK: KvEngine> =
-Fn(
-    Option<(u64, u64)>,
-    Option<Arc<IoRateLimiter>>,
-    &Config,
-) -> (
-    TabletRegistry<EK>,
-    RaftTestEngine,
-    Option<Arc<DataKeyManager>>,
-    TempDir,
-    LazyWorker<String>,
-    Arc<RocksStatistics>,
-    Option<Arc<RocksStatistics>>,
-);
 pub struct Cluster<T: Simulator<EK>, EK: KvEngine> {
     pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
@@ -346,7 +330,21 @@ pub struct Cluster<T: Simulator<EK>, EK: KvEngine> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
-    pub engine_creator: EngineCreator<EK>,
+    pub engine_creator: Box<
+        dyn Fn(
+            Option<(u64, u64)>,
+            Option<Arc<IoRateLimiter>>,
+            &Config,
+        ) -> (
+            TabletRegistry<EK>,
+            RaftTestEngine,
+            Option<Arc<DataKeyManager>>,
+            TempDir,
+            LazyWorker<String>,
+            Arc<RocksStatistics>,
+            Option<Arc<RocksStatistics>>,
+        ),
+    >,
 }
 
 impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
@@ -356,7 +354,21 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
-        engine_creator: EngineCreator<EK>,
+        engine_creator: Box<
+            dyn Fn(
+                Option<(u64, u64)>,
+                Option<Arc<IoRateLimiter>>,
+                &Config,
+            ) -> (
+                TabletRegistry<EK>,
+                RaftTestEngine,
+                Option<Arc<DataKeyManager>>,
+                TempDir,
+                LazyWorker<String>,
+                Arc<RocksStatistics>,
+                Option<Arc<RocksStatistics>>,
+            ),
+        >,
     ) -> Cluster<T, EK> {
         Cluster {
             cfg: Config {
@@ -425,15 +437,14 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
                 .build(true /* enable_statistics */),
         ));
         for id in 1..self.count + 1 {
-            self.create_engine(Some((self.id(), id as u64)), create_test_engine);
+            self.create_engine(Some((self.id(), id as u64)));
         }
     }
 
     // id indicates cluster id store_id
-    fn create_engine(&mut self, id: Option<(u64, u64)>)
-    {
+    fn create_engine(&mut self, id: Option<(u64, u64)>) {
         let (reg, raft_engine, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            self.engine_creator(id, self.io_rate_limiter.clone(), &self.cfg);
+            (self.engine_creator)(id, self.io_rate_limiter.clone(), &self.cfg);
         self.engines.push((reg, raft_engine));
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -456,7 +467,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         // Try start new nodes.
         for id in self.raft_engines.len()..self.count {
             let id = id as u64 + 1;
-            self.create_engine(Some((self.id(), id)), create_test_engine);
+            self.create_engine(Some((self.id(), id)));
             let (tablet_registry, raft_engine) = self.engines.last().unwrap().clone();
 
             let key_mgr = self.key_managers.last().unwrap().clone();
@@ -552,11 +563,9 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
                 if let Some(tablet) = tablet.latest() {
                     let mut tried = 0;
                     while tried < 10 {
-                        // TODO
-                        // if Arc::strong_count(&Arc::clone(tablet.bad_downcast::<rocksdb::DB>()))
-                        // <= 3 {
-                        //     break;
-                        // }
+                        if tablet.inner_refcount() <= 3 {
+                            break;
+                        }
                         thread::sleep(Duration::from_millis(10));
                         tried += 1;
                     }

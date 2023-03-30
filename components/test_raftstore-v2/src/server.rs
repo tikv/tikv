@@ -43,7 +43,6 @@ use raftstore_v2::{router::RaftRouter, StateStorage, StoreMeta, StoreRouter};
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
-use slog::KV;
 use slog_global::debug;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -837,7 +836,14 @@ impl Cluster<ServerCluster, RocksEngine> {
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster, RocksEngine> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+    Cluster::new(
+        id,
+        count,
+        sim,
+        pd_client,
+        ApiVersion::V1,
+        Box::new(crate::create_test_engine),
+    )
 }
 
 pub fn new_incompatible_server_cluster(
@@ -846,7 +852,14 @@ pub fn new_incompatible_server_cluster(
 ) -> Cluster<ServerCluster, RocksEngine> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+    Cluster::new(
+        id,
+        count,
+        sim,
+        pd_client,
+        ApiVersion::V1,
+        Box::new(crate::create_test_engine),
+    )
 }
 
 pub fn new_server_cluster_with_api_ver(
@@ -856,7 +869,14 @@ pub fn new_server_cluster_with_api_ver(
 ) -> Cluster<ServerCluster, RocksEngine> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, api_ver)
+    Cluster::new(
+        id,
+        count,
+        sim,
+        pd_client,
+        api_ver,
+        Box::new(crate::create_test_engine),
+    )
 }
 
 pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster, RocksEngine>, TikvClient, Context)
