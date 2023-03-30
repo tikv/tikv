@@ -60,6 +60,7 @@ use raftstore::{
 };
 use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
+use rocksdb::IndexType;
 use security::SecurityConfig;
 use serde::{
     de::{Error as DError, Unexpected},
@@ -537,12 +538,17 @@ macro_rules! build_cf_opt {
         $cf_name:ident,
         $cache:expr,
         $compaction_limiter:expr,
-        $region_info_provider:ident
+        $region_info_provider:ident,
+        $engine_type:ident,
     ) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
         block_base_opts.set_block_cache($cache);
+        if $engine_type == EngineType::RaftKv2 {
+            block_base_opts.set_partition_filters(true);
+            block_base_opts.set_index_type(IndexType::TwoLevelIndexSearch);
+        }
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
@@ -713,7 +719,8 @@ impl DefaultCfConfig {
             CF_DEFAULT,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_DEFAULT),
-            region_info_accessor
+            region_info_accessor,
+            for_engine,
         );
         cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
         let f = RangePropertiesCollectorFactory {
@@ -876,7 +883,8 @@ impl WriteCfConfig {
             CF_WRITE,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_WRITE),
-            region_info_accessor
+            region_info_accessor,
+            for_engine,
         );
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts
@@ -994,7 +1002,8 @@ impl LockCfConfig {
             CF_LOCK,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_LOCK),
-            no_region_info_accessor
+            no_region_info_accessor,
+            for_engine,
         );
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
@@ -1077,12 +1086,14 @@ impl Default for RaftCfConfig {
 impl RaftCfConfig {
     pub fn build_opt(&self, shared: &CfResources) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
+        let for_engine: EngineType = EngineType::RaftKv;
         let mut cf_opts = build_cf_opt!(
             self,
             CF_RAFT,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_RAFT),
-            no_region_info_accessor
+            no_region_info_accessor,
+            for_engine,
         );
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
@@ -1601,12 +1612,14 @@ impl RaftDefaultCfConfig {
             None
         };
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
+        let for_engine: EngineType = EngineType::RaftKv;
         let mut cf_opts = build_cf_opt!(
             self,
             CF_DEFAULT,
             cache,
             limiter.as_ref(),
-            no_region_info_accessor
+            no_region_info_accessor,
+            for_engine,
         );
         let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
         cf_opts
@@ -5337,7 +5350,14 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            EngineType::RaftKv
+        );
         assert_eq!(
             config.target_file_size_base(),
             cf_opts.get_target_file_size_base()
@@ -5350,7 +5370,14 @@ mod tests {
             ..Default::default()
         };
         let provider: Option<MockRegionInfoProvider> = None;
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            EngineType::RaftKv
+        );
         assert_eq!(
             config.target_file_size_base(),
             cf_opts.get_target_file_size_base()
@@ -5365,7 +5392,14 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
-        let cf_opts = build_cf_opt!(config, CF_DEFAULT, &cache, no_limiter.as_ref(), provider);
+        let cf_opts = build_cf_opt!(
+            config,
+            CF_DEFAULT,
+            &cache,
+            no_limiter.as_ref(),
+            provider,
+            EngineType::RaftKv
+        );
         assert_eq!(
             config.compaction_guard_max_output_file_size.0,
             cf_opts.get_target_file_size_base()
