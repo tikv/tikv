@@ -13,7 +13,6 @@ use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
 };
-use online_config::ConfigChange;
 use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
@@ -620,7 +619,6 @@ where
             let task_clone = task.clone();
             let run = async move {
                 let task_name = task.info.get_name();
-                cli.init_task(&task.info).await?;
                 let ranges = cli.ranges_of_task(task_name).await?;
                 info!(
                     "register backup stream ranges";
@@ -878,6 +876,15 @@ where
         }
     }
 
+    fn on_update_change_config(&mut self, cfg: BackupStreamConfig) {
+        info!(
+            "update log backup config";
+             "config" => ?cfg,
+        );
+        self.range_router.udpate_config(&cfg);
+        self.config = cfg;
+    }
+
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
@@ -899,8 +906,8 @@ where
             Task::ModifyObserve(op) => self.on_modify_observe(op),
             Task::ForceFlush(task) => self.on_force_flush(task),
             Task::FatalError(task, err) => self.on_fatal_error(task, err),
-            Task::ChangeConfig(_) => {
-                warn!("change config online isn't supported for now.")
+            Task::ChangeConfig(cfg) => {
+                self.on_update_change_config(cfg);
             }
             Task::Sync(cb, mut cond) => {
                 if cond(&self.range_router) {
@@ -1082,7 +1089,7 @@ impl fmt::Debug for RegionCheckpointOperation {
 pub enum Task {
     WatchTask(TaskOp),
     BatchEvent(Vec<CmdBatch>),
-    ChangeConfig(ConfigChange),
+    ChangeConfig(BackupStreamConfig),
     /// Change the observe status of some region.
     ModifyObserve(ObserveOp),
     /// Convert status of some task into `flushing` and do flush then.

@@ -2675,7 +2675,7 @@ impl Default for BackupConfig {
 pub struct BackupStreamConfig {
     #[online_config(skip)]
     pub min_ts_interval: ReadableDuration,
-    #[online_config(skip)]
+
     pub max_flush_interval: ReadableDuration,
     #[online_config(skip)]
     pub num_threads: usize,
@@ -2683,7 +2683,7 @@ pub struct BackupStreamConfig {
     pub enable: bool,
     #[online_config(skip)]
     pub temp_path: String,
-    #[online_config(skip)]
+
     pub file_size_limit: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_pending_memory_quota: ReadableSize,
@@ -3149,8 +3149,7 @@ pub struct TikvConfig {
     #[online_config(submodule)]
     // The term "log backup" and "backup stream" are identity.
     // The "log backup" should be the only product name exposed to the user.
-    #[serde(rename = "log-backup")]
-    pub backup_stream: BackupStreamConfig,
+    pub log_backup: BackupStreamConfig,
 
     #[online_config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
@@ -3215,7 +3214,7 @@ impl Default for TikvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
-            backup_stream: BackupStreamConfig::default(),
+            log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
         }
@@ -3346,8 +3345,8 @@ impl TikvConfig {
             );
         }
 
-        if self.backup_stream.temp_path.is_empty() {
-            self.backup_stream.temp_path =
+        if self.log_backup.temp_path.is_empty() {
+            self.log_backup.temp_path =
                 config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-temp")?;
         }
 
@@ -3373,7 +3372,7 @@ impl TikvConfig {
             .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.import.validate()?;
         self.backup.validate()?;
-        self.backup_stream.validate()?;
+        self.log_backup.validate()?;
         self.cdc.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
@@ -4162,7 +4161,7 @@ impl From<&str> for Module {
             "security" => Module::Security,
             "import" => Module::Import,
             "backup" => Module::Backup,
-            "backup_stream" => Module::BackupStream,
+            "log_backup" => Module::BackupStream,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             "cdc" => Module::Cdc,
@@ -5679,7 +5678,7 @@ mod tests {
         cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
-        cfg.backup_stream.num_threads = default_cfg.backup_stream.num_threads;
+        cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later
@@ -5869,7 +5868,7 @@ mod tests {
             ("security", Module::Security),
             ("import", Module::Import),
             ("backup", Module::Backup),
-            ("backup_stream", Module::BackupStream),
+            ("log_backup", Module::BackupStream),
             ("pessimistic_txn", Module::PessimisticTxn),
             ("gc", Module::Gc),
             ("cdc", Module::Cdc),

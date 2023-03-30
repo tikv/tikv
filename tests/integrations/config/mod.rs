@@ -774,7 +774,7 @@ fn test_serde_custom_tikv_config() {
         },
         ..Default::default()
     };
-    value.backup_stream = BackupStreamConfig {
+    value.log_backup = BackupStreamConfig {
         max_flush_interval: ReadableDuration::secs(11),
         num_threads: 7,
         enable: true,
