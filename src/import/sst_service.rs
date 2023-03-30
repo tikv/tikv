@@ -61,7 +61,7 @@ use crate::{
 /// this value?
 const REQUEST_WRITE_CONCURRENCY: usize = 16;
 /// The extra bytes required by the wire encoding.
-/// Generally, a field (and a embedded message) would introduce 2 extra
+/// Generally, a field (and a embedded message) would introduce some extra
 /// bytes. In detail, they are:
 /// - 2 bytes for the request type (Tag+Value).
 /// - 2 bytes for every string or bytes field (Tag+Length), they are:
@@ -188,11 +188,10 @@ impl RequestCollector {
     fn should_send_batch_before_adding(&self, m: &Modify) -> bool {
         let message_size = m.size() + WIRE_EXTRA_BYTES;
         // If there isn't any records in the collector, and there is a huge modify, we
-        // should give it a change to enter the collector. Or we may fall into an
-        // eternal loop.
-        let batched = self.unpacked_size != 0;
-        let exceeds_max_size = message_size + self.unpacked_size > self.max_raft_req_size;
-        batched && exceeds_max_size
+        // should give it a change to enter the collector. Or we may generate empty
+        // batch.
+        self.unpacked_size != 0 /* batched */
+        && message_size + self.unpacked_size > self.max_raft_req_size /* exceed the max_raft_req_size */
     }
 
     // we need to remove duplicate keys in here, since
