@@ -1218,7 +1218,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         self.get_engine(store_id)
-            .get_apply_state(region_id)
+            .raft_apply_state(region_id)
             .unwrap()
             .unwrap()
     }
@@ -1568,13 +1568,15 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
         self.get_engine(store_id)
-            .get_region_state(region_id)
+            .region_local_state(region_id)
             .unwrap()
             .unwrap()
     }
 
     pub fn get_raft_local_state(&self, region_id: u64, store_id: u64) -> Option<RaftLocalState> {
-        self.get_engine(store_id).get_raft_local_state(region_id)
+        self.get_engine(store_id)
+            .raft_local_state(region_id)
+            .unwrap()
     }
 
     pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
@@ -1667,21 +1669,6 @@ impl WrapFactory {
         let region_id = self.region_id_of_key(key);
         self.tablet_registry.get(region_id)?.latest().cloned()
     }
-
-    pub fn get_region_state(
-        &self,
-        region_id: u64,
-    ) -> engine_traits::Result<Option<RegionLocalState>> {
-        self.raft_engine.get_region_state(region_id, u64::MAX)
-    }
-
-    pub fn get_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
-        self.raft_engine.get_apply_state(region_id, u64::MAX)
-    }
-
-    pub fn get_raft_local_state(&self, region_id: u64) -> Option<RaftLocalState> {
-        self.raft_engine.get_raft_state(region_id).unwrap()
-    }
 }
 
 impl Peekable for WrapFactory {
@@ -1694,10 +1681,10 @@ impl Peekable for WrapFactory {
     ) -> engine_traits::Result<Option<Self::DbVector>> {
         let region_id = self.region_id_of_key(key);
 
-        if let Ok(Some(state)) = self.get_region_state(region_id)
-            && state.state == PeerState::Tombstone
-        {
-            return Ok(None);
+        if let Ok(Some(state)) = self.region_local_state(region_id) {
+            if state.state == PeerState::Tombstone {
+                return Ok(None);
+            }
         }
 
         match self.get_tablet(key) {
@@ -1714,10 +1701,10 @@ impl Peekable for WrapFactory {
     ) -> engine_traits::Result<Option<Self::DbVector>> {
         let region_id = self.region_id_of_key(key);
 
-        if let Ok(Some(state)) = self.get_region_state(region_id)
-            && state.state == PeerState::Tombstone
-        {
-            return Ok(None);
+        if let Ok(Some(state)) = self.region_local_state(region_id) {
+            if state.state == PeerState::Tombstone {
+                return Ok(None);
+            }
         }
 
         match self.get_tablet(key) {
@@ -1783,6 +1770,14 @@ impl RawEngine for WrapFactory {
         &self,
         region_id: u64,
     ) -> engine_traits::Result<Option<RegionLocalState>> {
-        self.get_region_state(region_id)
+        self.raft_engine.get_region_state(region_id, u64::MAX)
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.raft_engine.get_apply_state(region_id, u64::MAX)
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.raft_engine.get_raft_state(region_id)
     }
 }
