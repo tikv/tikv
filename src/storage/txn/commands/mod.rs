@@ -70,7 +70,7 @@ use crate::storage::{
     },
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
-    txn::{commands::prewrite::PessimisticMutation, latch, ProcessResult, Result},
+    txn::{latch, ProcessResult, Result},
     types::{
         MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
