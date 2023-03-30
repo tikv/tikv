@@ -345,7 +345,7 @@ where
 pub const MIN_READ_SPEED: usize = 8192;
 
 pub async fn read_external_storage_info_buff(
-    reader: &mut (dyn AsyncRead + Unpin),
+    reader: &mut (dyn AsyncRead + Unpin + Send),
     speed_limiter: &Limiter,
     expected_length: u64,
     expected_sha256: Option<Vec<u8>>,
