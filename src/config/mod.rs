@@ -5350,13 +5350,14 @@ mod tests {
             ..Default::default()
         };
         let provider = Some(MockRegionInfoProvider::new(vec![]));
+        let for_engine: EngineType = EngineType::RaftKv;
         let cf_opts = build_cf_opt!(
             config,
             CF_DEFAULT,
             &cache,
             no_limiter.as_ref(),
             provider,
-            EngineType::RaftKv
+            for_engine, 
         );
         assert_eq!(
             config.target_file_size_base(),
@@ -5376,7 +5377,7 @@ mod tests {
             &cache,
             no_limiter.as_ref(),
             provider,
-            EngineType::RaftKv
+            for_engine, 
         );
         assert_eq!(
             config.target_file_size_base(),
@@ -5398,7 +5399,7 @@ mod tests {
             &cache,
             no_limiter.as_ref(),
             provider,
-            EngineType::RaftKv
+            for_engine,  
         );
         assert_eq!(
             config.compaction_guard_max_output_file_size.0,
