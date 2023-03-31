@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicU64},
         mpsc, Arc,
     },
     time::Duration,
@@ -27,18 +27,17 @@ use std::{
 use api_version::{dispatch_api_version, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
-use encryption_export::DataKeyManager;
+
 use engine_rocks::{
     flush_engine_statistics, from_rocks_compression_type,
-    raw::{Cache, Env},
     RocksEngine, RocksStatistics,
 };
 use engine_traits::{
-    CachedTablet, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CachedTablet, Engines, KvEngine,
+    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{
-    get_io_rate_limiter, BytesFetcher, IoBudgetAdjustor, MetricsManager as IoMetricsManager,
+    get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager,
 };
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -96,8 +95,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
-    math::MovingAvgU32,
+    config::{ensure_dir_exist, VersionTrack},
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
@@ -115,7 +113,6 @@ use tokio::runtime::Builder;
 use crate::{
     common::{check_system_config, TikvServerCore, ConfiguredRaftEngine, EnginesResourceInfo},
     memory::*,
-    raft_engine_switch::*,
     server::Stop,
     setup::*,
     signal_handler,

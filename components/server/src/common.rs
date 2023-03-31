@@ -5,18 +5,15 @@ use std::{
     net::SocketAddr,
     collections::HashMap,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicU32, Ordering},
         mpsc, Arc,
     },
-    time::Duration,
     u64,
 };
 use file_system::get_io_rate_limiter;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
-    flush_engine_statistics, from_rocks_compression_type,
     raw::{Cache, Env},
     RocksEngine, RocksStatistics, FlowInfo
 };
@@ -24,37 +21,24 @@ use error_code::ErrorCodeExt;
 use file_system::{set_io_rate_limiter, BytesFetcher, File};
 use tikv::config::TikvConfig;
 use tikv::{
-    config::{ConfigController, DbConfigManger, DbType, LogConfigManager}};
+    config::{ConfigController, DbConfigManger, DbType}};
 use tikv_util::{
-    check_environment_variables,
-    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
+    config::{RaftDataStateMachine},
     math::MovingAvgU32,
-    metrics::INSTANCE_BACKEND_CPU_QUOTA,
-    quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
-        cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
-        SysQuota,
+        disk, path_in_diff_mount_point,
     },
-    thread_group::GroupProperties,
-    time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
-    yatp_pool::CleanupMethod,
-    Either,
+    time::{Instant},
 };
 use raft_log_engine::RaftLogEngine;
 use engine_traits::{
-    CachedTablet, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, SingletonFactory, StatisticsReporter, TabletContext, TabletRegistry, CF_DEFAULT,
+    CachedTablet, CfOptionsExt, FlowControlFactorsExt, MiscExt,
+    RaftEngine, TabletRegistry, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
 };
 use file_system::IoBudgetAdjustor;
 use crate::{
-    memory::*,
     raft_engine_switch::*,
-    server::Stop,
-    setup::*,
-    signal_handler,
-    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 /// This is the common layer of TiKV-like servers. By holding it in its own
