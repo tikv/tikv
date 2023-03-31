@@ -1,9 +1,10 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp,env,
-    net::SocketAddr,
+    cmp,
     collections::HashMap,
+    env, fmt,
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU32, Ordering},
@@ -11,35 +12,35 @@ use std::{
     },
     u64,
 };
-use file_system::get_io_rate_limiter;
+
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     raw::{Cache, Env},
-    RocksEngine, RocksStatistics, FlowInfo
+    FlowInfo, RocksEngine, RocksStatistics,
 };
-use error_code::ErrorCodeExt;
-use file_system::{set_io_rate_limiter, BytesFetcher, File};
-use tikv::config::TikvConfig;
-use tikv::{
-    config::{ConfigController, DbConfigManger, DbType}};
-use tikv_util::{
-    config::{RaftDataStateMachine},
-    math::MovingAvgU32,
-    sys::{
-        disk, path_in_diff_mount_point,
-    },
-    time::{Instant},
-};
-use raft_log_engine::RaftLogEngine;
 use engine_traits::{
-    CachedTablet, CfOptionsExt, FlowControlFactorsExt, MiscExt,
-    RaftEngine, TabletRegistry, CF_DEFAULT,
+    CachedTablet, CfOptionsExt, FlowControlFactorsExt, RaftEngine, TabletRegistry, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
 };
-use file_system::IoBudgetAdjustor;
-use crate::{
-    raft_engine_switch::*,
+use error_code::ErrorCodeExt;
+use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
+use grpcio::Environment;
+use pd_client::{PdClient, RpcClient};
+use raft_log_engine::RaftLogEngine;
+use security::SecurityManager;
+use tikv::{
+    config::{ConfigController, DbConfigManger, DbType, TikvConfig},
+    server::{status_server::StatusServer, DEFAULT_CLUSTER_ID},
 };
+use tikv_util::{
+    config::RaftDataStateMachine,
+    math::MovingAvgU32,
+    sys::{disk, path_in_diff_mount_point},
+    time::Instant,
+    worker::{LazyWorker, Worker},
+};
+
+use crate::raft_engine_switch::*;
 
 /// This is the common layer of TiKV-like servers. By holding it in its own
 /// TikvServer implementation, one can easily access the common ability of a
@@ -51,6 +52,7 @@ pub struct TikvServerCore {
     pub encryption_key_manager: Option<Arc<DataKeyManager>>,
     pub flow_info_sender: Option<mpsc::Sender<FlowInfo>>,
     pub flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
+    pub to_stop: Vec<Box<dyn Stop>>,
 }
 
 impl TikvServerCore {
@@ -233,6 +235,31 @@ impl TikvServerCore {
         self.flow_info_sender = Some(tx.clone());
         self.flow_info_receiver = Some(rx);
         engine_rocks::FlowListener::new(tx)
+    }
+
+    pub fn connect_to_pd_cluster(
+        config: &mut TikvConfig,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Arc<RpcClient> {
+        let pd_client = Arc::new(
+            RpcClient::new(&config.pd, Some(env), security_mgr)
+                .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
+        );
+
+        let cluster_id = pd_client
+            .get_cluster_id()
+            .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
+        if cluster_id == DEFAULT_CLUSTER_ID {
+            fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
+        }
+        config.server.cluster_id = cluster_id;
+        info!(
+            "connect to PD cluster";
+            "cluster_id" => cluster_id
+        );
+
+        pd_client
     }
 }
 
@@ -507,5 +534,32 @@ impl IoBudgetAdjustor for EnginesResourceInfo {
         // The target global write flow slides between Bandwidth / 2 and Bandwidth.
         let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
+    }
+}
+
+/// A small trait for components which can be trivially stopped. Lets us keep
+/// a list of these in `TiKV`, rather than storing each component individually.
+pub trait Stop {
+    fn stop(self: Box<Self>);
+}
+
+impl<R> Stop for StatusServer<R>
+where
+    R: 'static + Send,
+{
+    fn stop(self: Box<Self>) {
+        (*self).stop()
+    }
+}
+
+impl Stop for Worker {
+    fn stop(self: Box<Self>) {
+        Worker::stop(&self);
+    }
+}
+
+impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
+    fn stop(self: Box<Self>) {
+        self.stop_worker();
     }
 }

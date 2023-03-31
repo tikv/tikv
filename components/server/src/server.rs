@@ -15,13 +15,9 @@ use std::{
     cmp,
     collections::HashMap,
     convert::TryFrom,
-    fmt,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{
-        atomic::{AtomicU64},
-        mpsc, Arc, Mutex,
-    },
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
     u64,
 };
@@ -33,19 +29,15 @@ use backup_stream::{
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
-
 use engine_rocks::{
-    flush_engine_statistics, from_rocks_compression_type,
-    RocksEngine, RocksStatistics,
+    flush_engine_statistics, from_rocks_compression_type, RocksEngine, RocksStatistics,
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    CachedTablet, CfOptions, Engines, KvEngine, MiscExt,
-    RaftEngine, SingletonFactory, StatisticsReporter, TabletContext, TabletRegistry, CF_DEFAULT, CF_WRITE,
+    CachedTablet, Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, StatisticsReporter,
+    TabletContext, TabletRegistry, CF_DEFAULT, CF_WRITE,
 };
-use file_system::{
-    get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager,
-};
+use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
@@ -101,8 +93,7 @@ use tikv::{
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
-        GRPC_THREAD_PREFIX,
+        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
@@ -131,7 +122,7 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    common::{check_system_config, TikvServerCore, ConfiguredRaftEngine, EnginesResourceInfo},
+    common::{check_system_config, ConfiguredRaftEngine, EnginesResourceInfo, TikvServerCore},
     memory::*,
     setup::*,
     signal_handler,
@@ -236,7 +227,6 @@ struct TikvServer<ER: RaftEngine> {
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
-    to_stop: Vec<Box<dyn Stop>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
@@ -288,8 +278,11 @@ where
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-        let pd_client =
-            Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
+        let pd_client = TikvServerCore::connect_to_pd_cluster(
+            &mut config,
+            env.clone(),
+            Arc::clone(&security_mgr),
+        );
         // check if TiKV need to run in snapshot recovery mode
         let is_recovering_marked = match pd_client.is_recovering_marked() {
             Err(e) => {
@@ -398,6 +391,7 @@ where
                 encryption_key_manager: None,
                 flow_info_sender: None,
                 flow_info_receiver: None,
+                to_stop: vec![],
             },
             cfg_controller: Some(cfg_controller),
             security_mgr,
@@ -412,7 +406,6 @@ where
             servers: None,
             region_info_accessor,
             coprocessor_host,
-            to_stop: vec![],
             concurrency_manager,
             env,
             background_worker,
@@ -470,31 +463,6 @@ where
         config.write_into_metrics();
 
         ConfigController::new(config)
-    }
-
-    fn connect_to_pd_cluster(
-        config: &mut TikvConfig,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Arc<RpcClient> {
-        let pd_client = Arc::new(
-            RpcClient::new(&config.pd, Some(env), security_mgr)
-                .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
-        );
-
-        let cluster_id = pd_client
-            .get_cluster_id()
-            .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
-        if cluster_id == DEFAULT_CLUSTER_ID {
-            fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
-        }
-        config.server.cluster_id = cluster_id;
-        info!(
-            "connect to PD cluster";
-            "cluster_id" => cluster_id
-        );
-
-        pd_client
     }
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
@@ -643,19 +611,19 @@ where
             resource_metering::init_recorder(
                 self.core.config.resource_metering.precision.as_millis(),
             );
-        self.to_stop.push(recorder_worker);
+        self.core.to_stop.push(recorder_worker);
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(
                 self.core.config.resource_metering.clone(),
                 collector_reg_handle.clone(),
             );
-        self.to_stop.push(reporter_worker);
+        self.core.to_stop.push(reporter_worker);
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             self.core.config.resource_metering.receiver_address.clone(),
             self.env.clone(),
             data_sink_reg_handle.clone(),
         );
-        self.to_stop.push(single_target_worker);
+        self.core.to_stop.push(single_target_worker);
         let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
         let cfg_manager = resource_metering::ConfigManager::new(
@@ -907,7 +875,7 @@ where
                 Arc::clone(&self.security_mgr),
             );
             backup_stream_worker.start(backup_stream_endpoint);
-            self.to_stop.push(backup_stream_worker);
+            self.core.to_stop.push(backup_stream_worker);
             Some(backup_stream_scheduler)
         } else {
             None
@@ -1024,7 +992,7 @@ where
                 self.region_info_accessor.clone(),
                 self.core.config.storage.ttl_check_poll_interval.into(),
             ));
-            self.to_stop.push(ttl_checker);
+            self.core.to_stop.push(ttl_checker);
         }
 
         // Start CDC.
@@ -1046,7 +1014,7 @@ where
             self.causal_ts_provider.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
-        self.to_stop.push(cdc_worker);
+        self.core.to_stop.push(cdc_worker);
 
         // Start resolved ts
         if let Some(mut rts_worker) = rts_worker {
@@ -1061,7 +1029,7 @@ where
                 self.security_mgr.clone(),
             );
             rts_worker.start_with_timer(rts_endpoint);
-            self.to_stop.push(rts_worker);
+            self.core.to_stop.push(rts_worker);
         }
 
         cfg_controller.register(
@@ -1544,7 +1512,7 @@ where
             if let Err(e) = status_server.start(self.core.config.server.status_addr.clone()) {
                 error_unknown!(%e; "failed to bind addr for status service");
             } else {
-                self.to_stop.push(status_server);
+                self.core.to_stop.push(status_server);
             }
         }
     }
@@ -1566,7 +1534,7 @@ where
             sst_worker.stop_worker();
         }
 
-        self.to_stop.into_iter().for_each(|s| s.stop());
+        self.core.to_stop.into_iter().for_each(|s| s.stop());
     }
 }
 
@@ -1666,33 +1634,6 @@ fn pre_start() {
             "check: kernel";
             "err" => %e
         );
-    }
-}
-
-/// A small trait for components which can be trivially stopped. Lets us keep
-/// a list of these in `TiKV`, rather than storing each component individually.
-pub(crate) trait Stop {
-    fn stop(self: Box<Self>);
-}
-
-impl<R> Stop for StatusServer<R>
-where
-    R: 'static + Send,
-{
-    fn stop(self: Box<Self>) {
-        (*self).stop()
-    }
-}
-
-impl Stop for Worker {
-    fn stop(self: Box<Self>) {
-        Worker::stop(&self);
-    }
-}
-
-impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
-    fn stop(self: Box<Self>) {
-        self.stop_worker();
     }
 }
 
