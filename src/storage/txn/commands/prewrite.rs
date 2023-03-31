@@ -405,8 +405,8 @@ impl CommandExt for PrewritePessimistic {
 
     fn write_bytes(&self) -> usize {
         let mut bytes = 0;
-        for m in &self.mutations {
-            match m.mutation {
+        for (m, _) in &self.mutations {
+            match m {
                 Mutation::Put((ref key, ref value), _)
                 | Mutation::Insert((ref key, ref value), _) => {
                     bytes += key.as_encoded().len();
@@ -866,7 +866,7 @@ pub struct PessimisticMutation {
 
 impl MutationLock for PessimisticMutation {
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
-        self.1
+        self.pessimistic_action
     }
 
     fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp> {
