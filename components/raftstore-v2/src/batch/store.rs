@@ -499,6 +499,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
     tablet_flush: Worker,
+    cleanup_worker: Worker,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
@@ -516,6 +517,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             async_write: StoreWriters::new(None),
             purge,
             tablet_flush,
+            cleanup_worker: Worker::new("cleanup-worker"),
             background,
         }
     }
