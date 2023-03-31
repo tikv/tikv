@@ -192,10 +192,6 @@ test_util = { workspace = true }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
 
-[dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
-package = "rocksdb"
-
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }

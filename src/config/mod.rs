@@ -30,7 +30,7 @@ use engine_rocks::{
     properties::MvccPropertiesCollectorFactory,
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, ConcurrentTaskLimiter,
-        DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env,
+        DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env, IndexType,
         PrepopulateBlockCache, RateLimiter, WriteBufferManager,
     },
     util::{
@@ -60,7 +60,6 @@ use raftstore::{
 };
 use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
-use rocksdb::IndexType;
 use security::SecurityConfig;
 use serde::{
     de::{Error as DError, Unexpected},
