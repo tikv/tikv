@@ -192,6 +192,10 @@ test_util = { workspace = true }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
 
+[dependencies.rocksdb]
+git = "https://github.com/tikv/rust-rocksdb.git"
+package = "rocksdb"
+
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
@@ -382,11 +386,6 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-
-[dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
-package = "rocksdb"
-features = ["encryption"]
 
 [profile.dev.package.grpcio-sys]
 debug = false
