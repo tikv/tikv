@@ -34,7 +34,7 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb::{self, Region},
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
-    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage},
+    raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage},
 };
 use raftstore::store::{util, Transport, WriteTask};
 use slog::{debug, error, info, warn};
@@ -439,6 +439,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         report.set_from_region_epoch(self.region().get_region_epoch().clone());
         report.set_trimmed(!self.storage().has_dirty_data());
         let _ = ctx.trans.send(msg);
+    }
+
+    #[inline]
+    pub fn on_availability_response<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        from_peer: u64,
+        resp: &ExtraMessage,
+    ) {
+        self.merge_on_availability_response(ctx, from_peer, resp);
     }
 
     pub fn maybe_schedule_gc_peer_tick(&mut self) {

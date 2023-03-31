@@ -247,7 +247,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     return;
                 }
                 ExtraMessageType::MsgAvailabilityResponse => {
-                    self.merge_on_availability_response(
+                    self.on_availability_response(
                         ctx,
                         msg.get_from_peer().get_id(),
                         msg.get_extra_msg(),
