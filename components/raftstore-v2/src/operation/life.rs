@@ -298,30 +298,6 @@ impl Store {
                     forward_destroy_to_source_peer(ctx, &msg);
                     return;
                 }
-                if extra_msg.get_type() == ExtraMessageType::MsgAvailabilityRequest {
-                    let mut resp = RaftMessage::default();
-                    resp.set_region_id(extra_msg.get_availability_context().get_from_region_id());
-                    resp.set_region_epoch(
-                        extra_msg
-                            .get_availability_context()
-                            .get_from_region_epoch()
-                            .clone(),
-                    );
-                    resp.set_from_peer(msg.get_to_peer().clone());
-                    resp.set_to_peer(msg.get_from_peer().clone());
-                    resp.mut_extra_msg()
-                        .set_type(ExtraMessageType::MsgAvailabilityResponse);
-                    resp.mut_extra_msg()
-                        .mut_availability_context()
-                        .set_unavailable(true);
-                    resp.mut_extra_msg()
-                        .mut_availability_context()
-                        .set_from_region_id(msg.get_region_id());
-                    resp.mut_extra_msg()
-                        .mut_availability_context()
-                        .set_from_region_epoch(msg.get_region_epoch().clone());
-                    let _ = ctx.trans.send(resp);
-                }
             }
             ctx.raft_metrics.message_dropped.region_tombstone_peer.inc();
             return;
