@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::CfName;
 use pd_client::{BucketMeta, BucketStat};
 use raftstore::store::fsm::ApplyMetrics;
 
@@ -11,7 +12,7 @@ pub enum ApplyTask {
     Snapshot(GenSnapTask),
     /// Writes that doesn't care consistency.
     UnsafeWrite(Box<[u8]>),
-    ManualFlush,
+    ManualFlush(Box<[CfName]>),
     RefreshBucketStat(std::sync::Arc<BucketMeta>),
 }
 

@@ -30,8 +30,8 @@
 use std::{cmp, sync::Mutex};
 
 use engine_traits::{
-    data_cf_offset, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    data_cf_offset, ApplyProgress, CfName, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use kvproto::{
     metapb::Region,
@@ -138,6 +138,10 @@ struct Progress {
     ///
     /// If `flushed` == `last_modified`, then all data in the CF is persisted.
     last_modified: u64,
+    /// Flush will be triggered explicitly when there are too many pending
+    /// writes. It marks the last index that is flushed to avoid too many
+    /// flushes.
+    last_trigger_flush: u64,
 }
 
 /// `ApplyTrace` is used to track the indexes of modifications and flushes.
@@ -164,10 +168,6 @@ pub struct ApplyTrace {
     admin: Progress,
     /// Index that is issued to be written. It may not be truely persisted.
     persisted_applied: u64,
-    /// Flush will be triggered explicitly when there are too many pending
-    /// writes. It marks the last index that is flushed to avoid too many
-    /// flushes.
-    last_flush_trigger: u64,
     /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
 }
@@ -181,13 +181,13 @@ impl ApplyTrace {
             let i = engine.get_flushed_index(region_id, cf)?.unwrap();
             trace.data_cfs[off].flushed = i;
             trace.data_cfs[off].last_modified = i;
+            trace.data_cfs[off].last_trigger_flush = i;
         }
         let i = engine.get_flushed_index(region_id, CF_RAFT)?.unwrap();
         // Index of raft CF means all data before that must be persisted.
         trace.admin.flushed = i;
         trace.admin.last_modified = i;
         trace.persisted_applied = i;
-        trace.last_flush_trigger = i;
         let applied_region_state = match engine.get_region_state(region_id, trace.admin.flushed)? {
             Some(s) => s,
             None => panic!(
@@ -226,28 +226,45 @@ impl ApplyTrace {
         self.persisted_applied
     }
 
-    pub fn should_flush(&mut self) -> bool {
+    pub fn pick_cf_to_flush(&mut self) -> Option<CfName> {
         if self.admin.flushed < self.admin.last_modified {
             // It's waiting for other peers, flush will not help.
-            return false;
+            return None;
         }
-        let last_modified = self
-            .data_cfs
-            .iter()
-            .filter_map(|pr| {
-                if pr.last_modified != pr.flushed {
-                    Some(pr.last_modified)
-                } else {
-                    None
-                }
-            })
-            .max();
-        if let Some(m) = last_modified && m >= self.admin.flushed + 4096000 && m >= self.last_flush_trigger + 4096000 {
-            self.last_flush_trigger = m;
-            true
-        } else {
-            false
+        let (mut max_modified, mut min_flush_trigger) = (0, u64::MAX);
+        for pr in self.data_cfs.iter() {
+            max_modified = std::cmp::max(pr.last_modified, max_modified);
+            if pr.last_modified <= pr.flushed {
+                continue;
+            }
+            min_flush_trigger = std::cmp::min(
+                std::cmp::max(pr.last_trigger_flush, pr.flushed),
+                min_flush_trigger,
+            );
         }
+        // Only trigger flush when there are too many logs.
+        if max_modified < self.admin.flushed + 20480
+            || max_modified < min_flush_trigger.saturating_add(20480)
+        {
+            return None;
+        }
+        // Find the CF that is most lagging behind.
+        let (mut offset, mut last_flush_trigger) = (usize::MAX, u64::MAX);
+        for (i, pr) in self.data_cfs.iter().enumerate() {
+            if pr.last_modified <= pr.flushed {
+                continue;
+            }
+            let f = std::cmp::max(pr.flushed, pr.last_trigger_flush);
+            if f < last_flush_trigger {
+                offset = i;
+                last_flush_trigger = f;
+            }
+        }
+        if offset == usize::MAX {
+            return None;
+        }
+        self.data_cfs[offset].last_trigger_flush = max_modified;
+        Some(DATA_CFS[offset])
     }
 
     // All events before `mem_index` must be consumed before calling this function.
