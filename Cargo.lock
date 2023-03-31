@@ -4268,9 +4268,10 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/busyjay/raft-engine.git?branch=add-lru-cache#02f4c853a2cd39cfc48ec23b82ed68b26e15362a"
 dependencies = [
  "byteorder",
+ "bytes",
  "crc32fast",
  "crossbeam",
  "fail",
@@ -4302,7 +4303,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/busyjay/raft-engine.git?branch=add-lru-cache#02f4c853a2cd39cfc48ec23b82ed68b26e15362a"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",

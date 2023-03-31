@@ -1347,7 +1347,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
         );
         let should_dump = raft_data_state_machine.before_open_target();
 
-        let raft_config = config.raft_engine.config();
+        let raft_config = config.raft_engine_config();
         let raft_engine =
             RaftLogEngine::new(raft_config, key_manager.clone(), get_io_rate_limiter())
                 .expect("failed to open raft engine");

@@ -3794,6 +3794,14 @@ impl TikvConfig {
         }
         Ok(env)
     }
+
+    pub fn raft_engine_config(&self) -> RawRaftEngineConfig {
+        let mut cfg = self.raft_engine.config();
+        if let Some(s) = self.rocksdb.write_buffer_limit {
+            cfg.cache_capacity.0 = s.0 * 3 / 2;
+        }
+        cfg
+    }
 }
 
 /// Prevents launching with an incompatible configuration

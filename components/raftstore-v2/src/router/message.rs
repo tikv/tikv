@@ -2,6 +2,8 @@
 
 // #[PerformanceCriticalPath]
 
+use std::sync::Arc;
+
 use kvproto::{
     import_sstpb::SstMeta,
     metapb,
@@ -19,7 +21,9 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit};
+use crate::operation::{
+    CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -155,7 +159,7 @@ pub enum PeerMsg {
     LogsFetched(FetchedLogs),
     SnapshotGenerated(GenSnapRes),
     /// Start the FSM.
-    Start,
+    Start(Option<Arc<ReplayWatch>>),
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
     SplitInitFinish(u64),

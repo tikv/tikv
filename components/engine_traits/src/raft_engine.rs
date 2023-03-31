@@ -50,6 +50,8 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
 
     /// Get all available entries in the region.
     fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()>;
+
+    fn optimize_for(&self, _scan: bool) {}
 }
 
 pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
