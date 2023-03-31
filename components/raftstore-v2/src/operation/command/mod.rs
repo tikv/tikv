@@ -22,9 +22,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{
-    CfName, KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions,
-};
+use engine_traits::{CfName, KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };

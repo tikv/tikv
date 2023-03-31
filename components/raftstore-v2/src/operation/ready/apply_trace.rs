@@ -53,6 +53,8 @@ use crate::{
     Result, StoreRouter,
 };
 
+const FLUSH_LAG_THRESHOLD: u64 = 20480;
+
 /// Write states for the given region. The region is supposed to have all its
 /// data persisted and not governed by any raft group before.
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
@@ -226,44 +228,43 @@ impl ApplyTrace {
         self.persisted_applied
     }
 
+    /// In general, we avoid flushing to reduce the write amplification. But if
+    /// a CF is not active for a long time, it may cause too many logs to be
+    /// replayed after restart and cause raft engine write amplification. So we
+    /// need to find those CFs and trigger manual flush.
     pub fn pick_cf_to_flush(&mut self) -> Option<CfName> {
         if self.admin.flushed < self.admin.last_modified {
             // It's waiting for other peers, flush will not help.
             return None;
         }
-        let (mut max_modified, mut min_flush_trigger) = (0, u64::MAX);
+        let (mut max_modified, mut max_flushed) = (0, 0);
         for pr in self.data_cfs.iter() {
-            max_modified = std::cmp::max(pr.last_modified, max_modified);
-            if pr.last_modified <= pr.flushed {
-                continue;
-            }
-            min_flush_trigger = std::cmp::min(
-                std::cmp::max(pr.last_trigger_flush, pr.flushed),
-                min_flush_trigger,
-            );
+            max_flushed = cmp::max(max_flushed, pr.flushed);
+            max_modified = cmp::max(max_modified, pr.last_modified);
         }
-        // Only trigger flush when there are too many logs.
-        if max_modified < self.admin.flushed + 20480
-            || max_modified < min_flush_trigger.saturating_add(20480)
-        {
+        // Manual flush only when we can gc some logs.
+        if max_flushed < self.admin.flushed + FLUSH_LAG_THRESHOLD {
             return None;
         }
-        // Find the CF that is most lagging behind.
-        let (mut offset, mut last_flush_trigger) = (usize::MAX, u64::MAX);
+        let (mut offset, mut min_flushed) = (usize::MAX, u64::MAX);
         for (i, pr) in self.data_cfs.iter().enumerate() {
-            if pr.last_modified <= pr.flushed {
+            // Nothing to flush.
+            if pr.flushed >= pr.last_modified {
                 continue;
             }
-            let f = std::cmp::max(pr.flushed, pr.last_trigger_flush);
-            if f < last_flush_trigger {
+            let f = cmp::max(pr.flushed, pr.last_trigger_flush);
+            if f < min_flushed {
                 offset = i;
-                last_flush_trigger = f;
+                min_flushed = f;
             }
         }
-        if offset == usize::MAX {
+        // Skip if no other CF can be flushed or all other CFs are already flushed.
+        if offset == usize::MAX || min_flushed >= max_flushed {
             return None;
         }
-        self.data_cfs[offset].last_trigger_flush = max_modified;
+        // Modification records may race with flush records, but all data before
+        // maximum of them must be written to kv db already.
+        self.data_cfs[offset].last_trigger_flush = cmp::max(max_modified, max_flushed);
         Some(DATA_CFS[offset])
     }
 
