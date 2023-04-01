@@ -112,7 +112,7 @@ async fn check_impl(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn
     let uri = Uri::builder()
         .scheme("http")
         .authority(authority.to_string().as_str())
-        .path_and_query("/debug/pprof/profile?seconds=10")
+        .path_and_query("/debug/pprof/profile?seconds=15")
         .build()?;
     let resp = client.get(uri).await?;
     let (parts, raw_body) = resp.into_parts();

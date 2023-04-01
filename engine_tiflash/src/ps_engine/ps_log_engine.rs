@@ -317,7 +317,8 @@ impl PSLogEngine {
             raft_wb.del_page(&keys::raft_log_key(raft_group_id, idx))?;
         }
         // TODO: keep the max size of raft_wb under some threshold
-        self.consume(&mut raft_wb, false)?;
+        // Please notice in raft_log_engine, we don't flush to disk.
+        // self.consume(&mut raft_wb, false)?;
         Ok((to - from) as usize)
     }
 
@@ -544,7 +545,6 @@ impl RaftEngine for PSLogEngine {
                 batch.del_page(&keys::raft_log_key(raft_group_id, index))?;
             }
         }
-        self.consume(batch, true)?;
         Ok(())
     }
 

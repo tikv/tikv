@@ -56,7 +56,10 @@ pub use crate::table_properties::*;
 mod mixed_engine;
 mod ps_engine;
 mod rocks_engine;
-pub use crate::{ps_engine::PSLogEngine, rocks_engine::db_vector};
+pub use crate::{
+    ps_engine::{PSEngineWriteBatch, PSLogEngine},
+    rocks_engine::db_vector,
+};
 
 pub mod mvcc_properties;
 pub use crate::mvcc_properties::*;
