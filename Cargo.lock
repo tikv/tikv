@@ -4771,6 +4771,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "protobuf",
+ "rand 0.8.5",
  "serde",
  "slog",
  "slog-global",

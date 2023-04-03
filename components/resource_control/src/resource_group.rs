@@ -11,12 +11,13 @@ use std::{
 
 use collections::HashMap;
 use dashmap::{mapref::one::Ref, DashMap};
+use fail::fail_point;
 use kvproto::{
     kvrpcpb::CommandPri,
     resource_manager::{GroupMode, ResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
-use tikv_util::info;
+use tikv_util::{info, time::Instant};
 use yatp::queue::priority::TaskPriorityProvider;
 
 // a read task cost at least 50us.
@@ -154,8 +155,10 @@ pub struct ResourceController {
     is_read: bool,
     // record consumption of each resource group, name --> resource_group
     resource_consumptions: RwLock<HashMap<Vec<u8>, GroupPriorityTracker>>,
-
+    // the latest min vt, this value is used to init new added group vt
     last_min_vt: AtomicU64,
+    // update min vt lock
+    lock: Mutex<Instant>,
 }
 
 impl ResourceController {
@@ -165,6 +168,7 @@ impl ResourceController {
             is_read,
             resource_consumptions: RwLock::new(HashMap::default()),
             last_min_vt: AtomicU64::new(0),
+            lock: Mutex::new(Instant::now_coarse()),
         };
         // add the "default" resource group
         controller.add_resource_group(
@@ -240,6 +244,14 @@ impl ResourceController {
     }
 
     pub fn update_min_virtual_time(&self) {
+        let mut guard = match self.lock.try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                // another thread is still processing, just return.
+                return;
+            }
+        };
+        let start = Instant::now_coarse();
         let mut min_vt = u64::MAX;
         let mut max_vt = 0;
         self.resource_consumptions
@@ -257,6 +269,8 @@ impl ResourceController {
             return;
         }
 
+        fail_point!("increase_vt_duration_update_min_vt");
+
         let near_overflow = min_vt > RESET_VT_THRESHOLD;
         self.resource_consumptions
             .read()
@@ -267,15 +281,19 @@ impl ResourceController {
                 // but it should be ok as this operation should be extremely rare
                 // and the impact is not big.
                 if near_overflow {
-                    tracker.decrease_vt(RESET_VT_THRESHOLD - (max_vt - vt) / 2);
+                    tracker.decrease_vt(RESET_VT_THRESHOLD);
                 } else if vt < max_vt {
                     // TODO: is increase by half is a good choice.
                     tracker.increase_vt((max_vt - vt) / 2);
                 }
             });
         if near_overflow {
-            info!("all reset groups' virtual time are near overflow, do reset");
+            let end = Instant::now_coarse();
+            info!("all resource groups' virtual time are near overflow, do reset"; 
+                "min" => min_vt, "max" => max_vt, "dur" => ?end.duration_since(start), 
+                "reset_dur" => ?end.duration_since(*guard));
             max_vt -= RESET_VT_THRESHOLD;
+            *guard = end;
         }
         // max_vt is actually a little bigger than the current min vt, but we don't
         // need totally accurate here.
@@ -357,6 +375,7 @@ impl GroupPriorityTracker {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use rand::{thread_rng, RngCore};
     use yatp::queue::Extras;
 
     use super::*;
@@ -558,6 +577,69 @@ pub(crate) mod tests {
         assert!(g2_vt < threshold / 2);
         assert!(g1_vt < threshold / 2 && g1_vt < g2_vt);
         assert_eq!(resource_ctl.last_min_vt.load(Ordering::Relaxed), g2_vt);
+    }
+
+    #[test]
+    fn test_reset_resource_group_vt_overflow() {
+        let resource_manager = ResourceGroupManager::default();
+        let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
+        let mut rng = thread_rng();
+
+        let mut min_delta = u64::MAX;
+        let mut max_delta = 0;
+        for i in 0..10 {
+            let name = format!("g{}", i);
+            let g = new_resource_group_ru(name.clone(), 100, 1);
+            resource_manager.add_resource_group(g);
+            let delta = rng.next_u64() % 10000 + 1;
+            min_delta = delta.min(min_delta);
+            max_delta = delta.max(max_delta);
+            resource_ctl
+                .resource_group(name.as_bytes())
+                .increase_vt(RESET_VT_THRESHOLD + delta);
+        }
+        resource_ctl
+            .resource_group("default".as_bytes())
+            .increase_vt(RESET_VT_THRESHOLD + 1);
+
+        let current_max_vt = resource_ctl
+            .resource_consumptions
+            .read()
+            .iter()
+            .fold(0, |v, (_, g)| v.max(g.current_vt()));
+        let resource_ctl_cloned = resource_ctl.clone();
+        fail::cfg_callback("increase_vt_duration_update_min_vt", move || {
+            resource_ctl_cloned
+                .resource_consumptions
+                .read()
+                .iter()
+                .enumerate()
+                .for_each(|(i, (_, tracker))| {
+                    if i % 2 == 0 {
+                        tracker.increase_vt(max_delta - min_delta);
+                    }
+                });
+        })
+        .unwrap();
+        resource_ctl.update_min_virtual_time();
+        fail::remove("increase_vt_duration_update_min_vt");
+
+        let new_max_vt = resource_ctl
+            .resource_consumptions
+            .read()
+            .iter()
+            .fold(0, |v, (_, g)| {
+                // check all vt has decreased by RESET_VT_THRESHOLD.
+                assert!(
+                    g.current_vt() <= max_delta * 2,
+                    "current vt: {}",
+                    g.current_vt()
+                );
+                v.max(g.current_vt())
+            });
+
+        // if failpoint takes effect, new_max_vt should grows.
+        assert!(current_max_vt - RESET_VT_THRESHOLD < new_max_vt);
     }
 
     #[test]
