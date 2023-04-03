@@ -602,7 +602,7 @@ pub(crate) mod tests {
             .resource_group("default".as_bytes())
             .increase_vt(RESET_VT_THRESHOLD + 1);
 
-        let current_max_vt = resource_ctl
+        let old_max_vt = resource_ctl
             .resource_consumptions
             .read()
             .iter()
@@ -629,17 +629,12 @@ pub(crate) mod tests {
             .read()
             .iter()
             .fold(0, |v, (_, g)| {
-                // check all vt has decreased by RESET_VT_THRESHOLD.
-                assert!(
-                    g.current_vt() <= max_delta * 2,
-                    "current vt: {}",
-                    g.current_vt()
-                );
                 v.max(g.current_vt())
             });
-
-        // if failpoint takes effect, new_max_vt should grows.
-        assert!(current_max_vt - RESET_VT_THRESHOLD < new_max_vt);
+        // check all vt has decreased by RESET_VT_THRESHOLD.
+        assert!(new_max_vt < max_delta * 2);
+        // check fail-point takes effect, the `new_max_vt` has increased.
+        assert!(old_max_vt - RESET_VT_THRESHOLD < new_max_vt);
     }
 
     #[test]
