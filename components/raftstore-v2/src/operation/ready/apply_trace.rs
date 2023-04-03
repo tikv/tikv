@@ -208,9 +208,17 @@ impl ApplyTrace {
         }
     }
 
-    fn on_modify(&mut self, cf: &str, index: u64) {
-        let off = data_cf_offset(cf);
-        self.data_cfs[off].last_modified = index;
+    #[inline]
+    fn on_modify(&mut self, cf: &str, index: u64, mem_index: u64) {
+        let pr = &mut self.data_cfs[data_cf_offset(cf)];
+        if index != 0 {
+            pr.last_modified = index;
+        }
+        if pr.flushed == pr.last_modified {
+            // Updating `last_trigger_flush` so that we won't trigger a flush if a cf is
+            // active again after a long inactive time. See also `pick_cf_to_flush`.
+            pr.last_trigger_flush = mem_index;
+        }
     }
 
     pub fn on_admin_flush(&mut self, index: u64) {
@@ -237,35 +245,32 @@ impl ApplyTrace {
             // It's waiting for other peers, flush will not help.
             return None;
         }
-        let (mut max_modified, mut max_flushed) = (0, 0);
-        for pr in self.data_cfs.iter() {
-            max_flushed = cmp::max(max_flushed, pr.flushed);
-            max_modified = cmp::max(max_modified, pr.last_modified);
-        }
-        // Manual flush only when we can gc some logs.
-        if max_flushed < self.admin.flushed + FLUSH_LAG_THRESHOLD {
-            return None;
-        }
-        let (mut offset, mut min_flushed) = (usize::MAX, u64::MAX);
-        for (i, pr) in self.data_cfs.iter().enumerate() {
+        // There will be always records to write cf, so it should be flushed by
+        // memtable limit. We only flush default cf and lock cf.
+        let to_flush = [
+            // Usually records in default cf are valid, flush cost is high, using
+            // a large threshold to avoid frequent flush.
+            (data_cf_offset(CF_DEFAULT), FLUSH_LAG_THRESHOLD * 2),
+            // Most records in lock cf are deleted immediately, flush cost is low.
+            (data_cf_offset(CF_LOCK), FLUSH_LAG_THRESHOLD),
+        ];
+        let write_pr = &self.data_cfs[data_cf_offset(CF_WRITE)];
+        for (offset, threshold) in to_flush {
+            let pr = &self.data_cfs[offset];
             // Nothing to flush.
             if pr.flushed >= pr.last_modified {
                 continue;
             }
-            let f = cmp::max(pr.flushed, pr.last_trigger_flush);
-            if f < min_flushed {
-                offset = i;
-                min_flushed = f;
+            let flushed = cmp::max(pr.flushed, pr.last_trigger_flush);
+            // Log lag is too small, avoid flushing.
+            // If it's raw kv, following is always true.
+            if flushed + threshold >= write_pr.flushed {
+                continue;
             }
+            self.data_cfs[offset].last_trigger_flush = pr.last_modified;
+            return Some(DATA_CFS[offset]);
         }
-        // Skip if no other CF can be flushed or all other CFs are already flushed.
-        if offset == usize::MAX || min_flushed >= max_flushed {
-            return None;
-        }
-        // Modification records may race with flush records, but all data before
-        // maximum of them must be written to kv db already.
-        self.data_cfs[offset].last_trigger_flush = cmp::max(max_modified, max_flushed);
-        Some(DATA_CFS[offset])
+        None
     }
 
     // All events before `mem_index` must be consumed before calling this function.
@@ -536,9 +541,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply_index = self.storage().entry_storage().applied_index();
         let apply_trace = self.storage_mut().apply_trace_mut();
         for (cf, index) in DATA_CFS.iter().zip(modification) {
-            if index != 0 {
-                apply_trace.on_modify(cf, index);
-            }
+            apply_trace.on_modify(cf, index, apply_index);
         }
         apply_trace.maybe_advance_admin_flushed(apply_index);
     }
@@ -627,7 +630,7 @@ mod tests {
         trace.maybe_advance_admin_flushed(2);
         assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
-            trace.on_modify(cf, 3);
+            trace.on_modify(cf, 3, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // Modification is not flushed.
@@ -643,7 +646,7 @@ mod tests {
             trace.on_flush(cf, 4);
         }
         for cf in DATA_CFS {
-            trace.on_modify(cf, 4);
+            trace.on_modify(cf, 4, 4);
         }
         trace.maybe_advance_admin_flushed(4);
         // Unflushed admin modification should hold index.
@@ -660,7 +663,7 @@ mod tests {
         // advanced as we don't know whether there is admin modification.
         assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
-            trace.on_modify(cf, 5);
+            trace.on_modify(cf, 5, 5);
         }
         trace.maybe_advance_admin_flushed(5);
         // Because modify is recorded, so we know there should be no admin
