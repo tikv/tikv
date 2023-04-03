@@ -2921,7 +2921,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#da1c6ba757dcc026dc51242d97e39e904fd7d547"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2940,7 +2940,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#da1c6ba757dcc026dc51242d97e39e904fd7d547"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4866,7 +4866,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#da1c6ba757dcc026dc51242d97e39e904fd7d547"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
