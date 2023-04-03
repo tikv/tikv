@@ -6,6 +6,7 @@ pub mod rollback;
 
 use std::path::PathBuf;
 
+use collections::HashSet;
 use commit::CatchUpLogs;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{
@@ -38,6 +39,8 @@ fn merge_source_path<EK>(
 pub struct MergeContext {
     prepare_status: Option<PrepareStatus>,
     catch_up_logs: Option<CatchUpLogs>,
+    /// Peers that want to rollback merge.
+    pub(crate) rollback_peers: HashSet<u64>,
 }
 
 impl MergeContext {
@@ -72,6 +75,15 @@ impl MergeContext {
     pub fn max_compact_log_index(&self) -> Option<u64> {
         if let Some(PrepareStatus::WaitForFence { ctx, .. }) = self.prepare_status.as_ref() {
             Some(ctx.min_matched)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn applied_index(&self) -> Option<u64> {
+        if let Some(PrepareStatus::Applied(state)) = self.prepare_status.as_ref() {
+            Some(state.get_commit())
         } else {
             None
         }

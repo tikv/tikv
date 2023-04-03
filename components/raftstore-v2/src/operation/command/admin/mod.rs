@@ -15,7 +15,9 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
-use merge::{commit::CommitMergeResult, prepare::PrepareMergeResult};
+use merge::{
+    commit::CommitMergeResult, prepare::PrepareMergeResult, rollback::RollbackMergeResult,
+};
 pub use merge::{
     commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
     MergeContext, MERGE_SOURCE_PREFIX,
@@ -52,6 +54,7 @@ pub enum AdminCmdResult {
     UpdateGcPeers(UpdateGcPeersResult),
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
+    RollbackMerge(RollbackMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {

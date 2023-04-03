@@ -361,6 +361,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
                 AdminCmdResult::CommitMerge(res) => self.on_apply_res_commit_merge(ctx, res),
+                AdminCmdResult::RollbackMerge(res) => self.on_apply_res_rollback_merge(ctx, res),
             }
         }
         self.region_buckets_info_mut()
@@ -622,7 +623,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
                 AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
                 AdminCmdType::CommitMerge => self.apply_commit_merge(admin_req, log_index).await?,
-                AdminCmdType::RollbackMerge => unimplemented!(),
+                AdminCmdType::RollbackMerge => self.apply_rollback_merge(admin_req, log_index)?,
                 AdminCmdType::TransferLeader => {
                     self.apply_transfer_leader(admin_req, entry.term)?
                 }
