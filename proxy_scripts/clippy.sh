@@ -1,7 +1,7 @@
 set -uxeo pipefail
 export ENGINE_LABEL_VALUE=tiflash
 export RUST_BACKTRACE=full
-export ENABLE_FEATURES="test-engine-kv-rocksdb test-engine-raft-raft-engine"
+export ENABLE_FEATURES="test-engine-kv-rocksdb test-engine-raft-raft-engine testexport"
 rustup component add clippy
 cargo clippy --features "$ENABLE_FEATURES" --package proxy_ffi --no-deps -- -Dwarnings -A clippy::result_large_err -A clippy::needless_borrow -A clippy::clone_on_copy -A clippy::upper_case_acronyms -A clippy::missing_safety_doc
 cargo clippy --features "$ENABLE_FEATURES" --package engine_store_ffi --no-deps -- -Dwarnings -A clippy::result_large_err -A clippy::needless_borrow -A clippy::clone_on_copy -A clippy::upper_case_acronyms -A clippy::missing_safety_doc

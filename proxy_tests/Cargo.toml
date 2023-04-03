@@ -10,25 +10,29 @@ path = "proxy/mod.rs"
 required-features = ["failpoints", "testexport"]
 
 [features]
-default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
-testexport = ["raftstore/testexport", "tikv/testexport", "engine_tiflash/testexport", "engine_store_ffi/testexport"]
+testexport = ["raftstore/testexport", "raftstore-v2/testexport", "tikv/testexport", "engine_tiflash/testexport", "engine_store_ffi/testexport"]
 profiling = ["profiler/profiling"]
 
 test-engine-kv-rocksdb = [
-  "raftstore/test-engine-kv-rocksdb"
+  "raftstore/test-engine-kv-rocksdb",
+  "mock-engine-store/test-engine-kv-rocksdb"
 ]
 test-engine-raft-raft-engine = [
-  "raftstore/test-engine-raft-raft-engine"
+  "raftstore/test-engine-raft-raft-engine",
+  "mock-engine-store/test-engine-raft-raft-engine"
 ]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
+  "mock-engine-store/test-engines-rocksdb"
 ]
 test-engines-panic = [
   "raftstore/test-engines-panic",
+  "mock-engine-store/test-engines-panic"
 ]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -68,9 +72,11 @@ paste = "1.0"
 pd_client = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
 proxy_server = { workspace = true, default-features = false }
+proxy_test_raftstore_v2 = { workspace = true }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
+raftstore-v2 = { workspace = true }
 rand = "0.8.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

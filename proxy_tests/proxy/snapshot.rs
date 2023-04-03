@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::utils::*;
+use crate::utils::v1::*;
 
 // This is a panic while panic test, which we can not handle.
 // This double panic is due to:
@@ -225,32 +225,6 @@ fn test_concurrent_snapshot() {
     // check_key(&cluster, b"k4", b"v4", Some(true), None, Some(vec![3]));
 
     cluster.shutdown();
-}
-
-fn new_split_region_cluster(count: u64) -> (Cluster<NodeCluster>, Arc<TestPdClient>) {
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
-    // Disable raft log gc in this test case.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
-    // Disable default max peer count check.
-    pd_client.disable_default_operator();
-
-    let _ = cluster.run_conf_change();
-    for i in 0..count {
-        let k = format!("k{:0>4}", 2 * i + 1);
-        let v = format!("v{}", 2 * i + 1);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-
-    // k1 in [ , ]  splited by k2 -> (, k2] [k2, )
-    // k3 in [k2, ) splited by k4 -> [k2, k4) [k4, )
-    for i in 0..count {
-        let k = format!("k{:0>4}", 2 * i + 1);
-        let region = cluster.get_region(k.as_bytes());
-        let sp = format!("k{:0>4}", 2 * i + 2);
-        cluster.must_split(&region, sp.as_bytes());
-    }
-
-    (cluster, pd_client)
 }
 
 #[test]

@@ -4,7 +4,7 @@ use futures::executor::block_on;
 use tikv_util::time::Duration;
 use txn_types::WriteBatchFlags;
 
-use crate::utils::*;
+use crate::utils::v1::*;
 
 fn must_get_error_flashback_in_progress(
     cluster: &mut Cluster<NodeCluster>,

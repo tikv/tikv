@@ -1,13 +1,45 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::WriteBatchExt;
+use engine_tiflash::{PSEngineWriteBatch, PSLogEngine};
+use engine_traits::{RaftEngine, RaftEngineReadOnly, WriteBatchExt};
+use raft::eraftpb::Entry;
 
-use crate::utils::*;
+use crate::utils::v1::*;
+
+mod shared {
+    use super::*;
+    enum ChoosenKVEngine {
+        PS,
+        Rocks,
+    }
+    fn test_write(kvengine: ChoosenKVEngine) {
+        let (mut cluster, _pd_client) = new_mock_cluster(0, 1);
+        let _ = cluster.run();
+        // Wait until ffi is inited.
+
+        match kvengine {
+            ChoosenKVEngine::PS => cluster.cfg.proxy_cfg.engine_store.enable_unips = true,
+            _ => (),
+        };
+
+        let engine = cluster.get_tiflash_engine(1);
+        let mut wb = engine.write_batch();
+        wb.put_cf("default", b"k", b"v").unwrap();
+        wb.write().unwrap();
+
+        let kv = engine.get_value_cf("default", b"k").unwrap();
+        assert!(kv.is_none());
+
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_write_ps() {
+        test_write(ChoosenKVEngine::PS);
+    }
+}
 
 mod pagestorage {
-    use engine_tiflash::{PSEngineWriteBatch, PSLogEngine};
-    use engine_traits::{RaftEngine, RaftEngineReadOnly};
-    use raft::eraftpb::Entry;
 
     use super::*;
     #[test]
@@ -27,7 +59,7 @@ mod pagestorage {
             raft_engine.init(helper);
             let mut raft_wb = PSEngineWriteBatch::new(helper);
             let mut raft_state = RaftLocalState::default();
-            raft_state.mut_hard_state().set_commit(114514);
+            raft_state.mut_hard_state().set_commit(114);
             raft_wb.put_raft_state(20, &raft_state).unwrap();
             raft_engine.consume(&mut raft_wb, true).unwrap();
 
@@ -40,7 +72,7 @@ mod pagestorage {
                 .unwrap();
 
             let raft_state_read = raft_engine.get_raft_state(20).unwrap().unwrap();
-            assert_eq!(raft_state_read.get_hard_state().get_commit(), 114514);
+            assert_eq!(raft_state_read.get_hard_state().get_commit(), 114);
         }
 
         {
@@ -51,7 +83,7 @@ mod pagestorage {
             entry.set_index(6);
             entry.set_term(6);
             entries.push(entry);
-            raft_wb.append(21, None, entries);
+            raft_wb.append(21, None, entries).unwrap();
             raft_engine.consume(&mut raft_wb, true).unwrap();
 
             let mut raft_wb_clean = PSEngineWriteBatch::new(helper);

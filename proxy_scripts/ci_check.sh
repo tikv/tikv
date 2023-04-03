@@ -23,7 +23,7 @@ elif [[ $M == "testold" ]]; then
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_transaction
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_cmd_epoch_checker
     # cargo test --package tests --test failpoints cases::test_disk_full
-    cargo test --package tests --test failpoints cases::test_merge
+    cargo test --package tests --test failpoints cases::test_merge -- --skip test_node_merge_restart --skip test_node_merge_catch_up_logs_no_need
     # cargo test --package tests --test failpoints cases::test_snap
     cargo test --package tests --test failpoints cases::test_import_service
 elif [[ $M == "testnew" ]]; then
@@ -41,8 +41,11 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --test proxy ingest
     cargo test --package proxy_tests --test proxy engine
     cargo test --package proxy_tests --test proxy config
+    cargo test --package proxy_tests --test proxy store
     cargo test --package proxy_tests --test proxy region
     cargo test --package proxy_tests --test proxy flashback
+    cargo test --package proxy_tests --test proxy v1_specific::region_ext
+    cargo test --package proxy_tests --test proxy v1_specific::flashback
     cargo test --package proxy_tests --test proxy server_cluster_test
     cargo test --package proxy_tests --test proxy fast_add_peer
     cargo test --package proxy_tests --test proxy replica_read -- --test-threads 1

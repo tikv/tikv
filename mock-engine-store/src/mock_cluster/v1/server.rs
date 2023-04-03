@@ -84,7 +84,7 @@ use txn_types::TxnExtraScheduler;
 use super::{common::*, Cluster, Simulator, *};
 
 type SimulateStoreTransport =
-    SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, engine_rocks::RocksEngine>>;
+    SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>>;
 type SimulateRaftExtension = <SimulateEngine as Engine>::RaftExtension;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateRaftExtension, PdStoreAddrResolver>>;
@@ -126,11 +126,11 @@ impl StoreAddrResolver for AddressMap {
 }
 
 struct ServerMeta {
-    node: Node<TestPdClient, TiFlashEngine, engine_rocks::RocksEngine>,
+    node: Node<TestPdClient, TiFlashEngine, ProxyRaftEngine>,
     server: Server<PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>,
+    raw_router: RaftRouter<TiFlashEngine, ProxyRaftEngine>,
     raw_apply_router: ApplyRouter<TiFlashEngine>,
     gc_worker: GcWorker<RaftKv<TiFlashEngine, SimulateStoreTransport>>,
     rts_worker: Option<LazyWorker<resolved_ts::Task>>,
@@ -261,11 +261,11 @@ impl ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: MixedClusterConfig,
-        engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
+        engines: Engines<TiFlashEngine, ProxyRaftEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>,
-        system: RaftBatchSystem<TiFlashEngine, engine_rocks::RocksEngine>,
+        router: RaftRouter<TiFlashEngine, ProxyRaftEngine>,
+        system: RaftBatchSystem<TiFlashEngine, ProxyRaftEngine>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
@@ -637,11 +637,11 @@ impl Simulator<TiFlashEngine> for ServerCluster {
         &mut self,
         node_id: u64,
         cfg: MixedClusterConfig,
-        engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
+        engines: Engines<TiFlashEngine, ProxyRaftEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>,
-        system: RaftBatchSystem<TiFlashEngine, engine_rocks::RocksEngine>,
+        router: RaftRouter<TiFlashEngine, ProxyRaftEngine>,
+        system: RaftBatchSystem<TiFlashEngine, ProxyRaftEngine>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -741,10 +741,7 @@ impl Simulator<TiFlashEngine> for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(
-        &self,
-        node_id: u64,
-    ) -> Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<TiFlashEngine, ProxyRaftEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 

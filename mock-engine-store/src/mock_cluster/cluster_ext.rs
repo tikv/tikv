@@ -53,13 +53,13 @@ pub struct ClusterExt {
 
 impl ClusterExt {
     pub fn get_cluster_size(&self) -> usize {
-        self.ffi_helper_set.lock().expect("poinsoned").len()
+        self.ffi_helper_set.lock().expect("poisoned").len()
     }
     pub fn make_ffi_helper_set_no_bind(
         id: u64,
-        engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
+        engines: Engines<TiFlashEngine, ProxyRaftEngine>,
         key_mgr: &Option<Arc<DataKeyManager>>,
-        router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
+        router: &Option<RaftRouter<TiFlashEngine, ProxyRaftEngine>>,
         node_cfg: TikvConfig,
         cluster_ptr: isize,
         cluster_ext_ptr: isize,
@@ -128,9 +128,9 @@ impl ClusterExt {
         proxy_cfg: &ProxyConfig,
         tikv_cfg: &TikvConfig,
         mock_cfg: MockConfig,
-        engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
+        engines: Engines<TiFlashEngine, ProxyRaftEngine>,
         key_manager: &Option<Arc<DataKeyManager>>,
-        router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
+        router: &Option<RaftRouter<TiFlashEngine, ProxyRaftEngine>>,
     ) {
         init_global_ffi_helper_set();
         // We don't know `node_id` now.

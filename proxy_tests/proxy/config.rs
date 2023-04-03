@@ -10,7 +10,7 @@ use proxy_server::{
 };
 use tikv_util::sys::SysQuota;
 
-use crate::utils::*;
+use crate::utils::v1::*;
 
 /// We test here if we can use proxy's default value without given file.
 /// Normally, we only need to add config tests in

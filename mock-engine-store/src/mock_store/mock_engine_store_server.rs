@@ -20,8 +20,8 @@ use crate::mock_cluster;
 
 pub struct EngineStoreServer {
     pub id: u64,
-    // TODO
-    pub engines: Option<Engines<TiFlashEngine, engine_rocks::RocksEngine>>,
+    // TODO engines maybe changed into TabletRegistry?
+    pub engines: Option<Engines<TiFlashEngine, ProxyRaftEngine>>,
     pub kvstore: HashMap<RegionId, Box<MockRegion>>,
     pub mock_cfg: MockConfig,
     pub region_states: RefCell<HashMap<RegionId, RegionStats>>,
@@ -29,10 +29,7 @@ pub struct EngineStoreServer {
 }
 
 impl EngineStoreServer {
-    pub fn new(
-        id: u64,
-        engines: Option<Engines<TiFlashEngine, engine_rocks::RocksEngine>>,
-    ) -> Self {
+    pub fn new(id: u64, engines: Option<Engines<TiFlashEngine, ProxyRaftEngine>>) -> Self {
         EngineStoreServer {
             id,
             engines,

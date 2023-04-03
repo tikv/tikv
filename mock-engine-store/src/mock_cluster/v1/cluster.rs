@@ -74,11 +74,11 @@ pub trait Simulator<EK: KvEngine> {
         &mut self,
         node_id: u64,
         cfg: MixedClusterConfig,
-        engines: Engines<EK, engine_rocks::RocksEngine>,
+        engines: Engines<EK, ProxyRaftEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<EK, engine_rocks::RocksEngine>,
-        system: RaftBatchSystem<EK, engine_rocks::RocksEngine>,
+        router: RaftRouter<EK, ProxyRaftEngine>,
+        system: RaftBatchSystem<EK, ProxyRaftEngine>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -100,7 +100,7 @@ pub trait Simulator<EK: KvEngine> {
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_snap_mgr(&self, node_id: u64) -> &SnapManager;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<EK, engine_rocks::RocksEngine>>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<EK, ProxyRaftEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -159,11 +159,11 @@ pub struct Cluster<T: Simulator<TiFlashEngine>> {
     leaders: HashMap<u64, metapb::Peer>,
     pub count: usize,
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<Engines<TiFlashEngine, engine_rocks::RocksEngine>>,
+    pub dbs: Vec<Engines<TiFlashEngine, ProxyRaftEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     pub key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
-    pub engines: HashMap<u64, Engines<TiFlashEngine, engine_rocks::RocksEngine>>,
+    pub engines: HashMap<u64, Engines<TiFlashEngine, ProxyRaftEngine>>,
     pub key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
     pub group_props: HashMap<u64, GroupProperties>,
@@ -218,10 +218,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
-    pub fn create_engine(
-        &mut self,
-        router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
-    ) {
+    pub fn create_engine(&mut self, router: Option<RaftRouter<TiFlashEngine, ProxyRaftEngine>>) {
         let (engines, key_manager, dir) =
             create_tiflash_test_engine_with_cluster_ctx(self, router.clone());
 

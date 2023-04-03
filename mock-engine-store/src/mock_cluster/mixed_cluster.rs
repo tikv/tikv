@@ -10,7 +10,9 @@ use test_raftstore::RawEngine;
 
 use super::{ClusterExt, FFIHelperSet, MixedClusterConfig};
 
-// An union layer between Cluster of different `test_raftstores`.
+/// An union layer between Cluster of different `test_raftstore`s.
+/// In test_utils and util functions in proxy_tests, we no longer rely on
+/// specific `Cluster`s and `Simulator`s.
 // This trait can't be dispatched dynamiclly, since `get_engine`.
 pub trait MixedCluster {
     fn get_all_store_ids(&self) -> Vec<u64>;

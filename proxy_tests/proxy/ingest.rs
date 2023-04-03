@@ -1,59 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use sst_importer::SstImporter;
-use test_sst_importer::gen_sst_file_with_kvs;
-
-use crate::utils::*;
+use crate::utils::v1::*;
 
 pub fn new_ingest_sst_cmd(meta: SstMeta) -> Request {
     let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::IngestSst);
     cmd.mut_ingest_sst().set_sst(meta);
     cmd
-}
-
-pub fn create_tmp_importer(cfg: &MixedClusterConfig, kv_path: &str) -> (PathBuf, Arc<SstImporter>) {
-    let dir = Path::new(kv_path).join("import-sst");
-    let importer = {
-        Arc::new(
-            SstImporter::new(&cfg.import, dir.clone(), None, cfg.storage.api_version()).unwrap(),
-        )
-    };
-    (dir, importer)
-}
-
-fn make_sst(
-    cluster: &Cluster<NodeCluster>,
-    region_id: u64,
-    region_epoch: RegionEpoch,
-    keys: Vec<String>,
-) -> (PathBuf, SstMeta, PathBuf) {
-    let path = cluster.engines.iter().last().unwrap().1.kv.path();
-    let (import_dir, importer) = create_tmp_importer(&cluster.cfg, path);
-
-    // Prepare data
-    let mut kvs: Vec<(&[u8], &[u8])> = Vec::new();
-    let mut keys = keys;
-    keys.sort();
-    for i in 0..keys.len() {
-        kvs.push((keys[i].as_bytes(), b"2"));
-    }
-
-    // Make file
-    let sst_path = import_dir.join("test.sst");
-    let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
-    meta.set_region_id(region_id);
-    meta.set_region_epoch(region_epoch);
-    meta.set_cf_name("default".to_owned());
-    let mut file = importer.create(&meta).unwrap();
-    file.append(&data).unwrap();
-    file.finish().unwrap();
-
-    // copy file to save dir.
-    let src = sst_path.clone();
-    let dst = file.get_import_path().save.to_str().unwrap();
-    let _ = std::fs::copy(src.clone(), dst);
-
-    (file.get_import_path().save.clone(), meta, sst_path)
 }
 
 #[test]

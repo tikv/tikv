@@ -16,6 +16,14 @@ use crate::{
     general_get_apply_state, general_get_raft_local_state, general_get_region_local_state,
 };
 
+#[derive(Debug, Default)]
+pub struct FlushedIndex {
+    pub admin: u64,
+    pub data: u64,
+}
+
+/// All in_memory_ state are recorded in EngineStore.
+/// All in_disk_ state can somehow be fetched through KvEngine or RaftEngine.
 #[derive(Debug)]
 pub struct States {
     pub in_memory_apply_state: RaftApplyState,
@@ -23,6 +31,13 @@ pub struct States {
     pub in_disk_apply_state: RaftApplyState,
     pub in_disk_region_state: RegionLocalState,
     pub in_disk_raft_state: RaftLocalState,
+    // TODO maybe unused, we keep that since the persistence of admin.flushed is async.
+    #[allow(unused_variables)]
+    pub in_memory_flush_index: FlushedIndex,
+    // The flush index in RaftEngine.
+    pub in_disk_flush_index: FlushedIndex,
+    // The flush index record in EngineStore.
+    pub in_engine_store_flush_index: FlushedIndex,
     pub ident: StoreIdent,
 }
 
@@ -69,6 +84,9 @@ pub fn maybe_collect_states(
                     in_disk_apply_state: apply_state.unwrap(),
                     in_disk_region_state: region_state.unwrap(),
                     in_disk_raft_state: raft_state.unwrap(),
+                    in_disk_flush_index: Default::default(),
+                    in_memory_flush_index: Default::default(),
+                    in_engine_store_flush_index: Default::default(),
                     ident,
                 },
             );

@@ -110,11 +110,16 @@ impl PageStorageExt {
             let value = unsafe { &*arr.offset(i as isize) };
             if value.page_view.len != 0 {
                 // remove the prefix 0x01 added to all kv engine key
-                f(
-                    super::key_format::remove_prefix(value.key_view.to_slice()),
-                    value.page_view.to_slice(),
-                )
-                .unwrap();
+                let raw_key = value.key_view.to_slice();
+                let removed_prefix_key = super::key_format::remove_prefix(raw_key);
+                if let Err(e) = f(removed_prefix_key, value.page_view.to_slice()) {
+                    let err_str = format!(
+                        "scan_page error with rawkey {:?} removed prefix key {:?}, err: {:?}",
+                        raw_key, removed_prefix_key, e
+                    );
+                    tikv_util::error!("{}", err_str);
+                    panic!("{}", err_str)
+                }
             }
         }
     }

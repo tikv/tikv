@@ -55,10 +55,7 @@ use super::{
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<
-        u64,
-        SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
-    >,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>>>,
 }
 
 #[derive(Clone)]
@@ -186,7 +183,7 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient, TiFlashEngine, engine_rocks::RocksEngine>>,
+    nodes: HashMap<u64, Node<TestPdClient, TiFlashEngine, ProxyRaftEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
@@ -219,7 +216,7 @@ impl NodeCluster {
     pub fn get_node_router(
         &self,
         node_id: u64,
-    ) -> SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, engine_rocks::RocksEngine>> {
+    ) -> SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>> {
         self.trans
             .core
             .lock()
@@ -244,7 +241,7 @@ impl NodeCluster {
     pub fn get_node(
         &mut self,
         node_id: u64,
-    ) -> Option<&mut Node<TestPdClient, TiFlashEngine, engine_rocks::RocksEngine>> {
+    ) -> Option<&mut Node<TestPdClient, TiFlashEngine, ProxyRaftEngine>> {
         self.nodes.get_mut(&node_id)
     }
 
@@ -262,11 +259,11 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: MixedClusterConfig,
-        engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
+        engines: Engines<TiFlashEngine, ProxyRaftEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>,
-        system: RaftBatchSystem<TiFlashEngine, engine_rocks::RocksEngine>,
+        router: RaftRouter<TiFlashEngine, ProxyRaftEngine>,
+        system: RaftBatchSystem<TiFlashEngine, ProxyRaftEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         assert_ne!(engines.kv.proxy_ext.engine_store_server_helper, 0);
@@ -560,10 +557,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(
-        &self,
-        node_id: u64,
-    ) -> Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<TiFlashEngine, ProxyRaftEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

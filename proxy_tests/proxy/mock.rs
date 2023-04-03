@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::utils::*;
+use crate::utils::v1::*;
 
 #[test]
 fn test_mock_infra() {

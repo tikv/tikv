@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::utils::*;
+use crate::utils::v1::*;
 
 #[derive(PartialEq, Eq)]
 enum SourceType {

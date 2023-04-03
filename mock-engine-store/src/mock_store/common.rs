@@ -21,3 +21,4 @@ pub use protobuf::Message;
 pub use tikv_util::{box_err, box_try, debug, error, info, warn};
 
 pub use crate::mock_cluster::config::MockConfig;
+pub type ProxyRaftEngine = crate::mock_cluster::ProxyRaftEngine;

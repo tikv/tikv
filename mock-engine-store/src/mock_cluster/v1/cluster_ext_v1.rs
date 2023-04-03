@@ -57,7 +57,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         &self.engines[&node_id].kv
     }
 
-    pub fn get_engines(&self, node_id: u64) -> &Engines<TiFlashEngine, engine_rocks::RocksEngine> {
+    pub fn get_engines(&self, node_id: u64) -> &Engines<TiFlashEngine, ProxyRaftEngine> {
         &self.engines[&node_id]
     }
 

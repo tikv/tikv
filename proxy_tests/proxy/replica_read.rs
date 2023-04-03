@@ -7,7 +7,7 @@ use engine_store_ffi::ffi::{
     ProtoMsgBaseBuff,
 };
 
-use crate::utils::*;
+use crate::utils::v1::*;
 
 #[derive(Default)]
 struct GcMonitor {
@@ -142,34 +142,6 @@ fn blocked_read_index(
 extern "C" fn ffi_wake(data: RawVoidPtr) {
     let notifier = unsafe { &mut *(data as *mut mock_engine_store::ProxyNotifier) };
     notifier.wake()
-}
-
-pub fn configure_for_lease_read(
-    cluster: &mut Cluster<NodeCluster>,
-    base_tick_ms: Option<u64>,
-    election_ticks: Option<usize>,
-) -> Duration {
-    if let Some(base_tick_ms) = base_tick_ms {
-        cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
-    }
-    let base_tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.0;
-    if let Some(election_ticks) = election_ticks {
-        cluster.cfg.raft_store.raft_election_timeout_ticks = election_ticks;
-    }
-    let election_ticks = cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
-    let election_timeout = base_tick_interval * election_ticks;
-    // Adjust max leader lease.
-    cluster.cfg.raft_store.raft_store_max_leader_lease =
-        ReadableDuration(election_timeout - base_tick_interval);
-    // Use large peer check interval, abnormal and max leader missing duration to
-    // make a valid config, that is election timeout x 2 < peer stale state
-    // check < abnormal < max leader missing duration.
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
-    cluster.cfg.raft_store.abnormal_leader_missing_duration =
-        ReadableDuration(election_timeout * 4);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
-
-    election_timeout
 }
 
 #[test]
