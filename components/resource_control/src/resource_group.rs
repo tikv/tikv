@@ -628,9 +628,7 @@ pub(crate) mod tests {
             .resource_consumptions
             .read()
             .iter()
-            .fold(0, |v, (_, g)| {
-                v.max(g.current_vt())
-            });
+            .fold(0, |v, (_, g)| v.max(g.current_vt()));
         // check all vt has decreased by RESET_VT_THRESHOLD.
         assert!(new_max_vt < max_delta * 2);
         // check fail-point takes effect, the `new_max_vt` has increased.
