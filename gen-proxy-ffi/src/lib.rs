@@ -92,7 +92,10 @@ pub fn gen_ffi_code() {
         "{}/../raftstore-proxy/ffi/src/RaftStoreProxyFFI",
         manifest_dir
     );
-    let tar_file = format!("{}/../proxy_ffi/src/interfaces.rs", manifest_dir);
+    let tar_file = format!(
+        "{}/../proxy_components/proxy_ffi/src/interfaces.rs",
+        manifest_dir
+    );
     let version_cpp_file = format!("{}/@version", src_dir);
 
     let ori_version = read_version_file(&version_cpp_file);

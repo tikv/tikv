@@ -296,14 +296,14 @@ members = [
   "components/tipb_helper",
   "components/tracker",
   "components/txn_types",
-  "engine_tiflash",
   "fuzz",
   "fuzz/fuzzer-afl",
   "fuzz/fuzzer-honggfuzz",
   "fuzz/fuzzer-libfuzzer",
   "gen-proxy-ffi",
-  "proxy_ffi",
-  "proxy_test_raftstore_v2",
+  "proxy_components/engine_tiflash",
+  "proxy_components/proxy_ffi",
+  "proxy_components/proxy_test_raftstore_v2",
   "proxy_tests",
   "raftstore-proxy",
   "raftstore-proxy-main",
@@ -392,12 +392,12 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 
 # TiFlash libs
-engine_store_ffi = { path = "engine_store_ffi", default-features = false }
-mock-engine-store = { path = "mock-engine-store", default-features = false }
-proxy_server = { path = "proxy_server", default-features = false }
-proxy_test_raftstore_v2 = { path = "proxy_test_raftstore_v2", default-features = false }
-engine_tiflash = { path = "engine_tiflash", default-features = false }
-proxy_ffi = { path = "proxy_ffi", default-features = false }
+engine_store_ffi = { path = "proxy_components/engine_store_ffi", default-features = false }
+mock-engine-store = { path = "proxy_components/mock-engine-store", default-features = false }
+proxy_server = { path = "proxy_components/proxy_server", default-features = false }
+proxy_test_raftstore_v2 = { path = "proxy_components/proxy_test_raftstore_v2", default-features = false }
+engine_tiflash = { path = "proxy_components/engine_tiflash", default-features = false }
+proxy_ffi = { path = "proxy_components/proxy_ffi", default-features = false }
 
 [profile.dev.package.grpcio-sys]
 debug = false

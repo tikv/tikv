@@ -66,6 +66,12 @@ pub fn check_double_write(batch: &RocksWriteBatchVec) {
 #[cfg(not(any(test, feature = "testexport")))]
 pub fn check_double_write(_: &RocksWriteBatchVec) {}
 
+#[cfg(not(any(test, feature = "testexport")))]
+pub fn log_check_double_write(_: &RocksWriteBatchVec) -> bool {
+    false
+}
+
+#[cfg(any(test, feature = "testexport"))]
 pub fn log_check_double_write(batch: &RocksWriteBatchVec) -> bool {
     check_double_write(batch);
     // TODO(tiflash) re-support this tracker.

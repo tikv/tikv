@@ -34,8 +34,9 @@ mod shared {
     }
 
     #[test]
-    fn test_write_ps() {
+    fn test_write_in_engines() {
         test_write(ChoosenKVEngine::PS);
+        test_write(ChoosenKVEngine::Rocks);
     }
 }
 
