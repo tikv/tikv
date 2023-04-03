@@ -54,6 +54,13 @@ use crate::{
 };
 
 const FLUSH_LAG_THRESHOLD: u64 = 20480;
+// The records in default cf and write cf are probaby valid during flush, use
+// large threshold to avoid frequent flush.
+const FLUSH_LAG_THRESHOLD_PER_CF: &[u64] = &[
+    FLUSH_LAG_THRESHOLD * 2,
+    FLUSH_LAG_THRESHOLD,
+    FLUSH_LAG_THRESHOLD * 2,
+];
 
 /// Write states for the given region. The region is supposed to have all its
 /// data persisted and not governed by any raft group before.
@@ -208,9 +215,15 @@ impl ApplyTrace {
         }
     }
 
-    fn on_modify(&mut self, cf: &str, index: u64) {
-        let off = data_cf_offset(cf);
-        self.data_cfs[off].last_modified = index;
+    fn on_modify(&mut self, cf: &str, index: u64, mem_index: u64) {
+        let pr = &mut self.data_cfs[data_cf_offset(cf)];
+        if index != 0 {
+            pr.last_modified = index;
+        }
+        if pr.flushed == pr.last_modified {
+            // Increasing `last_trigger_flush` to avoid too many flushes.
+            pr.last_trigger_flush = mem_index;
+        }
     }
 
     pub fn on_admin_flush(&mut self, index: u64) {
@@ -249,7 +262,10 @@ impl ApplyTrace {
         let (mut offset, mut min_flushed) = (usize::MAX, u64::MAX);
         for (i, pr) in self.data_cfs.iter().enumerate() {
             // Nothing to flush.
-            if pr.flushed >= pr.last_modified {
+            if pr.flushed >= pr.last_modified
+                // Avoid frequent flush.
+                || pr.flushed > self.admin.flushed + FLUSH_LAG_THRESHOLD_PER_CF[i]
+            {
                 continue;
             }
             let f = cmp::max(pr.flushed, pr.last_trigger_flush);
@@ -537,7 +553,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply_trace = self.storage_mut().apply_trace_mut();
         for (cf, index) in DATA_CFS.iter().zip(modification) {
             if index != 0 {
-                apply_trace.on_modify(cf, index);
+                apply_trace.on_modify(cf, index, apply_index);
             }
         }
         apply_trace.maybe_advance_admin_flushed(apply_index);
@@ -627,7 +643,7 @@ mod tests {
         trace.maybe_advance_admin_flushed(2);
         assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
-            trace.on_modify(cf, 3);
+            trace.on_modify(cf, 3, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // Modification is not flushed.
@@ -643,7 +659,7 @@ mod tests {
             trace.on_flush(cf, 4);
         }
         for cf in DATA_CFS {
-            trace.on_modify(cf, 4);
+            trace.on_modify(cf, 4, 4);
         }
         trace.maybe_advance_admin_flushed(4);
         // Unflushed admin modification should hold index.
@@ -660,7 +676,7 @@ mod tests {
         // advanced as we don't know whether there is admin modification.
         assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
-            trace.on_modify(cf, 5);
+            trace.on_modify(cf, 5, 5);
         }
         trace.maybe_advance_admin_flushed(5);
         // Because modify is recorded, so we know there should be no admin
