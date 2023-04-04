@@ -452,7 +452,6 @@ pub mod tests {
         TestEngineBuilder,
     };
 
-    #[cfg(test)]
     pub fn acquire_pessimistic_lock_allow_lock_with_conflict<E: Engine>(
         engine: &mut E,
         key: &[u8],

@@ -2849,10 +2849,10 @@ mod tests {
         must_acquire_pessimistic_lock(&mut engine, k2, k1, 10, 20);
         must_acquire_pessimistic_lock(&mut engine, k3, k1, 10, 20);
 
-        let check_lock_unchanged = || {
-            must_pessimistic_locked(&mut engine, k1, 10, 10);
-            must_pessimistic_locked(&mut engine, k2, 10, 20);
-            must_pessimistic_locked(&mut engine, k3, 10, 20);
+        let check_lock_unchanged = |engine| {
+            must_pessimistic_locked(engine, k1, 10, 10);
+            must_pessimistic_locked(engine, k2, 10, 20);
+            must_pessimistic_locked(engine, k3, 10, 20);
         };
 
         let must_be_pessimistic_lock_not_found = |e| match e {
@@ -2891,7 +2891,7 @@ mod tests {
         )
         .unwrap_err();
         must_be_pessimistic_lock_not_found(e);
-        check_lock_unchanged();
+        check_lock_unchanged(&mut engine);
 
         let e = pessimistic_prewrite_check_for_update_ts(
             &mut engine,
@@ -2904,7 +2904,7 @@ mod tests {
         )
         .unwrap_err();
         must_be_pessimistic_lock_not_found(e);
-        check_lock_unchanged();
+        check_lock_unchanged(&mut engine);
 
         let e = pessimistic_prewrite_check_for_update_ts(
             &mut engine,
@@ -2917,7 +2917,7 @@ mod tests {
         )
         .unwrap_err();
         must_be_pessimistic_lock_not_found(e);
-        check_lock_unchanged();
+        check_lock_unchanged(&mut engine);
 
         // Index out of bound (invalid request).
         pessimistic_prewrite_check_for_update_ts(
@@ -2930,7 +2930,7 @@ mod tests {
             vec![(3, 30)],
         )
         .unwrap_err();
-        check_lock_unchanged();
+        check_lock_unchanged(&mut engine);
 
         pessimistic_prewrite_check_for_update_ts(
             &mut engine,

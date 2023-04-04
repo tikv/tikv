@@ -2702,6 +2702,7 @@ pub mod tests {
         let k1 = b"k1";
         let k2 = b"k2";
         let k3 = b"k3";
+        let k4 = b"k3";
 
         must_prewrite_put(&mut engine, k1, b"v1", k1, 5);
         must_commit(&mut engine, k1, 5, 8);
