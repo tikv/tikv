@@ -1,0 +1,11 @@
+# /src/config.rs => BusyJay
+# See the OWNERS docs at https://go.k8s.io/owners
+filters:
+  config\.rs$:
+    options:
+      no_parent_owners: true
+    reviewers:
+      - BusyJay
+    approvers:
+      - BusyJay
+

@@ -1,0 +1,11 @@
+# /src/server/status_server/mod.rs => BusyJay
+# See the OWNERS docs at https://go.k8s.io/owners
+filters:
+  mod\.rs$:
+    options:
+      no_parent_owners: true
+    reviewers:
+      - BusyJay
+    approvers:
+      - BusyJay
+

@@ -1,0 +1,11 @@
+# /components/raftstore/src/store/worker/split_config.rs => BusyJay
+# See the OWNERS docs at https://go.k8s.io/owners
+filters:
+  split_config\.rs$:
+    options:
+      no_parent_owners: true
+    reviewers:
+      - BusyJay
+    approvers:
+      - BusyJay
+
