@@ -364,6 +364,39 @@ impl PrewritePessimistic {
         )
     }
 
+    #[cfg(test)]
+    pub fn with_check_for_update_ts(
+        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+        for_update_ts_checks: impl IntoIterator<Item = (usize, TimeStamp)>,
+    ) -> TypedCommand<PrewriteResult> {
+        PrewritePessimistic::new(
+            mutations,
+            primary,
+            start_ts,
+            0,
+            for_update_ts,
+            0,
+            TimeStamp::default(),
+            TimeStamp::default(),
+            None,
+            false,
+            AssertionLevel::Off,
+            for_update_ts_checks
+                .into_iter()
+                .map(|(index, expected_for_update_ts)| {
+                    let mut check = PrewriteRequestForUpdateTsCheck::default();
+                    check.set_index(index as u32);
+                    check.set_expected_for_update_ts(expected_for_update_ts.into_inner());
+                    check
+                })
+                .collect(),
+            Context::default(),
+        )
+    }
+
     fn into_prewriter(self) -> Result<Prewriter<Pessimistic>> {
         let mut mutations: Vec<PessimisticMutation> =
             self.mutations.into_iter().map(Into::into).collect();
@@ -824,9 +857,8 @@ impl PrewriteKind for Pessimistic {
 /// The type of mutation and, optionally, its extra information, differing for
 /// the optimistic and pessimistic transaction.
 /// For optimistic txns, this is `Mutation`.
-/// For pessimistic txns, this is `(Mutation, PessimisticAction)`, where the
-/// action indicates what kind of operations(checks) need to be performed.
-/// The action also implies the type of the lock status.
+/// For pessimistic txns, this is `PessimisticMutation` which contains a
+/// `Mutation` and some other extra information necessary for pessimistic txns.
 trait MutationLock {
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
     fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp>;
@@ -847,20 +879,16 @@ impl MutationLock for Mutation {
     }
 }
 
-// impl MutationLock for (Mutation, PrewriteRequestPessimisticAction) {
-//     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
-//         self.1
-//     }
-//
-//     fn into_mutation(self) -> Mutation {
-//         self.0
-//     }
-// }
-
 #[derive(Debug)]
 pub struct PessimisticMutation {
     pub mutation: Mutation,
+    /// Indicates what kind of operations(checks) need to be performed, and also
+    /// implies the type of the lock status.
     pub pessimistic_action: PrewriteRequestPessimisticAction,
+    /// Specifies whether it needs to check the `for_update_ts` field in the
+    /// pessimistic lock during prewrite. If any, the check only passes if the
+    /// `for_update_ts` field in pessimistic lock is not greater than the
+    /// expected value.
     pub expected_for_update_ts: Option<TimeStamp>,
 }
 
@@ -966,8 +994,8 @@ mod tests {
             commands::{
                 check_txn_status::tests::must_success as must_check_txn_status,
                 test_util::{
-                    commit, pessimistic_prewrite_with_cm, prewrite, prewrite_command,
-                    prewrite_with_cm, rollback,
+                    commit, pessimistic_prewrite_check_for_update_ts, pessimistic_prewrite_with_cm,
+                    prewrite, prewrite_command, prewrite_with_cm, rollback,
                 },
             },
             tests::{
@@ -2806,5 +2834,116 @@ mod tests {
         let write = must_written(&mut engine, key, 80, res.one_pc_commit_ts, WriteType::Lock);
         assert_eq!(write.last_change_ts, TimeStamp::zero());
         assert_eq!(write.versions_to_last_change, 0);
+    }
+
+    #[test]
+    fn test_pessimistic_prewrite_check_for_update_ts() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut statistics = Statistics::default();
+
+        let k1 = b"k1";
+        let k2 = b"k2";
+        let k3 = b"k3";
+
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 10, 10);
+        must_acquire_pessimistic_lock(&mut engine, k2, k1, 10, 20);
+        must_acquire_pessimistic_lock(&mut engine, k3, k1, 10, 20);
+
+        let check_lock_unchanged = || {
+            must_pessimistic_locked(&mut engine, k1, 10, 10);
+            must_pessimistic_locked(&mut engine, k2, 10, 20);
+            must_pessimistic_locked(&mut engine, k3, 10, 20);
+        };
+
+        let must_be_pessimistic_lock_not_found = |e| match e {
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::PessimisticLockNotFound { .. },
+            ))) => (),
+            e => panic!(
+                "error type not match: expected PessimisticLockNotFound, got {:?}",
+                e
+            ),
+        };
+
+        let mutations = vec![
+            (
+                Mutation::make_put(Key::from_raw(k1), b"v1".to_vec()),
+                DoPessimisticCheck,
+            ),
+            (
+                Mutation::make_put(Key::from_raw(k2), b"v2".to_vec()),
+                DoPessimisticCheck,
+            ),
+            (
+                Mutation::make_put(Key::from_raw(k3), b"v3".to_vec()),
+                DoPessimisticCheck,
+            ),
+        ];
+
+        let e = pessimistic_prewrite_check_for_update_ts(
+            &mut unwrap,
+            &mut statistics,
+            mutations.clone(),
+            k1.to_vec(),
+            10,
+            15,
+            vec![(1, 15)],
+        )
+        .unwrap_err();
+        must_be_pessimistic_lock_not_found(e);
+        check_lock_unchanged();
+
+        let e = pessimistic_prewrite_check_for_update_ts(
+            &mut unwrap,
+            &mut statistics,
+            mutations.clone(),
+            k1.to_vec(),
+            10,
+            15,
+            vec![(0, 15), (1, 15), (2, 15)],
+        )
+        .unwrap_err();
+        must_be_pessimistic_lock_not_found(e);
+        check_lock_unchanged();
+
+        let e = pessimistic_prewrite_check_for_update_ts(
+            &mut unwrap,
+            &mut statistics,
+            mutations.clone(),
+            k1.to_vec(),
+            10,
+            15,
+            vec![(2, 15), (0, 20)],
+        )
+        .unwrap_err();
+        must_be_pessimistic_lock_not_found(e);
+        check_lock_unchanged();
+
+        // Index out of bound (invalid request).
+        pessimistic_prewrite_check_for_update_ts(
+            &mut unwrap,
+            &mut statistics,
+            mutations.clone(),
+            k1.to_vec(),
+            10,
+            15,
+            vec![(3, 30)],
+        )
+        .unwrap_err();
+        check_lock_unchanged();
+
+        pessimistic_prewrite_check_for_update_ts(
+            &mut unwrap,
+            &mut statistics,
+            mutations.clone(),
+            k1.to_vec(),
+            10,
+            15,
+            vec![(0, 15), (2, 20)],
+        )
+        .unwrap();
+        must_locked(&mut engine, k1, 10);
+        must_locked(&mut engine, k1, 20);
+        must_locked(&mut engine, k1, 30);
     }
 }

@@ -933,6 +933,28 @@ pub mod test_util {
         prewrite_command(engine, cm, statistics, cmd)
     }
 
+    pub fn pessimistic_prewrite_check_for_update_ts(
+        engine: &mut E,
+        statistics: &mut Statistics,
+        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        for_update_ts_checks: impl IntoIterator<Item = (usize, u64)>,
+    ) -> Result<PrewriteResult> {
+        let cmd = PrewritePessimistic::with_check_for_update_ts(
+            mutations,
+            primary,
+            start_ts.into(),
+            for_update_ts.into(),
+            for_update_ts_checks
+                .into_iter()
+                .map(|(size, ts)| (size, TimeStamp::from(ts))),
+        );
+        let cm = ConcurrencyManager::new(start_ts.into());
+        prewrite_command(engine, cm, statistics, cmd)
+    }
+
     pub fn commit<E: Engine>(
         engine: &mut E,
         statistics: &mut Statistics,

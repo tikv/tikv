@@ -33,7 +33,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     is_retry_request: bool,
     assertion: Assertion,
     assertion_level: AssertionLevel,
-) {
+) -> TimeStamp {
     must_prewrite_put_impl_with_should_not_exist(
         engine,
         key,
@@ -54,7 +54,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
         false,
         None,
         0,
-    );
+    )
 }
 
 pub fn must_prewrite_insert_impl<E: Engine>(
@@ -117,7 +117,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
     should_not_exist: bool,
     region_id: Option<u64>,
     txn_source: u64,
-) {
+) -> TimeStamp {
     let mut ctx = Context::default();
     ctx.set_txn_source(txn_source);
     if let Some(region_id) = region_id {
@@ -147,7 +147,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
     } else {
         CommitKind::TwoPc
     };
-    prewrite(
+    let (min_commit_ts, _) = prewrite(
         &mut txn,
         &mut reader,
         &TransactionProperties {
@@ -170,6 +170,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
     )
     .unwrap();
     write(engine, &ctx, txn.into_modifies());
+    min_commit_ts
 }
 
 pub fn must_prewrite_put<E: Engine>(
@@ -421,7 +422,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
     for_update_ts: impl Into<TimeStamp>,
     pessimistic_action: PrewriteRequestPessimisticAction,
     min_commit_ts: impl Into<TimeStamp>,
-) {
+) -> TimeStamp {
     assert!(secondary_keys.is_some());
     must_prewrite_put_impl(
         engine,
@@ -439,7 +440,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         false,
         Assertion::None,
         AssertionLevel::Off,
-    );
+    )
 }
 
 pub fn must_pessimistic_prewrite_put_check_for_update_ts<E: Engine>(

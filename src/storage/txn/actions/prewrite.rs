@@ -219,16 +219,18 @@ pub enum TransactionKind {
     Pessimistic(TimeStamp),
 }
 
+#[derive(Clone, Copy)]
 enum LockStatus {
     // Lock has already been locked; min_commit_ts of lock.
     Locked(TimeStamp),
-    Pessimistic,
+    // Key is pessimistic-locked; for_update_ts of lock.
+    Pessimistic(TimeStamp),
     None,
 }
 
 impl LockStatus {
     fn has_pessimistic_lock(&self) -> bool {
-        matches!(self, LockStatus::Pessimistic)
+        matches!(self, LockStatus::Pessimistic(_))
     }
 }
 
@@ -385,7 +387,7 @@ impl<'a> PrewriteMutation<'a> {
             self.lock_ttl = std::cmp::max(self.lock_ttl, lock.ttl);
             self.min_commit_ts = std::cmp::max(self.min_commit_ts, lock.min_commit_ts);
 
-            return Ok(LockStatus::Pessimistic);
+            return Ok(LockStatus::Pessimistic(lock.for_update_ts));
         }
 
         // Duplicated command. No need to overwrite the lock and data.
@@ -494,13 +496,20 @@ impl<'a> PrewriteMutation<'a> {
     ) -> Result<TimeStamp> {
         let mut try_one_pc = self.try_one_pc();
 
+        let for_update_ts_to_write = match (self.txn_props.for_update_ts(), lock_status) {
+            (from_prewrite_req, LockStatus::Pessimistic(from_pessimistic_lock)) => {
+                std::cmp::max(from_prewrite_req, from_pessimistic_lock)
+            }
+            (for_update_ts_from_req, _) => for_update_ts_from_req,
+        };
+
         let mut lock = Lock::new(
             self.lock_type.unwrap(),
             self.txn_props.primary.to_vec(),
             self.txn_props.start_ts,
             self.lock_ttl,
             None,
-            self.txn_props.for_update_ts(),
+            for_update_ts_to_write,
             self.txn_props.txn_size,
             self.min_commit_ts,
         )
@@ -530,6 +539,7 @@ impl<'a> PrewriteMutation<'a> {
             let res = async_commit_timestamps(
                 &self.key,
                 &mut lock,
+                lock_status,
                 self.txn_props.start_ts,
                 self.txn_props.for_update_ts(),
                 self.txn_props.max_commit_ts(),
@@ -709,6 +719,7 @@ impl<'a> PrewriteMutation<'a> {
 fn async_commit_timestamps(
     key: &Key,
     lock: &mut Lock,
+    prev_lock_status: LockStatus,
     start_ts: TimeStamp,
     for_update_ts: TimeStamp,
     max_commit_ts: TimeStamp,
@@ -724,6 +735,30 @@ fn async_commit_timestamps(
         let min_commit_ts = cmp::max(cmp::max(max_ts, start_ts), for_update_ts).next();
         let min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
 
+        let fallback_for_force_locking_ts_too_large = if let LockStatus::Pessimistic(for_update_ts_in_pessimistic_lock) = prev_lock_status {
+            // When force locking (allow_lock_with_conflict) of pessimistic lock has ever
+            // happened on the key before, it's possible that the key is locked on a larger
+            // `for_update_ts`. The commit_ts of the transaction must be greater than it,
+            // otherwise it indicates that the transaction commits logically before its
+            // read, which is incorrect. Another problem here is that when force-locking
+            // takes effect, the `for_update_ts` written in the pessimistic lock equals
+            // to the `commit_ts` of the latest version before the lock, which can be
+            // a calculated one instead of from TSO. This means that we cannot use this
+            // `for_update_ts` + 1 as the commit_ts, which can potentially break the
+            // linearizability.
+            //
+            // Actually this case should never happen for now (since TiDB must retry the
+            // statement after locking with conflict, and it must get a larger
+            // for_update_ts with TSO, thus the prewrite request must carries a larger
+            // `min_commit_ts`), but we still check it for safety. Moreover, this case
+            // should be carefully treated when implementing the statement-retry-
+            // reduction optimization of TiDB,
+            // (https://github.com/pingcap/tidb/issues/42772).
+            for_update_ts_in_pessimistic_lock > min_commit_ts
+        } else {
+            false
+        };
+
         #[cfg(feature = "failpoints")]
         let injected_fallback = (|| {
             fail_point!("async_commit_1pc_force_fallback", |_| {
@@ -736,7 +771,7 @@ fn async_commit_timestamps(
         let injected_fallback = false;
 
         let max_commit_ts = max_commit_ts;
-        if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || injected_fallback {
+        if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || fallback_for_force_locking_ts_too_large || injected_fallback {
             warn!("commit_ts is too large, fallback to normal 2PC";
                 "key" => log_wrappers::Value::key(key.as_encoded()),
                 "start_ts" => start_ts,
@@ -2586,6 +2621,9 @@ pub mod tests {
                            expected_for_update_ts: u64,
                            success: bool,
                            commit_ts: u64| {
+            // In actual cases this kinds of pessimistic locks should be locked in
+            // `allow_locking_with_conflict` mode. For simplicity of this test case,
+            // we simply passe a large for_update_ts to the pessimistic lock.
             must_acquire_pessimistic_lock(&mut engine, key, key, start_ts, lock_for_update_ts);
             must_pessimistic_locked(&mut engine, key, start_ts, lock_for_update_ts);
             if success {
@@ -2655,5 +2693,55 @@ pub mod tests {
         must_unlocked(&mut engine, key);
         prewrite_err(&mut engine, key, value, key, 120, 130, Some(130));
         must_unlocked(&mut engine, key);
+    }
+
+    #[test]
+    fn test_force_locking_async_commit_safety() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+
+        let k1 = b"k1";
+        let k2 = b"k2";
+        let k3 = b"k3";
+
+        must_prewrite_put(&mut engine, k1, b"v1", k1, 5);
+        must_commit(&mut engine, k1, 5, 8);
+        must_prewrite_put(&mut engine, k2, b"v2", k2, 6);
+        must_commit(&mut engine, k2, 6, 12);
+        must_prewrite_put(&mut engine, k3, b"v3", k3, 7);
+        must_commit(&mut engine, k3, 7, 30);
+
+        // Shortcuts for better readability.
+        let lock = must_acquire_pessimistic_lock_allow_lock_with_conflict;
+        let prewrite =
+            |engine, key, value, primary, secondaries, start_ts, for_update_ts, min_commit_ts| {
+                must_pessimistic_prewrite_put_async_commit(
+                    engine,
+                    key,
+                    value,
+                    primary,
+                    secondaries,
+                    start_ts,
+                    for_update_ts,
+                    DoPessimisticCheck,
+                    min_commit_ts,
+                )
+            };
+
+        lock(&mut engine, k1, k1, 10, 10, false, false).assert_empty();
+        lock(&mut engine, k2, k1, 10, 10, false, false)
+            .assert_locked_with_conflict(Some(b"v2"), 12);
+        lock(&mut engine, k3, k1, 10, 10, false, false)
+            .assert_locked_with_conflict(Some(b"v3"), 30);
+
+        // Prewrite in async commit mode
+        let secondaries = Some(vec![b"k2".to_vec(), b"k3".to_vec()]);
+        // Passes async commit check
+        let min_commit_ts = prewrite(&mut engine, k1, b"v11", k1, &secondaries, 10, 20, 21);
+        assert_eq!(min_commit_ts, 21.into());
+        let min_commit_ts = prewrite(&mut engine, k2, b"v22", k1, &Some(vec![]), 10, 20, 21);
+        assert_eq!(min_commit_ts, 21.into());
+        // Fallbacks to 2PC due to min_commit_ts < pessimistic_lock.for_update_ts
+        let min_commit_ts = prewrite(&mut engine, k3, b"v33", k1, &Some(vec![]), 10, 20, 21);
+        assert_eq!(min_commit_ts, 0.into());
     }
 }
