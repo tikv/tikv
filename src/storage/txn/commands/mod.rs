@@ -933,7 +933,7 @@ pub mod test_util {
         prewrite_command(engine, cm, statistics, cmd)
     }
 
-    pub fn pessimistic_prewrite_check_for_update_ts(
+    pub fn pessimistic_prewrite_check_for_update_ts<E: Engine>(
         engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,

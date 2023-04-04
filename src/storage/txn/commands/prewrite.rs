@@ -2881,7 +2881,7 @@ mod tests {
         ];
 
         let e = pessimistic_prewrite_check_for_update_ts(
-            &mut unwrap,
+            &mut engine,
             &mut statistics,
             mutations.clone(),
             k1.to_vec(),
@@ -2894,7 +2894,7 @@ mod tests {
         check_lock_unchanged();
 
         let e = pessimistic_prewrite_check_for_update_ts(
-            &mut unwrap,
+            &mut engine,
             &mut statistics,
             mutations.clone(),
             k1.to_vec(),
@@ -2907,7 +2907,7 @@ mod tests {
         check_lock_unchanged();
 
         let e = pessimistic_prewrite_check_for_update_ts(
-            &mut unwrap,
+            &mut engine,
             &mut statistics,
             mutations.clone(),
             k1.to_vec(),
@@ -2921,7 +2921,7 @@ mod tests {
 
         // Index out of bound (invalid request).
         pessimistic_prewrite_check_for_update_ts(
-            &mut unwrap,
+            &mut engine,
             &mut statistics,
             mutations.clone(),
             k1.to_vec(),
@@ -2933,7 +2933,7 @@ mod tests {
         check_lock_unchanged();
 
         pessimistic_prewrite_check_for_update_ts(
-            &mut unwrap,
+            &mut engine,
             &mut statistics,
             mutations.clone(),
             k1.to_vec(),

@@ -496,7 +496,6 @@ pub mod tests {
         res.map(|r| r.0)
     }
 
-    #[cfg(test)]
     pub fn must_succeed_allow_lock_with_conflict<E: Engine>(
         engine: &mut E,
         key: &[u8],

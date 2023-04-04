@@ -609,7 +609,7 @@ pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
         mutation,
         &None,
         pessimistic_action,
-        None,
+        expected_for_update_ts,
     )
     .unwrap_err()
 }
@@ -702,11 +702,11 @@ pub fn must_pessimistic_prewrite_put_check_for_update_ts_err<E: Engine>(
         value,
         pk,
         &None,
-        ts.into(),
-        for_update_ts.into(),
+        ts,
+        for_update_ts,
         DoPessimisticCheck,
         expected_for_update_ts.map(Into::into),
-        0.into(),
+        0,
         false,
         Assertion::None,
         AssertionLevel::Off,
