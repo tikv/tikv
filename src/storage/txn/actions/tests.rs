@@ -525,6 +525,7 @@ pub fn must_prewrite_put_err_impl<E: Engine>(
         for_update_ts.into(),
         pessimistic_action,
         None,
+        0,
         max_commit_ts.into(),
         is_retry_request,
         assertion,
@@ -557,6 +558,7 @@ pub fn must_prewrite_insert_err_impl<E: Engine>(
         for_update_ts.into(),
         pessimistic_action,
         None,
+        0,
         max_commit_ts.into(),
         is_retry_request,
         assertion,
@@ -575,6 +577,7 @@ pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
     for_update_ts: impl Into<TimeStamp>,
     pessimistic_action: PrewriteRequestPessimisticAction,
     expected_for_update_ts: Option<TimeStamp>,
+    min_commit_ts: impl Into<TimeStamp>,
     max_commit_ts: impl Into<TimeStamp>,
     is_retry_request: bool,
     assertion: Assertion,
@@ -601,13 +604,14 @@ pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
     props.is_retry_request = is_retry_request;
     props.commit_kind = commit_kind;
     props.assertion_level = assertion_level;
+    props.min_commit_ts = min_commit_ts.into();
 
     prewrite(
         &mut txn,
         &mut reader,
         &props,
         mutation,
-        &None,
+        &secondary_keys,
         pessimistic_action,
         expected_for_update_ts,
     )
@@ -706,6 +710,7 @@ pub fn must_pessimistic_prewrite_put_check_for_update_ts_err<E: Engine>(
         for_update_ts,
         DoPessimisticCheck,
         expected_for_update_ts.map(Into::into),
+        0,
         0,
         false,
         Assertion::None,

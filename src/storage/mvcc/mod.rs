@@ -148,6 +148,19 @@ pub enum ErrorInner {
     },
 
     #[error(
+        "min_commit_ts {} is smaller or equal to for_update_ts of force-locked pessimistic lock {}, start_ts: {}, req_for_update_ts: {}, key: {}",
+        .min_commit_ts, .lock_for_update_ts, .start_ts, req_for_update_ts,
+        log_wrappers::Value::key(.key)
+    )]
+    ForceLockingExceedsMinCommitTS {
+        start_ts: TimeStamp,
+        req_for_update_ts: TimeStamp,
+        lock_for_update_ts: TimeStamp,
+        min_commit_ts: TimeStamp,
+        key: Vec<u8>,
+    },
+
+    #[error(
         "assertion on data failed, start_ts:{}, key:{}, assertion:{:?}, existing_start_ts:{}, existing_commit_ts:{}",
         .start_ts, log_wrappers::Value::key(.key), .assertion, .existing_start_ts, .existing_commit_ts
     )]
@@ -272,6 +285,19 @@ impl ErrorInner {
                 min_commit_ts: *min_commit_ts,
                 max_commit_ts: *max_commit_ts,
             }),
+            ErrorInner::ForceLockingExceedsMinCommitTS {
+                start_ts,
+                req_for_update_ts,
+                lock_for_update_ts,
+                min_commit_ts,
+                key,
+            } => Some(ErrorInner::ForceLockingExceedsMinCommitTS {
+                start_ts: *start_ts,
+                req_for_update_ts: *req_for_update_ts,
+                lock_for_update_ts: *lock_for_update_ts,
+                min_commit_ts: *min_commit_ts,
+                key: key.clone(),
+            }),
             ErrorInner::AssertionFailed {
                 start_ts,
                 key,
@@ -303,6 +329,14 @@ pub struct Error(#[from] pub Box<ErrorInner>);
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         self.0.maybe_clone().map(Error::from)
+    }
+
+    pub fn is_async_commit_fallback(&self) -> bool {
+        match &*self.0 {
+            ErrorInner::CommitTsTooLarge { .. }
+            | ErrorInner::ForceLockingExceedsMinCommitTS { .. } => true,
+            _ => false,
+        }
     }
 }
 
@@ -391,6 +425,9 @@ impl ErrorCodeExt for Error {
                 error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
             }
             ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
+            ErrorInner::ForceLockingExceedsMinCommitTS { .. } => {
+                error_code::storage::FORCE_LOCKING_EXCEEDS_MIN_COMMIT_TS
+            }
             ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
             ErrorInner::LockIfExistsFailed { .. } => error_code::storage::LOCK_IF_EXISTS_FAILED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,

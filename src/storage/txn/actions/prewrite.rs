@@ -380,6 +380,12 @@ impl<'a> PrewriteMutation<'a> {
                     "start_ts" => self.txn_props.start_ts,
                     "expected_for_update_ts" => ts,
                     "actual_for_update_ts" => lock.for_update_ts);
+
+                return Err(ErrorInner::PessimisticLockNotFound {
+                    start_ts: self.txn_props.start_ts,
+                    key: self.key.to_raw()?,
+                }
+                    .into());
             }
 
             // The lock is pessimistic and owned by this txn, go through to overwrite it.
@@ -546,7 +552,7 @@ impl<'a> PrewriteMutation<'a> {
                 txn,
             );
             fail_point!("after_calculate_min_commit_ts");
-            if let Err(Error(box ErrorInner::CommitTsTooLarge { .. })) = &res {
+            if let Err(e) = &res && e.is_async_commit_fallback() {
                 try_one_pc = false;
                 lock.use_async_commit = false;
                 lock.secondaries = Vec::new();
@@ -735,7 +741,34 @@ fn async_commit_timestamps(
         let min_commit_ts = cmp::max(cmp::max(max_ts, start_ts), for_update_ts).next();
         let min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
 
-        let fallback_for_force_locking_ts_too_large = if let LockStatus::Pessimistic(for_update_ts_in_pessimistic_lock) = prev_lock_status {
+        #[cfg(feature = "failpoints")]
+        let injected_fallback = (|| {
+            fail_point!("async_commit_1pc_force_fallback", |_| {
+                info!("[failpoint] injected fallback for async commit/1pc transaction"; "start_ts" => start_ts);
+                true
+            });
+            false
+        })();
+        #[cfg(not(feature = "failpoints"))]
+        let injected_fallback = false;
+
+        let max_commit_ts = max_commit_ts;
+        if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || injected_fallback {
+            warn!("commit_ts is too large, fallback to normal 2PC";
+                "key" => log_wrappers::Value::key(key.as_encoded()),
+                "start_ts" => start_ts,
+                "min_commit_ts" => min_commit_ts,
+                "max_commit_ts" => max_commit_ts,
+                "lock" => ?lock);
+            return Err(ErrorInner::CommitTsTooLarge {
+                start_ts,
+                min_commit_ts,
+                max_commit_ts,
+            });
+        }
+
+        if let LockStatus::Pessimistic(lock_for_update_ts) = prev_lock_status &&
+            lock_for_update_ts >= min_commit_ts {
             // When force locking (allow_lock_with_conflict) of pessimistic lock has ever
             // happened on the key before, it's possible that the key is locked on a larger
             // `for_update_ts`. The commit_ts of the transaction must be greater than it,
@@ -754,34 +787,20 @@ fn async_commit_timestamps(
             // should be carefully treated when implementing the statement-retry-
             // reduction optimization of TiDB,
             // (https://github.com/pingcap/tidb/issues/42772).
-            for_update_ts_in_pessimistic_lock >= min_commit_ts
-        } else {
-            false
-        };
-
-        #[cfg(feature = "failpoints")]
-        let injected_fallback = (|| {
-            fail_point!("async_commit_1pc_force_fallback", |_| {
-                info!("[failpoint] injected fallback for async commit/1pc transaction"; "start_ts" => start_ts);
-                true
-            });
-            false
-        })();
-        #[cfg(not(feature = "failpoints"))]
-        let injected_fallback = false;
-
-        let max_commit_ts = max_commit_ts;
-        if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || fallback_for_force_locking_ts_too_large || injected_fallback {
-            warn!("commit_ts is too large, fallback to normal 2PC";
+            warn!("async commit or 1PC fallback to 2PC caused by for_update_ts of pessimistic lock \
+                (force locked) not less than calculated min_commit_ts";
                 "key" => log_wrappers::Value::key(key.as_encoded()),
                 "start_ts" => start_ts,
                 "min_commit_ts" => min_commit_ts,
-                "max_commit_ts" => max_commit_ts,
+                "for_update_ts_from_prewrite_req" => for_update_ts,
+                "for_update_ts_from_lock" => lock_for_update_ts,
                 "lock" => ?lock);
-            return Err(ErrorInner::CommitTsTooLarge {
+            return Err(ErrorInner::ForceLockingExceedsMinCommitTS {
                 start_ts,
+                req_for_update_ts: for_update_ts,
+                lock_for_update_ts,
                 min_commit_ts,
-                max_commit_ts,
+                key: key.to_raw()?,
             });
         }
 
@@ -2702,7 +2721,7 @@ pub mod tests {
         let k1 = b"k1";
         let k2 = b"k2";
         let k3 = b"k3";
-        let k4 = b"k3";
+        let k4 = b"k4";
 
         must_prewrite_put(&mut engine, k1, b"v1", k1, 5);
         must_commit(&mut engine, k1, 5, 8);
@@ -2736,6 +2755,40 @@ pub mod tests {
             )
         };
 
+        let prewrite_must_fallback = |engine: &mut _,
+                                      key,
+                                      value,
+                                      primary,
+                                      secondaries: &_,
+                                      start_ts,
+                                      for_update_ts,
+                                      min_commit_ts| {
+            let e = must_prewrite_put_err_impl_with_should_not_exist(
+                engine,
+                key,
+                value,
+                primary,
+                secondaries,
+                start_ts,
+                for_update_ts,
+                DoPessimisticCheck,
+                None,
+                min_commit_ts,
+                0,
+                false,
+                kvproto::kvrpcpb::Assertion::None,
+                kvproto::kvrpcpb::AssertionLevel::Off,
+                false,
+            );
+            match e {
+                Error(box ErrorInner::ForceLockingExceedsMinCommitTS { .. }) => (),
+                e => panic!(
+                    "unexpected error: expected ForceLockingExceedsMinCommitTS, got {:?}",
+                    e
+                ),
+            }
+        };
+
         lock(&mut engine, k1, k1, 10, 10, false, false).assert_empty();
         lock(&mut engine, k2, k1, 10, 10, false, false)
             .assert_locked_with_conflict(Some(b"v2"), 12);
@@ -2752,10 +2805,8 @@ pub mod tests {
         let min_commit_ts = prewrite(&mut engine, k2, b"v22", k1, &Some(vec![]), 10, 20, 21);
         assert_eq!(min_commit_ts, 21.into());
         // Fallbacks to 2PC due to min_commit_ts < pessimistic_lock.for_update_ts
-        let min_commit_ts = prewrite(&mut engine, k3, b"v33", k1, &Some(vec![]), 10, 20, 21);
-        assert_eq!(min_commit_ts, 0.into());
+        prewrite_must_fallback(&mut engine, k3, b"v33", k1, &Some(vec![]), 10, 20, 21);
         // Fallbacks to 2PC due to min_commit_ts == pessimistic_lock.for_update_ts
-        let min_commit_ts = prewrite(&mut engine, k4, b"v44", k1, &Some(vec![]), 10, 20, 21);
-        assert_eq!(min_commit_ts, 0.into());
+        prewrite_must_fallback(&mut engine, k4, b"v44", k1, &Some(vec![]), 10, 20, 21);
     }
 }

@@ -743,6 +743,12 @@ error = '''
 KV:Storage:CommitTsTooLarge
 '''
 
+["KV:Storage:ForceLockingExceedsMinCommitTS"]
+error = '''
+KV:Storage:ForceLockingExceedsMinCommitTS
+'''
+
+
 ["KV:Storage:AssertionFailed"]
 error = '''
 KV:Storage:AssertionFailed

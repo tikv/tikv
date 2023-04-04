@@ -659,7 +659,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
                     return check_committed_record_on_err(prewrite_result, txn, reader, &key);
                 }
-                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) => {
+                Err(ref e @ MvccError(_)) if e.is_async_commit_fallback() => {
                     // The prewrite might be a retry and the record may have been committed.
                     // So, we need to prevent the fallback to avoid duplicate commits.
                     if let Ok(res) =
@@ -2943,7 +2943,7 @@ mod tests {
         )
         .unwrap();
         must_locked(&mut engine, k1, 10);
-        must_locked(&mut engine, k1, 20);
-        must_locked(&mut engine, k1, 30);
+        must_locked(&mut engine, k2, 10);
+        must_locked(&mut engine, k3, 10);
     }
 }
