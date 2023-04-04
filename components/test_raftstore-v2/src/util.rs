@@ -163,7 +163,7 @@ pub fn configure_for_lease_read_v2<T: Simulator<EK>, EK: KvEngine>(
 }
 
 pub fn wait_for_synced(
-    cluster: &mut Cluster<ServerCluster, RocksEngine>,
+    cluster: &mut Cluster<ServerCluster<RocksEngine>, RocksEngine>,
     node_id: u64,
     region_id: u64,
 ) {
