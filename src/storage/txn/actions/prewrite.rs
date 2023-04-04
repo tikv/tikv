@@ -754,7 +754,7 @@ fn async_commit_timestamps(
             // should be carefully treated when implementing the statement-retry-
             // reduction optimization of TiDB,
             // (https://github.com/pingcap/tidb/issues/42772).
-            for_update_ts_in_pessimistic_lock > min_commit_ts
+            for_update_ts_in_pessimistic_lock >= min_commit_ts
         } else {
             false
         };
@@ -2709,6 +2709,8 @@ pub mod tests {
         must_commit(&mut engine, k2, 6, 12);
         must_prewrite_put(&mut engine, k3, b"v3", k3, 7);
         must_commit(&mut engine, k3, 7, 30);
+        must_prewrite_put(&mut engine, k4, b"v4", k4, 8);
+        must_commit(&mut engine, k4, 8, 21);
 
         // Shortcuts for better readability.
         let lock = must_acquire_pessimistic_lock_allow_lock_with_conflict;
@@ -2732,6 +2734,8 @@ pub mod tests {
             .assert_locked_with_conflict(Some(b"v2"), 12);
         lock(&mut engine, k3, k1, 10, 10, false, false)
             .assert_locked_with_conflict(Some(b"v3"), 30);
+        lock(&mut engine, k4, k1, 10, 10, false, false)
+            .assert_locked_with_conflict(Some(b"v4"), 21);
 
         // Prewrite in async commit mode
         let secondaries = Some(vec![b"k2".to_vec(), b"k3".to_vec()]);
@@ -2742,6 +2746,9 @@ pub mod tests {
         assert_eq!(min_commit_ts, 21.into());
         // Fallbacks to 2PC due to min_commit_ts < pessimistic_lock.for_update_ts
         let min_commit_ts = prewrite(&mut engine, k3, b"v33", k1, &Some(vec![]), 10, 20, 21);
+        assert_eq!(min_commit_ts, 0.into());
+        // Fallbacks to 2PC due to min_commit_ts == pessimistic_lock.for_update_ts
+        let min_commit_ts = prewrite(&mut engine, k4, b"v44", k1, &Some(vec![]), 10, 20, 21);
         assert_eq!(min_commit_ts, 0.into());
     }
 }
