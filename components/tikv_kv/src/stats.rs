@@ -22,6 +22,7 @@ const STAT_SEEK_TOMBSTONE: &str = "seek_tombstone";
 const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
 /// Statistics of raw value tombstone by RawKV TTL expired or logical deleted.
 const STAT_RAW_VALUE_TOMBSTONE: &str = "raw_value_tombstone";
+const STAT_IN_MEMORY_PESSIMISTIC_LOCK_HIT: &str = "in_memory_pessimistic_lock_hit";
 
 thread_local! {
     pub static RAW_VALUE_TOMBSTONE : RefCell<usize> = RefCell::new(0);
@@ -100,9 +101,11 @@ pub struct CfStatistics {
     pub seek_tombstone: usize,
     pub seek_for_prev_tombstone: usize,
     pub raw_value_tombstone: usize,
+
+    pub in_memory_pessimistic_lock_get_hit: usize,
 }
 
-const STATS_COUNT: usize = 12;
+const STATS_COUNT: usize = 13;
 
 impl CfStatistics {
     #[inline]
@@ -124,6 +127,10 @@ impl CfStatistics {
             (STAT_SEEK_TOMBSTONE, self.seek_tombstone),
             (STAT_SEEK_FOR_PREV_TOMBSTONE, self.seek_for_prev_tombstone),
             (STAT_RAW_VALUE_TOMBSTONE, self.raw_value_tombstone),
+            (
+                STAT_IN_MEMORY_PESSIMISTIC_LOCK_HIT,
+                self.in_memory_pessimistic_lock_get_hit,
+            ),
         ]
     }
 
@@ -144,27 +151,51 @@ impl CfStatistics {
                 self.seek_for_prev_tombstone,
             ),
             (GcKeysDetail::raw_value_tombstone, self.raw_value_tombstone),
+            (
+                GcKeysDetail::in_memory_pessimistic_lock_hit,
+                self.in_memory_pessimistic_lock_get_hit,
+            ),
         ]
     }
 
     pub fn add(&mut self, other: &Self) {
-        self.processed_keys = self.processed_keys.saturating_add(other.processed_keys);
-        self.get = self.get.saturating_add(other.get);
-        self.next = self.next.saturating_add(other.next);
-        self.prev = self.prev.saturating_add(other.prev);
-        self.seek = self.seek.saturating_add(other.seek);
-        self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
-        self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
-        self.flow_stats.add(&other.flow_stats);
-        self.next_tombstone = self.next_tombstone.saturating_add(other.next_tombstone);
-        self.prev_tombstone = self.prev_tombstone.saturating_add(other.prev_tombstone);
-        self.seek_tombstone = self.seek_tombstone.saturating_add(other.seek_tombstone);
-        self.seek_for_prev_tombstone = self
-            .seek_for_prev_tombstone
-            .saturating_add(other.seek_for_prev_tombstone);
-        self.raw_value_tombstone = self
-            .raw_value_tombstone
-            .saturating_add(other.raw_value_tombstone);
+        // pattern match so newly added fields cannot be forgotten.
+        match self {
+            CfStatistics {
+                processed_keys,
+                get,
+                next,
+                prev,
+                seek,
+                seek_for_prev,
+                over_seek_bound,
+                flow_stats,
+                next_tombstone,
+                prev_tombstone,
+                seek_tombstone,
+                seek_for_prev_tombstone,
+                raw_value_tombstone,
+                in_memory_pessimistic_lock_get_hit,
+            } => {
+                *processed_keys = processed_keys.saturating_add(other.processed_keys);
+                *get = get.saturating_add(other.get);
+                *next = next.saturating_add(other.next);
+                *prev = prev.saturating_add(other.prev);
+                *seek = seek.saturating_add(other.seek);
+                *seek_for_prev = seek_for_prev.saturating_add(other.seek_for_prev);
+                *over_seek_bound = over_seek_bound.saturating_add(other.over_seek_bound);
+                flow_stats.add(&other.flow_stats);
+                *next_tombstone = next_tombstone.saturating_add(other.next_tombstone);
+                *prev_tombstone = prev_tombstone.saturating_add(other.prev_tombstone);
+                *seek_tombstone = seek_tombstone.saturating_add(other.seek_tombstone);
+                *seek_for_prev_tombstone =
+                    seek_for_prev_tombstone.saturating_add(other.seek_for_prev_tombstone);
+                *raw_value_tombstone =
+                    raw_value_tombstone.saturating_add(other.raw_value_tombstone);
+                *in_memory_pessimistic_lock_get_hit = in_memory_pessimistic_lock_get_hit
+                    .saturating_add(other.in_memory_pessimistic_lock_get_hit);
+            }
+        }
     }
 
     /// Deprecated

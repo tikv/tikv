@@ -223,6 +223,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if let Some(pessimistic_lock) = self.load_in_memory_pessimistic_lock(key)? {
+            self.statistics.lock.in_memory_pessimistic_lock_get_hit += 1;
             return Ok(Some(pessimistic_lock));
         }
 

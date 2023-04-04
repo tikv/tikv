@@ -29,6 +29,7 @@ make_auto_flush_static_metric! {
         seek_tombstone,
         seek_for_prev_tombstone,
         raw_value_tombstone,
+        in_memory_pessimistic_lock_hit,
     }
 
     pub struct GcKeysCounterVec: LocalIntCounter {
