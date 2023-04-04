@@ -10,17 +10,19 @@ use std::{
         atomic::{AtomicU32, Ordering},
         mpsc, Arc,
     },
+    time::Duration,
     u64,
 };
 
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
+    flush_engine_statistics,
     raw::{Cache, Env},
     FlowInfo, RocksEngine, RocksStatistics,
 };
 use engine_traits::{
-    CachedTablet, CfOptionsExt, FlowControlFactorsExt, RaftEngine, TabletRegistry, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
+    CachedTablet, CfOptionsExt, FlowControlFactorsExt, KvEngine, RaftEngine, StatisticsReporter,
+    TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
@@ -33,14 +35,14 @@ use tikv::{
     server::{status_server::StatusServer, DEFAULT_CLUSTER_ID},
 };
 use tikv_util::{
-    config::RaftDataStateMachine,
+    config::{ensure_dir_exist, RaftDataStateMachine},
     math::MovingAvgU32,
     sys::{disk, path_in_diff_mount_point},
     time::Instant,
     worker::{LazyWorker, Worker},
 };
 
-use crate::raft_engine_switch::*;
+use crate::{raft_engine_switch::*, setup::validate_and_persist_config};
 
 /// This is the common layer of TiKV-like servers. By holding it in its own
 /// TikvServer implementation, one can easily access the common ability of a
@@ -56,6 +58,52 @@ pub struct TikvServerCore {
 }
 
 impl TikvServerCore {
+    /// Initialize and check the config
+    ///
+    /// Warnings are logged and fatal errors exist.
+    ///
+    /// #  Fatal errors
+    ///
+    /// - If `dynamic config` feature is enabled and failed to register config
+    ///   to PD
+    /// - If some critical configs (like data dir) are differrent from last run
+    /// - If the config can't pass `validate()`
+    /// - If the max open file descriptor limit is not high enough to support
+    ///   the main database and the raft database.
+    pub fn init_config(mut config: TikvConfig) -> ConfigController {
+        validate_and_persist_config(&mut config, true);
+
+        ensure_dir_exist(&config.storage.data_dir).unwrap();
+        if !config.rocksdb.wal_dir.is_empty() {
+            ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
+        }
+        if config.raft_engine.enable {
+            ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
+        } else {
+            ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
+            if !config.raftdb.wal_dir.is_empty() {
+                ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
+            }
+        }
+
+        check_system_config(&config);
+
+        tikv_util::set_panic_hook(config.abort_on_panic, &config.storage.data_dir);
+
+        info!(
+            "using config";
+            "config" => serde_json::to_string(&config).unwrap(),
+        );
+        if config.panic_when_unexpected_key_or_data {
+            info!("panic-when-unexpected-key-or-data is on");
+            tikv_util::set_panic_when_unexpected_key_or_data(true);
+        }
+
+        config.write_into_metrics();
+
+        ConfigController::new(config)
+    }
+
     pub fn check_conflict_addr(&mut self) {
         let cur_addr: SocketAddr = self
             .config
@@ -561,5 +609,63 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             raft_data_state_machine.after_dump_data();
         }
         (raft_engine, None)
+    }
+}
+
+const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
+pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
+    tablet_registry: TabletRegistry<EK>,
+    kv_statistics: Option<Arc<RocksStatistics>>,
+    kv_is_titan: bool,
+    raft_engine: ER,
+    raft_statistics: Option<Arc<RocksStatistics>>,
+    last_reset: Instant,
+}
+
+impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
+    pub fn new(
+        tablet_registry: TabletRegistry<EK>,
+        kv_statistics: Option<Arc<RocksStatistics>>,
+        kv_is_titan: bool,
+        raft_engine: ER,
+        raft_statistics: Option<Arc<RocksStatistics>>,
+    ) -> Self {
+        EngineMetricsManager {
+            tablet_registry,
+            kv_statistics,
+            kv_is_titan,
+            raft_engine,
+            raft_statistics,
+            last_reset: Instant::now(),
+        }
+    }
+
+    pub fn flush(&mut self, now: Instant) {
+        let mut reporter = EK::StatisticsReporter::new("kv");
+        self.tablet_registry
+            .for_each_opened_tablet(|_, db: &mut CachedTablet<EK>| {
+                if let Some(db) = db.latest() {
+                    reporter.collect(db);
+                }
+                true
+            });
+        reporter.flush();
+        self.raft_engine.flush_metrics("raft");
+
+        if let Some(s) = self.kv_statistics.as_ref() {
+            flush_engine_statistics(s, "kv", self.kv_is_titan);
+        }
+        if let Some(s) = self.raft_statistics.as_ref() {
+            flush_engine_statistics(s, "raft", false);
+        }
+        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+            if let Some(s) = self.kv_statistics.as_ref() {
+                s.reset();
+            }
+            if let Some(s) = self.raft_statistics.as_ref() {
+                s.reset();
+            }
+            self.last_reset = now;
+        }
     }
 }

@@ -30,11 +30,11 @@ use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{
-    flush_engine_statistics, from_rocks_compression_type, RocksEngine, RocksStatistics,
+    from_rocks_compression_type, RocksEngine, RocksStatistics,
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    CachedTablet, Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, StatisticsReporter,
+    Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, StatisticsReporter,
     TabletContext, TabletRegistry, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
@@ -106,7 +106,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, VersionTrack},
+    config::{VersionTrack},
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
@@ -122,7 +122,10 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    common::{check_system_config, ConfiguredRaftEngine, EnginesResourceInfo, TikvServerCore},
+    common::{
+        ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo,
+        TikvServerCore,
+    },
     memory::*,
     setup::*,
     signal_handler,
@@ -207,7 +210,6 @@ pub fn run_tikv(config: TikvConfig) {
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
-const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -309,7 +311,7 @@ where
         }
 
         // Initialize and check config
-        let cfg_controller = Self::init_config(config);
+        let cfg_controller = TikvServerCore::init_config(config);
         let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
@@ -417,52 +419,6 @@ where
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
         }
-    }
-
-    /// Initialize and check the config
-    ///
-    /// Warnings are logged and fatal errors exist.
-    ///
-    /// #  Fatal errors
-    ///
-    /// - If `dynamic config` feature is enabled and failed to register config
-    ///   to PD
-    /// - If some critical configs (like data dir) are differrent from last run
-    /// - If the config can't pass `validate()`
-    /// - If the max open file descriptor limit is not high enough to support
-    ///   the main database and the raft database.
-    fn init_config(mut config: TikvConfig) -> ConfigController {
-        validate_and_persist_config(&mut config, true);
-
-        ensure_dir_exist(&config.storage.data_dir).unwrap();
-        if !config.rocksdb.wal_dir.is_empty() {
-            ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
-        }
-        if config.raft_engine.enable {
-            ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
-        } else {
-            ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
-            if !config.raftdb.wal_dir.is_empty() {
-                ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
-            }
-        }
-
-        check_system_config(&config);
-
-        tikv_util::set_panic_hook(config.abort_on_panic, &config.storage.data_dir);
-
-        info!(
-            "using config";
-            "config" => serde_json::to_string(&config).unwrap(),
-        );
-        if config.panic_when_unexpected_key_or_data {
-            info!("panic-when-unexpected-key-or-data is on");
-            tikv_util::set_panic_when_unexpected_key_or_data(true);
-        }
-
-        config.write_into_metrics();
-
-        ConfigController::new(config)
     }
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
@@ -1634,62 +1590,6 @@ fn pre_start() {
             "check: kernel";
             "err" => %e
         );
-    }
-}
-pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
-    tablet_registry: TabletRegistry<EK>,
-    kv_statistics: Option<Arc<RocksStatistics>>,
-    kv_is_titan: bool,
-    raft_engine: ER,
-    raft_statistics: Option<Arc<RocksStatistics>>,
-    last_reset: Instant,
-}
-
-impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
-    pub fn new(
-        tablet_registry: TabletRegistry<EK>,
-        kv_statistics: Option<Arc<RocksStatistics>>,
-        kv_is_titan: bool,
-        raft_engine: ER,
-        raft_statistics: Option<Arc<RocksStatistics>>,
-    ) -> Self {
-        EngineMetricsManager {
-            tablet_registry,
-            kv_statistics,
-            kv_is_titan,
-            raft_engine,
-            raft_statistics,
-            last_reset: Instant::now(),
-        }
-    }
-
-    pub fn flush(&mut self, now: Instant) {
-        let mut reporter = EK::StatisticsReporter::new("kv");
-        self.tablet_registry
-            .for_each_opened_tablet(|_, db: &mut CachedTablet<EK>| {
-                if let Some(db) = db.latest() {
-                    reporter.collect(db);
-                }
-                true
-            });
-        reporter.flush();
-        self.raft_engine.flush_metrics("raft");
-
-        if let Some(s) = self.kv_statistics.as_ref() {
-            flush_engine_statistics(s, "kv", self.kv_is_titan);
-        }
-        if let Some(s) = self.raft_statistics.as_ref() {
-            flush_engine_statistics(s, "raft", false);
-        }
-        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
-            if let Some(s) = self.kv_statistics.as_ref() {
-                s.reset();
-            }
-            if let Some(s) = self.raft_statistics.as_ref() {
-                s.reset();
-            }
-            self.last_reset = now;
-        }
     }
 }
 
