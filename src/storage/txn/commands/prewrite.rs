@@ -2849,7 +2849,7 @@ mod tests {
         must_acquire_pessimistic_lock(&mut engine, k2, k1, 10, 20);
         must_acquire_pessimistic_lock(&mut engine, k3, k1, 10, 20);
 
-        let check_lock_unchanged = |engine| {
+        let check_lock_unchanged = |engine: &mut _| {
             must_pessimistic_locked(engine, k1, 10, 10);
             must_pessimistic_locked(engine, k2, 10, 20);
             must_pessimistic_locked(engine, k3, 10, 20);
@@ -2935,7 +2935,7 @@ mod tests {
         pessimistic_prewrite_check_for_update_ts(
             &mut engine,
             &mut statistics,
-            mutations.clone(),
+            mutations,
             k1.to_vec(),
             10,
             15,

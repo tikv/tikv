@@ -2615,12 +2615,12 @@ pub mod tests {
         let prewrite = &must_pessimistic_prewrite_put_check_for_update_ts;
         let prewrite_err = &must_pessimistic_prewrite_put_check_for_update_ts_err;
 
-        let test_normal = |start_ts: u64,
-                           lock_for_update_ts: u64,
-                           prewrite_req_for_update_ts: u64,
-                           expected_for_update_ts: u64,
-                           success: bool,
-                           commit_ts: u64| {
+        let mut test_normal = |start_ts: u64,
+                               lock_for_update_ts: u64,
+                               prewrite_req_for_update_ts: u64,
+                               expected_for_update_ts: u64,
+                               success: bool,
+                               commit_ts: u64| {
             // In actual cases this kinds of pessimistic locks should be locked in
             // `allow_locking_with_conflict` mode. For simplicity of this test case,
             // we simply passe a large for_update_ts to the pessimistic lock.
@@ -2715,20 +2715,26 @@ pub mod tests {
 
         // Shortcuts for better readability.
         let lock = must_acquire_pessimistic_lock_allow_lock_with_conflict;
-        let prewrite =
-            |engine, key, value, primary, secondaries, start_ts, for_update_ts, min_commit_ts| {
-                must_pessimistic_prewrite_put_async_commit(
-                    engine,
-                    key,
-                    value,
-                    primary,
-                    secondaries,
-                    start_ts,
-                    for_update_ts,
-                    DoPessimisticCheck,
-                    min_commit_ts,
-                )
-            };
+        let prewrite = |engine: &mut _,
+                        key,
+                        value,
+                        primary,
+                        secondaries: &_,
+                        start_ts,
+                        for_update_ts,
+                        min_commit_ts| {
+            must_pessimistic_prewrite_put_async_commit(
+                engine,
+                key,
+                value,
+                primary,
+                secondaries,
+                start_ts,
+                for_update_ts,
+                DoPessimisticCheck,
+                min_commit_ts,
+            )
+        };
 
         lock(&mut engine, k1, k1, 10, 10, false, false).assert_empty();
         lock(&mut engine, k2, k1, 10, 10, false, false)
