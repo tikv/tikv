@@ -84,7 +84,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     #[inline]
     pub fn on_pd_heartbeat(&mut self) {
         self.fsm.peer_mut().update_peer_statistics();
-        self.fsm.peer_mut().maybe_clean_up_stale_merge_context();
         if self.fsm.peer().is_leader() {
             self.fsm.peer_mut().region_heartbeat_pd(self.store_ctx);
         }

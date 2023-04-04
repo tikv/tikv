@@ -95,6 +95,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer_mut().tick() {
             self.fsm.peer_mut().set_has_ready();
         }
+        self.fsm.peer_mut().maybe_clean_up_stale_merge_context();
         self.schedule_tick(PeerTick::Raft);
     }
 
