@@ -1636,7 +1636,6 @@ fn pre_start() {
         );
     }
 }
-
 pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
     tablet_registry: TabletRegistry<EK>,
     kv_statistics: Option<Arc<RocksStatistics>>,

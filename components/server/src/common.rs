@@ -325,116 +325,6 @@ pub fn check_system_config(config: &TikvConfig) {
     }
 }
 
-pub trait ConfiguredRaftEngine: RaftEngine {
-    fn build(
-        _: &TikvConfig,
-        _: &Arc<Env>,
-        _: &Option<Arc<DataKeyManager>>,
-        _: &Cache,
-    ) -> (Self, Option<Arc<RocksStatistics>>);
-    fn as_rocks_engine(&self) -> Option<&RocksEngine>;
-    fn register_config(&self, _cfg_controller: &mut ConfigController);
-}
-
-impl<T: RaftEngine> ConfiguredRaftEngine for T {
-    default fn build(
-        _: &TikvConfig,
-        _: &Arc<Env>,
-        _: &Option<Arc<DataKeyManager>>,
-        _: &Cache,
-    ) -> (Self, Option<Arc<RocksStatistics>>) {
-        unimplemented!()
-    }
-    default fn as_rocks_engine(&self) -> Option<&RocksEngine> {
-        None
-    }
-    default fn register_config(&self, _cfg_controller: &mut ConfigController) {}
-}
-
-impl ConfiguredRaftEngine for RocksEngine {
-    fn build(
-        config: &TikvConfig,
-        env: &Arc<Env>,
-        key_manager: &Option<Arc<DataKeyManager>>,
-        block_cache: &Cache,
-    ) -> (Self, Option<Arc<RocksStatistics>>) {
-        let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &config.storage.data_dir,
-            &config.raft_engine.config().dir,
-            &config.raft_store.raftdb_path,
-        );
-        let should_dump = raft_data_state_machine.before_open_target();
-
-        let raft_db_path = &config.raft_store.raftdb_path;
-        let config_raftdb = &config.raftdb;
-        let statistics = Arc::new(RocksStatistics::new_titan());
-        let raft_db_opts = config_raftdb.build_opt(env.clone(), Some(&statistics));
-        let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-        let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
-            .expect("failed to open raftdb");
-
-        if should_dump {
-            let raft_engine =
-                RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
-                    .expect("failed to open raft engine for migration");
-            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /* threads */);
-            raft_engine.stop();
-            drop(raft_engine);
-            raft_data_state_machine.after_dump_data();
-        }
-        (raftdb, Some(statistics))
-    }
-
-    fn as_rocks_engine(&self) -> Option<&RocksEngine> {
-        Some(self)
-    }
-
-    fn register_config(&self, cfg_controller: &mut ConfigController) {
-        cfg_controller.register(
-            tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(self.clone(), DbType::Raft)),
-        );
-    }
-}
-
-impl ConfiguredRaftEngine for RaftLogEngine {
-    fn build(
-        config: &TikvConfig,
-        env: &Arc<Env>,
-        key_manager: &Option<Arc<DataKeyManager>>,
-        block_cache: &Cache,
-    ) -> (Self, Option<Arc<RocksStatistics>>) {
-        let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &config.storage.data_dir,
-            &config.raft_store.raftdb_path,
-            &config.raft_engine.config().dir,
-        );
-        let should_dump = raft_data_state_machine.before_open_target();
-
-        let raft_config = config.raft_engine.config();
-        let raft_engine =
-            RaftLogEngine::new(raft_config, key_manager.clone(), get_io_rate_limiter())
-                .expect("failed to open raft engine");
-
-        if should_dump {
-            let config_raftdb = &config.raftdb;
-            let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
-            let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-            let raftdb = engine_rocks::util::new_engine_opt(
-                &config.raft_store.raftdb_path,
-                raft_db_opts,
-                raft_cf_opts,
-            )
-            .expect("failed to open raftdb for migration");
-            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /* threads */);
-            raftdb.stop();
-            drop(raftdb);
-            raft_data_state_machine.after_dump_data();
-        }
-        (raft_engine, None)
-    }
-}
-
 pub struct EnginesResourceInfo {
     tablet_registry: TabletRegistry<RocksEngine>,
     raft_engine: Option<RocksEngine>,
@@ -561,5 +451,115 @@ impl Stop for Worker {
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     fn stop(self: Box<Self>) {
         self.stop_worker();
+    }
+}
+
+pub trait ConfiguredRaftEngine: RaftEngine {
+    fn build(
+        _: &TikvConfig,
+        _: &Arc<Env>,
+        _: &Option<Arc<DataKeyManager>>,
+        _: &Cache,
+    ) -> (Self, Option<Arc<RocksStatistics>>);
+    fn as_rocks_engine(&self) -> Option<&RocksEngine>;
+    fn register_config(&self, _cfg_controller: &mut ConfigController);
+}
+
+impl<T: RaftEngine> ConfiguredRaftEngine for T {
+    default fn build(
+        _: &TikvConfig,
+        _: &Arc<Env>,
+        _: &Option<Arc<DataKeyManager>>,
+        _: &Cache,
+    ) -> (Self, Option<Arc<RocksStatistics>>) {
+        unimplemented!()
+    }
+    default fn as_rocks_engine(&self) -> Option<&RocksEngine> {
+        None
+    }
+    default fn register_config(&self, _cfg_controller: &mut ConfigController) {}
+}
+
+impl ConfiguredRaftEngine for RocksEngine {
+    fn build(
+        config: &TikvConfig,
+        env: &Arc<Env>,
+        key_manager: &Option<Arc<DataKeyManager>>,
+        block_cache: &Cache,
+    ) -> (Self, Option<Arc<RocksStatistics>>) {
+        let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &config.storage.data_dir,
+            &config.raft_engine.config().dir,
+            &config.raft_store.raftdb_path,
+        );
+        let should_dump = raft_data_state_machine.before_open_target();
+
+        let raft_db_path = &config.raft_store.raftdb_path;
+        let config_raftdb = &config.raftdb;
+        let statistics = Arc::new(RocksStatistics::new_titan());
+        let raft_db_opts = config_raftdb.build_opt(env.clone(), Some(&statistics));
+        let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
+        let raftdb = engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
+            .expect("failed to open raftdb");
+
+        if should_dump {
+            let raft_engine =
+                RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
+                    .expect("failed to open raft engine for migration");
+            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /* threads */);
+            raft_engine.stop();
+            drop(raft_engine);
+            raft_data_state_machine.after_dump_data();
+        }
+        (raftdb, Some(statistics))
+    }
+
+    fn as_rocks_engine(&self) -> Option<&RocksEngine> {
+        Some(self)
+    }
+
+    fn register_config(&self, cfg_controller: &mut ConfigController) {
+        cfg_controller.register(
+            tikv::config::Module::Raftdb,
+            Box::new(DbConfigManger::new(self.clone(), DbType::Raft)),
+        );
+    }
+}
+
+impl ConfiguredRaftEngine for RaftLogEngine {
+    fn build(
+        config: &TikvConfig,
+        env: &Arc<Env>,
+        key_manager: &Option<Arc<DataKeyManager>>,
+        block_cache: &Cache,
+    ) -> (Self, Option<Arc<RocksStatistics>>) {
+        let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &config.storage.data_dir,
+            &config.raft_store.raftdb_path,
+            &config.raft_engine.config().dir,
+        );
+        let should_dump = raft_data_state_machine.before_open_target();
+
+        let raft_config = config.raft_engine.config();
+        let raft_engine =
+            RaftLogEngine::new(raft_config, key_manager.clone(), get_io_rate_limiter())
+                .expect("failed to open raft engine");
+
+        if should_dump {
+            let config_raftdb = &config.raftdb;
+            let raft_db_opts = config_raftdb.build_opt(env.clone(), None);
+            let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
+            let raftdb = engine_rocks::util::new_engine_opt(
+                &config.raft_store.raftdb_path,
+                raft_db_opts,
+                raft_cf_opts,
+            )
+            .expect("failed to open raftdb for migration");
+            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /* threads */);
+            raftdb.stop();
+            drop(raftdb);
+            raft_data_state_machine.after_dump_data();
+        }
+        (raft_engine, None)
     }
 }
