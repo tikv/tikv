@@ -29,13 +29,11 @@ use backup_stream::{
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{
-    from_rocks_compression_type, RocksEngine, RocksStatistics,
-};
+use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, StatisticsReporter,
-    TabletContext, TabletRegistry, CF_DEFAULT, CF_WRITE,
+    Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, TabletContext, TabletRegistry,
+    CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
@@ -106,7 +104,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{VersionTrack},
+    config::VersionTrack,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
@@ -122,10 +120,7 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    common::{
-        ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo,
-        TikvServerCore,
-    },
+    common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
     memory::*,
     setup::*,
     signal_handler,
@@ -1595,10 +1590,7 @@ fn pre_start() {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::HashMap,
-        sync::{atomic::Ordering, Arc},
-    };
+    use std::{collections::HashMap, sync::Arc};
 
     use engine_rocks::raw::Env;
     use engine_traits::{
@@ -1678,9 +1670,7 @@ mod test {
         // bytes of tablet_1_20
         assert_eq!(
             (new_pending_compaction_bytes * 100) as u32,
-            engines_info
-                .latest_normalized_pending_bytes
-                .load(Ordering::Relaxed)
+            engines_info.latest_normalized_pending_bytes()
         );
     }
 }

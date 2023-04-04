@@ -12,7 +12,7 @@ use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use futures::{executor::block_on, Future};

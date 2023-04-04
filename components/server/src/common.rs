@@ -455,6 +455,11 @@ impl EnginesResourceInfo {
             Ordering::Relaxed,
         );
     }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn latest_normalized_pending_bytes(&self) -> u32 {
+        self.latest_normalized_pending_bytes.load(Ordering::Relaxed)
+    }
 }
 
 impl IoBudgetAdjustor for EnginesResourceInfo {
