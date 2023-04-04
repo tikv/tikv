@@ -83,10 +83,9 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
-    metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
-        cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
+        disk, path_in_diff_mount_point, register_memory_usage_high_water,
         SysQuota,
     },
     thread_group::GroupProperties,
@@ -104,19 +103,6 @@ use crate::{
     signal_handler,
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
-
-// minimum number of core kept for background requests
-const BACKGROUND_REQUEST_CORE_LOWER_BOUND: f64 = 1.0;
-// max ratio of core quota for background requests
-const BACKGROUND_REQUEST_CORE_MAX_RATIO: f64 = 0.95;
-// default ratio of core quota for background requests = core_number * 0.5
-const BACKGROUND_REQUEST_CORE_DEFAULT_RATIO: f64 = 0.5;
-// indication of TiKV instance is short of cpu
-const SYSTEM_BUSY_THRESHOLD: f64 = 0.80;
-// indication of TiKV instance in healthy state when cpu usage is in [0.5, 0.80)
-const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
-// pace of cpu quota adjustment
-const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
@@ -140,7 +126,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.init_storage_stats_task();
     tikv.run_server(server_config);
     tikv.run_status_server();
-    tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
+    tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
     // TODO: support signal dump stats
     signal_handler::wait_for_signal(
@@ -184,7 +170,6 @@ pub fn run_tikv(config: TikvConfig) {
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
-const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A complete TiKV server.
 struct TikvServer<ER: RaftEngine> {
@@ -204,7 +189,6 @@ struct TikvServer<ER: RaftEngine> {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
-    background_worker: Worker,
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
@@ -327,6 +311,7 @@ where
                 flow_info_sender: None,
                 flow_info_receiver: None,
                 to_stop: vec![],
+                background_worker,
             },
             cfg_controller: Some(cfg_controller),
             security_mgr,
@@ -343,7 +328,6 @@ where
             coprocessor_host: None,
             concurrency_manager,
             env,
-            background_worker,
             check_leader_worker,
             sst_worker: None,
             quota_limiter,
@@ -418,14 +402,14 @@ where
                 pd_sender.clone(),
                 engines.engine.clone(),
                 resource_ctl,
-                CleanupMethod::Remote(self.background_worker.remote()),
+                CleanupMethod::Remote(self.core.background_worker.remote()),
             ))
         } else {
             None
         };
         if let Some(unified_read_pool) = &unified_read_pool {
             let handle = unified_read_pool.handle();
-            self.background_worker.spawn_interval_task(
+            self.core.background_worker.spawn_interval_task(
                 UPDATE_EWMA_TIME_SLICE_INTERVAL,
                 move || {
                     handle.update_ewma_time_slice();
@@ -520,7 +504,7 @@ where
 
         let (resolver, state) = resolve::new_resolver(
             self.pd_client.clone(),
-            &self.background_worker,
+            &self.core.background_worker,
             storage.get_engine().raft_extension(),
         );
         self.resolver = Some(resolver);
@@ -562,7 +546,7 @@ where
                 Box::new(ReadPoolConfigManager::new(
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
-                    &self.background_worker,
+                    &self.core.background_worker,
                     self.core.config.readpool.unified.max_thread_count,
                     self.core.config.readpool.unified.auto_adjust_pool_size,
                 )),
@@ -704,7 +688,7 @@ where
                 self.coprocessor_host.clone().unwrap(),
                 auto_split_controller,
                 collector_reg_handle,
-                self.background_worker.clone(),
+                self.core.background_worker.clone(),
                 pd_worker,
                 raft_store,
                 &state,
@@ -744,7 +728,7 @@ where
         let engines = self.engines.as_ref().unwrap();
 
         // Backup service.
-        let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
+        let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
         let backup_service = backup::Service::<RocksEngine, ER>::new(backup_scheduler);
         if servers
@@ -860,13 +844,15 @@ where
         // `cached_latest_tablets` is passed to `update` to avoid memory
         // allocation each time when calling `update`.
         let mut cached_latest_tablets = HashMap::default();
-        self.background_worker
-            .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
+        self.core.background_worker.spawn_interval_task(
+            DEFAULT_METRICS_FLUSH_INTERVAL,
+            move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
                 engines_info_clone.update(now, &mut cached_latest_tablets);
-            });
+            },
+        );
         if let Some(limiter) = get_io_rate_limiter() {
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info));
         }
@@ -874,90 +860,11 @@ where
         let mut mem_trace_metrics = MemoryTraceManager::default();
         mem_trace_metrics.register_provider(MEMTRACE_RAFTSTORE.clone());
         mem_trace_metrics.register_provider(MEMTRACE_COPROCESSOR.clone());
-        self.background_worker
-            .spawn_interval_task(DEFAULT_MEMTRACE_FLUSH_INTERVAL, move || {
+        self.core.background_worker.spawn_interval_task(
+            DEFAULT_MEMTRACE_FLUSH_INTERVAL,
+            move || {
                 let now = Instant::now();
                 mem_trace_metrics.flush(now);
-            });
-    }
-
-    // Only background cpu quota tuning is implemented at present. iops and frontend
-    // quota tuning is on the way
-    fn init_quota_tuning_task(&self, quota_limiter: Arc<QuotaLimiter>) {
-        // No need to do auto tune when capacity is really low
-        if SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO
-            < BACKGROUND_REQUEST_CORE_LOWER_BOUND
-        {
-            return;
-        };
-
-        // Determine the base cpu quota
-        let base_cpu_quota =
-            // if cpu quota is not specified, start from optimistic case
-            if quota_limiter.cputime_limiter(false).is_infinite() {
-                1000_f64
-                    * f64::max(
-                        BACKGROUND_REQUEST_CORE_LOWER_BOUND,
-                        SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_DEFAULT_RATIO,
-                    )
-            } else {
-                quota_limiter.cputime_limiter(false) / 1000_f64
-            };
-
-        // Calculate the celling and floor quota
-        let celling_quota = f64::min(
-            base_cpu_quota * 2.0,
-            1_000_f64 * SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO,
-        );
-        let floor_quota = f64::max(
-            base_cpu_quota * 0.5,
-            1_000_f64 * BACKGROUND_REQUEST_CORE_LOWER_BOUND,
-        );
-
-        let mut proc_stats: ProcessStat = ProcessStat::cur_proc_stat().unwrap();
-        self.background_worker.spawn_interval_task(
-            DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
-            move || {
-                if quota_limiter.auto_tune_enabled() {
-                    let cputime_limit = quota_limiter.cputime_limiter(false);
-                    let old_quota = if cputime_limit.is_infinite() {
-                        base_cpu_quota
-                    } else {
-                        cputime_limit / 1000_f64
-                    };
-                    let cpu_usage = match proc_stats.cpu_usage() {
-                        Ok(r) => r,
-                        Err(_e) => 0.0,
-                    };
-                    // Try tuning quota when cpu_usage is correctly collected.
-                    // rule based tuning:
-                    // - if instance is busy, shrink cpu quota for analyze by one quota pace until
-                    //   lower bound is hit;
-                    // - if instance cpu usage is healthy, no op;
-                    // - if instance is idle, increase cpu quota by one quota pace  until upper
-                    //   bound is hit.
-                    if cpu_usage > 0.0f64 {
-                        let mut target_quota = old_quota;
-
-                        let cpu_util = cpu_usage / SysQuota::cpu_cores_quota();
-                        if cpu_util >= SYSTEM_BUSY_THRESHOLD {
-                            target_quota =
-                                f64::max(target_quota - CPU_QUOTA_ADJUSTMENT_PACE, floor_quota);
-                        } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
-                            target_quota =
-                                f64::min(target_quota + CPU_QUOTA_ADJUSTMENT_PACE, celling_quota);
-                        }
-
-                        if old_quota != target_quota {
-                            quota_limiter.set_cpu_time_limit(target_quota as usize, false);
-                            debug!(
-                                "cpu_time_limiter tuned for backend request";
-                                "cpu_util" => ?cpu_util,
-                                "new quota" => ?target_quota);
-                            INSTANCE_BACKEND_CPU_QUOTA.set(target_quota as i64);
-                        }
-                    }
-                }
             },
         );
     }
@@ -992,7 +899,7 @@ where
                 (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
             }
         }
-        self.background_worker
+        self.core.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
                 let disk_stats = match fs2::statvfs(&store_path) {
                     Err(e) => {
