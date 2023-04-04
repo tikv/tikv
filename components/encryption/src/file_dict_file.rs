@@ -18,6 +18,7 @@ use crate::{
     Error, Result,
 };
 
+// Operations over data key dictionary.
 pub trait DictionaryItem: Sized + Clone {
     fn parse(buf: &mut &[u8]) -> Result<Self>;
 
@@ -26,6 +27,7 @@ pub trait DictionaryItem: Sized + Clone {
     fn is_tombstone(&self) -> bool;
 }
 
+// An abstract data key dictionary that can be replayed sequentially.
 pub trait ProtobufDictionary: Default + Message {
     type Item: DictionaryItem + std::fmt::Debug;
 
