@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.6.0-alpha"
+version = "7.1.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -13,6 +13,7 @@ publish = false
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+trace-tablet-lifetime = ["engine_rocks/trace-lifetime"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -38,7 +39,7 @@ cloud-azure = [
   "encryption_export/cloud-azure",
   "sst_importer/cloud-azure",
 ]
-testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport"]
+testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport"]
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]
@@ -117,7 +118,7 @@ match-template = "0.0.1"
 memory_trace_macros = { workspace = true }
 mime = "0.3.13"
 more-asserts = "0.2"
-murmur3 = "0.5.1"
+mur3 = "0.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 notify = "4"
 num-traits = "0.2.14"
@@ -184,6 +185,7 @@ api_version = { workspace = true, features = ["testexport"] }
 example_coprocessor_plugin = { workspace = true } # should be a binary dependency
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
+raftstore = { workspace = true, features = ["testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
@@ -213,17 +215,13 @@ fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 # Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
-# TODO: remove this after crossbeam-deque is updated to the next release version.
-# This is a workaround for cargo can't resolving the this patch in yatp.
-crossbeam-deque = { git = "https://github.com/crossbeam-rs/crossbeam", rev = "41ed3d948720f26149b2ebeaf58fe8a193134056" }
-
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-# [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = { git = "https://github.com/tabokie/kvproto", branch = "encryption-v2" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
@@ -280,6 +278,7 @@ members = [
   "components/test_pd",
   "components/test_pd_client",
   "components/test_raftstore",
+  "components/test_raftstore-v2",
   "components/test_raftstore_macro",
   "components/test_sst_importer",
   "components/test_storage",
@@ -356,6 +355,7 @@ example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/exampl
 test_pd = { path = "components/test_pd" }
 test_pd_client = { path = "components/test_pd_client" }
 test_raftstore = { path = "components/test_raftstore", default-features = false }
+test_raftstore-v2 = { path = "components/test_raftstore-v2", default-features = false }
 test_raftstore_macro = { path = "components/test_raftstore_macro" }
 test_sst_importer = { path = "components/test_sst_importer" }
 test_storage = { path = "components/test_storage", default-features = false }
@@ -377,7 +377,7 @@ txn_types = { path = "components/txn_types" }
 grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "tabokie-patch-1" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

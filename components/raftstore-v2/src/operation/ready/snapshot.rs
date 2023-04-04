@@ -250,6 +250,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(snapshot_index);
+            if self.proposal_control().is_merging() {
+                // After applying a snapshot, merge is rollbacked implicitly.
+                // TODO: self.rollback_merge(ctx);
+            }
             let read_tablet = SharedReadTablet::new(tablet.clone());
             {
                 let mut meta = ctx.store_meta.lock().unwrap();
@@ -592,12 +596,15 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             "{}",
             SlogFormat(self.logger())
         );
-        let region_state = self.region_state_mut();
+        let mut region_state = self.region_state().clone();
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region);
         region_state.set_removed_records(removed_records);
         region_state.set_merged_records(merged_records);
         region_state.set_tablet_index(last_index);
+        // We need set_region_state here to update the peer.
+        self.set_region_state(region_state);
+
         let entry_storage = self.entry_storage_mut();
         entry_storage.raft_state_mut().set_last_index(last_index);
         entry_storage.set_truncated_index(last_index);

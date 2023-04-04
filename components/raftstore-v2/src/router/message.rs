@@ -3,7 +3,9 @@
 // #[PerformanceCriticalPath]
 
 use kvproto::{
+    import_sstpb::SstMeta,
     metapb,
+    metapb::RegionEpoch,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
@@ -17,7 +19,7 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::{RequestSplit, SimpleWriteBinary, SplitInit};
+use crate::operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -185,6 +187,15 @@ pub enum PeerMsg {
         request: RequestSplit,
         ch: CmdResChannel,
     },
+    RefreshRegionBuckets {
+        region_epoch: RegionEpoch,
+        buckets: Vec<raftstore::store::Bucket>,
+        bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
+    },
+    RequestHalfSplit {
+        request: RequestHalfSplit,
+        ch: CmdResChannel,
+    },
     UpdateRegionSize {
         size: u64,
     },
@@ -196,6 +207,19 @@ pub enum PeerMsg {
     TabletTrimmed {
         tablet_index: u64,
     },
+    CleanupImportSst(Box<[SstMeta]>),
+    AskCommitMerge(RaftCmdRequest),
+    AckCommitMerge {
+        index: u64,
+        target_id: u64,
+    },
+    RejectCommitMerge {
+        index: u64,
+    },
+    // From target [`Apply`] to target [`Peer`].
+    RedirectCatchUpLogs(CatchUpLogs),
+    // From target [`Peer`] to source [`Peer`].
+    CatchUpLogs(CatchUpLogs),
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
@@ -266,6 +290,7 @@ pub enum StoreMsg {
     StoreUnreachable {
         to_store_id: u64,
     },
+    AskCommitMerge(RaftCmdRequest),
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush {

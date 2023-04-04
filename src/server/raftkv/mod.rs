@@ -393,6 +393,9 @@ where
                         let bytes = keys::data_end_key(key2.as_encoded());
                         *key2 = Key::from_encoded(bytes);
                     }
+                    Modify::Ingest(_) => {
+                        return Err(box_err!("ingest sst is not supported in local engine"));
+                    }
                 }
             }
         }
@@ -449,6 +452,9 @@ where
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = new_request_header(ctx);
+        if batch.avoid_batch {
+            header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
+        }
         let mut flags = 0;
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
@@ -579,10 +585,12 @@ where
                 .map_err(kv::Error::from);
         }
         async move {
-            // It's impossible to return cancel because the callback will be invoked if it's
-            // destroyed.
             let res = match res {
-                Ok(()) => f.await.unwrap(),
+                Ok(()) => match f.await {
+                    Ok(r) => r,
+                    // Canceled may be returned during shutdown.
+                    Err(e) => Err(kv::Error::from(kv::ErrorInner::Other(box_err!(e)))),
+                },
                 Err(e) => Err(e),
             };
             match res {

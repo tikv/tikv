@@ -44,14 +44,14 @@ use kvproto::{
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
-use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
+use pd_client::{BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
 use protobuf::{wire_format::WireType, CodedInputStream, Message};
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
-use resource_control::{ResourceController, ResourceMetered};
+use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -3242,6 +3242,11 @@ where
         ctx: &mut ApplyContext<EK>,
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        fail_point!(
+            "before_exec_batch_switch_witness",
+            self.id() == 2,
+            |_| unimplemented!()
+        );
         assert!(request.has_switch_witnesses());
         let switches = request
             .get_switch_witnesses()
@@ -3721,19 +3726,27 @@ where
 }
 
 impl<EK: KvEngine> ResourceMetered for Msg<EK> {
-    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+    fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
         match self {
             Msg::Apply { apply, .. } => {
-                let mut map = HashMap::default();
+                let mut dominant_group = "".to_owned();
+                let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
                     cached_entries.iter_entries(|entry| {
-                        // TODO: maybe use a more efficient way to get the resource group name.
                         let header = util::get_entry_header(entry);
                         let group_name = header.get_resource_group_name().to_owned();
-                        *map.entry(group_name).or_default() += entry.compute_size() as u64;
+                        let write_bytes = entry.compute_size() as u64;
+                        resource_ctl.consume(
+                            group_name.as_bytes(),
+                            ResourceConsumeType::IoBytes(write_bytes),
+                        );
+                        if write_bytes > max_write_bytes {
+                            dominant_group = group_name;
+                            max_write_bytes = write_bytes;
+                        }
                     });
                 }
-                Some(map)
+                Some(dominant_group)
             }
             _ => None,
         }
@@ -3941,12 +3954,12 @@ where
 
         self.delegate.term = apply.term;
         if let Some(meta) = apply.bucket_meta.clone() {
-            let buckets = self
-                .delegate
-                .buckets
-                .get_or_insert_with(BucketStat::default);
-            buckets.stats = new_bucket_stats(&meta);
-            buckets.meta = meta;
+            if let Some(old) = &mut self.delegate.buckets {
+                old.set_meta(meta);
+            } else {
+                let new = BucketStat::from_meta(meta);
+                self.delegate.buckets.replace(new);
+            }
         }
 
         let prev_state = (

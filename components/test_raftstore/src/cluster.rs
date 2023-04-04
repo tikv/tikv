@@ -15,8 +15,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
-    WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
+    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on};
@@ -389,12 +389,17 @@ impl<T: Simulator> Cluster<T> {
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
         self.group_props[&node_id].mark_shutdown();
+        // Simulate shutdown behavior of server shutdown. It's not enough to just set
+        // the map above as current thread may also query properties during shutdown.
+        let previous_prop = tikv_util::thread_group::current_properties();
+        tikv_util::thread_group::set_properties(Some(self.group_props[&node_id].clone()));
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
             Err(_) => safe_panic!("failed to acquire write lock."),
         }
         self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
+        tikv_util::thread_group::set_properties(previous_prop);
     }
 
     pub fn get_engine(&self, node_id: u64) -> RocksEngine {
@@ -1330,6 +1335,18 @@ impl<T: Simulator> Cluster<T> {
         kv_wb.write().unwrap();
     }
 
+    pub fn add_send_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        self.sim.wl().add_send_filter(node_id, filter);
+    }
+
+    pub fn clear_send_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_send_filters(node_id);
+    }
+
+    pub fn add_recv_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        self.sim.wl().add_recv_filter(node_id, filter);
+    }
+
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
@@ -1337,6 +1354,10 @@ impl<T: Simulator> Cluster<T> {
                 sim.add_send_filter(node_id, filter);
             }
         }
+    }
+
+    pub fn clear_recv_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_recv_filters(node_id);
     }
 
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
@@ -1817,6 +1838,10 @@ impl<T: Simulator> Cluster<T> {
         ctx
     }
 
+    pub fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
+        self.sim.rl().get_router(node_id)
+    }
+
     pub fn refresh_region_bucket_keys(
         &mut self,
         region: &metapb::Region,
@@ -1894,11 +1919,58 @@ impl<T: Simulator> Cluster<T> {
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
+
+    pub fn scan<F>(
+        &self,
+        store_id: u64,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: F,
+    ) -> engine_traits::Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> engine_traits::Result<bool>,
+    {
+        self.engines[&store_id]
+            .kv
+            .scan(cf, start_key, end_key, fill_cache, f)?;
+
+        Ok(())
+    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
     fn drop(&mut self) {
         test_util::clear_failpoints();
         self.shutdown();
+    }
+}
+
+pub trait RawEngine<EK: engine_traits::KvEngine>:
+    Peekable<DbVector = EK::DbVector> + SyncMutable
+{
+    fn region_local_state(&self, region_id: u64)
+    -> engine_traits::Result<Option<RegionLocalState>>;
+
+    fn raft_apply_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftApplyState>>;
+
+    fn raft_local_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftLocalState>>;
+}
+
+impl RawEngine<RocksEngine> for RocksEngine {
+    fn region_local_state(
+        &self,
+        region_id: u64,
+    ) -> engine_traits::Result<Option<RegionLocalState>> {
+        self.get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
     }
 }

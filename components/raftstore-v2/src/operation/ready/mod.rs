@@ -30,7 +30,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
 use protobuf::Message as _;
-use raft::{eraftpb, prelude::MessageType, Ready, StateRole, INVALID_ID};
+use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVALID_ID};
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
@@ -154,7 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // When it's handling snapshot, it's pointless to tick as all the side
         // affects have to wait till snapshot is applied. On the other hand, ticking
         // will bring other corner cases like elections.
-        !self.is_handling_snapshot() && self.raft_group_mut().tick()
+        !self.is_handling_snapshot() && self.serving() && self.raft_group_mut().tick()
     }
 
     pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
@@ -213,6 +213,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.on_gc_peer_request(ctx, &msg);
                     return;
                 }
+                ExtraMessageType::MsgFlushMemtable => {
+                    let region_epoch = msg.as_ref().get_region_epoch();
+                    if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
+                        return;
+                    }
+                    let _ =
+                        ctx.schedulers
+                            .tablet_flush
+                            .schedule(crate::TabletFlushTask::TabletFlush {
+                                region_id: self.region().get_id(),
+                                req: None,
+                                is_leader: false,
+                                ch: None,
+                            });
+                    return;
+                }
+                ExtraMessageType::MsgWantRollbackMerge => {
+                    if self.is_leader() {
+                        // TODO:
+                        // self.merge_context_mut().maybe_add_rollback_peer();
+                        return;
+                    }
+                }
                 _ => (),
             }
         }
@@ -236,6 +259,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             cmp::Ordering::Greater => {
                 // We need to create the target peer.
+                info!(self.logger, "mark for destroy for larger ID"; "larger_id" => to_peer.get_id());
                 self.mark_for_destroy(Some(msg));
                 return;
             }
@@ -250,15 +274,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
             self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
-        self.insert_peer_cache(msg.take_from_peer());
+        self.insert_peer_cache(from_peer);
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
-        } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
-            error!(self.logger, "raft step error"; "err" => ?e);
         } else {
-            let committed_index = self.raft_group().raft.raft_log.committed;
-            self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
+            // This can be a message that sent when it's still a follower. Nevertheleast,
+            // it's meaningless to continue to handle the request as callbacks are cleared.
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.is_leader()
+                && (msg.get_message().get_from() == raft::INVALID_ID
+                    || msg.get_message().get_from() == self.peer_id())
+            {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+
+            if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+                error!(self.logger, "raft step error"; "err" => ?e);
+            } else {
+                let committed_index = self.raft_group().raft.raft_log.committed;
+                self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
+            }
         }
 
         self.set_has_ready();
@@ -331,7 +368,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// The message is pushed into the send buffer, it may not be sent out until
     /// transport is flushed explicitly.
-    fn send_raft_message<T: Transport>(
+    pub(crate) fn send_raft_message<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: RaftMessage,
@@ -339,6 +376,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let msg_type = msg.get_message().get_msg_type();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
+        if msg_type == MessageType::MsgSnapshot {
+            let index = msg.get_message().get_snapshot().get_metadata().get_index();
+            self.update_last_sent_snapshot_index(index);
+        }
 
         trace!(
             self.logger,
@@ -362,6 +403,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 );
                 // unreachable store
                 self.raft_group_mut().report_unreachable(to_peer_id);
+                if msg_type == eraftpb::MessageType::MsgSnapshot {
+                    self.raft_group_mut()
+                        .report_snapshot(to_peer_id, SnapshotStatus::Failure);
+                }
                 ctx.raft_metrics.send_message.add(msg_type, false);
             }
         }
@@ -664,14 +709,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     fn report_persist_log_duration<T>(
         &self,
         ctx: &mut StoreContext<EK, ER, T>,
-        from: u64,
-        to: u64,
+        old_index: u64,
+        new_index: u64,
     ) {
-        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || from >= to {
+        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || old_index >= new_index {
             return;
         }
         let now = Instant::now();
-        for i in from + 1..to {
+        for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
                     for tracker in trackers {
@@ -685,12 +730,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn report_commit_log_duration<T>(&self, ctx: &mut StoreContext<EK, ER, T>, from: u64, to: u64) {
-        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || from >= to {
+    fn report_commit_log_duration<T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        old_index: u64,
+        new_index: u64,
+    ) {
+        if !ctx.cfg.waterfall_metrics || self.proposals().is_empty() || old_index >= new_index {
             return;
         }
         let now = Instant::now();
-        for i in from + 1..to {
+        for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
                     let commit_persisted = i <= self.persisted_index();
@@ -770,6 +820,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // current term to apply the read. So broadcast eagerly to avoid unexpected
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
+                    self.update_last_sent_snapshot_index(
+                        self.raft_group().raft.raft_log.last_index(),
+                    );
 
                     self.txn_context().on_became_leader(
                         ctx,
@@ -785,6 +838,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.add_pending_tick(PeerTick::CompactLog);
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
                     self.add_pending_tick(PeerTick::CheckLongUncommitted);
+                    self.add_pending_tick(PeerTick::ReportBuckets);
                     self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
@@ -792,6 +846,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
+                    self.update_merge_progress_on_became_follower();
                 }
                 _ => {}
             }
@@ -913,7 +968,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         write_task: &mut WriteTask<EK, ER>,
     ) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
-        let ever_persisted = self.ever_persisted();
+        let prev_ever_persisted = self.ever_persisted();
 
         if !ready.snapshot().is_empty() {
             if let Err(e) = self.apply_snapshot(
@@ -927,18 +982,35 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         }
 
-        let entry_storage = self.entry_storage_mut();
         if !ready.entries().is_empty() {
-            entry_storage.append(ready.take_entries(), write_task);
+            assert!(self.ever_persisted(), "{}", SlogFormat(self.logger()));
+            self.entry_storage_mut()
+                .append(ready.take_entries(), write_task);
         }
         if let Some(hs) = ready.hs() {
-            entry_storage.raft_state_mut().set_hard_state(hs.clone());
+            self.entry_storage_mut()
+                .raft_state_mut()
+                .set_hard_state(hs.clone());
         }
-        if !ever_persisted || prev_raft_state != *entry_storage.raft_state() {
+        let entry_storage = self.entry_storage();
+        if !prev_ever_persisted || prev_raft_state != *entry_storage.raft_state() {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
         }
-        // If snapshot initializes the peer, we don't need to write apply trace again.
+        // If snapshot initializes the peer (in `apply_snapshot`), we don't need to
+        // write apply trace again.
         if !self.ever_persisted() {
+            let region_id = self.region().get_id();
+            let raft_engine = entry_storage.raft_engine();
+            if write_task.raft_wb.is_none() {
+                write_task.raft_wb = Some(raft_engine.log_batch(64));
+            }
+            let wb = write_task.raft_wb.as_mut().unwrap();
+            // There may be tombstone key from last peer.
+            raft_engine
+                .clean(region_id, 0, entry_storage.raft_state(), wb)
+                .unwrap_or_else(|e| {
+                    slog_panic!(self.logger(), "failed to clean up region"; "error" => ?e);
+                });
             self.init_apply_trace(write_task);
             self.set_ever_persisted();
         }

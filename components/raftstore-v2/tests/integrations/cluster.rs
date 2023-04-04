@@ -23,6 +23,7 @@ use engine_test::{
 use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
+    kvrpcpb::ApiVersion,
     metapb::{self, RegionEpoch, Store},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
@@ -30,7 +31,7 @@ use kvproto::{
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    coprocessor::CoprocessorHost,
+    coprocessor::{Config as CopConfig, CoprocessorHost},
     store::{
         region_meta::{RegionLocalState, RegionMeta},
         AutoSplitController, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport,
@@ -44,10 +45,11 @@ use raftstore_v2::{
 };
 use resource_metering::CollectorRegHandle;
 use slog::{debug, o, Logger};
+use sst_importer::SstImporter;
 use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::{
-    config::{ReadableDuration, VersionTrack},
+    config::{ReadableDuration, ReadableSize, VersionTrack},
     store::new_peer,
     worker::{LazyWorker, Worker},
 };
@@ -65,6 +67,7 @@ pub fn check_skip_wal(path: &str) {
     assert!(found, "no WAL found in {}", path);
 }
 
+#[derive(Clone)]
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
@@ -98,7 +101,10 @@ impl TestRouter {
                 thread::sleep(Duration::from_millis(10));
                 continue;
             }
-            return block_on(sub.result());
+            let res = block_on(sub.result());
+            if res.is_some() {
+                return res;
+            }
         }
         None
     }
@@ -234,6 +240,7 @@ pub struct RunningState {
     pub registry: TabletRegistry<KvTestEngine>,
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
     pub cfg: Arc<VersionTrack<Config>>,
+    pub cop_cfg: Arc<VersionTrack<CopConfig>>,
     pub transport: TestTransport,
     snap_mgr: TabletSnapManager,
     background: Worker,
@@ -244,6 +251,7 @@ impl RunningState {
         pd_client: &Arc<RpcClient>,
         path: &Path,
         cfg: Arc<VersionTrack<Config>>,
+        cop_cfg: Arc<VersionTrack<CopConfig>>,
         transport: TestTransport,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
@@ -290,11 +298,18 @@ impl RunningState {
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
-
-        let coprocessor_host = CoprocessorHost::new(
-            router.store_router().clone(),
-            raftstore::coprocessor::Config::default(),
+        let coprocessor_host =
+            CoprocessorHost::new(router.store_router().clone(), cop_cfg.value().clone());
+        let importer = Arc::new(
+            SstImporter::new(
+                &Default::default(),
+                path.join("importer"),
+                None,
+                ApiVersion::V1,
+            )
+            .unwrap(),
         );
+
         let background = Worker::new("background");
         let pd_worker = LazyWorker::new("pd-worker");
         system
@@ -315,6 +330,7 @@ impl RunningState {
                 CollectorRegHandle::new_for_test(),
                 background.clone(),
                 pd_worker,
+                importer,
             )
             .unwrap();
 
@@ -327,6 +343,7 @@ impl RunningState {
             transport,
             snap_mgr,
             background,
+            cop_cfg,
         };
         (TestRouter(router), state)
     }
@@ -358,11 +375,17 @@ impl TestNode {
         }
     }
 
-    fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
+    fn start(
+        &mut self,
+        cfg: Arc<VersionTrack<Config>>,
+        cop_cfg: Arc<VersionTrack<CopConfig>>,
+        trans: TestTransport,
+    ) -> TestRouter {
         let (router, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
             cfg,
+            cop_cfg,
             trans,
             ConcurrencyManager::new(1.into()),
             None,
@@ -389,8 +412,9 @@ impl TestNode {
         let state = self.running_state().unwrap();
         let prev_transport = state.transport.clone();
         let cfg = state.cfg.clone();
+        let cop_cfg = state.cop_cfg.clone();
         self.stop();
-        self.start(cfg, prev_transport)
+        self.start(cfg, cop_cfg, prev_transport)
     }
 
     pub fn running_state(&self) -> Option<&RunningState> {
@@ -441,6 +465,9 @@ impl Transport for TestTransport {
 pub fn v2_default_config() -> Config {
     let mut config = Config::default();
     config.store_io_pool_size = 1;
+    if config.region_split_check_diff.is_none() {
+        config.region_split_check_diff = Some(ReadableSize::mb(96 / 16));
+    }
     config
 }
 
@@ -489,6 +516,14 @@ impl Cluster {
     }
 
     pub fn with_node_count(count: usize, config: Option<Config>) -> Self {
+        Cluster::with_configs(count, config, None)
+    }
+
+    pub fn with_cop_cfg(config: Option<Config>, coprocessor_cfg: CopConfig) -> Cluster {
+        Cluster::with_configs(1, config, Some(coprocessor_cfg))
+    }
+
+    pub fn with_configs(count: usize, config: Option<Config>, cop_cfg: Option<CopConfig>) -> Self {
         let pd_server = test_pd::Server::new(1);
         let logger = slog_global::borrow_global().new(o!());
         let mut cluster = Cluster {
@@ -504,10 +539,15 @@ impl Cluster {
             v2_default_config()
         };
         disable_all_auto_ticks(&mut cfg);
+        let cop_cfg = cop_cfg.unwrap_or_default();
         for _ in 1..=count {
             let mut node = TestNode::with_pd(&cluster.pd_server, cluster.logger.clone());
             let (tx, rx) = new_test_transport();
-            let router = node.start(Arc::new(VersionTrack::new(cfg.clone())), tx);
+            let router = node.start(
+                Arc::new(VersionTrack::new(cfg.clone())),
+                Arc::new(VersionTrack::new(cop_cfg.clone())),
+                tx,
+            );
             cluster.nodes.push(node);
             cluster.receivers.push(rx);
             cluster.routers.push(router);
@@ -719,5 +759,132 @@ pub mod split_helper {
         assert_eq!(region.get_end_key(), right.get_end_key());
 
         (left, right)
+    }
+}
+
+pub mod merge_helper {
+    use std::{thread, time::Duration};
+
+    use futures::executor::block_on;
+    use kvproto::{
+        metapb,
+        raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
+    };
+    use raftstore_v2::router::PeerMsg;
+
+    use super::TestRouter;
+
+    pub fn merge_region(
+        router: &mut TestRouter,
+        source: metapb::Region,
+        source_peer: metapb::Peer,
+        target: metapb::Region,
+        check: bool,
+    ) -> metapb::Region {
+        let region_id = source.id;
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header()
+            .set_region_epoch(source.get_region_epoch().clone());
+        req.mut_header().set_peer(source_peer);
+
+        let mut admin_req = AdminRequest::default();
+        admin_req.set_cmd_type(AdminCmdType::PrepareMerge);
+        admin_req.mut_prepare_merge().set_target(target.clone());
+        req.set_admin_request(admin_req);
+
+        let (msg, sub) = PeerMsg::admin_command(req);
+        router.send(region_id, msg).unwrap();
+        let resp = block_on(sub.result()).unwrap();
+        if check {
+            assert!(!resp.get_header().has_error(), "{:?}", resp);
+        }
+
+        // TODO: when persistent implementation is ready, we can use tablet index of
+        // the parent to check whether the split is done. Now, just sleep a second.
+        thread::sleep(Duration::from_secs(1));
+
+        let new_target = router.region_detail(target.id);
+        if check {
+            if new_target.get_start_key() == source.get_start_key() {
+                // [source, target] => new_target
+                assert_eq!(new_target.get_end_key(), target.get_end_key());
+            } else {
+                // [target, source] => new_target
+                assert_eq!(new_target.get_start_key(), target.get_start_key());
+                assert_eq!(new_target.get_end_key(), source.get_end_key());
+            }
+        }
+        new_target
+    }
+}
+
+pub mod life_helper {
+    use std::assert_matches::assert_matches;
+
+    use engine_traits::RaftEngine;
+    use kvproto::raft_serverpb::{ExtraMessageType, PeerState};
+
+    use super::*;
+
+    pub fn assert_peer_not_exist(region_id: u64, peer_id: u64, router: &TestRouter) {
+        let timer = Instant::now();
+        loop {
+            let (ch, sub) = DebugInfoChannel::pair();
+            let msg = PeerMsg::QueryDebugInfo(ch);
+            match router.send(region_id, msg) {
+                Err(TrySendError::Disconnected(_)) => return,
+                Ok(()) => {
+                    if let Some(m) = block_on(sub.result()) {
+                        if m.raft_status.id != peer_id {
+                            return;
+                        }
+                    }
+                }
+                Err(_) => (),
+            }
+            if timer.elapsed() < Duration::from_secs(3) {
+                thread::sleep(Duration::from_millis(10));
+            } else {
+                panic!("peer of {} still exists", region_id);
+            }
+        }
+    }
+
+    // TODO: make raft engine support more suitable way to verify range is empty.
+    /// Verify all states in raft engine are cleared.
+    pub fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb::Peer) {
+        let mut buf = vec![];
+        raft_engine.get_all_entries_to(region_id, &mut buf).unwrap();
+        assert!(buf.is_empty(), "{:?}", buf);
+        assert_matches!(raft_engine.get_raft_state(region_id), Ok(None));
+        assert_matches!(raft_engine.get_apply_state(region_id, u64::MAX), Ok(None));
+        let region_state = raft_engine
+            .get_region_state(region_id, u64::MAX)
+            .unwrap()
+            .unwrap();
+        assert_matches!(region_state.get_state(), PeerState::Tombstone);
+        assert!(
+            region_state.get_region().get_peers().contains(peer),
+            "{:?}",
+            region_state
+        );
+    }
+
+    #[track_caller]
+    pub fn assert_valid_report(report: &RaftMessage, region_id: u64, peer_id: u64) {
+        assert_eq!(
+            report.get_extra_msg().get_type(),
+            ExtraMessageType::MsgGcPeerResponse
+        );
+        assert_eq!(report.get_region_id(), region_id);
+        assert_eq!(report.get_from_peer().get_id(), peer_id);
+    }
+
+    #[track_caller]
+    pub fn assert_tombstone_msg(msg: &RaftMessage, region_id: u64, peer_id: u64) {
+        assert_eq!(msg.get_region_id(), region_id);
+        assert_eq!(msg.get_to_peer().get_id(), peer_id);
+        assert!(msg.get_is_tombstone());
     }
 }

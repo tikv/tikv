@@ -12,13 +12,13 @@ use std::{
     time::Duration,
 };
 
-use futures::executor::block_on;
+use futures::{compat::Future01CompatExt, executor::block_on, FutureExt};
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{store::ReadIndexContext, Result};
 use test_raftstore::*;
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use tikv_util::{config::*, time::Instant, timer::GLOBAL_TIMER_HANDLE, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 use uuid::Uuid;
 
@@ -58,7 +58,7 @@ fn test_replica_read_not_applied() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), Some(30));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(30));
     let max_lease = Duration::from_secs(1);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
     // After the leader has committed to its term, pending reads on followers can be
@@ -129,7 +129,7 @@ fn test_replica_read_not_applied() {
 fn test_replica_read_on_hibernate() {
     let mut cluster = new_node_cluster(0, 3);
 
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -191,7 +191,7 @@ fn test_replica_read_on_hibernate() {
 fn test_read_hibernated_region() {
     let mut cluster = new_node_cluster(0, 3);
     // Initialize the cluster.
-    configure_for_lease_read(&mut cluster, Some(100), Some(8));
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(8));
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(Duration::from_millis(1));
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
     cluster.pd_client.disable_default_operator();
@@ -254,7 +254,7 @@ fn test_read_hibernated_region() {
 fn test_replica_read_on_stale_peer() {
     let mut cluster = new_node_cluster(0, 3);
 
-    configure_for_lease_read(&mut cluster, Some(50), Some(30));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(30));
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -288,7 +288,7 @@ fn test_read_index_out_of_order() {
     let mut cluster = new_node_cluster(0, 2);
 
     // Use long election timeout and short lease.
-    configure_for_lease_read(&mut cluster, Some(1000), Some(10));
+    configure_for_lease_read(&mut cluster.cfg, Some(1000), Some(10));
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(Duration::from_millis(100));
 
@@ -328,7 +328,7 @@ fn test_read_index_retry_lock_checking() {
     let mut cluster = new_node_cluster(0, 2);
 
     // Use long election timeout and short lease.
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(Duration::from_millis(100));
 
@@ -402,7 +402,7 @@ fn test_split_isolation() {
     let mut cluster = new_node_cluster(0, 2);
     // Use long election timeout and short lease.
     configure_for_hibernate(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -461,7 +461,7 @@ fn test_split_isolation() {
 #[test]
 fn test_read_local_after_snapshpot_replace_peer() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
 
@@ -527,7 +527,7 @@ fn test_read_local_after_snapshpot_replace_peer() {
 #[test]
 fn test_malformed_read_index() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     cluster.cfg.raft_store.hibernate_regions = true;
@@ -581,5 +581,81 @@ fn test_malformed_read_index() {
     let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), region, b"k1", true, false);
     cluster.clear_send_filters();
     let resp = resp.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+}
+
+/// The case checks if a malformed request should not corrupt the leader's read
+/// queue.
+#[test]
+fn test_malformed_read_index_v2() {
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
+    cluster.cfg.raft_store.hibernate_regions = true;
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+
+    // Wait till lease expires.
+    std::thread::sleep(
+        cluster
+            .cfg
+            .raft_store
+            .raft_store_max_leader_lease()
+            .to_std()
+            .unwrap(),
+    );
+    let region = cluster.get_region(b"k1");
+    // Send a malformed request to leader
+    let mut raft_msg = raft::eraftpb::Message::default();
+    raft_msg.set_msg_type(MessageType::MsgReadIndex);
+    let rctx = ReadIndexContext {
+        id: Uuid::new_v4(),
+        request: None,
+        locked: None,
+    };
+    let mut e = raft::eraftpb::Entry::default();
+    e.set_data(rctx.to_bytes().into());
+    raft_msg.mut_entries().push(e);
+    raft_msg.from = 1;
+    raft_msg.to = 1;
+    let mut message = RaftMessage::default();
+    message.set_region_id(region_id);
+    message.set_from_peer(new_peer(1, 1));
+    message.set_to_peer(new_peer(1, 1));
+    message.set_region_epoch(region.get_region_epoch().clone());
+    message.set_message(raft_msg);
+    // So the read won't be handled soon.
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.send_raft_msg(message).unwrap();
+    // Also send a correct request. If the malformed request doesn't corrupt
+    // the read queue, the correct request should be responded.
+    let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), region, b"k1", true, false);
+    cluster.clear_send_filters();
+
+    let timeout = Duration::from_secs(10);
+    let timeout_f = GLOBAL_TIMER_HANDLE
+        .delay(std::time::Instant::now() + timeout)
+        .compat();
+    let resp = futures::executor::block_on(async move {
+        futures::select! {
+            res = resp.fuse() => res.unwrap(),
+            e = timeout_f.fuse() => {
+                panic!("request timeout for {:?}: {:?}", timeout,e);
+            },
+        }
+    });
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 }

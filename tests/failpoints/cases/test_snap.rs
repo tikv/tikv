@@ -15,6 +15,7 @@ use engine_traits::RaftEngineReadOnly;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 #[test]
@@ -62,7 +63,7 @@ fn test_overlap_cleanup() {
 #[test]
 fn test_server_snapshot_on_resolve_failure() {
     let mut cluster = new_server_cluster(1, 2);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
 
     let on_send_store_fp = "transport_on_send_snapshot";
 
@@ -195,7 +196,7 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
 #[test]
 fn test_destroy_peer_on_pending_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -261,7 +262,7 @@ fn test_destroy_peer_on_pending_snapshot() {
 #[test]
 fn test_destroy_peer_on_pending_snapshot_and_restart() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -384,10 +385,11 @@ fn test_shutdown_when_snap_gc() {
 }
 
 // Test if a peer handle the old snapshot properly.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_receive_old_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    let mut cluster = new_cluster(0, 3);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.right_derive_when_split = true;
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -420,7 +422,7 @@ fn test_receive_old_snapshot() {
             .msg_type(MessageType::MsgSnapshot)
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
-    cluster.sim.wl().add_recv_filter(2, recv_filter);
+    cluster.add_recv_filter_on_node(2, recv_filter);
     cluster.clear_send_filters();
 
     for _ in 0..20 {
@@ -440,17 +442,18 @@ fn test_receive_old_snapshot() {
         std::mem::take(guard.as_mut())
     };
 
-    cluster.sim.wl().clear_recv_filters(2);
+    cluster.clear_recv_filter_on_node(2);
 
     for i in 20..40 {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
     }
     must_get_equal(&cluster.get_engine(2), b"k39", b"v1");
 
-    let router = cluster.sim.wl().get_router(2).unwrap();
+    let router = cluster.get_router(2).unwrap();
     // Send the old snapshot
     for raft_msg in msgs {
-        router.send_raft_message(raft_msg).unwrap();
+        #[allow(clippy::useless_conversion)]
+        router.send_raft_message(raft_msg.into()).unwrap();
     }
 
     cluster.must_put(b"k40", b"v1");
@@ -482,7 +485,7 @@ fn test_receive_old_snapshot() {
 #[test]
 fn test_gen_snapshot_with_no_committed_entries_ready() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -571,7 +574,7 @@ fn test_cancel_snapshot_generating() {
 #[test]
 fn test_snapshot_gc_after_failed() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -641,7 +644,7 @@ fn test_snapshot_gc_after_failed() {
 #[test]
 fn test_sending_fail_with_net_error() {
     let mut cluster = new_server_cluster(1, 2);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -742,7 +745,7 @@ fn test_snapshot_clean_up_logs_with_unfinished_log_gc() {
 #[test]
 fn test_snapshot_recover_from_raft_write_failure() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     // Avoid triggering snapshot at final step.
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -800,7 +803,7 @@ fn test_snapshot_recover_from_raft_write_failure() {
 #[test]
 fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    configure_for_snapshot(&mut cluster.cfg);
     // Avoid triggering snapshot at final step.
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     let pd_client = Arc::clone(&cluster.pd_client);

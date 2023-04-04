@@ -15,6 +15,7 @@ use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
 use futures::{Future, Stream, StreamExt};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
 pub use node::NodeV2;
+pub use raft_extension::Extension;
 use raftstore::store::{util::encode_start_ts_into_flag_data, RegionSnapshot};
 use raftstore_v2::{
     router::{
@@ -69,6 +70,8 @@ impl Stream for Transform {
 
 fn modifies_to_simple_write(modifies: Vec<Modify>) -> SimpleWriteBinary {
     let mut encoder = SimpleWriteEncoder::with_capacity(128);
+    let modifies_len = modifies.len();
+    let mut ssts = vec![];
     for m in modifies {
         match m {
             Modify::Put(cf, k, v) => encoder.put(cf, k.as_encoded(), &v),
@@ -82,7 +85,16 @@ fn modifies_to_simple_write(modifies: Vec<Modify>) -> SimpleWriteBinary {
                 end_key.as_encoded(),
                 notify_only,
             ),
+            Modify::Ingest(sst) => {
+                if ssts.capacity() == 0 {
+                    ssts.reserve(modifies_len);
+                }
+                ssts.push(*sst);
+            }
         }
+    }
+    if !ssts.is_empty() {
+        encoder.ingest(ssts);
     }
     encoder.encode()
 }
@@ -157,9 +169,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
             flags |= WriteBatchFlags::STALE_READ.bits();
         }
-        if ctx.allowed_in_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
+        // TODO: flashback is not supported yet.
+        // if ctx.allowed_in_flashback {
+        //     flags |= WriteBatchFlags::FLASHBACK.bits();
+        // }
         header.set_flags(flags);
         // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
         if need_encoded_start_ts {
@@ -222,13 +235,17 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         if batch.extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
         }
-        if batch.extra.allowed_in_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
+        // TODO: flashback is not supported yet.
+        // if batch.extra.allowed_in_flashback {
+        //     flags |= WriteBatchFlags::FLASHBACK.bits();
+        // }
         header.set_flags(flags);
 
         self.schedule_txn_extra(batch.extra);
-        let data = modifies_to_simple_write(batch.modifies);
+        let mut data = modifies_to_simple_write(batch.modifies);
+        if batch.avoid_batch {
+            data.freeze();
+        }
         let mut builder = CmdResChannelBuilder::default();
         if WriteEvent::subscribed_proposed(subscribed) {
             builder.subscribe_proposed();
