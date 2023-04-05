@@ -402,7 +402,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .term(meta.raft_apply.commit_index)
             .unwrap();
         if let Some(bucket_stats) = self.region_buckets_info().bucket_stat() {
-            meta.bucket_keys = (*bucket_stats.meta).keys.clone();
+            meta.bucket_keys = bucket_stats.meta.keys.clone();
         }
         debug!(self.logger, "on query debug info";
             "tick" => self.raft_group().raft.election_elapsed,
