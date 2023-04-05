@@ -31,7 +31,7 @@ fn test_refresh_bucket() {
     assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
 
     // to simulate the delay of set_apply_scheduler
-    fail::cfg("deplay_set_apply_scheduler", "sleep(1000)").unwrap();
+    fail::cfg("delay_set_apply_scheduler", "sleep(1000)").unwrap();
     split_region_and_refresh_bucket(
         router,
         region,
