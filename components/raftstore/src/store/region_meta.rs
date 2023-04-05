@@ -246,6 +246,7 @@ pub struct RegionMeta {
     pub raft_status: RaftStatus,
     pub raft_apply: RaftApplyState,
     pub region_state: RegionLocalState,
+    pub bucket_keys: Vec<Vec<u8>>,
 }
 
 impl RegionMeta {
@@ -308,6 +309,7 @@ impl RegionMeta {
                 }),
                 tablet_index: local_state.get_tablet_index(),
             },
+            bucket_keys: vec![],
         }
     }
 }
