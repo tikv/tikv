@@ -770,8 +770,8 @@ pub mod split_helper {
     // Split the region and refresh bucket immediately
     // This is to simulate the case when the splitted peer's storage is not
     // initialized yet when refresh bucket happens
-    pub fn split_region_and_refresh_bucket<'a>(
-        router: &'a mut TestRouter,
+    pub fn split_region_and_refresh_bucket(
+        router: &mut TestRouter,
         region: metapb::Region,
         peer: metapb::Peer,
         split_region_id: u64,

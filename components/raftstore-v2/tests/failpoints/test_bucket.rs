@@ -35,7 +35,7 @@ fn test_refresh_bucket() {
     split_region_and_refresh_bucket(
         router,
         region,
-        peer.clone(),
+        peer,
         1000,
         new_peer(store_id, 10),
         b"k22",
@@ -47,13 +47,12 @@ fn test_refresh_bucket() {
         let meta = router
             .must_query_debug_info(1000, Duration::from_secs(1))
             .unwrap();
-        if meta.bucket_keys.len() != 0 {
+        if !meta.bucket_keys.is_empty() {
             assert_eq!(meta.bucket_keys.len(), 4); // include region start/end keys
             assert_eq!(meta.bucket_keys[1], b"1".to_vec());
             assert_eq!(meta.bucket_keys[2], b"2".to_vec());
-            std::thread::sleep(Duration::from_millis(5000));
             return;
         }
     }
-    assert!(false, "timeout for updating buckets"); // timeout
+    panic!("timeout for updating buckets"); // timeout
 }
