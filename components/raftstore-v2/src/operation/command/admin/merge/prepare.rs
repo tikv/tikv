@@ -127,7 +127,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // (1) `check_trim_status`
         // (2) `check_logs_before_prepare_merge`
         // (3) `check_pessimistic_locks`
-        // Check 1 and 3 are async, they yield by returning error.
+        // Check 1 and 3 are async, they yield by returning
+        // `Error::PendingPrepareMerge`.
         let pre_propose = if let Some(r) = self.already_checked_pessimistic_locks()? {
             r
         } else if self.already_checked_trim_status()? {
@@ -397,20 +398,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 if pending_peers.is_empty() {
                     Ok(true)
                 } else {
-                    info!(
-                        self.logger,
-                        "suspend PrepareMerge because trim status check is not complete";
-                    );
                     Err(Error::PendingPrepareMerge)
                 }
             }
-            // Shouldn't reach here after calling `already_checked_pessimistic_locks` first.
-            Some(PrepareStatus::WaitForFence { .. }) => unreachable!(),
-            Some(PrepareStatus::Applied(state)) => Err(box_err!(
-                "another merge is in-progress, merge_state: {:?}.",
-                state
-            )),
             None => Ok(false),
+            // Shouldn't reach here after calling `already_checked_pessimistic_locks` first.
+            _ => unreachable!(),
         }
     }
 
