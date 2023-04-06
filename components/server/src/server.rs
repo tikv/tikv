@@ -106,10 +106,7 @@ use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{
-        disk, path_in_diff_mount_point, register_memory_usage_high_water,
-        SysQuota,
-    },
+    sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},

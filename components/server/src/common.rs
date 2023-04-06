@@ -60,9 +60,13 @@ const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
 const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// This is the common layer of TiKV-like servers. By holding it in its own
-/// TikvServer implementation, one can easily access the common ability of a
-/// TiKV server.
+/// This is the common layer of TiKV-like servers. It is a collection of all
+/// capabilities a TikvServer should have or may take advantage of. By holding
+/// it in its own TikvServer implementation, one can easily access the common
+/// ability of a TiKV server.
+// Fields in this struct are all public since they are open for other TikvServer
+// to use, e.g. a custom TikvServer may alter some fields in `config` or push
+// some services into `to_stop`.
 pub struct TikvServerCore {
     pub config: TikvConfig,
     pub store_path: PathBuf,
