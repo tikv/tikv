@@ -795,7 +795,7 @@ fn async_commit_timestamps(
                 "for_update_ts_from_prewrite_req" => for_update_ts,
                 "for_update_ts_from_lock" => lock_for_update_ts,
                 "lock" => ?lock);
-            return Err(ErrorInner::ForceLockingExceedsMinCommitTS {
+            return Err(ErrorInner::ForceLockingExceedsMinCommitTs {
                 start_ts,
                 req_for_update_ts: for_update_ts,
                 lock_for_update_ts,
@@ -2781,7 +2781,7 @@ pub mod tests {
                 false,
             );
             match e {
-                Error(box ErrorInner::ForceLockingExceedsMinCommitTS { .. }) => (),
+                Error(box ErrorInner::ForceLockingExceedsMinCommitTs { .. }) => (),
                 e => panic!(
                     "unexpected error: expected ForceLockingExceedsMinCommitTS, got {:?}",
                     e

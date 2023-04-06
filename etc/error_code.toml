@@ -743,9 +743,9 @@ error = '''
 KV:Storage:CommitTsTooLarge
 '''
 
-["KV:Storage:ForceLockingExceedsMinCommitTS"]
+["KV:Storage:ForceLockingExceedsMinCommitTs"]
 error = '''
-KV:Storage:ForceLockingExceedsMinCommitTS
+KV:Storage:ForceLockingExceedsMinCommitTs
 '''
 
 

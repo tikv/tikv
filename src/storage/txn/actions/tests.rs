@@ -611,7 +611,7 @@ pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
         &mut reader,
         &props,
         mutation,
-        &secondary_keys,
+        secondary_keys,
         pessimistic_action,
         expected_for_update_ts,
     )

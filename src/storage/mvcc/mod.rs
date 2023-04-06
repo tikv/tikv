@@ -152,7 +152,7 @@ pub enum ErrorInner {
         .min_commit_ts, .lock_for_update_ts, .start_ts, req_for_update_ts,
         log_wrappers::Value::key(.key)
     )]
-    ForceLockingExceedsMinCommitTS {
+    ForceLockingExceedsMinCommitTs {
         start_ts: TimeStamp,
         req_for_update_ts: TimeStamp,
         lock_for_update_ts: TimeStamp,
@@ -285,13 +285,13 @@ impl ErrorInner {
                 min_commit_ts: *min_commit_ts,
                 max_commit_ts: *max_commit_ts,
             }),
-            ErrorInner::ForceLockingExceedsMinCommitTS {
+            ErrorInner::ForceLockingExceedsMinCommitTs {
                 start_ts,
                 req_for_update_ts,
                 lock_for_update_ts,
                 min_commit_ts,
                 key,
-            } => Some(ErrorInner::ForceLockingExceedsMinCommitTS {
+            } => Some(ErrorInner::ForceLockingExceedsMinCommitTs {
                 start_ts: *start_ts,
                 req_for_update_ts: *req_for_update_ts,
                 lock_for_update_ts: *lock_for_update_ts,
@@ -332,11 +332,10 @@ impl Error {
     }
 
     pub fn is_async_commit_fallback(&self) -> bool {
-        match &*self.0 {
-            ErrorInner::CommitTsTooLarge { .. }
-            | ErrorInner::ForceLockingExceedsMinCommitTS { .. } => true,
-            _ => false,
-        }
+        matches!(
+            &*self.0,
+            ErrorInner::CommitTsTooLarge { .. } | ErrorInner::ForceLockingExceedsMinCommitTS { .. }
+        )
     }
 }
 
@@ -425,7 +424,7 @@ impl ErrorCodeExt for Error {
                 error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
             }
             ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
-            ErrorInner::ForceLockingExceedsMinCommitTS { .. } => {
+            ErrorInner::ForceLockingExceedsMinCommitTs { .. } => {
                 error_code::storage::FORCE_LOCKING_EXCEEDS_MIN_COMMIT_TS
             }
             ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
