@@ -66,4 +66,9 @@ pub trait KvEngine:
     fn can_apply_snapshot(&self, _is_timeout: bool, _new_batch: bool, _region_id: u64) -> bool {
         true
     }
+
+    /// A method for test to expose inner db refcount in order to make sure a
+    /// full release of engine.
+    #[cfg(any(test, feature = "testexport"))]
+    fn inner_refcount(&self) -> usize;
 }
