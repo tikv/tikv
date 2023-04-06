@@ -53,7 +53,6 @@ make_auto_flush_static_metric! {
         seek_tombstone,
         seek_for_prev_tombstone,
         raw_value_tombstone,
-        in_memory_pessimistic_lock_hit,
     }
 
     pub label_enum WaitType {
@@ -238,9 +237,6 @@ impl From<GcKeysDetail> for ScanKind {
             GcKeysDetail::seek_tombstone => ScanKind::seek_tombstone,
             GcKeysDetail::seek_for_prev_tombstone => ScanKind::seek_for_prev_tombstone,
             GcKeysDetail::raw_value_tombstone => ScanKind::raw_value_tombstone,
-            GcKeysDetail::in_memory_pessimistic_lock_hit => {
-                ScanKind::in_memory_pessimistic_lock_hit
-            }
         }
     }
 }
