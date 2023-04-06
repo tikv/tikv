@@ -5,9 +5,10 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, TabletRegistry, CF_WRITE};
-use keys::{MAX_KEY, MIN_KEY};
-use slog::{error, warn, Logger};
+use engine_traits::{KvEngine, Range, TabletRegistry, CF_WRITE};
+use fail::fail_point;
+use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
+use slog::{error, info, warn, Logger};
 use thiserror::Error;
 use tikv_util::{box_try, worker::Runnable};
 
@@ -92,6 +93,9 @@ where
                         let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {continue};
                         let Some(tablet) = tablet_cache.latest() else {continue};
                         for cf in &cf_names {
+                            let approximate_size = tablet
+                                .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
+                                .unwrap_or_default();
                             if let Err(e) =
                                 tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
                             {
@@ -103,7 +107,19 @@ where
                                     "err" => %e,
                                 );
                             }
+                            let cur_approximate_size = tablet
+                                .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
+                                .unwrap_or_default();
+                            info!(
+                                self.logger,
+                                "Compaction done";
+                                "cf" => cf,
+                                "region_id" => region_id,
+                                "approximate_size_before" => approximate_size,
+                                "approximate_size_after" => cur_approximate_size
+                            );
                         }
+                        fail_point!("raftstore-v2::CheckAndCompact:AfterCompact");
                     }
                 }
                 Err(e) => warn!(
@@ -143,7 +159,7 @@ fn collect_regions_to_compact<E: KvEngine>(
         let Some(mut tablet_cache) = reg.get(id) else {continue};
         let Some(tablet) = tablet_cache.latest() else {continue};
         if let Some((num_ent, num_ver)) =
-            box_try!(tablet.get_range_entries_and_versions(CF_WRITE, MIN_KEY, MAX_KEY))
+            box_try!(tablet.get_range_entries_and_versions(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
         {
             if need_compact(
                 num_ent,
@@ -164,72 +180,112 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactory},
     };
-    use engine_traits::{
-        MiscExt, Mutable, TabletContext, TabletFactory, TabletRegistry, WriteBatch, WriteBatchExt,
-        CF_DEFAULT,
-    };
+    use engine_traits::{MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT, CF_LOCK};
+    use keys::data_key;
     use kvproto::metapb::Region;
-    use slog::Logger;
     use tempfile::Builder;
+    use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
 
     fn build_test_factory(name: &'static str) -> (tempfile::TempDir, TabletRegistry<KvTestEngine>) {
         let dir = Builder::new().prefix(name).tempdir().unwrap();
+        let mut cf_opts = CfOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let factory = Box::new(TestTabletFactory::new(
             DbOptions::default(),
             vec![
-                ("default", CfOptions::default()),
-                ("write", CfOptions::default()),
+                (CF_DEFAULT, CfOptions::new()),
+                (CF_LOCK, CfOptions::new()),
+                (CF_WRITE, cf_opts),
             ],
         ));
         let registry = TabletRegistry::new(factory, dir.path()).unwrap();
         (dir, registry)
     }
 
+    fn mvcc_put(db: &KvTestEngine, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
+        let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
+        let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
+        db.put_cf(CF_WRITE, k.as_encoded(), &w.as_ref().to_bytes())
+            .unwrap();
+    }
+
+    fn delete(db: &KvTestEngine, k: &[u8], commit_ts: TimeStamp) {
+        let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
+        db.delete_cf(CF_WRITE, k.as_encoded()).unwrap();
+    }
+
     #[test]
     fn test_compact_range() {
         let (_dir, registry) = build_test_factory("compact-range-test");
-        let logger = slog_global::borrow_global().new(slog::o!());
-        let mut runner = Runner::new(registry.clone(), logger);
 
         let mut region = Region::default();
         region.set_id(2);
-        let mut ctx = TabletContext::new(&region, Some(5));
+        let ctx = TabletContext::new(&region, Some(5));
         let mut cache = registry.load(ctx, true).unwrap();
         let tablet = cache.latest().unwrap();
 
-        // Generate the first SST file.
-        let mut wb = tablet.write_batch();
-        for i in 0..1000 {
-            let k = format!("key_{}", i);
-            wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
-                .unwrap();
+        // mvcc_put 0..5
+        for i in 0..5 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            mvcc_put(tablet, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
-        wb.write().unwrap();
-        tablet.flush_cf(CF_DEFAULT, true).unwrap();
+        tablet.flush_cf(CF_WRITE, true).unwrap();
 
-        // Generate the first SST file.
-        let mut wb = tablet.write_batch();
-        for i in 0..1000 {
-            let k = format!("key_{}", i);
-            wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
-                .unwrap();
+        // gc 0..5
+        for i in 0..5 {
+            let k = format!("k{}", i);
+            delete(tablet, k.as_bytes(), 2.into());
         }
-        wb.write().unwrap();
-        tablet.flush_cf(CF_DEFAULT, true).unwrap();
+        tablet.flush_cf(CF_WRITE, true).unwrap();
 
-        // Get the total SST files size.
-        let old_sst_files_size = tablet
-            .get_total_sst_files_size_cf(CF_DEFAULT)
+        let (start, end) = (data_key(b"k0"), data_key(b"k5"));
+        let (entries, version) = tablet
+            .get_range_entries_and_versions(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
+        assert_eq!(entries, 10);
+        assert_eq!(version, 5);
 
-        runner.run(Task::CheckAndCompact {
-            cf_names: vec![CF_DEFAULT.to_string()],
-            region_ids: vec![2],
-            tombstones_num_threshold: 2,
-            tombstones_percent_threshold: 2,
-        })
+        region.set_id(3);
+        let ctx = TabletContext::new(&region, Some(5));
+        let mut cache = registry.load(ctx, true).unwrap();
+        let tablet = cache.latest().unwrap();
+        // mvcc_put 5..10
+        for i in 5..10 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            mvcc_put(tablet, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
+        }
+        tablet.flush_cf(CF_WRITE, true).unwrap();
+
+        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
+        let (entries, version) = tablet
+            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entries, 5);
+        assert_eq!(version, 5);
+
+        // gc 5..8
+        for i in 5..8 {
+            let k = format!("k{}", i);
+            delete(tablet, k.as_bytes(), 2.into());
+        }
+        tablet.flush_cf(CF_WRITE, true).unwrap();
+
+        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
+        let (entries, version) = tablet
+            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entries, 8);
+        assert_eq!(version, 5);
+
+        let regions = collect_regions_to_compact(&registry, vec![2, 3, 4], 4, 50).unwrap();
+        assert!(regions.len() == 1 && regions[0] == 2);
+
+        let regions = collect_regions_to_compact(&registry, vec![2, 3, 4], 3, 30).unwrap();
+        assert!(regions.len() == 2 && !regions.contains(&4));
     }
 }

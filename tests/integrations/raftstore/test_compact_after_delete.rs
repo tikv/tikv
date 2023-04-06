@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_rocks::{raw::Range, util::get_cf_handle};
-use engine_traits::{MiscExt, CF_WRITE};
+use engine_traits::{CachedTablet, MiscExt, CF_WRITE};
 use keys::{data_key, DATA_MAX_KEY};
 use test_raftstore::*;
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
@@ -84,4 +84,73 @@ fn test_node_compact_after_delete() {
     let count = 1;
     let mut cluster = new_node_cluster(0, count);
     test_compact_after_delete(&mut cluster);
+}
+
+#[test]
+fn test_node_compact_after_delete_v2() {
+    let count = 1;
+    let mut cluster = test_raftstore_v2::new_node_cluster(0, count);
+
+    cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_compact_min_tombstones = 50;
+    cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
+    cluster.cfg.raft_store.region_compact_check_step = 2;
+    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    let (split_key, _) = gen_mvcc_put_kv(b"k100", b"", 1.into(), 2.into());
+    cluster.must_split(&region, &split_key);
+
+    for i in 0..200 {
+        let (k, v) = (format!("k{:03}", i), format!("value{}", i));
+        let (k, v) = gen_mvcc_put_kv(k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
+        cluster.must_put_cf(CF_WRITE, &k, &v);
+    }
+    for (registry, _) in &cluster.engines {
+        registry.for_each_opened_tablet(|_, db: &mut CachedTablet<_>| {
+            if let Some(db) = db.latest() {
+                db.flush_cf(CF_WRITE, true).unwrap();
+            }
+            true
+        })
+    }
+
+    let (sender, receiver) = mpsc::channel();
+    let sync_sender = Mutex::new(sender);
+    fail::cfg_callback("raftstore-v2::CheckAndCompact:AfterCompact", move || {
+        let sender = sync_sender.lock().unwrap();
+        sender.send(true).unwrap();
+    })
+    .unwrap();
+    for i in 0..200 {
+        let k = format!("k{:03}", i);
+        let k = gen_delete_k(k.as_bytes(), 2.into());
+        cluster.must_delete_cf(CF_WRITE, &k);
+    }
+    for (registry, _) in &cluster.engines {
+        registry.for_each_opened_tablet(|_, db: &mut CachedTablet<_>| {
+            if let Some(db) = db.latest() {
+                db.flush_cf(CF_WRITE, true).unwrap();
+            }
+            true
+        })
+    }
+
+    // wait for 2 regions' compaction.
+    receiver.recv_timeout(Duration::from_millis(5000)).unwrap();
+    receiver.recv_timeout(Duration::from_millis(5000)).unwrap();
+
+    for (registry, _) in &cluster.engines {
+        registry.for_each_opened_tablet(|_, db: &mut CachedTablet<_>| {
+            if let Some(db) = db.latest() {
+                let cf_handle = get_cf_handle(db.as_inner(), CF_WRITE).unwrap();
+                let approximate_size = db
+                    .as_inner()
+                    .get_approximate_sizes_cf(cf_handle, &[Range::new(b"", DATA_MAX_KEY)])[0];
+                assert_eq!(approximate_size, 0);
+            }
+            true
+        })
+    }
 }

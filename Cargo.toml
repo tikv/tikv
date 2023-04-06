@@ -392,12 +392,12 @@ opt-level = 0
 debug = true
 
 [profile.dev.package.libtitan_sys]
-debug = false
-opt-level = 1
+opt-level = 0
+debug = true
 
 [profile.dev.package.tirocks-sys]
-debug = false
-opt-level = 1
+opt-level = 0
+debug = true
 
 [profile.dev.package.tests]
 opt-level = 0

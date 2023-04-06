@@ -1,12 +1,11 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::{
-    Bound::{Excluded, Included, Unbounded},
-    HashMap, HashSet,
+    Bound::{Excluded, Unbounded},
+    HashSet,
 };
 
 use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
-use parking_lot::lock_api::RawMutex;
 use slog::{debug, error};
 
 use crate::{
@@ -14,15 +13,25 @@ use crate::{
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
-    fn register_compact_check_tick(&mut self) {
+    pub fn register_compact_check_tick(&mut self) {
         self.schedule_tick(
             StoreTick::CompactCheck,
             self.store_ctx.cfg.region_compact_check_interval.0,
         )
     }
 
-    // ""  "k2" "k6"  "k10" ""
     pub fn on_ompact_check_tick(&mut self) {
+        self.register_compact_check_tick();
+        if self.store_ctx.schedulers.cleanup.is_busy() {
+            debug!(
+                self.store_ctx.logger,
+                "compact worker is busy, check space redundancy next time";
+            );
+            return;
+        }
+
+        // todo: auto compaction disable?
+
         // Start from last checked key.
         let mut regions_to_check: HashSet<u64> = HashSet::default();
         let (largest_key, last_check_key) = {
