@@ -3,13 +3,14 @@
 //! This module implements the interactions with pd.
 
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
-use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, Transport};
-use slog::error;
-use tikv_util::slog_panic;
+use raftstore::store::{metrics::{STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, RAFT_PEER_PENDING_DURATION}, Transport};
+use slog::{debug, error};
+use tikv_util::{slog_panic, time::{InstantExt, duration_to_sec}};
 
 use crate::{
     batch::StoreContext,
@@ -122,7 +123,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    fn collect_pending_peers<T>(&self, ctx: &StoreContext<EK, ER, T>) -> Vec<metapb::Peer> {
+    fn collect_pending_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group().status();
         let truncated_idx = self
@@ -135,9 +136,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return pending_peers;
         }
 
-        // TODO: update `peers_start_pending_time`.
+        for i in 0..self.peers_start_pending_time.len() {
+            let (_, pending_after) = self.peers_start_pending_time[i];
+            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+            RAFT_PEER_PENDING_DURATION.observe(elapsed);
+        }
 
         let progresses = status.progress.unwrap().iter();
+        let mut peers_start_pending_time= Vec::with_capacity(self.region().get_peers().len());
         for (&id, progress) in progresses {
             if id == self.peer_id() {
                 continue;
@@ -156,6 +162,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.peer_from_cache(id) {
                     pending_peers.push(p);
+                    if !self
+                        .peers_start_pending_time
+                        .iter()
+                        .any(|&(pid, _)| pid == id)
+                    {
+                        let now = Instant::now();
+                        peers_start_pending_time.push((id, now));
+                        debug!(
+                            self.logger,
+                            "peer start pending";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.peer_id(),
+                            "time" => ?now,
+                        );
+                    }
                 } else {
                     if ctx.cfg.dev_assert {
                         slog_panic!(
@@ -172,6 +193,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
+        self.peers_start_pending_time.extend(peers_start_pending_time);
         pending_peers
     }
 

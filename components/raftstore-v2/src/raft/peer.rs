@@ -20,13 +20,14 @@ use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         fsm::ApplyMetrics,
+        metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
         TabletSnapManager, WriteTask,
     },
 };
-use slog::Logger;
-use tikv_util::slog_panic;
+use slog::{Logger, debug};
+use tikv_util::{slog_panic, time::{duration_to_sec, InstantExt}};
 
 use super::storage::Storage;
 use crate::{
@@ -115,6 +116,12 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_messages: Vec<RaftMessage>,
 
     gc_peer_context: GcPeerContext,
+
+    /// Record the instants of peers being added into the configuration.
+    /// Remove them after they are not pending any more.
+    pub peers_start_pending_time: Vec<(u64, Instant)>,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peer_ids: Vec<u64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -199,6 +206,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
+            down_peer_ids: vec![],
+            peers_start_pending_time: vec![],
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -538,8 +547,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         )
     }
 
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
+    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
         let mut down_peers = Vec::new();
+        let mut down_peer_ids = Vec::new();
         let now = Instant::now();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer_id() {
@@ -552,9 +562,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(elapsed.as_secs());
                     down_peers.push(stats);
+                    down_peer_ids.push(p.get_id());
                 }
             }
         }
+        self.down_peer_ids = down_peer_ids;
         // TODO: `refill_disk_full_peers`
         down_peers
     }
@@ -848,5 +860,46 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Ok(t) => t,
             Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
         }
+    }
+
+    /// Returns `true` if any peer recover from connectivity problem.
+    ///
+    /// A peer can become pending or down if it has not responded for a
+    /// long time. If it becomes normal again, PD need to be notified.
+    pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
+        if self.peers_start_pending_time.is_empty() && self.down_peer_ids.is_empty() {
+            return false;
+        }
+        if !self.is_leader() {
+            self.down_peer_ids = vec![];
+            self.peers_start_pending_time = vec![];
+            return false;
+        }
+        for i in 0..self.peers_start_pending_time.len() {
+            if self.peers_start_pending_time[i].0 != peer_id {
+                continue;
+            }
+            // TODO check wait data peers here
+            let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
+            if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
+                if progress.matched >= truncated_idx {
+                    let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
+                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                    RAFT_PEER_PENDING_DURATION.observe(elapsed);
+                    debug!(
+                        self.logger,
+                        "peer has caught up logs";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.peer_id(),
+                        "takes" => elapsed,
+                    );
+                    return true;
+                }
+            }
+        }
+        if self.down_peer_ids.contains(&peer_id) {
+            return true;
+        }
+        false
     }
 }
