@@ -308,11 +308,15 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub optimize_filters_for_hits: bool,
             #[online_config(skip)]
+            pub optimize_filters_for_memory: bool,
+            #[online_config(skip)]
             pub whole_key_filtering: bool,
             #[online_config(skip)]
             pub bloom_filter_bits_per_key: i32,
             #[online_config(skip)]
             pub block_based_bloom_filter: bool,
+            #[online_config(skip)]
+            pub ribbon_filter_above_level: Option<u32>,
             #[online_config(skip)]
             pub read_amp_bytes_per_bit: u32,
             #[serde(with = "rocks_config::compression_type_level_serde")]
@@ -431,6 +435,9 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "optimize_filters_for_hits"])
             .set(($cf.optimize_filters_for_hits as i32).into());
         $metrics
+            .with_label_values(&[$tag, "optimize_filters_for_memory"])
+            .set(($cf.optimize_filters_for_memory as i32).into());
+        $metrics
             .with_label_values(&[$tag, "whole_key_filtering"])
             .set(($cf.whole_key_filtering as i32).into());
         $metrics
@@ -439,6 +446,11 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "block_based_bloom_filter"])
             .set(($cf.block_based_bloom_filter as i32).into());
+        if let Some(level) = $cf.ribbon_filter_above_level {
+            $metrics
+                .with_label_values(&[$tag, "ribbon_filter_above_level"])
+                .set((level as i32).into());
+        }
 
         $metrics
             .with_label_values(&[$tag, "read_amp_bytes_per_bit"])
@@ -547,16 +559,24 @@ macro_rules! build_cf_opt {
         block_base_opts
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
         if $opt.use_bloom_filter {
-            block_base_opts.set_bloom_filter(
-                $opt.bloom_filter_bits_per_key as f64,
-                $opt.block_based_bloom_filter,
-            );
+            if let Some(level) = $opt.ribbon_filter_above_level {
+                block_base_opts.set_ribbon_filter(
+                    $opt.bloom_filter_bits_per_key as f64,
+                    level as i32 - 1, // bloom_before_level
+                );
+            } else {
+                block_base_opts.set_bloom_filter(
+                    $opt.bloom_filter_bits_per_key as f64,
+                    $opt.block_based_bloom_filter,
+                );
+            }
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
         }
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
         block_base_opts.set_prepopulate_block_cache($opt.prepopulate_block_cache);
         block_base_opts.set_format_version($opt.format_version);
         block_base_opts.set_checksum($opt.checksum);
+        block_base_opts.set_optimize_filters_for_memory($opt.optimize_filters_for_memory);
         let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_block_based_table_factory(&block_base_opts);
         cf_opts.set_num_levels($opt.num_levels);
@@ -649,9 +669,11 @@ impl Default for DefaultCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
             optimize_filters_for_hits: true,
+            optimize_filters_for_memory: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -813,9 +835,11 @@ impl Default for WriteCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
             optimize_filters_for_hits: false,
+            optimize_filters_for_memory: false,
             whole_key_filtering: false,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -939,9 +963,11 @@ impl Default for LockCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
             optimize_filters_for_hits: false,
+            optimize_filters_for_memory: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
             write_buffer_size: ReadableSize::mb(32),
@@ -1032,9 +1058,11 @@ impl Default for RaftCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
             optimize_filters_for_hits: true,
+            optimize_filters_for_memory: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
             write_buffer_size: ReadableSize::mb(128),
@@ -1543,9 +1571,11 @@ impl Default for RaftDefaultCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: false,
             optimize_filters_for_hits: true,
+            optimize_filters_for_memory: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
