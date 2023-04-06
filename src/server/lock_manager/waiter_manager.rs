@@ -657,7 +657,7 @@ impl FutureRunnable<Task> for WaiterManager {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{sync::mpsc, time::Duration};
+    use std::{sync::mpsc, thread::sleep, time::Duration};
 
     use futures::{executor::block_on, future::FutureExt};
     use kvproto::kvrpcpb::LockInfo;
@@ -1149,6 +1149,89 @@ pub mod tests {
             0,
             200,
         );
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn test_duration_to_last_update() {
+        let (mut worker, scheduler) = start_waiter_manager(1000, 100);
+        let key = Key::from_raw(b"foo");
+        let (waiter_ts, lock) = (
+            10.into(),
+            LockDigest {
+                ts: 20.into(),
+                hash: key.gen_hash(),
+            },
+        );
+        // waiter1 is updated when waiting, while waiter2(f2) is not.
+        let (waiter1, _, f1) = new_test_waiter_with_key(waiter_ts, lock.ts, &key.to_raw().unwrap());
+        let (waiter2, _, f2) = new_test_waiter_with_key(100.into(), 100.into(), "foo".as_bytes());
+        scheduler.wait_for(
+            LockWaitToken(Some(1)),
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter1.start_ts,
+            waiter1.wait_info,
+            WaitTimeout::Millis(1000),
+            waiter1.cancel_callback,
+            DiagnosticContext::default(),
+        );
+        scheduler.wait_for(
+            LockWaitToken(Some(2)),
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter2.start_ts,
+            waiter2.wait_info,
+            WaitTimeout::Millis(1000),
+            waiter2.cancel_callback,
+            DiagnosticContext::default(),
+        );
+
+        // then update waiter
+        sleep(Duration::from_millis(500));
+        let event = UpdateWaitForEvent {
+            token: LockWaitToken(Some(1)),
+            start_ts: waiter1.start_ts,
+            is_first_lock: false,
+            wait_info: KeyLockWaitInfo {
+                key: key.clone(),
+                lock_digest: Default::default(),
+                lock_info: LockInfo {
+                    key: key.to_raw().unwrap().clone(),
+                    ..Default::default()
+                },
+            },
+        };
+        scheduler.update_wait_for(vec![event]);
+
+        assert_elapsed(
+            || match block_on(f1).unwrap() {
+                StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                    MvccError(box MvccErrorInner::KeyIsLocked(res)),
+                )))) => {
+                    assert!(res.duration_to_last_update_ms > 400);
+                    assert!(res.duration_to_last_update_ms < 600);
+                }
+                e => panic!("unexpected error: {:?}", e),
+            },
+            400,
+            600,
+        );
+        assert_elapsed(
+            || match block_on(f2).unwrap() {
+                StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                    MvccError(box MvccErrorInner::KeyIsLocked(res)),
+                )))) => {
+                    assert_eq!(res.duration_to_last_update_ms, 0);
+                }
+                e => panic!("unexpected error: {:?}", e),
+            },
+            0,
+            200,
+        );
+
         worker.stop().unwrap();
     }
 }
