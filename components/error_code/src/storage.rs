@@ -39,7 +39,6 @@ define_error_codes!(
     KEY_VERSION => ("KeyVersion", "",""),
     PESSIMISTIC_LOCK_NOT_FOUND => ("PessimisticLockNotFound", "", ""),
     COMMIT_TS_TOO_LARGE => ("CommitTsTooLarge", "", ""),
-    FORCE_LOCKING_EXCEEDS_MIN_COMMIT_TS => ("ForceLockingExceedsMinCommitTs", "", ""),
 
     ASSERTION_FAILED => ("AssertionFailed", "", ""),
     LOCK_IF_EXISTS_FAILED => ("LockIfExistsFailed", "", ""),

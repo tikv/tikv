@@ -545,14 +545,13 @@ impl<'a> PrewriteMutation<'a> {
             let res = async_commit_timestamps(
                 &self.key,
                 &mut lock,
-                lock_status,
                 self.txn_props.start_ts,
                 self.txn_props.for_update_ts(),
                 self.txn_props.max_commit_ts(),
                 txn,
             );
             fail_point!("after_calculate_min_commit_ts");
-            if let Err(e) = &res && e.is_async_commit_fallback() {
+            if let Err(Error(box ErrorInner::CommitTsTooLarge { .. })) = &res {
                 try_one_pc = false;
                 lock.use_async_commit = false;
                 lock.secondaries = Vec::new();
@@ -725,7 +724,6 @@ impl<'a> PrewriteMutation<'a> {
 fn async_commit_timestamps(
     key: &Key,
     lock: &mut Lock,
-    prev_lock_status: LockStatus,
     start_ts: TimeStamp,
     for_update_ts: TimeStamp,
     max_commit_ts: TimeStamp,
@@ -764,43 +762,6 @@ fn async_commit_timestamps(
                 start_ts,
                 min_commit_ts,
                 max_commit_ts,
-            });
-        }
-
-        if let LockStatus::Pessimistic(lock_for_update_ts) = prev_lock_status &&
-            lock_for_update_ts >= min_commit_ts {
-            // When force locking (allow_lock_with_conflict) of pessimistic lock has ever
-            // happened on the key before, it's possible that the key is locked on a larger
-            // `for_update_ts`. The commit_ts of the transaction must be greater than it,
-            // otherwise it indicates that the transaction commits logically before its
-            // read, which is incorrect. Another problem here is that when force-locking
-            // takes effect, the `for_update_ts` written in the pessimistic lock equals
-            // to the `commit_ts` of the latest version before the lock, which can be
-            // a calculated one instead of from TSO. This means that we cannot use this
-            // `for_update_ts` + 1 as the commit_ts, which can potentially break the
-            // linearizability.
-            //
-            // Actually this case should never happen for now (since TiDB must retry the
-            // statement after locking with conflict, and it must get a larger
-            // for_update_ts with TSO, thus the prewrite request must carries a larger
-            // `min_commit_ts`), but we still check it for safety. Moreover, this case
-            // should be carefully treated when implementing the statement-retry-
-            // reduction optimization of TiDB,
-            // (https://github.com/pingcap/tidb/issues/42772).
-            warn!("async commit or 1PC fallback to 2PC caused by for_update_ts of pessimistic lock \
-                (force locked) not less than calculated min_commit_ts";
-                "key" => log_wrappers::Value::key(key.as_encoded()),
-                "start_ts" => start_ts,
-                "min_commit_ts" => min_commit_ts,
-                "for_update_ts_from_prewrite_req" => for_update_ts,
-                "for_update_ts_from_lock" => lock_for_update_ts,
-                "lock" => ?lock);
-            return Err(ErrorInner::ForceLockingExceedsMinCommitTs {
-                start_ts,
-                req_for_update_ts: for_update_ts,
-                lock_for_update_ts,
-                min_commit_ts,
-                key: key.to_raw()?,
             });
         }
 
@@ -2712,101 +2673,5 @@ pub mod tests {
         must_unlocked(&mut engine, key);
         prewrite_err(&mut engine, key, value, key, 120, 130, Some(130));
         must_unlocked(&mut engine, key);
-    }
-
-    #[test]
-    fn test_force_locking_async_commit_safety() {
-        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-
-        let k1 = b"k1";
-        let k2 = b"k2";
-        let k3 = b"k3";
-        let k4 = b"k4";
-
-        must_prewrite_put(&mut engine, k1, b"v1", k1, 5);
-        must_commit(&mut engine, k1, 5, 8);
-        must_prewrite_put(&mut engine, k2, b"v2", k2, 6);
-        must_commit(&mut engine, k2, 6, 12);
-        must_prewrite_put(&mut engine, k3, b"v3", k3, 7);
-        must_commit(&mut engine, k3, 7, 30);
-        must_prewrite_put(&mut engine, k4, b"v4", k4, 8);
-        must_commit(&mut engine, k4, 8, 21);
-
-        // Shortcuts for better readability.
-        let lock = must_acquire_pessimistic_lock_allow_lock_with_conflict;
-        let prewrite = |engine: &mut _,
-                        key,
-                        value,
-                        primary,
-                        secondaries: &_,
-                        start_ts,
-                        for_update_ts,
-                        min_commit_ts| {
-            must_pessimistic_prewrite_put_async_commit(
-                engine,
-                key,
-                value,
-                primary,
-                secondaries,
-                start_ts,
-                for_update_ts,
-                DoPessimisticCheck,
-                min_commit_ts,
-            )
-        };
-
-        let prewrite_must_fallback = |engine: &mut _,
-                                      key,
-                                      value,
-                                      primary,
-                                      secondaries: &_,
-                                      start_ts,
-                                      for_update_ts,
-                                      min_commit_ts| {
-            let e = must_prewrite_put_err_impl_with_should_not_exist(
-                engine,
-                key,
-                value,
-                primary,
-                secondaries,
-                start_ts,
-                for_update_ts,
-                DoPessimisticCheck,
-                None,
-                min_commit_ts,
-                0,
-                false,
-                kvproto::kvrpcpb::Assertion::None,
-                kvproto::kvrpcpb::AssertionLevel::Off,
-                false,
-            );
-            match e {
-                Error(box ErrorInner::ForceLockingExceedsMinCommitTs { .. }) => (),
-                e => panic!(
-                    "unexpected error: expected ForceLockingExceedsMinCommitTS, got {:?}",
-                    e
-                ),
-            }
-        };
-
-        lock(&mut engine, k1, k1, 10, 10, false, false).assert_empty();
-        lock(&mut engine, k2, k1, 10, 10, false, false)
-            .assert_locked_with_conflict(Some(b"v2"), 12);
-        lock(&mut engine, k3, k1, 10, 10, false, false)
-            .assert_locked_with_conflict(Some(b"v3"), 30);
-        lock(&mut engine, k4, k1, 10, 10, false, false)
-            .assert_locked_with_conflict(Some(b"v4"), 21);
-
-        // Prewrite in async commit mode
-        let secondaries = Some(vec![b"k2".to_vec(), b"k3".to_vec()]);
-        // Passes async commit check
-        let min_commit_ts = prewrite(&mut engine, k1, b"v11", k1, &secondaries, 10, 20, 21);
-        assert_eq!(min_commit_ts, 21.into());
-        let min_commit_ts = prewrite(&mut engine, k2, b"v22", k1, &Some(vec![]), 10, 20, 21);
-        assert_eq!(min_commit_ts, 21.into());
-        // Fallbacks to 2PC due to min_commit_ts < pessimistic_lock.for_update_ts
-        prewrite_must_fallback(&mut engine, k3, b"v33", k1, &Some(vec![]), 10, 20, 21);
-        // Fallbacks to 2PC due to min_commit_ts == pessimistic_lock.for_update_ts
-        prewrite_must_fallback(&mut engine, k4, b"v44", k1, &Some(vec![]), 10, 20, 21);
     }
 }
