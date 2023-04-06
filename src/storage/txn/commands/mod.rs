@@ -197,7 +197,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 secondary_keys,
                 req.get_try_one_pc(),
                 req.get_assertion_level(),
-                req.take_for_update_ts_checks().into(),
+                req.take_for_update_ts_constraints().into(),
                 req.take_context(),
             )
         }
@@ -940,14 +940,14 @@ pub mod test_util {
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
-        for_update_ts_checks: impl IntoIterator<Item = (usize, u64)>,
+        for_update_ts_constraints: impl IntoIterator<Item = (usize, u64)>,
     ) -> Result<PrewriteResult> {
-        let cmd = PrewritePessimistic::with_check_for_update_ts(
+        let cmd = PrewritePessimistic::with_for_update_ts_constraints(
             mutations,
             primary,
             start_ts.into(),
             for_update_ts.into(),
-            for_update_ts_checks
+            for_update_ts_constraints
                 .into_iter()
                 .map(|(size, ts)| (size, TimeStamp::from(ts))),
         );

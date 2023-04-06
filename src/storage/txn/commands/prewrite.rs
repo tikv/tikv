@@ -10,7 +10,7 @@ use std::mem;
 
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{
-    AssertionLevel, ExtraOp, PrewriteRequestForUpdateTsCheck,
+    AssertionLevel, ExtraOp, PrewriteRequestForUpdateTsConstraint,
     PrewriteRequestPessimisticAction::{self, *},
 };
 use tikv_kv::SnapshotExt;
@@ -284,7 +284,7 @@ command! {
             /// that must be satisfied as long as data is consistent.
             assertion_level: AssertionLevel,
             /// Constraints on the pessimistic locks that have to be checked when prewriting.
-            for_update_ts_checks: Vec<PrewriteRequestForUpdateTsCheck>,
+            for_update_ts_constraints: Vec<PrewriteRequestForUpdateTsConstraint>,
         }
 }
 
@@ -303,7 +303,7 @@ impl std::fmt::Display for PrewritePessimistic {
             self.max_commit_ts,
             self.try_one_pc,
             self.assertion_level,
-            self.for_update_ts_checks,
+            self.for_update_ts_constraints,
             self.ctx,
         )
     }
@@ -365,12 +365,12 @@ impl PrewritePessimistic {
     }
 
     #[cfg(test)]
-    pub fn with_check_for_update_ts(
+    pub fn with_for_update_ts_constraints(
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
-        for_update_ts_checks: impl IntoIterator<Item = (usize, TimeStamp)>,
+        for_update_ts_constraints: impl IntoIterator<Item = (usize, TimeStamp)>,
     ) -> TypedCommand<PrewriteResult> {
         PrewritePessimistic::new(
             mutations,
@@ -384,7 +384,7 @@ impl PrewritePessimistic {
             None,
             false,
             AssertionLevel::Off,
-            for_update_ts_checks
+            for_update_ts_constraints
                 .into_iter()
                 .map(|(index, expected_for_update_ts)| {
                     let mut check = PrewriteRequestForUpdateTsCheck::default();
@@ -400,7 +400,7 @@ impl PrewritePessimistic {
     fn into_prewriter(self) -> Result<Prewriter<Pessimistic>> {
         let mut mutations: Vec<PessimisticMutation> =
             self.mutations.into_iter().map(Into::into).collect();
-        for item in self.for_update_ts_checks {
+        for item in self.for_update_ts_constraints {
             let index = item.index as usize;
             if index >= mutations.len() {
                 return Err(ErrorInner::Other(box_err!("prewrite request invalid: for_update_ts constraint set for index {} while {} mutations were given", index, mutations.len())).into());
