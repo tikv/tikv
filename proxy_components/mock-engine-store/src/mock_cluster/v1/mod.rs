@@ -34,7 +34,7 @@ impl<T: Simulator<TiFlashEngine>> MixedCluster for Cluster<T> {
     fn get_region(&self, key: &[u8]) -> metapb::Region {
         <Cluster<T>>::get_region(self, key)
     }
-    fn get_engine(&self, node_id: u64) -> &impl RawEngine {
+    fn get_engine(&self, node_id: u64) -> &impl RawEngine<engine_rocks::RocksEngine> {
         <Cluster<T>>::get_engine(self, node_id)
     }
     fn must_put(&mut self, key: &[u8], value: &[u8]) {

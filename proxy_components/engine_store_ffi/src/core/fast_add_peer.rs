@@ -91,6 +91,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             });
                             FALLBACK_MILLIS
                         })();
+                        #[allow(clippy::absurd_extreme_comparisons)]
                         if elapsed >= TRACE_SLOW_MILLIS {
                             let need_fallback = elapsed > fallback_millis;
                             // TODO If snapshot is sent, we need fallback but can't do fallback?
@@ -387,6 +388,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             .unwrap();
         #[cfg(any(test, feature = "testexport"))]
         {
+            #[allow(clippy::redundant_closure_call)]
             let fake_send: bool = (|| {
                 fail::fail_point!("fap_core_fake_send", |t| {
                     let t = t.unwrap().parse::<u64>().unwrap();

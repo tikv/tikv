@@ -53,10 +53,10 @@ pub fn check_double_write(batch: &RocksWriteBatchVec) {
     for wb in batch.wbs.iter() {
         for (_, cf, k, _) in wb.iter() {
             let handle = batch.db.cf_handle_by_id(cf as usize).unwrap();
-            let cf_name = cf_to_name(&batch, handle.id());
+            let cf_name = cf_to_name(batch, handle.id());
             match cf_name {
                 engine_traits::CF_DEFAULT | engine_traits::CF_LOCK | engine_traits::CF_WRITE => {
-                    assert_eq!(crate::do_write(cf_name, k), true);
+                    assert!(crate::do_write(cf_name, k));
                 }
                 _ => (),
             };

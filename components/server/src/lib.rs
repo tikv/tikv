@@ -9,6 +9,7 @@ extern crate tikv_util;
 
 #[macro_use]
 pub mod setup;
+pub mod common;
 pub mod memory;
 pub mod raft_engine_switch;
 pub mod server;

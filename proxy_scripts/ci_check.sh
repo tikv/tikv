@@ -12,6 +12,9 @@ elif [[ $M == "testold" ]]; then
     chmod +x ./proxy_scripts/clippy.sh
     ./proxy_scripts/clippy.sh
     echo "Finish clippy"
+    chmod +x ./proxy_scripts/tikv-code-consistency.sh
+    ./proxy_scripts/tikv-code-consistency.sh
+    echo "Finish tikv code consistency"
     # exit # If we depend TiKV as a Cargo component, the following is not necessary, and can fail.
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_normal
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_bootstrap

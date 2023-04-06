@@ -1975,6 +1975,7 @@ pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
+    stats: Arc<Mutex<HashMap<TabletSnapKey, (Instant, SnapshotStat)>>>,
 }
 
 impl TabletSnapManager {
@@ -1994,7 +1995,43 @@ impl TabletSnapManager {
         Ok(Self {
             base: path,
             receiving: Arc::default(),
+            stats: Arc::default(),
         })
+    }
+
+    pub fn begin_snapshot(&self, key: TabletSnapKey, start: Instant, generate_duration_sec: u64) {
+        let mut stat = SnapshotStat::default();
+        stat.set_generate_duration_sec(generate_duration_sec);
+        self.stats.lock().unwrap().insert(key, (start, stat));
+    }
+
+    pub fn finish_snapshot(&self, key: TabletSnapKey, send: Instant) {
+        let region_id = key.region_id;
+        self.stats
+            .lock()
+            .unwrap()
+            .entry(key)
+            .and_modify(|(start, stat)| {
+                stat.set_send_duration_sec(send.saturating_elapsed().as_secs());
+                stat.set_total_duration_sec(start.saturating_elapsed().as_secs());
+                stat.set_region_id(region_id);
+            });
+    }
+
+    pub fn stats(&self) -> SnapStats {
+        let stats: Vec<SnapshotStat> = self
+            .stats
+            .lock()
+            .unwrap()
+            .drain_filter(|_, (_, stat)| stat.get_region_id() > 0)
+            .map(|(_, (_, stat))| stat)
+            .filter(|stat| stat.get_total_duration_sec() > 1)
+            .collect();
+        SnapStats {
+            sending_count: 0,
+            receiving_count: 0,
+            stats,
+        }
     }
 
     pub fn tablet_gen_path(&self, key: &TabletSnapKey) -> PathBuf {
@@ -3054,6 +3091,30 @@ pub mod tests {
         src_mgr.init().unwrap();
         // The sst_path will be deleted by SnapManager because it is a temp filet.
         assert!(!file_system::file_exists(&sst_path));
+    }
+
+    #[test]
+    fn test_snapshot_stats() {
+        let snap_dir = Builder::new()
+            .prefix("test_snapshot_stats")
+            .tempdir()
+            .unwrap();
+        let start = Instant::now();
+        let mgr = TabletSnapManager::new(snap_dir.path()).unwrap();
+        let key = TabletSnapKey::new(1, 1, 1, 1);
+        mgr.begin_snapshot(key.clone(), start - time::Duration::from_secs(2), 1);
+        // filter out the snapshot that is not finished
+        assert!(mgr.stats().stats.is_empty());
+        mgr.finish_snapshot(key.clone(), start - time::Duration::from_secs(1));
+        let stats = mgr.stats().stats;
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].get_total_duration_sec(), 2);
+        assert!(mgr.stats().stats.is_empty());
+
+        // filter out the total duration seconds less than one sencond.
+        mgr.begin_snapshot(key.clone(), start, 1);
+        mgr.finish_snapshot(key, start);
+        assert_eq!(mgr.stats().stats.len(), 0);
     }
 
     #[test]

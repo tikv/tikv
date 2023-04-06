@@ -39,7 +39,7 @@ cloud-azure = [
   "encryption_export/cloud-azure",
   "sst_importer/cloud-azure",
 ]
-testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport"]
+testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport"]
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]
@@ -301,8 +301,11 @@ members = [
   "fuzz/fuzzer-honggfuzz",
   "fuzz/fuzzer-libfuzzer",
   "gen-proxy-ffi",
+  "proxy_components/engine_store_ffi",
   "proxy_components/engine_tiflash",
+  "proxy_components/mock-engine-store",
   "proxy_components/proxy_ffi",
+  "proxy_components/proxy_server",
   "proxy_components/proxy_test_raftstore_v2",
   "proxy_tests",
   "raftstore-proxy",
