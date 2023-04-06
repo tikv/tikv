@@ -2845,6 +2845,9 @@ mod tests {
         let k2 = b"k2";
         let k3 = b"k3";
 
+        // In actual cases this kinds of pessimistic locks should be locked in
+        // `allow_locking_with_conflict` mode. For simplicity, we pass a large
+        // for_update_ts to the pessimistic lock to simulate that case.
         must_acquire_pessimistic_lock(&mut engine, k1, k1, 10, 10);
         must_acquire_pessimistic_lock(&mut engine, k2, k1, 10, 20);
         must_acquire_pessimistic_lock(&mut engine, k3, k1, 10, 20);
@@ -2919,6 +2922,20 @@ mod tests {
         must_be_pessimistic_lock_not_found(e);
         check_lock_unchanged(&mut engine);
 
+        // lock.for_update_ts < expected is disallowed too.
+        let e = pessimistic_prewrite_check_for_update_ts(
+            &mut engine,
+            &mut statistics,
+            mutations.clone(),
+            k1.to_vec(),
+            10,
+            15,
+            vec![(0, 15), (2, 20)],
+        )
+        .unwrap_err();
+        must_be_pessimistic_lock_not_found(e);
+        check_lock_unchanged(&mut engine);
+
         // Index out of bound (invalid request).
         pessimistic_prewrite_check_for_update_ts(
             &mut engine,
@@ -2939,7 +2956,7 @@ mod tests {
             k1.to_vec(),
             10,
             15,
-            vec![(0, 15), (2, 20)],
+            vec![(0, 10), (2, 20)],
         )
         .unwrap();
         must_locked(&mut engine, k1, 10);

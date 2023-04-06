@@ -348,10 +348,10 @@ impl<'a> PrewriteMutation<'a> {
                 .into());
             }
 
-            if let Some(ts) = expected_for_update_ts && lock.for_update_ts > ts {
+            if let Some(ts) = expected_for_update_ts && lock.for_update_ts != ts {
                 // The constraint on for_update_ts of the pessimistic lock is violated.
                 // Consider the following case:
-
+                //
                 // 1. A pessimistic lock of transaction `T1` succeeded with`WakeUpModeForceLock`
                 //    enabled, then it returns to the client and the client continues its
                 //    execution.
@@ -373,9 +373,15 @@ impl<'a> PrewriteMutation<'a> {
                 // expect. As a result, the conflict between transaction `T1` and `T2` is
                 // missed.
                 // To avoid this problem, we check the for_update_ts written on the
-                // pessimistic locks that's acquired in force-locking mode. If it's larger
-                // than the one known by the client, the lock will be regarded as lost.
-                warn!("pessimistic lock have larger for_update_ts than expected. the expected lock must have been lost";
+                // pessimistic locks that's acquired in force-locking mode. If it doesn't match
+                // the one known by the client, the lock that we expected to have will be
+                // regarded as missing.
+                //
+                // It's actually theoretically safe to allow `lock.for_update_ts` <
+                // `expected_for_update_ts`, but the possibility to encounter this case is very
+                // low. For simplicity, we don't consider that case and only allow
+                // `lock.for_update_ts` to exactly match that we expect.
+                warn!("pessimistic lock have different for_update_ts than expected. the expected lock must have been lost";
                     "key" => %self.key,
                     "start_ts" => self.txn_props.start_ts,
                     "expected_for_update_ts" => ts,
@@ -2602,8 +2608,8 @@ pub mod tests {
                                success: bool,
                                commit_ts: u64| {
             // In actual cases this kinds of pessimistic locks should be locked in
-            // `allow_locking_with_conflict` mode. For simplicity of this test case,
-            // we simply passe a large for_update_ts to the pessimistic lock.
+            // `allow_locking_with_conflict` mode. For simplicity, we pass a large
+            // for_update_ts to the pessimistic lock to simulate that case.
             must_acquire_pessimistic_lock(&mut engine, key, key, start_ts, lock_for_update_ts);
             must_pessimistic_locked(&mut engine, key, start_ts, lock_for_update_ts);
             if success {
@@ -2627,7 +2633,8 @@ pub mod tests {
                     prewrite_req_for_update_ts,
                     Some(expected_for_update_ts),
                 );
-                must_locked(&mut engine, key, start_ts);
+                let prewrite_lock = must_locked(&mut engine, key, start_ts);
+                assert_le!(lock_for_update_ts, prewrite_lock.for_update_ts);
                 must_commit(&mut engine, key, start_ts, commit_ts);
                 must_unlocked(&mut engine, key);
             } else {
@@ -2654,7 +2661,7 @@ pub mod tests {
         // Note that the `for_update_ts` field in prewrite request is not guaranteed to
         // be greater or equal to the max for_update_ts that has been written to
         // a pessimistic lock during the transaction.
-        test_normal(20, 20, 20, 24, true, 29);
+        test_normal(20, 20, 20, 24, false, 0);
         test_normal(30, 35, 30, 35, true, 39);
         test_normal(40, 45, 40, 40, false, 0);
         test_normal(50, 55, 56, 51, false, 0);
