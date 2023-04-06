@@ -8,4 +8,5 @@ pub mod store;
 pub mod test;
 
 pub use client::{Checkpoint, CheckpointProvider, MetadataClient, MetadataEvent, StreamTask};
+#[cfg(feature = "metastore-etcd")]
 pub use store::lazy_etcd::{ConnectionConfig, LazyEtcdClient};
