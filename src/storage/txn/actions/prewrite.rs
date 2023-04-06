@@ -2634,7 +2634,7 @@ pub mod tests {
                     Some(expected_for_update_ts),
                 );
                 let prewrite_lock = must_locked(&mut engine, key, start_ts);
-                assert_le!(lock_for_update_ts, prewrite_lock.for_update_ts);
+                assert_le!(TimeStamp::from(lock_for_update_ts), prewrite_lock.for_update_ts);
                 must_commit(&mut engine, key, start_ts, commit_ts);
                 must_unlocked(&mut engine, key);
             } else {
