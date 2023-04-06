@@ -251,8 +251,6 @@ pub struct ServerMeta<EK: KvEngine> {
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
 
-// Note ServerCluster should use generic EK rather than RocksEngine to support
-// test with other engines.
 pub struct ServerCluster<EK: KvEngine> {
     metas: HashMap<u64, ServerMeta<EK>>,
     addrs: AddressMap,

@@ -311,8 +311,6 @@ pub trait Simulator<EK: KvEngine> {
     }
 }
 
-// Note Cluster should use generic EK rather than RocksEngine to support test
-// with other engines.
 pub struct Cluster<T: Simulator<EK>, EK: KvEngine> {
     pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,

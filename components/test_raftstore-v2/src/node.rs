@@ -144,8 +144,6 @@ impl<EK: KvEngine> Default for ChannelTransport<EK> {
 
 type SimulateChannelTransport<EK> = SimulateTransport<ChannelTransport<EK>>;
 
-// Note NodeCluster should use generic EK rather than RocksEngine to support
-// test with other engines.
 pub struct NodeCluster<EK: KvEngine> {
     trans: ChannelTransport<EK>,
     pd_client: Arc<TestPdClient>,
