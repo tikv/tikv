@@ -387,10 +387,10 @@ impl PrewritePessimistic {
             for_update_ts_constraints
                 .into_iter()
                 .map(|(index, expected_for_update_ts)| {
-                    let mut check = PrewriteRequestForUpdateTsCheck::default();
-                    check.set_index(index as u32);
-                    check.set_expected_for_update_ts(expected_for_update_ts.into_inner());
-                    check
+                    let mut constraint = PrewriteRequestForUpdateTsConstraint::default();
+                    constraint.set_index(index as u32);
+                    constraint.set_expected_for_update_ts(expected_for_update_ts.into_inner());
+                    constraint
                 })
                 .collect(),
             Context::default(),
