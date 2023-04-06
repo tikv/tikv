@@ -312,7 +312,6 @@ impl PSLogEngine {
             return Ok(0);
         }
 
-        let mut raft_wb = self.log_batch(0);
         for idx in from..to {
             raft_wb.del_page(&keys::raft_log_key(raft_group_id, idx))?;
         }

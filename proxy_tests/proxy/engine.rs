@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_tiflash::{PSEngineWriteBatch, PSLogEngine};
-use engine_traits::{RaftEngine, RaftEngineReadOnly, WriteBatchExt};
+use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, WriteBatchExt};
 use raft::eraftpb::Entry;
 
 use crate::utils::v1::*;
@@ -74,6 +74,12 @@ mod pagestorage {
 
             let raft_state_read = raft_engine.get_raft_state(20).unwrap().unwrap();
             assert_eq!(raft_state_read.get_hard_state().get_commit(), 114);
+
+            raft_engine.consume(&mut raft_wb_clean, true).unwrap();
+            match raft_engine.get_raft_state(20).unwrap() {
+                None => (),
+                _ => panic!("Raft state should be cleaned"),
+            }
         }
 
         {
@@ -95,6 +101,14 @@ mod pagestorage {
                 .fetch_entries_to(21, 6, 7, None, &mut entries_read)
                 .unwrap();
             assert_eq!(entries_read.len(), 1);
+
+            raft_engine.consume(&mut raft_wb_clean, true).unwrap();
+            entries_read.clear();
+            match raft_engine.fetch_entries_to(21, 6, 7, None, &mut entries_read) {
+                Err(Error::EntriesCompacted) => (),
+                _ => panic!("Raft log should be compacted"),
+            }
+            assert_eq!(entries_read.len(), 0);
         }
         cluster.shutdown();
     }
