@@ -89,6 +89,7 @@ use crate::{
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
+pub const DEFAULT_TABLET_SUB_DIR: &str = "tablets";
 
 /// By default, block cache size will be set to 45% of system memory.
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
@@ -3284,7 +3285,9 @@ impl TikvConfig {
         let kv_data_exists = if self.storage.engine == EngineType::RaftKv {
             RocksEngine::exists(&kv_db_path)
         } else {
-            Path::new(&self.storage.data_dir).join("tablets").exists()
+            Path::new(&self.storage.data_dir)
+                .join(DEFAULT_TABLET_SUB_DIR)
+                .exists()
         };
 
         RaftDataStateMachine::new(
