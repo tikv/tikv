@@ -707,9 +707,9 @@ mod tests {
         let path = "/dir1:dir2:dir3";
         let mut lines = String::new();
         lines.push_str(id);
-        lines.push_str(":");
+        lines.push(':');
         lines.push_str(devices);
-        lines.push_str(":");
+        lines.push(':');
         lines.push_str(path);
         let ret = parse_proc_cgroup_v1(&lines);
         assert_eq!(ret.get(devices).unwrap(), path);
