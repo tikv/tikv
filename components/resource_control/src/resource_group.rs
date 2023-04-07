@@ -171,7 +171,8 @@ pub struct ResourceController {
     last_rest_vt_time: Cell<Instant>,
 }
 
-// we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's thread safe.
+// we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
+// thread safe.
 unsafe impl Send for ResourceController {}
 unsafe impl Sync for ResourceController {}
 
