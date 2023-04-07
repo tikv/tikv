@@ -45,7 +45,8 @@ impl Default for RaftstoreConfig {
             snap_handle_pool_size: (cpu_num * 0.7).clamp(2.0, 16.0) as usize,
             // This pool is used when handling ingest SST raft messages, e.g.
             // when using BR / lightning.
-            apply_low_priority_pool_size: (cpu_num * 0.3).clamp(2.0, 8.0) as usize,
+            // We want to use as more resource as possible when doing BR restore.
+            apply_low_priority_pool_size: std::cmp::max(1, cpu_num as usize),
             evict_cache_on_memory_ratio: 0.1,
         }
     }
@@ -228,7 +229,11 @@ pub struct ImportConfig {
 
 impl Default for ImportConfig {
     fn default() -> ImportConfig {
-        ImportConfig { num_threads: 4 }
+        let cpu_num = SysQuota::cpu_cores_quota();
+        ImportConfig {
+            // We want to use as more resource as possible when doing BR restore.
+            num_threads: std::cmp::max(4, (cpu_num * 2.0) as usize),
+        }
     }
 }
 

@@ -117,7 +117,10 @@ fn test_default_no_config_item() {
         background_thread_count
     );
 
-    assert_eq!(config.import.num_threads, 4);
+    assert_eq!(
+        config.import.num_threads,
+        std::cmp::max(4, (cpu_num * 2.0) as usize)
+    );
     assert_eq!(config.server.status_thread_pool_size, 2);
 
     assert_eq!(config.raft_store.evict_cache_on_memory_ratio, 0.1);
