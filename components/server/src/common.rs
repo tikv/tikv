@@ -1,4 +1,5 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+//! This mod is exported to make convenience for creating TiKV-like servers.
 
 use std::{
     cmp,
@@ -60,7 +61,7 @@ const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
 const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// This is the common layer of TiKV-like servers. It is a collection of all
+/// This is the common part of TiKV-like servers. It is a collection of all
 /// capabilities a TikvServer should have or may take advantage of. By holding
 /// it in its own TikvServer implementation, one can easily access the common
 /// ability of a TiKV server.

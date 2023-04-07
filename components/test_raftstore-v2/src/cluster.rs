@@ -69,8 +69,6 @@ use tikv_util::{
 // Sometimes, we use fixed id to test, which means the id
 // isn't allocated by pd, and node id, store id are same.
 // E,g, for node 1, the node id and store id are both 1.
-// Note Simulator should use generic EK rather than RocksEngine to support test
-// with other engines.
 pub trait Simulator<EK: KvEngine> {
     // Pass 0 to let pd allocate a node id if db is empty.
     // If node id > 0, the node must be created in db already,

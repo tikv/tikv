@@ -9,7 +9,6 @@ extern crate tikv_util;
 
 #[macro_use]
 pub mod setup;
-/// This mod is exported to make convenience for creating TiKV-like servers.
 pub mod common;
 pub mod memory;
 pub mod raft_engine_switch;
