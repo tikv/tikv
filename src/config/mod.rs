@@ -1207,8 +1207,6 @@ pub struct DbConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub write_buffer_flush_oldest_first: bool,
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
     pub write_buffer_flush_deadline: Option<ReadableDuration>,
     // Dangerous option only for programming use.
     #[online_config(skip)]
