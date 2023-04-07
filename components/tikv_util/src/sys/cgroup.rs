@@ -183,6 +183,8 @@ fn is_cgroup2_unified_mode() -> Result<bool, String> {
 //
 // The format is "<id>:<hierarchy>:<path>". For example,
 // "10:cpuset:/test-cpuset".
+//
+// Note: path may contains ":" in some envrionment.
 fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
