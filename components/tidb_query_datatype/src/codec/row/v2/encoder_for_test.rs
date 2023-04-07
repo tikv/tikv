@@ -90,9 +90,24 @@ impl Column {
     }
 }
 
+/// Checksum
+///
+/// 	0               1               2               3               4
+/// 5               6               7               8
+/// 	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// 	|       |E| VER |                            CHECKSUM
+/// |                    EXTRA_CHECKSUM(OPTIONAL)                   |
+/// 	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// 	     HEADER
+///
+/// 	- HEADER
+/// 	  - VER: version(3 bit)
+/// 	  - E:   has extra checksum
+/// 	- CHECKSUM
+/// 	  - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
 pub trait CheckSumHandler {
     // update_col updates the checksum with the encoded value of the column.
-    fn update_col(&mut self, ctx: &mut EvalContext, col: &Column) -> Result<()>;
+    fn checksum(&mut self, buf: &[u8]) -> Result<()>;
 
     // header_value returns the checksum header value.
     fn header_value(&self) -> u8;
@@ -107,12 +122,8 @@ pub struct Crc32RowChecksumHandler {
 }
 
 impl CheckSumHandler for Crc32RowChecksumHandler {
-    fn update_col(&mut self, ctx: &mut EvalContext, col: &Column) -> Result<()> {
-        let mut encoded_col_val = Vec::new();
-        col.value
-            .as_scalar_value_ref()
-            .encode(&col.ft, ctx, &mut encoded_col_val)?;
-        self.hasher.update(&encoded_col_val);
+    fn checksum(&mut self, buf: &[u8]) -> Result<()> {
+        self.hasher.update(buf);
         Ok(())
     }
 
@@ -134,12 +145,12 @@ impl ChecksumHeader {
 
     #[cfg(test)]
     fn set_version(&mut self, ver: u8) {
-        self.0 = ver & 0b0000_0011;
+        self.0 = ver & 0b0000_0111;
     }
 
     #[cfg(test)]
-    fn set_checksum_len(&mut self, len: u8) {
-        self.0 |= (len & 0b0000_1111) << 2;
+    fn set_extra_checksum(&mut self) {
+        self.0 |= 0b0000_1000;
     }
 
     fn value(&self) -> u8 {
@@ -209,9 +220,6 @@ pub trait RowEncoder: NumberEncoder {
             non_null_ids.push(col.id);
             value_wtr.write_value(ctx, &col)?;
             offsets.push(value_wtr.len());
-            if let Some(checksum_handler) = checksum_handler.as_mut() {
-                checksum_handler.update_col(ctx, &col)?;
-            }
         }
         if value_wtr.len() > (u16::MAX as usize) {
             is_big = true;
@@ -237,6 +245,7 @@ pub trait RowEncoder: NumberEncoder {
 
         if let Some(checksum_handler) = checksum_handler.as_mut() {
             let header_val = checksum_handler.header_value();
+            checksum_handler.checksum(value_wtr.as_slice())?;
             let val = checksum_handler.value();
             self.write_u8(header_val)?;
             self.write_u32_le(val)?;
@@ -333,7 +342,9 @@ mod tests {
         codec::{
             data_type::ScalarValue,
             mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
-            row::v2::encoder_for_test::Crc32RowChecksumHandler,
+            row::v2::encoder_for_test::{
+                CheckSumHandler, Crc32RowChecksumHandler, ScalarValueEncoder,
+            },
         },
         expr::EvalContext,
     };
@@ -409,6 +420,23 @@ mod tests {
 
     #[test]
     fn test_encode_checksum() {
+        let encode_col_values = |ctx: &mut EvalContext, non_null_cols: Vec<Column>| -> Vec<u8> {
+            let mut res = vec![];
+            for col in non_null_cols {
+                res.write_value(ctx, &col).unwrap();
+            }
+            res
+        };
+        let get_non_null_columns = |cols: &Vec<Column>| -> Vec<Column> {
+            let mut res = vec![];
+            for col in cols {
+                if col.value.is_some() {
+                    res.push(col.clone());
+                }
+            }
+            res.sort_by_key(|c| c.id);
+            res
+        };
         let cols = vec![
             Column::new(1, 1000),
             Column::new(12, 2),
@@ -420,7 +448,6 @@ mod tests {
         let mut buf = vec![];
         let mut handler = Crc32RowChecksumHandler::new();
         handler.header.set_version(0);
-        handler.header.set_checksum_len(4);
         buf.write_row_with_checksum(
             &mut EvalContext::default(),
             cols.clone(),
@@ -428,24 +455,24 @@ mod tests {
         )
         .unwrap();
 
-        let exp = vec![
-            128, 1, 4, 0, 1, 0, 1, 0, 0, 0, 3, 0, 0, 0, 8, 0, 0, 0, 12, 0, 0, 0, 79, 1, 0, 0, 2, 0,
-            0, 0, 3, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 232, 3, 3, 255, 127, 2, 16, 161, 212, 166,
-            47,
-        ];
-        assert_eq!(exp, buf);
+        let exp = {
+            let mut hasher = crc32fast::Hasher::new();
+            hasher.update(
+                encode_col_values(&mut EvalContext::default(), get_non_null_columns(&cols))
+                    .as_slice(),
+            );
+            hasher.finalize()
+        };
+        assert_eq!(exp, handler.value());
+        assert_eq!(0, handler.header_value());
 
         buf.clear();
         let mut handler = Crc32RowChecksumHandler::new();
         handler.header.set_version(1);
-        handler.header.set_checksum_len(4);
+        handler.header.set_extra_checksum();
         buf.write_row_with_checksum(&mut EvalContext::default(), cols, Some(&mut handler))
             .unwrap();
-        let exp_v1 = vec![
-            128, 1, 4, 0, 1, 0, 1, 0, 0, 0, 3, 0, 0, 0, 8, 0, 0, 0, 12, 0, 0, 0, 79, 1, 0, 0, 2, 0,
-            0, 0, 3, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 232, 3, 3, 255, 127, 2, 17, 161, 212, 166,
-            47,
-        ];
-        assert_eq!(exp_v1, buf);
+        assert_eq!(exp, handler.value());
+        assert_eq!(9, handler.header_value());
     }
 }
