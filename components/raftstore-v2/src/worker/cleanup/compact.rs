@@ -87,6 +87,7 @@ where
                 region_ids,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                &self.logger,
             ) {
                 Ok(mut region_ids) => {
                     for region_id in region_ids.drain(..) {
@@ -153,7 +154,13 @@ fn collect_regions_to_compact<E: KvEngine>(
     region_ids: Vec<u64>,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
+    logger: &Logger,
 ) -> Result<Vec<u64>, Error> {
+    info!(
+        logger,
+        "received compaction check";
+        "regions" => ?region_ids
+    );
     let mut regions_to_compact = vec![];
     for id in region_ids {
         let Some(mut tablet_cache) = reg.get(id) else {continue};
@@ -161,6 +168,13 @@ fn collect_regions_to_compact<E: KvEngine>(
         if let Some((num_ent, num_ver)) =
             box_try!(tablet.get_range_entries_and_versions(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
         {
+            info!(
+                logger,
+                "get range entries and versions";
+                "num_entries" => num_ent,
+                "num_versions" => num_ver,
+                "region_id" => id,
+            );
             if need_compact(
                 num_ent,
                 num_ver,
@@ -282,10 +296,12 @@ mod tests {
         assert_eq!(entries, 8);
         assert_eq!(version, 5);
 
-        let regions = collect_regions_to_compact(&registry, vec![2, 3, 4], 4, 50).unwrap();
+        let logger = slog_global::borrow_global().new(slog::o!());
+
+        let regions = collect_regions_to_compact(&registry, vec![2, 3, 4], 4, 50, &logger).unwrap();
         assert!(regions.len() == 1 && regions[0] == 2);
 
-        let regions = collect_regions_to_compact(&registry, vec![2, 3, 4], 3, 30).unwrap();
+        let regions = collect_regions_to_compact(&registry, vec![2, 3, 4], 3, 30, &logger).unwrap();
         assert!(regions.len() == 2 && !regions.contains(&4));
     }
 }
