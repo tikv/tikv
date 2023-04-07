@@ -81,7 +81,7 @@ use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
@@ -97,6 +97,7 @@ use tikv::{
     storage::{
         self,
         config_manager::StorageConfigManger,
+        kv::LocalTablets,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },

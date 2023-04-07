@@ -32,7 +32,7 @@ test-engines-panic = [
 ]
 nortcheck = ["engine_rocks/nortcheck", "engine_tiflash/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
-
+testexport = ["engine_tiflash/testexport", "engine_store_ffi/testexport", "tikv/testexport"]
 pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]

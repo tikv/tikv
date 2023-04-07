@@ -29,7 +29,7 @@
 
 use std::mem;
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
+use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
 use kvproto::{
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, PrepareMergeRequest, PutRequest,
@@ -46,12 +46,13 @@ use raftstore::{
     Error, Result,
 };
 use slog::{debug, info};
-use tikv_util::{box_err, log::SlogFormat, store::region_on_same_stores};
+use tikv_util::{box_err, log::SlogFormat, slog_panic, store::region_on_same_stores};
 
+use super::merge_source_path;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
-    operation::AdminCmdResult,
+    operation::{AdminCmdResult, SimpleWriteReqDecoder},
     raft::{Apply, Peer},
     router::CmdResChannel,
 };
@@ -97,6 +98,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
+        // Best effort. Remove when trim check is implemented.
         if self.storage().has_dirty_data() {
             return Err(box_err!(
                 "{} source peer has dirty data, try again later",
@@ -245,11 +247,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if entry.get_data().is_empty() {
                 continue;
             }
-            let cmd: RaftCmdRequest =
-                util::parse_data_at(entry.get_data(), entry.get_index(), "tag");
-            if !cmd.has_admin_request() {
-                continue;
-            }
+            let Err(cmd) = SimpleWriteReqDecoder::new(
+                &self.logger,
+                entry.get_data(),
+                entry.get_index(),
+                entry.get_term(),
+            ) else { continue };
             let cmd_type = cmd.get_admin_request().get_cmd_type();
             match cmd_type {
                 AdminCmdType::TransferLeader
@@ -458,6 +461,29 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
 
+        let _ = self.flush();
+        let tablet = self.tablet().clone();
+        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
+            slog_panic!(
+                self.logger,
+                "fails to create checkpoint object";
+                "error" => ?e
+            )
+        });
+        let reg = self.tablet_registry();
+        let path = merge_source_path(reg, self.region_id(), log_index);
+        // We might be replaying this command.
+        if !path.exists() {
+            checkpointer.create_at(&path, None, 0).unwrap_or_else(|e| {
+                slog_panic!(
+                    self.logger,
+                    "fails to create checkpoint";
+                    "path" => %path.display(),
+                    "error" => ?e
+                )
+            });
+        }
+
         Ok((
             AdminResponse::default(),
             AdminCmdResult::PrepareMerge(PrepareMergeResult {
@@ -501,7 +527,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .enter_prepare_merge(res.state.get_commit());
         self.merge_context_mut().prepare_status = Some(PrepareStatus::Applied(res.state));
 
-        // TODO: self.
-        // update_merge_progress_on_apply_res_prepare_merge(store_ctx);
+        self.start_commit_merge(store_ctx);
     }
 }

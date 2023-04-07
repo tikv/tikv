@@ -115,7 +115,7 @@ impl RocksEngine {
         // If path is not an empty directory, we say db exists. If path is not an empty
         // directory but db has not been created, `DB::list_column_families`
         // fails and we can clean up the directory by this indication.
-        fs::read_dir(&path).unwrap().next().is_some()
+        fs::read_dir(path).unwrap().next().is_some()
     }
 
     pub fn support_multi_batch_write(&self) -> bool {
@@ -146,6 +146,11 @@ impl KvEngine for RocksEngine {
         self.proxy_ext
             .can_apply_snapshot(is_timeout, new_batch, region_id)
     }
+
+    #[cfg(any(test, feature = "testexport"))]
+    fn inner_refcount(&self) -> usize {
+        self.rocks.inner_refcount()
+    }
 }
 
 impl RocksEngine {
@@ -160,6 +165,10 @@ impl Checkpointable for RocksEngine {
     type Checkpointer = TiFlashCheckpointer;
 
     fn new_checkpointer(&self) -> Result<Self::Checkpointer> {
+        Err(Error::Other("TiFlash don't support Checkpointable".into()))
+    }
+
+    fn merge(&self, dbs: &[&Self]) -> Result<()> {
         Err(Error::Other("TiFlash don't support Checkpointable".into()))
     }
 }

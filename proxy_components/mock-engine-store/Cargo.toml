@@ -30,6 +30,7 @@ test-engines-panic = [
   "raftstore/test-engines-panic",
   "proxy_server/test-engines-panic",
 ]
+testexport = ["proxy_server/testexport"]
 
 [dependencies]
 api_version = { workspace = true, default-features = false }

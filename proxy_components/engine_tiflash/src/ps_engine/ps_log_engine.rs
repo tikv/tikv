@@ -312,6 +312,7 @@ impl PSLogEngine {
             return Ok(0);
         }
 
+        // TODO Find we create a write batch here won't raise a error in cargo clippy.
         for idx in from..to {
             raft_wb.del_page(&keys::raft_log_key(raft_group_id, idx))?;
         }

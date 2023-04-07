@@ -9,7 +9,7 @@ jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 failpoints = ["fail/failpoints"]
-testexport = []
+testexport = ["engine_traits/testexport", "engine_panic/testexport", "engine_rocks/testexport"]
 
 # Disables runtime checks of invariants required by RocksDB that are redundant
 # with assertions inside RocksDB itself. This makes it possible to test those
@@ -23,6 +23,19 @@ testexport = []
 # to ensure the bindings are safe, but until that is done, they are here.
 nortcheck = []
 
+test-engine-kv-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "engine_test/test-engine-raft-raft-engine"
+]
+test-engines-rocksdb = [
+  "engine_test/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engines-panic",
+]
+
 [dependencies]
 api_version = { workspace = true, default-features = false }
 case_macros = { workspace = true }
@@ -32,6 +45,10 @@ derive_more = "0.99.3"
 encryption = { workspace = true, default-features = false }
 engine_rocks = { workspace = true, default-features = false }
 engine_traits = { workspace = true, default-features = false }
+# TODO: Imported for `test-` features to make cargo clippy happy.
+# Need to findout how to fix.
+engine_test = { workspace = true, default-features = false }
+engine_panic = { workspace = true, default-features = false }
 fail = "0.5"
 file_system = { workspace = true, default-features = false }
 keys = { workspace = true, default-features = false }

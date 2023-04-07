@@ -5,6 +5,9 @@ description = "An example TiKV storage engine that does nothing but panic"
 edition = "2018"
 publish = false
 
+[features]
+testexport = []
+
 [dependencies]
 engine_traits = { workspace = true }
 kvproto = { workspace = true }

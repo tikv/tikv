@@ -17,7 +17,7 @@ use super::{ClusterExt, FFIHelperSet, MixedClusterConfig};
 pub trait MixedCluster {
     fn get_all_store_ids(&self) -> Vec<u64>;
     fn get_region(&self, key: &[u8]) -> metapb::Region;
-    fn get_engine(&self, node_id: u64) -> &impl RawEngine;
+    fn get_engine(&self, node_id: u64) -> &impl RawEngine<engine_rocks::RocksEngine>;
     fn must_put(&mut self, key: &[u8], value: &[u8]);
     fn must_get(&self, id: u64, key: &[u8], expected: Option<&[u8]>);
     fn run_node(&mut self, node_id: u64);

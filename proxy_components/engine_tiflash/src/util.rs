@@ -150,7 +150,7 @@ pub fn db_exist(path: &str) -> bool {
     // If path is not an empty directory but db has not been created,
     // `DB::list_column_families` fails and we can clean up the directory by
     // this indication.
-    fs::read_dir(&path).unwrap().next().is_some()
+    fs::read_dir(path).unwrap().next().is_some()
 }
 
 /// Returns a Vec of cf which is in `a' but not in `b'.
