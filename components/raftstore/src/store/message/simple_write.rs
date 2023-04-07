@@ -8,11 +8,11 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
 };
 use protobuf::{CodedInputStream, Message};
-use raftstore::store::WriteCallback;
 use slog::Logger;
 use tikv_util::slog_panic;
 
-use crate::{operation::command::parse_at, router::CmdResChannel};
+use super::parse_at;
+use crate::store::{response_channel::CmdResChannel, WriteCallback};
 
 // MAGIC number to hint simple write codec is used. If it's a protobuf message,
 // the first one or several bytes are for field tag, which can't be zero.

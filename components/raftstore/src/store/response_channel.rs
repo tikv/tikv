@@ -26,11 +26,12 @@ use std::{
 
 use futures::{task::AtomicWaker, FutureExt, Stream};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
-use raftstore::store::{
+use tracker::{get_tls_tracker_token, TrackerToken};
+
+use crate::store::{
     local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
     WriteCallback,
 };
-use tracker::{get_tls_tracker_token, TrackerToken};
 
 union Tracker {
     read: TrackerToken,

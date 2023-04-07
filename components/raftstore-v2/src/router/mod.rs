@@ -3,7 +3,12 @@
 mod imp;
 mod internal_message;
 pub mod message;
-mod response_channel;
+
+pub use raftstore::store::response_channel::{
+    BaseSubscriber, CmdResChannel, CmdResChannelBuilder, CmdResEvent, CmdResStream,
+    CmdResSubscriber, DebugInfoChannel, DebugInfoSubscriber, QueryResChannel, QueryResult,
+    ReadResponse,
+};
 
 pub(crate) use self::internal_message::ApplyTask;
 #[cfg(feature = "testexport")]
@@ -14,9 +19,4 @@ pub use self::{
     imp::RaftRouter,
     internal_message::ApplyRes,
     message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
-    response_channel::{
-        BaseSubscriber, CmdResChannel, CmdResChannelBuilder, CmdResEvent, CmdResStream,
-        CmdResSubscriber, DebugInfoChannel, DebugInfoSubscriber, QueryResChannel, QueryResult,
-        ReadResponse,
-    },
 };

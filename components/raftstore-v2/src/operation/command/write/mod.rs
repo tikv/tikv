@@ -22,13 +22,11 @@ use crate::{
 };
 
 mod ingest;
-mod simple_write;
 
-pub use simple_write::{
-    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
+pub use raftstore::store::message::simple_write::{
+    SimpleWrite, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
+    SimpleWriteReqEncoder,
 };
-
-pub use self::simple_write::SimpleWrite;
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
