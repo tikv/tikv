@@ -180,10 +180,10 @@ impl FileSystem for ManagedFileSystem {
         })
     }
 
-    fn open<P: AsRef<Path>>(&self, path: P, pmt: Permission) -> IoResult<Self::Handle> {
+    fn open<P: AsRef<Path>>(&self, path: P, perm: Permission) -> IoResult<Self::Handle> {
         Ok(ManagedHandle {
             path: path.as_ref().to_path_buf(),
-            base: Arc::new(self.base_file_system.open(path.as_ref(), pmt)?),
+            base: Arc::new(self.base_file_system.open(path.as_ref(), perm)?),
         })
     }
 
