@@ -43,7 +43,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::{error, info, warn};
+use slog::{debug, error, info, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -335,7 +335,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         if !self.serving() || !apply_res.admin_result.is_empty() {
             // TODO: remove following log once stable.
-            info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
+            debug!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         }
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {

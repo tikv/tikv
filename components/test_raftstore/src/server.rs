@@ -50,7 +50,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker,
@@ -65,7 +65,7 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, SnapContext},
+        kv::{FakeExtension, LocalTablets, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
