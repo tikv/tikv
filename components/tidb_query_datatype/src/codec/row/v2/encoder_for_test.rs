@@ -91,20 +91,11 @@ impl Column {
 }
 
 /// Checksum
-///
-/// 	0               1               2               3               4
-/// 5               6               7               8
-/// 	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// 	|       |E| VER |                            CHECKSUM
-/// |                    EXTRA_CHECKSUM(OPTIONAL)                   |
-/// 	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// 	     HEADER
-///
-/// 	- HEADER
-/// 	  - VER: version(3 bit)
-/// 	  - E:   has extra checksum
-/// 	- CHECKSUM
-/// 	  - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
+/// - HEADER(1 byte)
+///   - VER: version(3 bit)
+///   - E:   has extra checksum
+/// - CHECKSUM(4 bytes)
+///   - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
 pub trait CheckSumHandler {
     // update_col updates the checksum with the encoded value of the column.
     fn checksum(&mut self, buf: &[u8]) -> Result<()>;
