@@ -359,7 +359,7 @@ where
 
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
-        let check_leader_worker = WorkerBuilder::new("check_leader").thread_count(1).create();
+        let check_leader_worker = WorkerBuilder::new("check-leader").thread_count(1).create();
 
         TikvServer {
             core: TikvServerCore {
