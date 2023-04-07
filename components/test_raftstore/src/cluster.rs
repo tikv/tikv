@@ -12,7 +12,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
@@ -1947,7 +1947,9 @@ impl<T: Simulator> Drop for Cluster<T> {
     }
 }
 
-pub trait RawEngine: Peekable<DbVector = RocksDbVector> + SyncMutable {
+pub trait RawEngine<EK: engine_traits::KvEngine>:
+    Peekable<DbVector = EK::DbVector> + SyncMutable
+{
     fn region_local_state(&self, region_id: u64)
     -> engine_traits::Result<Option<RegionLocalState>>;
 
@@ -1956,7 +1958,7 @@ pub trait RawEngine: Peekable<DbVector = RocksDbVector> + SyncMutable {
     fn raft_local_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftLocalState>>;
 }
 
-impl RawEngine for RocksEngine {
+impl RawEngine<RocksEngine> for RocksEngine {
     fn region_local_state(
         &self,
         region_id: u64,

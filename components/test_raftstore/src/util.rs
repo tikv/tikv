@@ -16,8 +16,8 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CfNamesExt, Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, CF_DEFAULT,
-    CF_RAFT,
+    CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
+    CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -43,7 +43,7 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::RngCore;
-use server::server::ConfiguredRaftEngine;
+use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -60,7 +60,12 @@ use txn_types::Key;
 
 use crate::{Cluster, Config, RawEngine, ServerCluster, Simulator};
 
-pub fn must_get(engine: &impl RawEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
+pub fn must_get<EK: KvEngine>(
+    engine: &impl RawEngine<EK>,
+    cf: &str,
+    key: &[u8],
+    value: Option<&[u8]>,
+) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
@@ -86,19 +91,24 @@ pub fn must_get(engine: &impl RawEngine, cf: &str, key: &[u8], value: Option<&[u
     )
 }
 
-pub fn must_get_equal(engine: &impl RawEngine, key: &[u8], value: &[u8]) {
+pub fn must_get_equal<EK: KvEngine>(engine: &impl RawEngine<EK>, key: &[u8], value: &[u8]) {
     must_get(engine, "default", key, Some(value));
 }
 
-pub fn must_get_none(engine: &impl RawEngine, key: &[u8]) {
+pub fn must_get_none<EK: KvEngine>(engine: &impl RawEngine<EK>, key: &[u8]) {
     must_get(engine, "default", key, None);
 }
 
-pub fn must_get_cf_equal(engine: &impl RawEngine, cf: &str, key: &[u8], value: &[u8]) {
+pub fn must_get_cf_equal<EK: KvEngine>(
+    engine: &impl RawEngine<EK>,
+    cf: &str,
+    key: &[u8],
+    value: &[u8],
+) {
     must_get(engine, cf, key, Some(value));
 }
 
-pub fn must_get_cf_none(engine: &impl RawEngine, cf: &str, key: &[u8]) {
+pub fn must_get_cf_none<EK: KvEngine>(engine: &impl RawEngine<EK>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
