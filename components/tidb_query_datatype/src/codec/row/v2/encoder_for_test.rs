@@ -136,12 +136,12 @@ impl ChecksumHeader {
 
     #[cfg(test)]
     fn set_version(&mut self, ver: u8) {
-        self.0 = ver & 0b0000_0111;
+        self.0 |= ver & 0b111;
     }
 
     #[cfg(test)]
     fn set_extra_checksum(&mut self) {
-        self.0 |= 0b0000_1000;
+        self.0 |= 0b1000;
     }
 
     fn value(&self) -> u8 {
@@ -173,9 +173,9 @@ pub trait RowEncoder: NumberEncoder {
         &mut self,
         ctx: &mut EvalContext,
         columns: Vec<Column>,
-        handler: Option<&mut dyn CheckSumHandler>,
     ) -> Result<()> {
-        self.write_row_impl(ctx, columns, handler)
+        let mut handler = Crc32RowChecksumHandler::new();
+        self.write_row_impl(ctx, columns, Some(&mut handler))
     }
 
     fn write_row_impl(
@@ -439,7 +439,7 @@ mod tests {
         let mut buf = vec![];
         let mut handler = Crc32RowChecksumHandler::new();
         handler.header.set_version(0);
-        buf.write_row_with_checksum(
+        buf.write_row_impl(
             &mut EvalContext::default(),
             cols.clone(),
             Some(&mut handler),
@@ -461,7 +461,7 @@ mod tests {
         let mut handler = Crc32RowChecksumHandler::new();
         handler.header.set_version(1);
         handler.header.set_extra_checksum();
-        buf.write_row_with_checksum(&mut EvalContext::default(), cols, Some(&mut handler))
+        buf.write_row_impl(&mut EvalContext::default(), cols, Some(&mut handler))
             .unwrap();
         assert_eq!(exp, handler.value());
         assert_eq!(9, handler.header_value());
