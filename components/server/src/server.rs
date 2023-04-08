@@ -954,7 +954,7 @@ where
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &self.core.config.resolved_ts,
                 rts_worker.scheduler(),
-                self.router.clone(),
+                CdcRaftRouter(self.router.clone()),
                 engines.store_meta.clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),

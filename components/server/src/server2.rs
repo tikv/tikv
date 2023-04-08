@@ -600,32 +600,32 @@ where
         self.cdc_scheduler = Some(cdc_scheduler);
         self.cdc_memory_quota = Some(cdc_memory_quota);
 
-        // // Create resolved ts.
-        //  if self.core.config.resolved_ts.enable {
-        //     let rts_worker = Box::new(LazyWorker::new("resolved-ts"));
-        //     // Register the resolved ts observer
-        //     let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
-        //     resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        //     // Register config manager for resolved ts worker
-        //     cfg_controller.register(
-        //         tikv::config::Module::ResolvedTs,
-        //         Box::new(resolved_ts::ResolvedTsConfigManager::new(
-        //             rts_worker.scheduler(),
-        //         )),
-        //     );
-        //     let rts_endpoint = resolved_ts::Endpoint::new(
-        //         &self.core.config.resolved_ts,
-        //         rts_worker.scheduler(),
-        //         self.router.clone().unwrap(),
-        //         self.router.as_ref().unwrap().store_meta().clone(),
-        //         self.pd_client.clone(),
-        //         self.concurrency_manager.clone(),
-        //         self.env.clone(),
-        //         self.security_mgr.clone(),
-        //     );
-        //     rts_worker.start_with_timer(rts_endpoint);
-        //     self.core.to_stop.push(rts_worker);
-        // }
+        // Create resolved ts.
+        if self.core.config.resolved_ts.enable {
+            let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
+            // Register the resolved ts observer
+            let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager for resolved ts worker
+            cfg_controller.register(
+                tikv::config::Module::ResolvedTs,
+                Box::new(resolved_ts::ResolvedTsConfigManager::new(
+                    rts_worker.scheduler(),
+                )),
+            );
+            let rts_endpoint = resolved_ts::Endpoint::new(
+                &self.core.config.resolved_ts,
+                rts_worker.scheduler(),
+                self.router.clone().unwrap(),
+                self.router.as_ref().unwrap().store_meta().clone(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+            );
+            rts_worker.start_with_timer(rts_endpoint);
+            self.core.to_stop.push(rts_worker);
+        }
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
