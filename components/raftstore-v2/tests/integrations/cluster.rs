@@ -31,11 +31,11 @@ use kvproto::{
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    coprocessor::{Config as CopConfig, CoprocessorHost},
+    coprocessor::{Config as CopConfig, CoprocessorHost, StoreHandle},
     store::{
         region_meta::{RegionLocalState, RegionMeta},
-        AutoSplitController, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport,
-        RAFT_INIT_LOG_INDEX,
+        AutoSplitController, Bucket, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager,
+        Transport, RAFT_INIT_LOG_INDEX,
     },
 };
 use raftstore_v2::{
@@ -231,6 +231,11 @@ impl TestRouter {
             region.mut_peers().push(new_peer(peer.store_id, peer.id));
         }
         region
+    }
+
+    pub fn refresh_bucket(&self, region_id: u64, region_epoch: RegionEpoch, buckets: Vec<Bucket>) {
+        self.store_router()
+            .refresh_region_buckets(region_id, region_epoch, buckets, None);
     }
 }
 
@@ -653,6 +658,7 @@ pub mod split_helper {
         metapb, pdpb,
         raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, SplitRequest},
     };
+    use raftstore::store::Bucket;
     use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 
     use super::TestRouter;
@@ -759,6 +765,54 @@ pub mod split_helper {
         assert_eq!(region.get_end_key(), right.get_end_key());
 
         (left, right)
+    }
+
+    // Split the region and refresh bucket immediately
+    // This is to simulate the case when the splitted peer's storage is not
+    // initialized yet when refresh bucket happens
+    pub fn split_region_and_refresh_bucket(
+        router: &mut TestRouter,
+        region: metapb::Region,
+        peer: metapb::Peer,
+        split_region_id: u64,
+        split_peer: metapb::Peer,
+        propose_key: &[u8],
+        right_derive: bool,
+    ) {
+        let region_id = region.id;
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header()
+            .set_region_epoch(region.get_region_epoch().clone());
+        req.mut_header().set_peer(peer);
+
+        let mut split_id = pdpb::SplitId::new();
+        split_id.new_region_id = split_region_id;
+        split_id.new_peer_ids = vec![split_peer.id];
+        let admin_req = new_batch_split_region_request(
+            vec![propose_key.to_vec()],
+            vec![split_id],
+            right_derive,
+        );
+        req.mut_requests().clear();
+        req.set_admin_request(admin_req);
+
+        let (msg, sub) = PeerMsg::admin_command(req);
+        router.send(region_id, msg).unwrap();
+        block_on(sub.result()).unwrap();
+
+        let meta = router
+            .must_query_debug_info(split_region_id, Duration::from_secs(1))
+            .unwrap();
+        let epoch = &meta.region_state.epoch;
+        let buckets = vec![Bucket {
+            keys: vec![b"1".to_vec(), b"2".to_vec()],
+            size: 100,
+        }];
+        let mut region_epoch = kvproto::metapb::RegionEpoch::default();
+        region_epoch.set_conf_ver(epoch.conf_ver);
+        region_epoch.set_version(epoch.version);
+        router.refresh_bucket(split_region_id, region_epoch, buckets);
     }
 }
 
