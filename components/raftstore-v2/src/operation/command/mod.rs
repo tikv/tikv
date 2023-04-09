@@ -74,7 +74,7 @@ pub use write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
 };
 
-use self::write::SimpleWrite;
+use self::write::SimpleWriteView;
 
 #[derive(Debug)]
 pub struct CommittedEntries {
@@ -455,13 +455,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         };
         for req in decoder {
             match req {
-                SimpleWrite::Put(put) => {
+                SimpleWriteView::Put(put) => {
                     let _ = self.apply_put(put.cf, u64::MAX, put.key, put.value);
                 }
-                SimpleWrite::Delete(delete) => {
+                SimpleWriteView::Delete(delete) => {
                     let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
                 }
-                SimpleWrite::DeleteRange(dr) => {
+                SimpleWriteView::DeleteRange(dr) => {
                     let _ = self.apply_delete_range(
                         dr.cf,
                         u64::MAX,
@@ -470,7 +470,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         dr.notify_only,
                     );
                 }
-                SimpleWrite::Ingest(_) => {
+                SimpleWriteView::Ingest(_) => {
                     error!(
                         self.logger,
                         "IngestSST is not supposed to be called on local engine"
@@ -558,13 +558,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     let res = Ok(new_response(decoder.header()));
                     for req in decoder {
                         match req {
-                            SimpleWrite::Put(put) => {
+                            SimpleWriteView::Put(put) => {
                                 self.apply_put(put.cf, log_index, put.key, put.value)?;
                             }
-                            SimpleWrite::Delete(delete) => {
+                            SimpleWriteView::Delete(delete) => {
                                 self.apply_delete(delete.cf, log_index, delete.key)?;
                             }
-                            SimpleWrite::DeleteRange(dr) => {
+                            SimpleWriteView::DeleteRange(dr) => {
                                 self.apply_delete_range(
                                     dr.cf,
                                     log_index,
@@ -573,7 +573,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.notify_only,
                                 )?;
                             }
-                            SimpleWrite::Ingest(ssts) => {
+                            SimpleWriteView::Ingest(ssts) => {
                                 self.apply_ingest(log_index, ssts)?;
                             }
                         }

@@ -38,8 +38,8 @@ impl SimpleWriteBinary {
 }
 
 /// We usually use `RaftCmdRequest` for read write request. But the codec is
-/// not efficient enough for simple request. `SimpleWrite` is introduce to make
-/// codec alloc less and fast.
+/// not efficient enough for simple request. `SimpleWriteView` is introduce to
+/// make codec alloc less and fast.
 #[derive(Debug)]
 pub struct SimpleWriteReqEncoder {
     header: Box<RaftRequestHeader>,
@@ -147,7 +147,7 @@ pub struct DeleteRange<'a> {
 }
 
 #[derive(Debug)]
-pub enum SimpleWrite<'a> {
+pub enum SimpleWriteView<'a> {
     Put(Put<'a>),
     Delete(Delete<'a>),
     DeleteRange(DeleteRange<'a>),
@@ -183,7 +183,7 @@ impl SimpleWriteEncoder {
             self.write_type,
             WriteType::Unspecified | WriteType::PutDelete
         );
-        encode(SimpleWrite::Put(Put { cf, key, value }), &mut self.buf);
+        encode(SimpleWriteView::Put(Put { cf, key, value }), &mut self.buf);
         self.write_type = WriteType::PutDelete;
     }
 
@@ -193,7 +193,7 @@ impl SimpleWriteEncoder {
             self.write_type,
             WriteType::Unspecified | WriteType::PutDelete
         );
-        encode(SimpleWrite::Delete(Delete { cf, key }), &mut self.buf);
+        encode(SimpleWriteView::Delete(Delete { cf, key }), &mut self.buf);
         self.write_type = WriteType::PutDelete;
     }
 
@@ -204,7 +204,7 @@ impl SimpleWriteEncoder {
             WriteType::Unspecified | WriteType::DeleteRange
         );
         encode(
-            SimpleWrite::DeleteRange(DeleteRange {
+            SimpleWriteView::DeleteRange(DeleteRange {
                 cf,
                 start_key,
                 end_key,
@@ -218,7 +218,7 @@ impl SimpleWriteEncoder {
     #[inline]
     pub fn ingest(&mut self, sst: Vec<SstMeta>) {
         debug_assert_matches!(self.write_type, WriteType::Unspecified | WriteType::Ingest);
-        encode(SimpleWrite::Ingest(sst), &mut self.buf);
+        encode(SimpleWriteView::Ingest(sst), &mut self.buf);
         self.write_type = WriteType::Ingest;
     }
 
@@ -274,7 +274,7 @@ impl<'a> SimpleWriteReqDecoder<'a> {
 }
 
 impl<'a> Iterator for SimpleWriteReqDecoder<'a> {
-    type Item = SimpleWrite<'a>;
+    type Item = SimpleWriteView<'a>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -391,27 +391,27 @@ fn decode_cf(buf: &[u8]) -> (&str, &[u8]) {
 }
 
 #[inline(always)]
-fn encode(simple_write: SimpleWrite<'_>, buf: &mut Vec<u8>) {
+fn encode(simple_write: SimpleWriteView<'_>, buf: &mut Vec<u8>) {
     match simple_write {
-        SimpleWrite::Put(put) => {
+        SimpleWriteView::Put(put) => {
             buf.push(PUT_TAG);
             encode_cf(put.cf, buf);
             encode_bytes(put.key, buf);
             encode_bytes(put.value, buf);
         }
-        SimpleWrite::Delete(delete) => {
+        SimpleWriteView::Delete(delete) => {
             buf.push(DELETE_TAG);
             encode_cf(delete.cf, buf);
             encode_bytes(delete.key, buf);
         }
-        SimpleWrite::DeleteRange(dr) => {
+        SimpleWriteView::DeleteRange(dr) => {
             buf.push(DELETE_RANGE_TAG);
             encode_cf(dr.cf, buf);
             encode_bytes(dr.start_key, buf);
             encode_bytes(dr.end_key, buf);
             buf.push(dr.notify_only as u8);
         }
-        SimpleWrite::Ingest(ssts) => {
+        SimpleWriteView::Ingest(ssts) => {
             buf.push(INGEST_TAG);
             encode_len(ssts.len() as u32, buf);
             // IngestSST is not a frequent operation, use protobuf to reduce complexity.
@@ -423,7 +423,7 @@ fn encode(simple_write: SimpleWrite<'_>, buf: &mut Vec<u8>) {
 }
 
 #[inline]
-fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
+fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWriteView<'a>> {
     let (tag, left) = buf.split_first()?;
     match *tag {
         PUT_TAG => {
@@ -431,13 +431,13 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
             let (key, left) = decode_bytes(left);
             let (value, left) = decode_bytes(left);
             *buf = left;
-            Some(SimpleWrite::Put(Put { cf, key, value }))
+            Some(SimpleWriteView::Put(Put { cf, key, value }))
         }
         DELETE_TAG => {
             let (cf, left) = decode_cf(left);
             let (key, left) = decode_bytes(left);
             *buf = left;
-            Some(SimpleWrite::Delete(Delete { cf, key }))
+            Some(SimpleWriteView::Delete(Delete { cf, key }))
         }
         DELETE_RANGE_TAG => {
             let (cf, left) = decode_cf(left);
@@ -445,7 +445,7 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
             let (end_key, left) = decode_bytes(left);
             let (notify_only, left) = left.split_first()?;
             *buf = left;
-            Some(SimpleWrite::DeleteRange(DeleteRange {
+            Some(SimpleWriteView::DeleteRange(DeleteRange {
                 cf,
                 start_key,
                 end_key,
@@ -465,7 +465,7 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
             }
             let read = is.pos();
             *buf = &left[read as usize..];
-            Some(SimpleWrite::Ingest(ssts))
+            Some(SimpleWriteView::Ingest(ssts))
         }
         tag => panic!("corrupted data: invalid tag {}", tag),
     }
@@ -504,13 +504,13 @@ mod tests {
         let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
         assert_eq!(*decoder.header(), *header);
         let write = decoder.next().unwrap();
-        let SimpleWrite::Put(put) = write else { panic!("should be put") };
+        let SimpleWriteView::Put(put) = write else { panic!("should be put") };
         assert_eq!(put.cf, CF_DEFAULT);
         assert_eq!(put.key, b"key");
         assert_eq!(put.value, b"");
 
         let write = decoder.next().unwrap();
-        let SimpleWrite::Delete(delete) = write else { panic!("should be delete") };
+        let SimpleWriteView::Delete(delete) = write else { panic!("should be delete") };
         assert_eq!(delete.cf, CF_WRITE);
         assert_eq!(delete.key, &delete_key);
         assert_matches!(decoder.next(), None);
@@ -518,14 +518,14 @@ mod tests {
         let (bytes, _) = req_encoder2.encode();
         decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
-        let SimpleWrite::DeleteRange(dr) = write else { panic!("should be delete range") };
+        let SimpleWriteView::DeleteRange(dr) = write else { panic!("should be delete range") };
         assert_eq!(dr.cf, CF_LOCK);
         assert_eq!(dr.start_key, b"key");
         assert_eq!(dr.end_key, b"key");
         assert!(dr.notify_only);
 
         let write = decoder.next().unwrap();
-        let SimpleWrite::DeleteRange(dr) = write else { panic!("should be delete range") };
+        let SimpleWriteView::DeleteRange(dr) = write else { panic!("should be delete range") };
         assert_eq!(dr.cf, "cf");
         assert_eq!(dr.start_key, b"key");
         assert_eq!(dr.end_key, b"key");
@@ -548,7 +548,7 @@ mod tests {
         let (bytes, _) = req_encoder.encode();
         let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
-        let SimpleWrite::Ingest(ssts) = write else { panic!("should be ingest") };
+        let SimpleWriteView::Ingest(ssts) = write else { panic!("should be ingest") };
         assert_eq!(exp, ssts);
         assert_matches!(decoder.next(), None);
     }
@@ -623,7 +623,7 @@ mod tests {
         let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
         assert_eq!(*decoder.header(), *header);
         let req = decoder.next().unwrap();
-        let SimpleWrite::Put(put) = req else { panic!("should be put") };
+        let SimpleWriteView::Put(put) = req else { panic!("should be put") };
         assert_eq!(put.cf, CF_DEFAULT);
         assert_eq!(put.key, b"key");
         assert_eq!(put.value, b"");
