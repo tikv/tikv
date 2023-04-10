@@ -36,7 +36,11 @@ impl Clone for BaseBuffView {
 
 impl BaseBuffView {
     pub fn to_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.data as *const _, self.len as usize) }
+        if self.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(self.data as *const _, self.len as usize) }
+        }
     }
 }
 pub struct ProtoMsgBaseBuff {
