@@ -394,17 +394,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
-        if self.pause_for_recovery()
-            && self.storage().entry_storage().commit_index() <= apply_res.applied_index
-        {
-            info!(self.logger, "recovery completed"; "apply_index" => apply_res.applied_index);
-            self.set_pause_for_recovery(false);
-            // Flush to avoid recover again and again.
-            if let Some(scheduler) = self.apply_scheduler() {
-                scheduler.send(ApplyTask::ManualFlush);
-            }
-            self.add_pending_tick(PeerTick::Raft);
-        }
+        self.try_compelete_recovery();
         if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
