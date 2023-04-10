@@ -253,44 +253,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) {
-        match self.validate_commit_merge(&req) {
-            Some(true) if self.is_leader() => {
-                let (ch, _) = CmdResChannel::pair();
-                self.on_admin_command(store_ctx, req, ch);
-            }
-            Some(false) => {
-                let commit_merge = req.get_admin_request().get_commit_merge();
-                let source_id = commit_merge.get_source_state().get_region().get_id();
-                let _ = store_ctx.router.force_send(
-                    source_id,
-                    PeerMsg::RejectCommitMerge {
-                        index: commit_of_merge(commit_merge),
-                    },
-                );
-            }
-            _ => (),
-        }
-    }
-
-    fn validate_commit_merge(&self, req: &RaftCmdRequest) -> Option<bool> {
         let expected_epoch = req.get_header().get_region_epoch();
         let merge = req.get_admin_request().get_commit_merge();
         assert!(merge.has_source_state() && merge.get_source_state().has_merge_state());
         let source_region = merge.get_source_state().get_region();
         let region = self.region();
-        if self
+        if let Some(r) = self
             .storage()
             .region_state()
             .get_merged_records()
             .iter()
-            .any(|p| p.get_source_region_id() == source_region.get_id())
+            .find(|p| p.get_source_region_id() == source_region.get_id())
         {
             info!(
                 self.logger,
-                "ignore commit merge because peer is already in merged_records";
+                "ack commit merge because peer is already in merged_records";
                 "source" => ?source_region,
+                "index" => r.get_index(),
             );
-            None
+            let _ = store_ctx.router.force_send(
+                source_region.get_id(),
+                PeerMsg::AckCommitMerge {
+                    index: r.get_index(),
+                    target_id: self.region_id(),
+                },
+            );
         } else if util::is_epoch_stale(expected_epoch, region.get_region_epoch()) {
             info!(
                 self.logger,
@@ -298,7 +285,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "current_epoch" => ?region.get_region_epoch(),
                 "expected_epoch" => ?expected_epoch,
             );
-            Some(false)
+            let commit_merge = req.get_admin_request().get_commit_merge();
+            let source_id = commit_merge.get_source_state().get_region().get_id();
+            let _ = store_ctx.router.force_send(
+                source_id,
+                PeerMsg::RejectCommitMerge {
+                    index: commit_of_merge(commit_merge),
+                },
+            );
         } else if expected_epoch == region.get_region_epoch() {
             assert!(
                 util::is_sibling_regions(source_region, region),
@@ -314,11 +308,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 region
             );
             // Best effort. Remove when trim check is implemented.
-            if self.storage().has_dirty_data() {
-                info!(self.logger, "ignore commit merge because of dirty data");
-                None
-            } else {
-                Some(true)
+            if !self.storage().has_dirty_data() && self.is_leader() {
+                let (ch, _) = CmdResChannel::pair();
+                self.on_admin_command(store_ctx, req, ch);
             }
         } else {
             info!(
@@ -326,7 +318,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "ignore commit merge because self epoch is stale";
                 "source" => ?source_region,
             );
-            None
         }
     }
 

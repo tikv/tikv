@@ -1,18 +1,12 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! The rollback of `PrepareMerge` command.
-//!
-//! # Propose
-//!
-//! A `RollbackMerge` command is proposed only when peers that have such
-//! intention have reached a quorum. The intention is recorded by leader in
-//! `MergeContext::rollback_peers`.
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb,
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse},
-    raft_serverpb::{ExtraMessageType, MergeState, PeerState, RaftMessage},
+    raft_serverpb::{MergeState, PeerState},
 };
 use protobuf::Message;
 use raftstore::{
@@ -43,49 +37,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         index: u64,
     ) {
-        if !self
+        if self
             .merge_context()
-            .map_or(false, |c| c.applied_index() == Some(index))
+            .map_or(true, |c| c.prepare_merge_index() != Some(index))
         {
             return;
         }
-        if self.is_leader() {
-            if self.add_rollback_peer(self.peer_id()) {
-                self.propose_rollback_merge(store_ctx, index);
-            }
-        } else if !tikv_util::store::is_learner(self.peer()) {
-            info!(
-                self.logger,
-                "want to rollback prepare merge";
-                "index" => index,
-            );
-            if self.leader_id() != raft::INVALID_ID {
-                // Match v1::send_want_rollback_merge.
-                let to_peer = self
-                    .region()
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_id() == self.leader_id())
-                    .unwrap()
-                    .clone();
-                let mut msg = RaftMessage::default();
-                msg.set_region_id(self.region_id());
-                msg.set_from_peer(self.peer().clone());
-                msg.set_to_peer(to_peer.clone());
-                msg.set_region_epoch(self.region().get_region_epoch().clone());
-                msg.mut_extra_msg()
-                    .set_type(ExtraMessageType::MsgWantRollbackMerge);
-                msg.mut_extra_msg().set_index(index);
-                if let Err(e) = store_ctx.trans.send(msg) {
-                    error!(
-                        self.logger,
-                        "failed to send extra message MsgWantRollbackMerge";
-                        "err" => ?e,
-                        "target" => ?to_peer,
-                    );
-                }
-            }
-        }
+        self.propose_rollback_merge(store_ctx, index);
     }
 
     pub fn propose_rollback_merge<T: Transport>(
@@ -164,7 +122,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         res: RollbackMergeResult,
     ) {
         assert!(res.commit != 0);
-        let current = self.merge_context().and_then(|c| c.applied_index());
+        let current = self.merge_context().and_then(|c| c.prepare_merge_index());
         if current != Some(res.commit) {
             slog_panic!(
                 self.logger,
@@ -200,7 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn rollback_merge<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         let index = self
             .merge_context()
-            .and_then(|c| c.applied_index())
+            .and_then(|c| c.prepare_merge_index())
             .unwrap_or_else(|| slog_panic!(self.logger, "no applied prepare merge to rollback"));
         // Clear merge releted data
         self.proposal_control_mut().leave_prepare_merge(index);

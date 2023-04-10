@@ -394,14 +394,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_context.get_or_insert_default()
     }
 
-    // Returns true if there is a quorum wants to rollback.
-    #[inline]
-    pub fn add_rollback_peer(&mut self, peer_id: u64) -> bool {
-        let peers = &mut self.merge_context.as_mut().unwrap().rollback_peers;
-        peers.insert(peer_id);
-        self.raft_group.raft.prs().has_quorum(peers)
-    }
-
     #[inline]
     pub fn take_merge_context(&mut self) -> Option<Box<MergeContext>> {
         self.merge_context.take()

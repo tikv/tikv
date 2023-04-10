@@ -229,16 +229,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             });
                     return;
                 }
-                ExtraMessageType::MsgWantRollbackMerge => {
-                    if self.is_leader()
-                        && let index = msg.get_extra_msg().get_index()
-                        && self.merge_context().map_or(false, |c| c.applied_index() == Some(index))
-                        && self.add_rollback_peer(msg.get_from_peer().get_id())
-                    {
-                        self.propose_rollback_merge(ctx, index);
-                    }
-                    return;
-                }
                 _ => (),
             }
         }
