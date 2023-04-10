@@ -970,7 +970,6 @@ impl DataKeyManager {
         Ok(())
     }
 
-    // #[cfg(test)]
     pub fn rename_dir(&self, src_dname: &str, dst_dname: &str) -> IoResult<()> {
         self.link_file(src_dname, dst_dname)?;
         self.delete_file(src_dname)

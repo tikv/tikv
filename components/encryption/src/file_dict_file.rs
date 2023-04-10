@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io::{BufRead, Read, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -21,7 +21,7 @@ use crate::{
 
 // Operations over data key dictionary.
 pub trait DictionaryItem: Sized + Clone {
-    // `buf` should contains all remaining bytes of the file.
+    // `buf` should contain all remaining bytes of the file.
     fn parse(buf: &mut &[u8]) -> Result<Self>;
 
     fn as_bytes(&self) -> Result<Vec<u8>>;
@@ -77,7 +77,7 @@ impl DictionaryItem for DataKeyDictionaryItem {
         let name_len = BigEndian::read_u16(&buf[4..6]) as usize;
         let info_len = BigEndian::read_u16(&buf[6..8]) as usize;
         let mode = buf[Self::RECORD_HEADER_SIZE - 1];
-        buf.consume(Self::RECORD_HEADER_SIZE);
+        *buf = &buf[Self::RECORD_HEADER_SIZE..];
         if buf.len() < name_len + info_len {
             warn!(
                 "file corrupted! record content size is too small, discarded the tail record";
@@ -114,13 +114,13 @@ impl DictionaryItem for DataKeyDictionaryItem {
         let ret: Result<String> = String::from_utf8(buf[0..name_len].to_owned())
             .map_err(|e| box_err!("parse file name failed: {:?}", e));
         let file_name = ret?;
-        buf.consume(name_len);
+        *buf = &buf[name_len..];
 
         let record = match mode {
             2 => Self::Remove(file_name),
             1 => {
                 let file_info = parse_from_bytes(&buf[0..info_len])?;
-                buf.consume(info_len);
+                *buf = &buf[info_len..];
                 Self::Insert(file_name, file_info)
             }
             _ => return Err(box_err!("file corrupted! record type is unknown: {}", mode)),
@@ -264,16 +264,16 @@ impl DictionaryItem for DataKeyDictionaryItemV2 {
                 ));
             }
         }
-        buf.consume(Self::RECORD_HEADER_SIZE);
+        *buf = &buf[Self::RECORD_HEADER_SIZE..];
         // read file/dir name
         let name = String::from_utf8(buf[0..name_len].to_owned())
             .map_err(|e| -> Error { box_err!("parse file name failed: {:?}", e) })?;
-        buf.consume(name_len);
+        *buf = &buf[name_len..];
         let item = match op {
             1 => {
                 assert!(!name.is_empty());
                 let file_info = parse_from_bytes(&buf[0..info_len])?;
-                buf.consume(info_len);
+                *buf = &buf[info_len..];
                 Self::InsertFile(dir_id, name, file_info)
             }
             2 => {
