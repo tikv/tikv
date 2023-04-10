@@ -931,4 +931,5 @@ fn test_issue_14548() {
     cluster.stop_node(1);
 
     cluster.must_put(b"k0500", b"val");
+    assert_eq!(cluster.must_get(b"k0500").unwrap(), b"val".to_vec());
 }

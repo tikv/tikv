@@ -43,7 +43,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::{debug, error, info, warn};
+use slog::{debug, error, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -55,7 +55,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerTick},
+    router::{ApplyRes, ApplyTask, CmdResChannel},
 };
 
 mod admin;
