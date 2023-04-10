@@ -49,6 +49,11 @@ use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_
 
 const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
 
+/// When encoded into the wire format, every message would be add a 2 bytes
+/// header. We add the header size to it so we won't make the request exceed the
+/// max raft size.
+const WIRE_EXTRA_BYTES: usize = 2;
+
 /// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
 /// It saves the SST sent from client to a file and then sends a command to
@@ -106,6 +111,20 @@ impl RequestCollector {
             unpacked_size: 0,
             pending_raft_reqs: Vec::new(),
         }
+    }
+
+    fn record_size_of_message(&mut self, size: usize) {
+        // We make a raft command entry when we unpacked size grows to 7/8 of the max
+        // raft entry size.
+        //
+        // Which means, if we don't add the extra bytes, when the amplification by the
+        // extra bytes is greater than 8/7 (i.e. the average size of entry is
+        // less than 70B), we may encounter the "raft entry is too large" error.
+        self.unpacked_size += size + WIRE_EXTRA_BYTES;
+    }
+
+    fn release_message_of_size(&mut self, size: usize) {
+        self.unpacked_size -= size + WIRE_EXTRA_BYTES;
     }
 
     fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
@@ -174,19 +193,19 @@ impl RequestCollector {
                     .map(|(_, old_ts)| *old_ts < ts.into_inner())
                     .unwrap_or(true)
                 {
-                    self.unpacked_size += req.compute_size() as usize;
+                    self.record_size_of_message(req.compute_size() as usize);
                     if let Some((v, _)) = self
                         .write_reqs
                         .insert(encoded_key.to_owned(), (req, ts.into_inner()))
                     {
-                        self.unpacked_size -= v.get_cached_size() as usize;
+                        self.release_message_of_size(v.get_cached_size() as usize);
                     }
                 }
             }
             CF_DEFAULT => {
-                self.unpacked_size += req.compute_size() as usize;
+                self.record_size_of_message(req.compute_size() as usize);
                 if let Some(v) = self.default_reqs.insert(k.to_owned(), req) {
-                    self.unpacked_size -= v.get_cached_size() as usize;
+                    self.release_message_of_size(v.get_cached_size() as usize);
                 }
             }
             _ => unreachable!(),
@@ -201,7 +220,7 @@ impl RequestCollector {
             self.write_reqs.drain().map(|(_, (req, _))| req).collect()
         };
         for r in &res {
-            self.unpacked_size -= r.get_cached_size() as usize;
+            self.release_message_of_size(r.get_cached_size() as usize);
         }
         res
     }
@@ -1130,6 +1149,16 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use crate::import::sst_service::{key_from_request, RequestCollector};
+
+    /// The extra size needed in the request header.
+    /// They are:
+    /// UUID: 16 bytes.
+    /// Region + Epoch: 24 bytes.
+    /// Please note this is mainly for test usage. In a running TiKV server, we
+    /// use 1/2 of the max raft command size as the goal of batching, where the
+    /// extra size is acceptable.
+    const HEADER_EXTRA_SIZE: u32 = 40;
+
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
         let v = Write::new(ty, TimeStamp::new(start_ts), None);
@@ -1336,7 +1365,7 @@ mod test {
             k1.cmp(k2).then(ts1.cmp(&ts2))
         });
         assert_eq!(reqs, reqs_result);
-        assert!(request_collector.is_empty());
+        assert!(request_collector.is_empty(), "{}", request_collector.unpacked_size);
     }
 
     fn fake_ctx() -> Context {
@@ -1362,7 +1391,7 @@ mod test {
         let pws = request_collector.drain_raft_reqs(true);
         for w in pws {
             let req_size = w.compute_size();
-            assert!(req_size < 1024, "{}", req_size);
+            assert!(req_size < 1024 + HEADER_EXTRA_SIZE, "{}", req_size);
         }
     }
 
@@ -1413,8 +1442,9 @@ mod test {
         let mut total = 0;
         for w in pws {
             let req_size = w.compute_size();
+
             total += w.get_requests().len();
-            assert!(req_size < 1024, "{}", req_size);
+            assert!(req_size < 1024 + HEADER_EXTRA_SIZE, "{}", req_size);
         }
         assert_eq!(total, 100);
     }
