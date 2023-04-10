@@ -69,7 +69,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // If any of `should_not_exist`, `need_value`, `need_check_existence` is set,
     // it infers a read to the value, in which case max_ts need to be updated to
     // guarantee the linearizability and snapshot isolation.
-    if should_not_exist || need_value || need_check_existence || allow_lock_with_conflict {
+    if should_not_exist || need_value || need_check_existence {
         txn.concurrency_manager.update_max_ts(for_update_ts);
     }
 
@@ -2499,61 +2499,5 @@ pub mod tests {
         .unwrap()
         .assert_locked_with_conflict(Some(b"v2"), 50);
         must_pessimistic_locked(&mut engine, b"k2", 40, 50);
-    }
-
-    #[test]
-    fn test_force_locking_must_update_max_ts() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
-        let key = b"k";
-
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(1.into());
-        let start_ts = TimeStamp::new(10);
-        let for_update_ts = TimeStamp::new(20);
-        let mut allow_lock_with_conflict = false;
-        let mut txn = MvccTxn::new(start_ts, cm.clone());
-        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        acquire_pessimistic_lock(
-            &mut txn,
-            &mut reader,
-            Key::from_raw(key),
-            key,
-            false,
-            0,
-            for_update_ts,
-            false,
-            false,
-            0.into(),
-            false,
-            false,
-            allow_lock_with_conflict,
-        )
-        .unwrap();
-
-        // max_ts doesn't need to be updated.
-        assert_eq!(cm.max_ts(), 1.into());
-
-        txn.clear();
-
-        allow_lock_with_conflict = true;
-        acquire_pessimistic_lock(
-            &mut txn,
-            &mut reader,
-            Key::from_raw(key),
-            key,
-            false,
-            0,
-            for_update_ts,
-            false,
-            false,
-            0.into(),
-            false,
-            false,
-            allow_lock_with_conflict,
-        )
-        .unwrap();
-
-        // max_ts must be updated if allow_lock_with_conflict is set.
-        assert_eq!(cm.max_ts(), for_update_ts);
     }
 }
