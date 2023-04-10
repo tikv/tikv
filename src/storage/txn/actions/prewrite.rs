@@ -385,7 +385,7 @@ impl<'a> PrewriteMutation<'a> {
                     "key" => %self.key,
                     "start_ts" => self.txn_props.start_ts,
                     "expected_for_update_ts" => ts,
-                    "actual_for_update_ts" => lock.for_update_ts);
+                    "lock" => ?lock);
 
                 return Err(ErrorInner::PessimisticLockNotFound {
                     start_ts: self.txn_props.start_ts,
@@ -2607,7 +2607,7 @@ pub mod tests {
                                expected_for_update_ts: u64,
                                success: bool,
                                commit_ts: u64| {
-            // In actual cases this kinds of pessimistic locks should be locked in
+            // In actual cases these kinds of pessimistic locks should be locked in
             // `allow_locking_with_conflict` mode. For simplicity, we pass a large
             // for_update_ts to the pessimistic lock to simulate that case.
             must_acquire_pessimistic_lock(&mut engine, key, key, start_ts, lock_for_update_ts);

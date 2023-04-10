@@ -2845,7 +2845,7 @@ mod tests {
         let k2 = b"k2";
         let k3 = b"k3";
 
-        // In actual cases this kinds of pessimistic locks should be locked in
+        // In actual cases these kinds of pessimistic locks should be locked in
         // `allow_locking_with_conflict` mode. For simplicity, we pass a large
         // for_update_ts to the pessimistic lock to simulate that case.
         must_acquire_pessimistic_lock(&mut engine, k1, k1, 10, 10);
