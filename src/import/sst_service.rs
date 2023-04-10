@@ -82,6 +82,7 @@ pub struct SnapshotResult<E: KvEngine> {
 struct RequestCollector {
     context: Context,
     max_raft_req_size: usize,
+
     /// Retain the last ts of each key in each request.
     /// This is used for write CF because resolved ts observer hates duplicated
     /// key in the same request.
@@ -135,10 +136,24 @@ impl RequestCollector {
         self.accept(cf, req);
     }
 
+    /// check whether the unpacked size would exceed the max_raft_req_size after
+    /// accepting the modify.
+    fn should_send_batch_before_adding(&self, m: &Request) -> bool {
+        let message_size = m.compute_size() as usize;
+        // If there isn't any records in the collector, and there is a huge modify, we
+        // should give it a change to enter the collector. Or we may generate empty
+        // batch.
+        self.unpacked_size != 0 /* batched */
+        && message_size + self.unpacked_size > self.max_raft_req_size /* exceed the max_raft_req_size */
+    }
+
     // we need to remove duplicate keys in here, since
     // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
     // will panic if found duplicated entry during Vec<PutRequest>.
     fn accept(&mut self, cf: &str, req: Request) {
+        if self.should_send_batch_before_adding(&req) {
+            self.pack_all();
+        }
         let k = key_from_request(&req);
         match cf {
             CF_WRITE => {
@@ -175,10 +190,6 @@ impl RequestCollector {
                 }
             }
             _ => unreachable!(),
-        }
-
-        if self.unpacked_size >= self.max_raft_req_size {
-            self.pack_all();
         }
     }
 
@@ -460,7 +471,7 @@ where
 
         let mut range: Option<Range> = None;
 
-        let mut collector = RequestCollector::new(req.take_context(), max_raft_size * 7 / 8);
+        let mut collector = RequestCollector::new(req.get_context().clone(), max_raft_size / 2);
         let mut metas = req.take_metas();
         let mut rules = req.take_rewrite_rules();
         // For compatibility with old requests.
@@ -1114,11 +1125,11 @@ mod test {
     use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
-    use kvproto::{kvrpcpb::Context, raft_cmdpb::*};
+    use kvproto::{kvrpcpb::Context, metapb::RegionEpoch, raft_cmdpb::*};
+    use protobuf::Message;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use crate::import::sst_service::{key_from_request, RequestCollector};
-
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
         let v = Write::new(ty, TimeStamp::new(start_ts), None);
@@ -1326,5 +1337,85 @@ mod test {
         });
         assert_eq!(reqs, reqs_result);
         assert!(request_collector.is_empty());
+    }
+
+    fn fake_ctx() -> Context {
+        let mut fake_ctx = Context::new();
+        fake_ctx.set_region_id(42);
+        fake_ctx.set_region_epoch({
+            let mut e = RegionEpoch::new();
+            e.set_version(1024);
+            e.set_conf_ver(56);
+            e
+        });
+        fake_ctx
+    }
+
+    #[test]
+    fn test_collector_size() {
+        let mut request_collector = RequestCollector::new(fake_ctx(), 1024);
+
+        for i in 0..100u8 {
+            request_collector.accept(CF_DEFAULT, default_req(&i.to_ne_bytes(), b"egg", i as _));
+        }
+
+        let pws = request_collector.drain_raft_reqs(true);
+        for w in pws {
+            let req_size = w.compute_size();
+            assert!(req_size < 1024, "{}", req_size);
+        }
+    }
+
+    #[test]
+    fn test_collector_huge_write_liveness() {
+        let mut request_collector = RequestCollector::new(fake_ctx(), 1024);
+        for i in 0..100u8 {
+            if i % 10 == 2 {
+                // Inject some huge requests.
+                request_collector.accept(
+                    CF_DEFAULT,
+                    default_req(&i.to_ne_bytes(), &[42u8; 1025], i as _),
+                );
+            } else {
+                request_collector.accept(CF_DEFAULT, default_req(&i.to_ne_bytes(), b"egg", i as _));
+            }
+        }
+        let pws = request_collector.drain_raft_reqs(true);
+        let mut total = 0;
+        for w in pws {
+            let req_size = w.compute_size();
+            total += w.get_requests().len();
+            assert!(req_size < 2048, "{}", req_size);
+        }
+        assert_eq!(total, 100);
+    }
+
+    #[test]
+    fn test_collector_mid_size_write_no_exceed_max() {
+        let mut request_collector = RequestCollector::new(fake_ctx(), 1024);
+        for i in 0..100u8 {
+            if i % 10 == 2 {
+                let huge_req = default_req(&i.to_ne_bytes(), &[42u8; 960], i as _);
+                // Inject some huge requests.
+                request_collector.accept(CF_DEFAULT, huge_req);
+            } else {
+                request_collector.accept(
+                    CF_DEFAULT,
+                    default_req(
+                        &i.to_ne_bytes(),
+                        b"noodles with beef, egg, bacon and spinach; in chicken soup",
+                        i as _,
+                    ),
+                );
+            }
+        }
+        let pws = request_collector.drain_raft_reqs(true).collect::<Vec<_>>();
+        let mut total = 0;
+        for w in pws {
+            let req_size = w.compute_size();
+            total += w.get_requests().len();
+            assert!(req_size < 1024, "{}", req_size);
+        }
+        assert_eq!(total, 100);
     }
 }
