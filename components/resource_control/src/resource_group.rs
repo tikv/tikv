@@ -222,7 +222,7 @@ impl ResourceController {
         let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
         // skip to adjust max ru if it is the "default" group and the ru config eq
         // MAX_RU_QUOTA
-        if ru_quota > *max_ru_quota && (&name != "default".as_bytes() || ru_quota < MAX_RU_QUOTA) {
+        if ru_quota > *max_ru_quota && (name != "default".as_bytes() || ru_quota < MAX_RU_QUOTA) {
             *max_ru_quota = ru_quota;
             // adjust all group weight because the current value is too small.
             self.adjust_all_resource_group_factors(ru_quota);
