@@ -21,7 +21,7 @@ fn test_encrypted_checkpoint() {
     let root_path = dir.path();
 
     let mut encryption_cfg = test_util::new_file_security_config(&dir);
-    encryption_cfg.v2_directory_whitelist = vec![root_path.to_str().unwrap().to_owned()];
+    encryption_cfg.v2_directory_allowlist = vec![root_path.to_str().unwrap().to_owned()];
     let key_manager = Arc::new(
         data_key_manager_from_config(&encryption_cfg, root_path.to_str().unwrap())
             .unwrap()

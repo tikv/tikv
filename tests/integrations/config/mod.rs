@@ -761,7 +761,7 @@ fn test_serde_custom_tikv_config() {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            v2_directory_whitelist: Vec::new(),
+            v2_directory_allowlist: Vec::new(),
         },
     };
     value.backup = BackupConfig {

@@ -15,11 +15,13 @@ use tikv_util::{box_err, set_panic_mark, warn};
 use crate::{
     encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX},
     master_key::{Backend, PlaintextBackend},
+    metrics::*,
     Error, Result,
 };
 
 // Operations over data key dictionary.
 pub trait DictionaryItem: Sized + Clone {
+    // `buf` should contains all remaining bytes of the file.
     fn parse(buf: &mut &[u8]) -> Result<Self>;
 
     fn as_bytes(&self) -> Result<Vec<u8>>;
@@ -32,6 +34,8 @@ pub trait ProtobufDictionary: Default + Message {
     type Item: DictionaryItem + std::fmt::Debug;
 
     fn apply(&mut self, item: Self::Item) -> Result<()>;
+
+    fn file_count(&self) -> usize;
 }
 
 #[derive(Debug, Clone)]
@@ -89,12 +93,21 @@ impl DictionaryItem for DataKeyDictionaryItem {
         digest.update(&buf[0..name_len + info_len]);
         let crc32_checksum = digest.finalize();
         if crc32_checksum != crc32 {
-            warn!(
-                "file corrupted! crc32 mismatch, discarded the tail record";
-                "expected crc32" => crc32,
-                "checksum crc32" => crc32_checksum,
-            );
-            return Err(Error::TailRecordParseIncomplete);
+            if buf.is_empty() {
+                // Only when this record is the last one can the panic be skipped.
+                warn!(
+                    "file corrupted! crc32 mismatch, discarded the tail record";
+                    "expected crc32" => crc32,
+                    "checksum crc32" => crc32_checksum,
+                );
+                return Err(Error::TailRecordParseIncomplete);
+            } else {
+                return Err(box_err!(
+                    "file corrupted! crc32 mismatch {} != {}",
+                    crc32,
+                    crc32_checksum
+                ));
+            }
         }
 
         // read file name
@@ -107,6 +120,7 @@ impl DictionaryItem for DataKeyDictionaryItem {
             2 => Self::Remove(file_name),
             1 => {
                 let file_info = parse_from_bytes(&buf[0..info_len])?;
+                buf.consume(info_len);
                 Self::Insert(file_name, file_info)
             }
             _ => return Err(box_err!("file corrupted! record type is unknown: {}", mode)),
@@ -170,6 +184,10 @@ impl ProtobufDictionary for FileDictionary {
         }
         Ok(())
     }
+
+    fn file_count(&self) -> usize {
+        self.files.len()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -230,12 +248,21 @@ impl DictionaryItem for DataKeyDictionaryItemV2 {
         digest.update(&buf[4..total_len]);
         let crc32_checksum = digest.finalize();
         if crc32_checksum != crc32 {
-            warn!(
-                "file corrupted! crc32 mismatch, discarded the tail record";
-                "expected crc32" => crc32,
-                "checksum crc32" => crc32_checksum,
-            );
-            return Err(Error::TailRecordParseIncomplete);
+            if buf.is_empty() {
+                // Only when this record is the last one can the panic be skipped.
+                warn!(
+                    "file corrupted! crc32 mismatch, discarded the tail record";
+                    "expected crc32" => crc32,
+                    "checksum crc32" => crc32_checksum,
+                );
+                return Err(Error::TailRecordParseIncomplete);
+            } else {
+                return Err(box_err!(
+                    "file corrupted! crc32 mismatch {} != {}",
+                    crc32,
+                    crc32_checksum
+                ));
+            }
         }
         buf.consume(Self::RECORD_HEADER_SIZE);
         // read file/dir name
@@ -359,6 +386,10 @@ impl ProtobufDictionary for FileDictionaryV2 {
         }
         Ok(())
     }
+
+    fn file_count(&self) -> usize {
+        self.dir_files.len()
+    }
 }
 
 /// DictionaryFile is used to store log style file dictionary.
@@ -405,7 +436,7 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
             file_size: 0,
         };
         dict_file.rewrite()?;
-        // dict_file.update_metrics();
+        dict_file.update_metrics();
         Ok(dict_file)
     }
 
@@ -431,7 +462,7 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
         if !skip_rewrite {
             dict_file.rewrite()?;
         }
-        // dict_file.update_metrics();
+        dict_file.update_metrics();
         Ok(dict_file)
     }
 
@@ -464,7 +495,7 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
             tmp_file.write_all(&dict_bytes)?;
             tmp_file.sync_all()?;
 
-            // Replace old file with the tmp file aomticlly.
+            // Replace old file with the tmp file atomically.
             rename(&tmp_path, &origin_path)?;
             let base_dir = File::open(&self.base)?;
             base_dir.sync_all()?;
@@ -528,15 +559,24 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
         Ok(())
     }
 
-    /// Append an insert operation to the log file.
+    /// Append an operation to the log file.
     ///
     /// Warning: `self.write(file_dict)` must be called before.
-    // pub fn insert(&mut self, name: &str, info: &FileInfo) -> Result<()> {
     pub fn add(&mut self, item: T::Item) -> Result<()> {
         self.dict.apply(item.clone())?;
         if self.enable_log {
             let file = self.append_file.as_mut().unwrap();
             let bytes = item.as_bytes()?;
+
+            fail::fail_point!("file_dict_log_append_incomplete", |truncate_num| {
+                let mut bytes = bytes.clone();
+                let truncate_num: usize = truncate_num.map_or(0, |c| c.parse().unwrap());
+                bytes.truncate(truncate_num);
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                Ok(())
+            });
+
             file.write_all(&bytes)?;
             file.sync_all()?;
 
@@ -548,7 +588,7 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
         } else {
             self.rewrite()?;
         }
-        // self.update_metrics();
+        self.update_metrics();
         Ok(())
     }
 
@@ -562,12 +602,12 @@ impl<T: ProtobufDictionary> DictionaryFile<T> {
         Ok(())
     }
 
-    // fn update_metrics(&self) {
-    //     ENCRYPTION_FILE_SIZE_GAUGE
-    //         .with_label_values(&["file_dictionary"])
-    //         .set(self.file_size as _);
-    //     ENCRYPTION_FILE_NUM_GAUGE.set(self.file_dict.files.len() as _);
-    // }
+    fn update_metrics(&self) {
+        ENCRYPTION_FILE_SIZE_GAUGE
+            .with_label_values(&["file_dictionary"])
+            .set(self.file_size as _);
+        ENCRYPTION_FILE_NUM_GAUGE.set(self.dict.file_count() as _);
+    }
 }
 
 #[cfg(test)]

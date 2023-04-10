@@ -44,15 +44,15 @@ const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
 struct Dicts {
     base: PathBuf,
     rotation_period: Duration,
-    // Directories directly under these (`whitelist/<name>`) will be represented using Dir ID. This
+    // Directories directly under these (`allowlist/<name>`) will be represented using Dir ID. This
     // makes it possible to rename directory without modifying records of every file.
     //
-    // The reasons for having a whitelist instead of treating all directories this way:
+    // The reasons for having an allowlist instead of treating all directories this way:
     // (1) keep v1 data keys file backward compatible.
     // (2) make it easy to find the right prefix of a file path to locate its Dir ID.
     //
     // The string should not contain trailing slash.
-    v2_directory_whitelist: Vec<String>,
+    v2_directory_allowlist: Vec<String>,
 
     // File Full Path -> FileInfo.
     file_dict: Mutex<FileDictionary>,
@@ -82,12 +82,12 @@ impl Dicts {
         rotation_period: Duration,
         enable_file_dictionary_log: bool,
         file_dictionary_rewrite_threshold: u64,
-        v2_directory_whitelist: Vec<String>,
+        v2_directory_allowlist: Vec<String>,
     ) -> Result<Dicts> {
         Ok(Dicts {
             base: Path::new(path).to_owned(),
             rotation_period,
-            v2_directory_whitelist,
+            v2_directory_allowlist,
             file_dict: Mutex::new(FileDictionary::default()),
             file_dict_file: Mutex::new(DictionaryFile::<FileDictionary>::new(
                 Path::new(path),
@@ -117,7 +117,7 @@ impl Dicts {
         master_key: &dyn Backend,
         enable_file_dictionary_log: bool,
         file_dictionary_rewrite_threshold: u64,
-        v2_directory_whitelist: Vec<String>,
+        v2_directory_allowlist: Vec<String>,
     ) -> Result<Option<Dicts>> {
         let base = Path::new(path);
 
@@ -171,7 +171,7 @@ impl Dicts {
                 Ok(Some(Dicts {
                     base: base.to_owned(),
                     rotation_period,
-                    v2_directory_whitelist,
+                    v2_directory_allowlist,
                     file_dict: Mutex::new(file_dict),
                     file_dict_file: Mutex::new(file_dict_file),
                     file_dict_v2: Mutex::new(file_dict_v2),
@@ -253,7 +253,7 @@ impl Dicts {
     // Returns Dir, Relative Path.
     #[inline]
     fn parse_v2(&self, full_name: &str) -> Option<(String, String)> {
-        for p in &self.v2_directory_whitelist {
+        for p in &self.v2_directory_allowlist {
             if let Some(name) = full_name.strip_prefix(p)
                 && let len = name.len()
                 && let name = name.trim_start_matches('/')
@@ -344,6 +344,12 @@ impl Dicts {
                     }
                 }
             };
+            if self.get_file(fname).is_some() && Path::new(fname).exists() {
+                return Err(Error::Io(IoError::new(
+                    ErrorKind::AlreadyExists,
+                    format!("file already exists, {}", fname),
+                )));
+            }
 
             let file_num = {
                 let mut file_dict = self.file_dict.lock().unwrap();
@@ -476,12 +482,12 @@ impl Dicts {
                 Ok(())
             } else {
                 Err(box_err!(format!(
-                    "Linking non whitelisted directory {dst_name} is not supported."
+                    "Linking directory {dst_name} not under allowlist is not supported."
                 )))
             }
         } else {
             Err(box_err!(format!(
-                "Linking non whitelisted directory {src_name} is not supported."
+                "Linking directory {src_name} not under allowlist is not supported."
             )))
         }
     }
@@ -512,7 +518,7 @@ impl Dicts {
             Ok(())
         } else {
             Err(box_err!(
-                "Deleting non whitelisted directory is not supported."
+                "Deleting directory {dname} not under allowlist is not supported."
             ))
         }
     }
@@ -638,7 +644,7 @@ pub struct DataKeyManagerArgs {
     pub enable_file_dictionary_log: bool,
     pub file_dictionary_rewrite_threshold: u64,
     pub dict_path: String,
-    pub v2_directory_whitelist: Vec<String>,
+    pub v2_directory_allowlist: Vec<String>,
 }
 
 impl DataKeyManagerArgs {
@@ -652,7 +658,7 @@ impl DataKeyManagerArgs {
             rotation_period: config.data_key_rotation_period.into(),
             enable_file_dictionary_log: config.enable_file_dictionary_log,
             file_dictionary_rewrite_threshold: config.file_dictionary_rewrite_threshold,
-            v2_directory_whitelist: config.v2_directory_whitelist.clone(),
+            v2_directory_allowlist: config.v2_directory_allowlist.clone(),
         }
     }
 }
@@ -722,7 +728,7 @@ impl DataKeyManager {
                 master_key,
                 args.enable_file_dictionary_log,
                 args.file_dictionary_rewrite_threshold,
-                args.v2_directory_whitelist.clone(),
+                args.v2_directory_allowlist.clone(),
             ),
             args.method,
         ) {
@@ -739,7 +745,7 @@ impl DataKeyManager {
                     args.rotation_period,
                     args.enable_file_dictionary_log,
                     args.file_dictionary_rewrite_threshold,
-                    args.v2_directory_whitelist.clone(),
+                    args.v2_directory_allowlist.clone(),
                 )?))
             }
             // Encryption was enabled and master key didn't change.
@@ -773,7 +779,7 @@ impl DataKeyManager {
             previous_master_key,
             args.enable_file_dictionary_log,
             args.file_dictionary_rewrite_threshold,
-            args.v2_directory_whitelist.clone(),
+            args.v2_directory_allowlist.clone(),
         )
         .map_err(|e| {
             if let Error::WrongMasterKey(e_previous) = e {
@@ -1104,7 +1110,7 @@ mod tests {
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 2,
             dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
-            v2_directory_whitelist: Vec::new(),
+            v2_directory_allowlist: Vec::new(),
         }
     }
 
@@ -1719,7 +1725,7 @@ mod tests {
         let mut args = def_data_key_args(&tmp_dir);
         let path = tmp_dir.path();
         let (key_path, _tmp_key_dir) = create_key_file("key");
-        args.v2_directory_whitelist = vec![path.to_str().unwrap().to_owned()];
+        args.v2_directory_allowlist = vec![path.to_str().unwrap().to_owned()];
         let method = to_engine_encryption_method(args.method);
 
         {

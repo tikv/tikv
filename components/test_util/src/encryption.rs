@@ -32,7 +32,7 @@ pub fn new_file_security_config(dir: &tempfile::TempDir) -> EncryptionConfig {
         file_dictionary_rewrite_threshold: 100000,
         master_key: master_key_cfg.clone(),
         previous_master_key: master_key_cfg,
-        v2_directory_whitelist: Vec::new(),
+        v2_directory_allowlist: Vec::new(),
     }
 }
 
@@ -54,7 +54,7 @@ pub fn new_test_key_manager(
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 2,
             dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
-            v2_directory_whitelist: Vec::new(),
+            v2_directory_allowlist: Vec::new(),
         },
     )
 }
