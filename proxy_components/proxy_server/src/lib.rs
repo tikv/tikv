@@ -1,5 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+#![allow(incomplete_features)]
 #![recursion_limit = "256"]
+#![feature(specialization)]
 
 extern crate slog_global;
 
@@ -17,6 +19,7 @@ extern crate tikv_util;
 #[macro_use]
 pub mod config;
 pub mod common;
+pub mod common_override;
 pub mod engine;
 pub mod hacked_lock_mgr;
 pub mod proxy;
