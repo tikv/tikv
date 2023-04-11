@@ -184,7 +184,7 @@ fn is_cgroup2_unified_mode() -> Result<bool, String> {
 // The format is "<id>:<hierarchy>:<path>". For example,
 // "10:cpuset:/test-cpuset".
 //
-// Note: path may contains ":" in some envrionment.
+// Note: path may contain ":" in some envrionments.
 fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -704,15 +704,15 @@ mod tests {
     }
 
     #[test]
-    fn test_cgroup_path_with_abnormal_semicolon() {
+    fn test_cgroup_path_with_semicolon() {
         let id = "1";
         let devices = "test_device";
         let path = "/dir1:dir2:dir3";
         let mut lines = String::new();
         lines.push_str(id);
-        lines.push_str(":");
+        lines.push(':');
         lines.push_str(devices);
-        lines.push_str(":");
+        lines.push(':');
         lines.push_str(path);
         let ret = parse_proc_cgroup_v1(&lines);
         assert_eq!(ret.get(devices).unwrap(), path);
