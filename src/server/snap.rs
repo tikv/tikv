@@ -31,19 +31,22 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot, TabletSnapManager};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
-    time::{Instant, UnixSecs},
+    time::{Instant, Limiter, UnixSecs},
     worker::Runnable,
     DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{metrics::*, Config, Error, Result};
-use crate::tikv_util::sys::thread::ThreadBuildWrapper;
+use crate::{
+    server::tablet_snap::{recv_snap_files_impl, RecvTabletSnapContext, SnapCacheBuilder},
+    tikv_util::sys::thread::ThreadBuildWrapper,
+};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -307,10 +310,37 @@ fn recv_snap<R: RaftExtension + 'static>(
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
     raft_router: R,
+    cache_builder: impl SnapCacheBuilder,
+    limiter: Limiter,
 ) -> impl Future<Output = Result<()>> {
     let recv_task = async move {
         let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
+
+        let snap_from_v2 = head.map_or_else(
+            || false,
+            |head| {
+                let head_meta = head.get_message();
+                // head_meta.get_extra_msg().get_snap_version()
+                false
+            },
+        );
+
+        if snap_from_v2 {
+            let context = RecvTabletSnapContext::new(head, snap_mgr)?;
+            recv_snap_files_impl(
+                context,
+                &snap_mgr.manager_v2,
+                cache_builder,
+                stream,
+                &mut sink,
+                limiter,
+            )
+            .await
+            .and_then(|context| context.finish(raft_router))?;
+            return false;
+        }
+
         let mut context = RecvSnapContext::new(head, &snap_mgr)?;
         if context.file.is_none() {
             return context.finish(raft_router);
@@ -340,12 +370,14 @@ fn recv_snap<R: RaftExtension + 'static>(
                 return Err(e);
             }
         }
-        context.finish(raft_router)
+        context.finish(raft_router)?;
+        true
     };
 
     async move {
         match recv_task.await {
-            Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
+            Ok(true) => sink.success(Done::default()).await.map_err(Error::from),
+            Ok(false) => Ok(()),
             Err(e) => {
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 sink.fail(status).await.map_err(Error::from)
@@ -354,7 +386,7 @@ fn recv_snap<R: RaftExtension + 'static>(
     }
 }
 
-pub struct Runner<R: RaftExtension> {
+pub struct Runner<B, R: RaftExtension> {
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
@@ -364,17 +396,30 @@ pub struct Runner<R: RaftExtension> {
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
+
+    // the following fields are used to receive snapshot sent from raftstore-v2
+    cache_builder: B,
+    limiter: Limiter,
 }
 
-impl<R: RaftExtension + 'static> Runner<R> {
+impl<B, R: RaftExtension + 'static> Runner<B, R> {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
+        cache_builder: B,
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
+        let config = cfg.value().clone();
+        let limit = i64::try_from(config.snap_io_max_bytes_per_sec.0)
+            .unwrap_or_else(|_| panic!("snap_io_max_bytes_per_sec > i64::max_value"));
+        let limiter = Limiter::new(if limit > 0 {
+            limit as f64
+        } else {
+            f64::INFINITY
+        });
         let snap_worker = Runner {
             env,
             snap_mgr,
@@ -388,9 +433,11 @@ impl<R: RaftExtension + 'static> Runner<R> {
             raft_router: r,
             security_mgr,
             cfg_tracker,
-            cfg: cfg.value().clone(),
+            cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
+            cache_builder,
+            limiter,
         };
         snap_worker
     }
@@ -417,7 +464,11 @@ impl<R: RaftExtension + 'static> Runner<R> {
     }
 }
 
-impl<R: RaftExtension + 'static> Runnable for Runner<R> {
+impl<B, R> Runnable for Runner<B, R>
+where
+    B: SnapCacheBuilder + Clone + 'static,
+    R: RaftExtension,
+{
     type Task = Task;
 
     fn run(&mut self, task: Task) {

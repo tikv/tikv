@@ -123,7 +123,7 @@ impl SnapCacheBuilder for NoSnapshotCache {
     }
 }
 
-struct RecvTabletSnapContext<'a> {
+pub(crate) struct RecvTabletSnapContext<'a> {
     key: TabletSnapKey,
     raft_msg: RaftMessage,
     use_cache: bool,
@@ -134,7 +134,7 @@ struct RecvTabletSnapContext<'a> {
 }
 
 impl<'a> RecvTabletSnapContext<'a> {
-    fn new(mut head: TabletSnapshotRequest, mgr: &'a TabletSnapManager) -> Result<Self> {
+    pub(crate) fn new(mut head: TabletSnapshotRequest, mgr: &'a TabletSnapManager) -> Result<Self> {
         if !head.has_head() {
             return Err(box_err!("no raft message in the first chunk"));
         }
@@ -161,7 +161,7 @@ impl<'a> RecvTabletSnapContext<'a> {
         })
     }
 
-    fn finish<R: RaftExtension>(self, raft_router: R) -> Result<()> {
+    pub fn finish<R: RaftExtension>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         raft_router.feed(self.raft_msg, true);
         info!("saving all snapshot files"; "snap_key" => %key, "takes" => ?self.start.saturating_elapsed());
@@ -380,19 +380,14 @@ async fn accept_missing(
     }
 }
 
-async fn recv_snap_files<'a>(
+pub async fn recv_snap_files_impl<'a>(
+    context: RecvTabletSnapContext<'a>,
     snap_mgr: &'a TabletSnapManager,
     cache_builder: impl SnapCacheBuilder,
     mut stream: impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin,
     sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
     limiter: Limiter,
 ) -> Result<RecvTabletSnapContext<'a>> {
-    let head = stream
-        .next()
-        .await
-        .transpose()?
-        .ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
-    let context = RecvTabletSnapContext::new(head, snap_mgr)?;
     let _with_io_type = WithIoType::new(context.io_type);
     let region_id = context.key.region_id;
     let final_path = snap_mgr.final_recv_path(&context.key);
@@ -424,6 +419,22 @@ async fn recv_snap_files<'a>(
     let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;
     Ok(context)
+}
+
+async fn recv_snap_files<'a>(
+    snap_mgr: &'a TabletSnapManager,
+    cache_builder: impl SnapCacheBuilder,
+    mut stream: impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin,
+    sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
+    limiter: Limiter,
+) -> Result<RecvTabletSnapContext<'a>> {
+    let head = stream
+        .next()
+        .await
+        .transpose()?
+        .ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
+    let context = RecvTabletSnapContext::new(head, snap_mgr)?;
+    recv_snap_files_impl(context, snap_mgr, cache_builder, stream, sink, limiter)
 }
 
 async fn recv_snap<R: RaftExtension + 'static>(

@@ -1387,6 +1387,8 @@ struct SnapManagerCore {
 pub struct SnapManager {
     core: SnapManagerCore,
     max_total_size: Arc<AtomicU64>,
+
+    pub manager_v2: TabletSnapManager,
 }
 
 impl Clone for SnapManager {
@@ -1394,6 +1396,7 @@ impl Clone for SnapManager {
         SnapManager {
             core: self.core.clone(),
             max_total_size: self.max_total_size.clone(),
+            manager_v2: self.manager_v2.clone(),
         }
     }
 }
@@ -1896,9 +1899,14 @@ impl SnapManagerBuilder {
         } else {
             u64::MAX
         };
+        let path = path.into();
+        let snap_mgr_v2 = match TabletSnapManager::new(&path) {
+            Ok(mgr) => mgr,
+            Err(e) => panic!("failed to create snapshot manager at {}: {}", path, e),
+        };
         let mut snapshot = SnapManager {
             core: SnapManagerCore {
-                base: path.into(),
+                base: path,
                 registry: Default::default(),
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
@@ -1910,6 +1918,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
+            manager_v2: snap_mgr_v2,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
