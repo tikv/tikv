@@ -172,7 +172,7 @@ lazy_static! {
 }
 
 make_static_metric! {
-    pub label_enum MIscEventsName {
+    pub label_enum MiscEventsName {
         skip_resolve_non_leader,
         skip_resolve_no_subscription,
     }
