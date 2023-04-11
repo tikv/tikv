@@ -1365,7 +1365,11 @@ mod test {
             k1.cmp(k2).then(ts1.cmp(&ts2))
         });
         assert_eq!(reqs, reqs_result);
-        assert!(request_collector.is_empty(), "{}", request_collector.unpacked_size);
+        assert!(
+            request_collector.is_empty(),
+            "{}",
+            request_collector.unpacked_size
+        );
     }
 
     fn fake_ctx() -> Context {
