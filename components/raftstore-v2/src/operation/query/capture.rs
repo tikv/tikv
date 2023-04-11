@@ -28,14 +28,18 @@ use crate::{
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>
 {
+    pub fn on_leader_callback(&mut self, ch: QueryResChannel) {
+        let peer = self.fsm.peer();
+        let msg = new_read_index_request(
+            peer.region_id(),
+            peer.region().get_region_epoch().clone(),
+            peer.peer().clone(),
+        );
+        self.on_query(msg, ch);
+    }
+
     pub fn on_capture_change(&mut self, capture_change: CaptureChange) {
         fail_point!("raft_on_capture_change");
-        let region_id = self.fsm.peer().region_id();
-        let msg = new_read_index_request(
-            region_id,
-            capture_change.region_epoch.clone(),
-            self.fsm.peer().peer().clone(),
-        );
 
         // TODO: Allow to capture change even is in flashback state.
         // TODO: add a test case for this kind of situation.
@@ -49,18 +53,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
             }
             apply_router.send(ApplyTask::CaptureApply(capture_change))
         }));
-        self.on_query(msg, ch);
+        self.on_leader_callback(ch);
     }
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn on_capture_apply(&mut self, capture_change: CaptureChange) {
         let CaptureChange {
-            cmd,
+            observer,
             region_epoch,
             snap_cb,
         } = capture_change;
-        let ChangeObserver { region_id, ty } = cmd;
+        let ChangeObserver { region_id, ty } = observer;
 
         let is_stale_cmd = match ty {
             ObserverType::Cdc(ObserveHandle { id, .. }) => self.observe_info_mut().cdc_id.id > id,

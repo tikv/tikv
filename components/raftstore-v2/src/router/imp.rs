@@ -22,7 +22,7 @@ use raftstore::{
 };
 use slog::warn;
 
-use super::{build_any_channel, message::CaptureChange, PeerMsg};
+use super::{build_any_channel, message::CaptureChange, PeerMsg, QueryResChannel, QueryResult};
 use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
@@ -182,7 +182,7 @@ impl<EK: KvEngine, ER: RaftEngine> CdcHandle<EK> for RaftRouter<EK, ER> {
         &self,
         region_id: u64,
         region_epoch: RegionEpoch,
-        change_observer: ChangeObserver,
+        observer: ChangeObserver,
         callback: Callback<EK::Snapshot>,
     ) -> crate::Result<()> {
         let (snap_cb, _) = build_any_channel(Box::new(move |args| {
@@ -208,7 +208,7 @@ impl<EK: KvEngine, ER: RaftEngine> CdcHandle<EK> for RaftRouter<EK, ER> {
         if let Err(SendError(msg)) = self.router.force_send(
             region_id,
             PeerMsg::CaptureChange(CaptureChange {
-                cmd: change_observer,
+                observer,
                 region_epoch,
                 snap_cb,
             }),
@@ -221,9 +221,31 @@ impl<EK: KvEngine, ER: RaftEngine> CdcHandle<EK> for RaftRouter<EK, ER> {
 
     fn check_leadership(
         &self,
-        _region_id: u64,
-        _callback: Callback<EK::Snapshot>,
+        region_id: u64,
+        callback: Callback<EK::Snapshot>,
     ) -> crate::Result<()> {
-        unimplemented!()
+        let (ch, _) = QueryResChannel::with_callback(Box::new(|res| {
+            let resp = match res {
+                QueryResult::Read(_) => raftstore::store::ReadResponse {
+                    response: Default::default(),
+                    snapshot: None,
+                    txn_extra_op: ExtraOp::Noop,
+                },
+                QueryResult::Response(resp) => raftstore::store::ReadResponse {
+                    response: resp.clone(),
+                    snapshot: None,
+                    txn_extra_op: ExtraOp::Noop,
+                },
+            };
+            callback.invoke_read(resp);
+        }));
+        if let Err(SendError(msg)) = self
+            .router
+            .force_send(region_id, PeerMsg::LeaderCallback(ch))
+        {
+            warn!(self.router.logger(), "failed to send capture change msg"; "msg" => ?msg);
+            return Err(crate::Error::RegionNotFound(region_id));
+        }
+        Ok(())
     }
 }

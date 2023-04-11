@@ -136,7 +136,7 @@ pub struct UnsafeWrite {
 
 #[derive(Debug)]
 pub struct CaptureChange {
-    pub cmd: ChangeObserver,
+    pub observer: ChangeObserver,
     pub region_epoch: RegionEpoch,
     // A callback accpets a snapshot.
     pub snap_cb: AnyResChannel,
@@ -233,7 +233,7 @@ pub enum PeerMsg {
     CatchUpLogs(CatchUpLogs),
     /// Capture changes of a region.
     CaptureChange(CaptureChange),
-    // LeaderCallback(Callback<SK>),
+    LeaderCallback(QueryResChannel),
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
