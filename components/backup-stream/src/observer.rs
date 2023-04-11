@@ -83,7 +83,7 @@ impl BackupStreamObserver {
     /// Check whether there are any task range registered to the observer.
     /// when there isn't any task, we can ignore the events, so we don't need to
     /// handle useless events. (Also won't yield verbose logs.)
-    fn is_hibernating(&self) -> bool {
+    pub fn is_hibernating(&self) -> bool {
         self.ranges.rl().is_empty()
     }
 }
