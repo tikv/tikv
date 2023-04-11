@@ -89,6 +89,9 @@ use crate::{
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
+// FIXME: These definitions are duplicate with server::server2.
+pub const DEFAULT_TABLET_SUB_DIR: &str = "tablets";
+pub const DEFAULT_SNAP_SUB_DIR: &str = "tablet_snap";
 
 /// By default, block cache size will be set to 45% of system memory.
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
@@ -3284,7 +3287,9 @@ impl TikvConfig {
         let kv_data_exists = if self.storage.engine == EngineType::RaftKv {
             RocksEngine::exists(&kv_db_path)
         } else {
-            Path::new(&self.storage.data_dir).join("tablets").exists()
+            Path::new(&self.storage.data_dir)
+                .join(DEFAULT_TABLET_SUB_DIR)
+                .exists()
         };
 
         RaftDataStateMachine::new(
@@ -3355,8 +3360,23 @@ impl TikvConfig {
             self.coprocessor.enable_region_bucket(),
             self.coprocessor.region_bucket_size,
         )?;
-        self.security
-            .validate(self.storage.engine == EngineType::RaftKv2)?;
+        self.security.validate()?;
+        if self.storage.engine == EngineType::RaftKv2 {
+            self.security
+                .encryption
+                .v2_directory_allowlist
+                .push(config::canonicalize_sub_path(
+                    &self.storage.data_dir,
+                    DEFAULT_TABLET_SUB_DIR,
+                )?);
+            self.security
+                .encryption
+                .v2_directory_allowlist
+                .push(config::canonicalize_sub_path(
+                    &self.storage.data_dir,
+                    DEFAULT_SNAP_SUB_DIR,
+                )?);
+        }
         self.import.validate()?;
         self.backup.validate()?;
         self.log_backup.validate()?;

@@ -23,6 +23,7 @@ pub struct EncryptionConfig {
     pub master_key: MasterKeyConfig,
     #[online_config(skip)]
     pub previous_master_key: MasterKeyConfig,
+    // This field should contain full path string without any trailing slash.
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
