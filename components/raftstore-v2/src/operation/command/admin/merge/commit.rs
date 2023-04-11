@@ -153,6 +153,7 @@ fn commit_of_merge(r: &CommitMergeRequest) -> u64 {
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Called after applying `PrepareMerge`.
     pub fn start_commit_merge<T: Transport>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+        fail::fail_point!("start_commit_merge");
         assert!(self.applied_merge_state().is_some());
         // Target already committed `CommitMerge`.
         if let Some(c) = &self.merge_context().unwrap().catch_up_logs {
