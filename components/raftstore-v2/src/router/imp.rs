@@ -5,10 +5,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crossbeam::channel::TrySendError;
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
+    kvrpcpb::ExtraOp,
     metapb::RegionEpoch,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -21,7 +22,7 @@ use raftstore::{
 };
 use slog::warn;
 
-use super::PeerMsg;
+use super::{build_any_channel, message::CaptureChange, PeerMsg};
 use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
@@ -179,12 +180,43 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
 impl<EK: KvEngine, ER: RaftEngine> CdcHandle<EK> for RaftRouter<EK, ER> {
     fn capture_change(
         &self,
-        _region_id: u64,
-        _region_epoch: RegionEpoch,
-        _change_observer: ChangeObserver,
-        _callback: Callback<EK::Snapshot>,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        change_observer: ChangeObserver,
+        callback: Callback<EK::Snapshot>,
     ) -> crate::Result<()> {
-        unimplemented!()
+        let (snap_cb, _) = build_any_channel(Box::new(move |args| {
+            let (resp, snap) = (&args.0, args.1.take());
+            if let Some(snap) = snap {
+                let snapshot: RegionSnapshot<EK::Snapshot> = match snap.downcast() {
+                    Ok(s) => *s,
+                    Err(t) => unreachable!("snapshot type should be the same: {:?}", t),
+                };
+                callback.invoke_read(raftstore::store::ReadResponse {
+                    response: Default::default(),
+                    snapshot: Some(snapshot),
+                    txn_extra_op: ExtraOp::Noop,
+                })
+            } else {
+                callback.invoke_read(raftstore::store::ReadResponse {
+                    response: resp.clone(),
+                    snapshot: None,
+                    txn_extra_op: ExtraOp::Noop,
+                });
+            }
+        }));
+        if let Err(SendError(msg)) = self.router.force_send(
+            region_id,
+            PeerMsg::CaptureChange(CaptureChange {
+                cmd: change_observer,
+                region_epoch,
+                snap_cb,
+            }),
+        ) {
+            warn!(self.router.logger(), "failed to send capture change msg"; "msg" => ?msg);
+            return Err(crate::Error::RegionNotFound(region_id));
+        }
+        Ok(())
     }
 
     fn check_leadership(

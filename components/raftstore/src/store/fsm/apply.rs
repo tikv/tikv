@@ -3651,14 +3651,14 @@ impl Debug for GenSnapTask {
 }
 
 #[derive(Debug)]
-enum ObserverType {
+pub enum ObserverType {
     Cdc(ObserveHandle),
     Rts(ObserveHandle),
     Pitr(ObserveHandle),
 }
 
 impl ObserverType {
-    fn handle(&self) -> &ObserveHandle {
+    pub fn handle(&self) -> &ObserveHandle {
         match self {
             ObserverType::Cdc(h) => h,
             ObserverType::Rts(h) => h,
@@ -3669,8 +3669,8 @@ impl ObserverType {
 
 #[derive(Debug)]
 pub struct ChangeObserver {
-    ty: ObserverType,
-    region_id: u64,
+    pub ty: ObserverType,
+    pub region_id: u64,
 }
 
 impl ChangeObserver {
