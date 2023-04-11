@@ -271,10 +271,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "source" => ?source_region,
                 "index" => r.get_index(),
             );
+            let index = commit_of_merge(req.get_admin_request().get_commit_merge());
+            // If target caught up by snapshot, the source checkpoint hasn't been used.
+            let source_path =
+                merge_source_path(&store_ctx.tablet_registry, source_region.get_id(), index);
+            self.record_tombstone_tablet_path(store_ctx, source_path, r.get_index());
             let _ = store_ctx.router.force_send(
                 source_region.get_id(),
                 PeerMsg::AckCommitMerge {
-                    index: r.get_index(),
+                    index,
                     target_id: self.region_id(),
                 },
             );
@@ -307,8 +312,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 source_region,
                 region
             );
-            // Best effort. Remove when trim check is implemented.
-            if !self.storage().has_dirty_data() && self.is_leader() {
+            assert!(!self.storage().has_dirty_data());
+            if self.is_leader() {
                 let (ch, _) = CmdResChannel::pair();
                 self.on_admin_command(store_ctx, req, ch);
             }
