@@ -5,13 +5,13 @@ use std::{fmt::Write, sync::Arc, thread, time::Duration};
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{TabletRegistry, CF_DEFAULT};
+use engine_traits::{KvEngine, TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
 use futures::Future;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse};
 use raftstore::Result;
 use rand::RngCore;
-use server::server2::ConfiguredRaftEngine;
+use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
 use tikv::{
@@ -86,16 +86,16 @@ pub fn create_test_engine(
 }
 
 /// Keep putting random kvs until specified size limit is reached.
-pub fn put_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn put_till_size<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
     limit: u64,
     range: &mut dyn Iterator<Item = u64>,
 ) -> Vec<u8> {
     put_cf_till_size(cluster, CF_DEFAULT, limit, range)
 }
 
-pub fn put_cf_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn put_cf_till_size<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
     cf: &'static str,
     limit: u64,
     range: &mut dyn Iterator<Item = u64>,
@@ -134,8 +134,8 @@ pub fn configure_for_snapshot(config: &mut Config) {
     config.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
 
-pub fn configure_for_lease_read_v2<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn configure_for_lease_read_v2<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
     base_tick_ms: Option<u64>,
     election_ticks: Option<usize>,
 ) -> Duration {
@@ -162,7 +162,11 @@ pub fn configure_for_lease_read_v2<T: Simulator>(
     election_timeout
 }
 
-pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, region_id: u64) {
+pub fn wait_for_synced(
+    cluster: &mut Cluster<ServerCluster<RocksEngine>, RocksEngine>,
+    node_id: u64,
+    region_id: u64,
+) {
     let mut storage = cluster
         .sim
         .read()
@@ -193,8 +197,8 @@ pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, regio
 }
 
 // Issue a read request on the specified peer.
-pub fn read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn read_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
@@ -211,8 +215,8 @@ pub fn read_on_peer<T: Simulator>(
     cluster.read(None, request, timeout)
 }
 
-pub fn async_read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],

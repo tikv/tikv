@@ -25,6 +25,7 @@ mod rocksdb_engine;
 mod stats;
 
 use std::{
+    borrow::Cow,
     cell::UnsafeCell,
     error,
     num::NonZeroU64,
@@ -35,8 +36,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
-    CF_DEFAULT, CF_LOCK,
+    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions,
+    TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
@@ -224,7 +225,7 @@ impl PessimisticLockPair for Modify {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
@@ -782,6 +783,29 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     }
     wb.write()?;
     Ok(())
+}
+
+#[derive(Clone)]
+pub enum LocalTablets<EK> {
+    Singleton(EK),
+    Registry(TabletRegistry<EK>),
+}
+
+impl<EK: Clone> LocalTablets<EK> {
+    /// Get the tablet of the given region.
+    ///
+    /// If `None` is returned, the region may not exist or may not initialized.
+    /// If there are multiple versions of tablet, the latest one is returned
+    /// with best effort.
+    pub fn get(&self, region_id: u64) -> Option<Cow<'_, EK>> {
+        match self {
+            LocalTablets::Singleton(tablet) => Some(Cow::Borrowed(tablet)),
+            LocalTablets::Registry(registry) => {
+                let mut cached = registry.get(region_id)?;
+                cached.latest().cloned().map(Cow::Owned)
+            }
+        }
+    }
 }
 
 pub const TEST_ENGINE_CFS: &[CfName] = &[CF_DEFAULT, "cf"];

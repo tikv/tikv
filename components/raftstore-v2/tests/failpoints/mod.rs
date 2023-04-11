@@ -10,6 +10,7 @@
 mod cluster;
 mod test_basic_write;
 mod test_bootstrap;
+mod test_bucket;
 mod test_life;
 mod test_merge;
 mod test_split;
