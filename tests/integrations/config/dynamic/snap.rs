@@ -17,6 +17,7 @@ use tikv::{
         config::{Config as ServerConfig, ServerConfigManager},
         raftkv::RaftRouterWrap,
         snap::{Runner as SnapHandler, Task as SnapTask},
+        tablet_snap::NoSnapshotCache,
     },
 };
 use tikv_util::{
@@ -65,6 +66,7 @@ fn start_server(
         RaftRouterWrap::new(raft_router),
         security_mgr,
         Arc::clone(&server_config),
+        NoSnapshotCache,
     );
     snap_worker.start(snap_runner);
 

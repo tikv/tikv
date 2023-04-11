@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    convert::TryFrom,
     fmt::{self, Display, Formatter},
     io::{Error as IoError, ErrorKind, Read, Write},
     pin::Pin,
@@ -13,7 +14,7 @@ use std::{
 
 use file_system::{IoType, WithIoType};
 use futures::{
-    future::{Future, FutureExt, TryFutureExt},
+    future::{Future, TryFutureExt},
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
     task::{Context, Poll},
@@ -31,7 +32,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot, TabletSnapManager};
+use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -43,10 +44,7 @@ use tikv_util::{
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{metrics::*, Config, Error, Result};
-use crate::{
-    server::tablet_snap::{recv_snap_files_impl, RecvTabletSnapContext, SnapCacheBuilder},
-    tikv_util::sys::thread::ThreadBuildWrapper,
-};
+use crate::{server::tablet_snap::SnapCacheBuilder, tikv_util::sys::thread::ThreadBuildWrapper};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -310,37 +308,10 @@ fn recv_snap<R: RaftExtension + 'static>(
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
     raft_router: R,
-    cache_builder: impl SnapCacheBuilder,
-    limiter: Limiter,
 ) -> impl Future<Output = Result<()>> {
     let recv_task = async move {
         let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
-
-        let snap_from_v2 = head.map_or_else(
-            || false,
-            |head| {
-                let head_meta = head.get_message();
-                // head_meta.get_extra_msg().get_snap_version()
-                false
-            },
-        );
-
-        if snap_from_v2 {
-            let context = RecvTabletSnapContext::new(head, snap_mgr)?;
-            recv_snap_files_impl(
-                context,
-                &snap_mgr.manager_v2,
-                cache_builder,
-                stream,
-                &mut sink,
-                limiter,
-            )
-            .await
-            .and_then(|context| context.finish(raft_router))?;
-            return false;
-        }
-
         let mut context = RecvSnapContext::new(head, &snap_mgr)?;
         if context.file.is_none() {
             return context.finish(raft_router);
@@ -370,14 +341,11 @@ fn recv_snap<R: RaftExtension + 'static>(
                 return Err(e);
             }
         }
-        context.finish(raft_router)?;
-        true
+        context.finish(raft_router)
     };
-
     async move {
         match recv_task.await {
-            Ok(true) => sink.success(Done::default()).await.map_err(Error::from),
-            Ok(false) => Ok(()),
+            Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
             Err(e) => {
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 sink.fail(status).await.map_err(Error::from)
@@ -462,31 +430,40 @@ impl<B, R: RaftExtension + 'static> Runner<B, R> {
             self.cfg = incoming.clone();
         }
     }
+
+    // todo
+    fn receiving_busy(&self) -> Option<RpcStatus> {
+        let task_num = self.recving_count.load(Ordering::SeqCst);
+        if task_num >= self.cfg.concurrent_recv_snap_limit {
+            warn!("too many recving snapshot tasks, ignore");
+            return Some(RpcStatus::with_message(
+                RpcStatusCode::RESOURCE_EXHAUSTED,
+                format!(
+                    "the number of received snapshot tasks {} exceeded the limitation {}",
+                    task_num, self.cfg.concurrent_recv_snap_limit
+                ),
+            ));
+        }
+
+        None
+    }
 }
 
 impl<B, R> Runnable for Runner<B, R>
 where
     B: SnapCacheBuilder + Clone + 'static,
-    R: RaftExtension,
+    R: RaftExtension + 'static,
 {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {
-                let task_num = self.recving_count.load(Ordering::SeqCst);
-                if task_num >= self.cfg.concurrent_recv_snap_limit {
-                    warn!("too many recving snapshot tasks, ignore");
-                    let status = RpcStatus::with_message(
-                        RpcStatusCode::RESOURCE_EXHAUSTED,
-                        format!(
-                            "the number of received snapshot tasks {} exceeded the limitation {}",
-                            task_num, self.cfg.concurrent_recv_snap_limit
-                        ),
-                    );
+                if let Some(status) = self.receiving_busy() {
                     self.pool.spawn(sink.fail(status));
                     return;
                 }
+
                 SNAP_TASK_COUNTER_STATIC.recv.inc();
 
                 let snap_mgr = self.snap_mgr.clone();
@@ -502,12 +479,36 @@ where
                 };
                 self.pool.spawn(task);
             }
-            Task::RecvTablet { sink, .. } => {
-                let status = RpcStatus::with_message(
-                    RpcStatusCode::UNIMPLEMENTED,
-                    "tablet snap is not supported".to_string(),
-                );
-                self.pool.spawn(sink.fail(status).map(|_| ()));
+            Task::RecvTablet { stream, sink } => {
+                if let Some(status) = self.receiving_busy() {
+                    self.pool.spawn(sink.fail(status));
+                    return;
+                }
+
+                SNAP_TASK_COUNTER_STATIC.recv.inc();
+
+                let snap_mgr = self.snap_mgr.manager_v2.clone();
+                let raft_router = self.raft_router.clone();
+                let recving_count = self.recving_count.clone();
+                recving_count.fetch_add(1, Ordering::SeqCst);
+                let limiter = self.limiter.clone();
+                let cache_builder = self.cache_builder.clone();
+                let task = async move {
+                    let result = crate::server::tablet_snap::recv_snap(
+                        stream,
+                        sink,
+                        snap_mgr,
+                        raft_router,
+                        cache_builder,
+                        limiter,
+                    )
+                    .await;
+                    recving_count.fetch_sub(1, Ordering::SeqCst);
+                    if let Err(e) = result {
+                        error!("failed to recv snapshot"; "err" => %e);
+                    }
+                };
+                self.pool.spawn(task);
             }
             Task::Send { addr, msg, cb } => {
                 fail_point!("send_snapshot");

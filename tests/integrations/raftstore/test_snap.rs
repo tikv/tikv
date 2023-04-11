@@ -17,12 +17,15 @@ use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType, Snapshot};
-use raftstore::{store::*, Result};
+use raftstore::{
+    store::{snap::TABLET_SNAPSHOT_VERSION, *},
+    Result,
+};
 use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::server::snap::send_snap;
+use tikv::server::{snap::send_snap, tablet_snap::send_snap as send_snap_v2};
 use tikv_util::{
     config::*,
     time::{Instant, UnixSecs},
@@ -732,4 +735,45 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     raft_engine.get_all_entries_to(1, &mut dest).unwrap();
     // No new log is proposed, so there should be no log at all.
     assert!(dest.is_empty(), "{:?}", dest);
+}
+
+#[test]
+fn test_snap() {
+    let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
+    let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
+
+    cluster_v1.run();
+    cluster_v2.run();
+
+    let s1_addr = cluster_v1.get_addr(1);
+    let s2_addr = cluster_v2.get_addr(1);
+
+    for i in 0..50 {
+        let k = format!("k{:04}", i);
+        cluster_v2.must_put(k.as_bytes(), b"val");
+    }
+    let region = cluster_v2.get_region(b"k0000");
+    let region_id = region.get_id();
+    let engine = cluster_v2.get_engine(1);
+    let region_state = engine.region_local_state(region_id).unwrap().unwrap();
+    let apply_state = engine.raft_apply_state(region_id).unwrap().unwrap();
+    let raft_state = engine.raft_local_state(region_id).unwrap().unwrap();
+
+    let mut snapshot = Snapshot::default();
+    snapshot.mut_metadata().set_term(apply_state.commit_term);
+    snapshot.mut_metadata().set_index(apply_state.applied_index);
+    let conf_state = raftstore::store::util::conf_state_from_region(region_state.get_region());
+    snapshot.mut_metadata().set_conf_state(conf_state);
+
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.set_region(region_state.get_region().clone());
+    snap_data.set_version(TABLET_SNAPSHOT_VERSION);
+    use protobuf::Message;
+    snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+    let tablet = engine.get_tablet_by_id(region_id).unwrap();
+    let snap_key = TabletSnapKey::from_region_snap(region_id, 1, &snapshot);
+
+    let env = Arc::new(Environment::new(1));
+    let mgr = cluster_v2.get_snap_mgr(1);
+    send_snap_v2(env, mgr, security_mgr, cfg, addr, msg, limiter)
 }

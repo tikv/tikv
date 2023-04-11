@@ -809,6 +809,10 @@ impl Cluster<ServerCluster> {
     pub fn raft_extension(&self, node_id: u64) -> SimulateRaftExtension {
         self.sim.rl().storages[&node_id].raft_extension()
     }
+
+    pub fn get_addr(&self, node_id: u64) -> String {
+        self.sim.rl().get_addr(node_id)
+    }
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
