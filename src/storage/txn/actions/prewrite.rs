@@ -19,7 +19,8 @@ use crate::storage::{
             MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC,
             MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC,
         },
-        Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
+        Error, ErrorInner, Lock, LockType, MvccTxn, PessimisticLockNotFoundReason, Result,
+        SnapshotReader,
     },
     txn::{
         actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
@@ -327,6 +328,7 @@ impl<'a> PrewriteMutation<'a> {
                 return Err(ErrorInner::PessimisticLockNotFound {
                     start_ts: self.txn_props.start_ts,
                     key: self.key.to_raw()?,
+                    reason: PessimisticLockNotFoundReason::LockTsMismatch,
                 }
                 .into());
             }
@@ -390,8 +392,9 @@ impl<'a> PrewriteMutation<'a> {
                 return Err(ErrorInner::PessimisticLockNotFound {
                     start_ts: self.txn_props.start_ts,
                     key: self.key.to_raw()?,
+                    reason: PessimisticLockNotFoundReason::LockForUpdateTsMismatch,
                 }
-                    .into());
+                .into());
             }
 
             // The lock is pessimistic and owned by this txn, go through to overwrite it.
@@ -480,6 +483,7 @@ impl<'a> PrewriteMutation<'a> {
                         return Err(ErrorInner::PessimisticLockNotFound {
                             start_ts: self.txn_props.start_ts,
                             key: self.key.clone().into_raw()?,
+                            reason: PessimisticLockNotFoundReason::NonLockKeyConflict,
                         }
                         .into());
                     }
@@ -815,6 +819,7 @@ fn amend_pessimistic_lock<S: Snapshot>(
             return Err(ErrorInner::PessimisticLockNotFound {
                 start_ts: reader.start_ts,
                 key: mutation.key.clone().into_raw()?,
+                reason: PessimisticLockNotFoundReason::LockMissingAmendFail,
             }
             .into());
         }

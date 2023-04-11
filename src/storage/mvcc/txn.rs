@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::LockInfo;
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use crate::storage::kv::Modify;
+use crate::storage::{kv::Modify, mvcc::PessimisticLockNotFoundReason};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -306,6 +306,7 @@ pub(crate) fn make_txn_error(
             "pessimisticlocknotfound" => ErrorInner::PessimisticLockNotFound {
                 start_ts,
                 key: key.to_raw().unwrap(),
+                reason: PessimisticLockNotFoundReason::FailpointInjected,
             },
             _ => ErrorInner::Other(box_err!("unexpected error string")),
         }
