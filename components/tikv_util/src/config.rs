@@ -1101,6 +1101,31 @@ pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
     Ok(false)
 }
 
+/// `from_same_dev` validates the two path in same devices.
+/// return true if the two path in same devices.
+pub fn from_same_dev<P: AsRef<Path>>(dir1: P, dir2: P) -> std::io::Result<bool> {
+    if dir1.as_ref().starts_with(dir2.as_ref()) || dir2.as_ref().starts_with(dir1.as_ref()) {
+        return Ok(true);
+    }
+    #[cfg(any(target_os = "unix", target_os = "macos"))]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta1 = std::fs::metadata(dir1.as_ref())?;
+        let meta2 = std::fs::metadata(dir2.as_ref())?;
+        Ok(meta1.dev() == meta2.dev())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::linux::fs::MetadataExt;
+        let meta1 = std::fs::metadata(dir1.as_ref())?;
+        let meta2 = std::fs::metadata(dir2.as_ref())?;
+        Ok(meta1.st_dev() == meta2.st_dev())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "unix", target_os = "macos")))]
+    {
+        unimplemented!()
+    }
+}
 #[derive(Default)]
 pub struct VersionTrack<T> {
     value: RwLock<T>,
@@ -1586,6 +1611,17 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+
+    #[test]
+    fn test_from_same_path() {
+        let path = tempfile::TempDir::new().unwrap();
+        let src = path.path().join("src");
+        let dst = path.path().join("src1");
+        std::fs::create_dir_all(path.path()).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        assert!(from_same_dev(src.as_path(), dst.as_path()).unwrap());
+    }
 
     #[test]
     fn test_readable_size() {
