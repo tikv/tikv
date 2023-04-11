@@ -13,7 +13,7 @@ use tikv_util::time::ThreadReadId;
 
 use crate::{
     store::{
-        fsm::RaftRouter,
+        fsm::{ChangeObserver, RaftRouter},
         transport::{CasualRouter, ProposalRouter, SignificantRouter},
         Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
         SignificantMsg, StoreMsg, StoreRouter,
@@ -382,5 +382,70 @@ impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRoute
                 cb: Callback::None,
             },
         );
+    }
+}
+
+/// A handle for cdc and pitr to schedule some command back to raftstore.
+pub trait CdcHandle<EK>: Clone + Send
+where
+    EK: KvEngine,
+{
+    fn capture_change(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        change_observer: ChangeObserver,
+        callback: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()>;
+
+    fn check_leadership(
+        &self,
+        region_id: u64,
+        callback: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()>;
+}
+
+/// A wrapper of SignificantRouter that is specialized for implementing
+/// CdcHandle.
+#[derive(Clone)]
+pub struct CdcRaftRouter<T>(pub T);
+
+impl<T> std::ops::Deref for CdcRaftRouter<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<EK, T> CdcHandle<EK> for CdcRaftRouter<T>
+where
+    EK: KvEngine,
+    T: SignificantRouter<EK> + Send + Clone,
+{
+    fn capture_change(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        change_observer: ChangeObserver,
+        callback: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        self.0.significant_send(
+            region_id,
+            SignificantMsg::CaptureChange {
+                cmd: change_observer,
+                region_epoch,
+                callback,
+            },
+        )
+    }
+
+    fn check_leadership(
+        &self,
+        region_id: u64,
+        callback: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        self.0
+            .significant_send(region_id, SignificantMsg::LeaderCallback(callback))
     }
 }
