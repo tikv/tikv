@@ -121,7 +121,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: RollbackMergeResult,
     ) {
-        assert!(res.commit != 0);
+        assert_ne!(res.commit, 0);
         let current = self.merge_context().and_then(|c| c.prepare_merge_index());
         if current != Some(res.commit) {
             slog_panic!(
