@@ -5619,8 +5619,9 @@ pub trait RequestInspector {
 
         fail_point!("perform_read_local", |_| Ok(RequestPolicy::ReadLocal));
 
+        let inspect_lease_res = self.inspect_lease();
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
-        if flags.contains(WriteBatchFlags::STALE_READ) {
+        if flags.contains(WriteBatchFlags::STALE_READ) && inspect_lease_res != LeaseState::Valid {
             return Ok(RequestPolicy::StaleRead);
         }
 
@@ -5636,7 +5637,7 @@ pub trait RequestInspector {
 
         // Local read should be performed, if and only if leader is in lease.
         // None for now.
-        match self.inspect_lease() {
+        match inspect_lease_res {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {
                 // Perform a consistent read to Raft quorum and try to renew the leader lease.

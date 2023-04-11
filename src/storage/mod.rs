@@ -1175,9 +1175,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
 
                 // Update max_ts and check the in-memory lock table before getting the snapshot
-                if !ctx.get_stale_read() {
-                    concurrency_manager.update_max_ts(start_ts);
-                }
+                concurrency_manager.update_max_ts(start_ts);
                 if need_check_locks(ctx.get_isolation_level()) {
                     let begin_instant = Instant::now();
                     concurrency_manager
@@ -2921,9 +2919,7 @@ fn prepare_snap_ctx<'a>(
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
     // Update max_ts and check the in-memory lock table before getting the snapshot
-    if !pb_ctx.get_stale_read() {
-        concurrency_manager.update_max_ts(start_ts);
-    }
+    concurrency_manager.update_max_ts(start_ts);
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
     if need_check_locks(isolation_level) {

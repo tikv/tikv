@@ -561,6 +561,13 @@ impl ReadDelegate {
 
     pub fn check_stale_read_safe(&self, read_ts: u64) -> std::result::Result<(), RaftCmdResponse> {
         let safe_ts = self.read_progress.safe_ts();
+        fail_point!("check_stale_read_safe_report_err", |_| {
+            Err(cmd_resp::new_error(Error::DataIsNotReady {
+                region_id: self.region.get_id(),
+                peer_id: self.peer_id,
+                safe_ts,
+            }))
+        });
         if safe_ts >= read_ts {
             return Ok(());
         }
