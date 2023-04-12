@@ -112,13 +112,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
-        // Best effort. Remove when trim check is implemented.
-        if self.storage().has_dirty_data() {
-            return Err(box_err!(
-                "{} source peer has dirty data, try again later",
-                SlogFormat(&self.logger)
-            ));
-        }
         self.validate_prepare_merge_command(
             store_ctx,
             req.get_admin_request().get_prepare_merge(),
