@@ -379,12 +379,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 merge: merge.clone(),
                 tx,
             });
+            println!("apply_commit_merge await {}", self.region_id());
             match rx.await {
                 Ok(ts) => {
+                    println!("apply_commit_merge await ok {}", self.region_id());
                     source_safe_ts = ts;
                 }
                 Err(_) => {
                     if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        println!("apply_commit_merge await shutdown {}", self.region_id());
                         return futures::future::pending().await;
                     } else {
                         slog_panic!(
@@ -437,7 +440,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         // Avoid seqno jump back between self.tablet and the newly created tablet.
         // If we are recovering, this flush would just be a noop.
+        println!("apply_commit_merge flush {}", self.region_id());
         self.tablet().flush_cfs(&[], true).unwrap();
+        println!("apply_commit_merge after flush {}", self.region_id());
         let flush_time = Instant::now_coarse();
 
         let mut ctx = TabletContext::new(&region, Some(index));
@@ -453,6 +458,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             });
         let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
         if let Some(guard) = guard {
+            println!("rocks merge");
             tablet
                 .merge(&[&source_tablet, self.tablet()])
                 .unwrap_or_else(|e| {
@@ -463,6 +469,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         "error" => ?e
                     )
                 });
+            println!("rocks merge finished");
             guard.defuse().unwrap_or_else(|e| {
                 slog_panic!(
                     self.logger,
@@ -513,6 +520,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         state.mut_merged_records().push(merged_record);
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
+        println!("apply_commit_merge finished");
 
         Ok((
             AdminResponse::default(),
