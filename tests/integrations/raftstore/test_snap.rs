@@ -13,7 +13,7 @@ use std::{
 
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
 use engine_traits::{
-    Checkpointable, Checkpointer, KvEngine, MiscExt, Peekable, RaftEngineReadOnly, SyncMutable,
+    Checkpointable, Checkpointer, KvEngine, Peekable, RaftEngineReadOnly, SyncMutable,
 };
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
