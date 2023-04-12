@@ -3,7 +3,7 @@
 use std::fmt::{Display, Formatter};
 
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry, DATA_CFS};
-use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use slog::{error, info, Logger};
 use tikv_util::{time::Instant, worker::Runnable};
 use txn_types::WriteBatchFlags;
@@ -79,6 +79,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
 
         let mut req = req.unwrap();
+        assert!(req.get_admin_request().get_cmd_type() == AdminCmdType::BatchSplit);
         req.mut_header()
             .set_flags(WriteBatchFlags::SPLIT_SECOND_PHASE.bits());
         if let Err(e) = self.router.send(
