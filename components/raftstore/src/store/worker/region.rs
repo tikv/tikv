@@ -1143,6 +1143,7 @@ pub(crate) mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let bg_worker = Worker::new("snap-manager");
         let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
