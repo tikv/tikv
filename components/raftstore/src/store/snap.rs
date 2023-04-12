@@ -504,6 +504,10 @@ impl Snapshot {
             mgr: mgr.clone(),
         };
 
+        s.init_for_building();
+        s.meta_file.meta = Some(gen_snapshot_meta(&s.cf_files[..], false)?);
+        s.save_meta_file()?;
+
         if check_policy == CheckPolicy::None {
             return Ok(s);
         }

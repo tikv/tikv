@@ -750,8 +750,8 @@ fn generate_snap<EK: KvEngine>(
 
     // Construct snapshot by hand
     let mut snapshot = Snapshot::default();
-    snapshot.mut_metadata().set_term(apply_state.commit_term);
-    snapshot.mut_metadata().set_index(apply_state.applied_index);
+    snapshot.mut_metadata().set_term(10);
+    snapshot.mut_metadata().set_index(20);
     let conf_state = raftstore::store::util::conf_state_from_region(region_state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
@@ -771,6 +771,7 @@ fn generate_snap<EK: KvEngine>(
     msg.region_id = region_id;
     msg.set_to_peer(new_peer(1, 1));
     msg.mut_message().set_snapshot(snapshot);
+    msg.mut_message().set_term(10);
     msg.mut_message().set_msg_type(MessageType::MsgSnapshot);
     msg.set_region_epoch(region_state.get_region().get_region_epoch().clone());
 
