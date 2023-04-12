@@ -22,7 +22,7 @@ pub fn commit<S: Snapshot>(
     ));
 
     let (mut lock, commit) = match reader.load_lock(&key)? {
-        Some(mut lock) if lock.ts == reader.start_ts => {
+        Some(lock) if lock.ts == reader.start_ts => {
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
                 info!(
@@ -131,11 +131,13 @@ pub mod tests {
     };
     #[cfg(test)]
     use crate::storage::{
-        mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
+        mvcc::SHORT_VALUE_MAX_LEN,
+        txn::commands::check_txn_status,
+        txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
+        TestEngineBuilder, TxnStatus,
     };
     use crate::storage::{
         mvcc::{tests::*, MvccTxn},
-        txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
         Engine,
     };
 
