@@ -9,18 +9,17 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{
-    metrics::RaftEventDurationType,
-    response_channel::{
-        CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel, QueryResSubscriber,
-    },
-    FetchedLogs, GenSnapRes,
-};
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
 
 use super::ApplyRes;
-use crate::operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit};
+use crate::{
+    operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit},
+    router::response_channel::{
+        CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel, QueryResSubscriber,
+    },
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]

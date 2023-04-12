@@ -23,7 +23,6 @@ pub mod message;
 mod peer_storage;
 mod region_snapshot;
 mod replication_mode;
-pub mod response_channel;
 pub mod snap;
 mod txn_ext;
 mod worker;

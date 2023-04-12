@@ -24,8 +24,8 @@ use crate::{
 mod ingest;
 
 pub use raftstore::store::message::simple_write::{
-    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
-    SimpleWrite,
+    SimpleWrite, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
+    SimpleWriteReqEncoder,
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -88,7 +88,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
-        let bin = SimpleWriteReqEncoder::new(
+        let bin = SimpleWriteReqEncoder::<CmdResChannel>::new(
             Box::<RaftRequestHeader>::default(),
             data,
             ctx.cfg.raft_entry_max_size.0 as usize,
