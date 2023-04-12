@@ -68,7 +68,8 @@ use raft::{GetEntriesContext, Storage, INVALID_ID, NO_LIMIT};
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
-        fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, ProposalContext, Transport,
+        fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, util, ProposalContext,
+        ProposalContextBits, Transport,
     },
     Result,
 };
@@ -336,7 +337,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         req: RaftCmdRequest,
     ) -> Result<u64> {
         let mut proposal_ctx = ProposalContext::empty();
-        proposal_ctx.insert(ProposalContext::COMMIT_MERGE);
+        proposal_ctx.insert(ProposalContextBits::COMMIT_MERGE);
         let data = req.write_to_bytes().unwrap();
         self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
     }
