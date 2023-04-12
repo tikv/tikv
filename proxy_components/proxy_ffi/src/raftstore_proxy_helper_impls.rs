@@ -24,7 +24,7 @@ use super::{
         RaftStoreProxyPtr, RawCppPtr, RawCppStringPtr, RawRustPtr, RawVoidPtr, SSTReaderInterfaces,
     },
     read_index_helper,
-    sst_reader_impls::*,
+    snapshot_reader_impls::*,
     utils, UnwrapExternCFunc,
 };
 

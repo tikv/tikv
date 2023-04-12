@@ -10,7 +10,8 @@ use file_system::File;
 use raftstore::store::snap::snap_io::get_decrypter_reader;
 use tikv_util::codec::bytes::CompactBytesFromFileDecoder;
 
-use super::interfaces_ffi::{BaseBuffView, RawVoidPtr};
+use super::KIND_SST;
+use crate::interfaces_ffi::{BaseBuffView, SSTReaderPtr};
 
 type LockCFDecoder = BufReader<Box<dyn Read + Send>>;
 
@@ -21,7 +22,10 @@ pub struct LockCFFileReader {
 }
 
 impl LockCFFileReader {
-    pub fn ffi_get_cf_file_reader(path: &str, key_mgr: Option<&Arc<DataKeyManager>>) -> RawVoidPtr {
+    pub fn ffi_get_cf_file_reader(
+        path: &str,
+        key_mgr: Option<&Arc<DataKeyManager>>,
+    ) -> SSTReaderPtr {
         let file = File::open(path).unwrap();
         let mut decoder: LockCFDecoder = if let Some(key_mgr) = key_mgr {
             let reader = get_decrypter_reader(path, key_mgr).unwrap();
@@ -36,7 +40,10 @@ impl LockCFFileReader {
             val = decoder.decode_compact_bytes().unwrap();
         }
 
-        Box::into_raw(Box::new(LockCFFileReader { decoder, key, val })) as *mut _
+        SSTReaderPtr {
+            inner: Box::into_raw(Box::new(LockCFFileReader { decoder, key, val })) as *mut _,
+            kind: KIND_SST,
+        }
     }
 
     pub fn ffi_remained(&self) -> u8 {

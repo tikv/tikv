@@ -210,6 +210,7 @@ pub mod root {
         #[derive(Debug)]
         pub struct SSTReaderPtr {
             pub inner: root::DB::RawVoidPtr,
+            pub kind: u64,
         }
         #[repr(C)]
         #[derive(Debug)]
@@ -585,7 +586,7 @@ pub mod root {
                 ) -> root::DB::FastAddPeerRes,
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 4990756589462826693;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 15438096667077497650;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

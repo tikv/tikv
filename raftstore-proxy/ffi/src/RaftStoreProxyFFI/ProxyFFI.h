@@ -154,6 +154,7 @@ struct RaftStoreProxyPtr {
 
 struct SSTReaderPtr {
   RawVoidPtr inner;
+  uint64_t kind;
 };
 
 struct SSTReaderInterfaces {

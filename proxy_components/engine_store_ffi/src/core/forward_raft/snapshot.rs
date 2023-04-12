@@ -1,3 +1,5 @@
+use proxy_ffi::interfaces_ffi::SSTReaderPtr;
+
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{
     core::{common::*, PrehandleTask, ProxyForwarder, PtrWrapper},
@@ -50,15 +52,29 @@ fn pre_handle_snapshot_impl(
     ssts: Vec<(PathBuf, ColumnFamilyType)>,
     region: &Region,
     snap_key: &SnapKey,
+    is_v2_format: bool,
 ) -> PtrWrapper {
     let idx = snap_key.idx;
     let term = snap_key.term;
     let ptr = {
-        let sst_views = ssts
-            .iter()
-            .map(|(b, c)| (b.to_str().unwrap().as_bytes(), c.clone()))
-            .collect();
-        engine_store_server_helper.pre_handle_snapshot(region, peer_id, sst_views, idx, term)
+        if is_v2_format {
+            // We must own the modified path.
+            let sst_strs: Vec<(String, ColumnFamilyType)> = ssts
+                .iter()
+                .map(|(b, c)| (SSTReaderPtr::encode_v2(b.to_str().unwrap()), c.clone()))
+                .collect();
+            let sst_views = sst_strs
+                .iter()
+                .map(|(b, c)| (b.as_bytes(), c.clone()))
+                .collect();
+            engine_store_server_helper.pre_handle_snapshot(region, peer_id, sst_views, idx, term)
+        } else {
+            let sst_views = ssts
+                .iter()
+                .map(|(b, c)| (b.to_str().unwrap().as_bytes(), c.clone()))
+                .collect();
+            engine_store_server_helper.pre_handle_snapshot(region, peer_id, sst_views, idx, term)
+        }
     };
     PtrWrapper(ptr)
 }
@@ -159,6 +175,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                         ssts,
                         &region,
                         &snap_key,
+                        false,
                     );
                     match sender.send(res) {
                         Err(_e) => {
@@ -321,6 +338,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 ssts,
                 ob_region,
                 snap_key,
+                false,
             );
             info!("re-gen pre-handled snapshot success";
                 "peer_id" => peer_id,
