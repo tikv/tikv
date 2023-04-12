@@ -96,7 +96,7 @@ impl Column {
 ///   - E:   has extra checksum
 /// - CHECKSUM(4 bytes)
 ///   - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
-pub trait CheckSumHandler {
+pub trait ChecksumHandler {
     // update_col updates the checksum with the encoded value of the column.
     fn checksum(&mut self, buf: &[u8]) -> Result<()>;
 
@@ -112,7 +112,7 @@ pub struct Crc32RowChecksumHandler {
     hasher: crc32fast::Hasher,
 }
 
-impl CheckSumHandler for Crc32RowChecksumHandler {
+impl ChecksumHandler for Crc32RowChecksumHandler {
     fn checksum(&mut self, buf: &[u8]) -> Result<()> {
         self.hasher.update(buf);
         Ok(())
@@ -136,6 +136,7 @@ impl ChecksumHeader {
 
     #[cfg(test)]
     fn set_version(&mut self, ver: u8) {
+        self.0 &= !0b111;
         self.0 |= ver & 0b111;
     }
 
@@ -182,7 +183,7 @@ pub trait RowEncoder: NumberEncoder {
         &mut self,
         ctx: &mut EvalContext,
         columns: Vec<Column>,
-        mut checksum_handler: Option<&mut dyn CheckSumHandler>,
+        mut checksum_handler: Option<&mut dyn ChecksumHandler>,
     ) -> Result<()> {
         let mut is_big = false;
         let mut null_ids = Vec::with_capacity(columns.len());
@@ -334,7 +335,7 @@ mod tests {
             data_type::ScalarValue,
             mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
             row::v2::encoder_for_test::{
-                CheckSumHandler, Crc32RowChecksumHandler, ScalarValueEncoder,
+                ChecksumHandler, Crc32RowChecksumHandler, ScalarValueEncoder,
             },
         },
         expr::EvalContext,
