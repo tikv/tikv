@@ -235,8 +235,8 @@ impl ResourceController {
         })
     }
 
-    pub fn consume(&self, name: &[u8], delta: ResourceConsumeType) {
-        self.resource_group(name).consume(delta)
+    pub fn consume(&self, name: &[u8], resource: ResourceConsumeType) {
+        self.resource_group(name).consume(resource)
     }
 
     pub fn update_min_virtual_time(&self) {
@@ -346,8 +346,8 @@ impl GroupPriorityTracker {
 
     // TODO: make it delta type as generic to avoid mixed consume different types.
     #[inline]
-    fn consume(&self, delta: ResourceConsumeType) {
-        let vt_delta = match delta {
+    fn consume(&self, resource: ResourceConsumeType) {
+        let vt_delta = match resource {
             ResourceConsumeType::CpuTime(dur) => dur.as_micros() as u64,
             ResourceConsumeType::IoBytes(bytes) => bytes,
         } * self.weight;

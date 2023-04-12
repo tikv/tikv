@@ -491,6 +491,7 @@ impl<E: Engine> Endpoint<E> {
             .get_resource_group_name()
             .as_bytes()
             .to_owned();
+        let delta = req_ctx.context.get_delta();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -502,6 +503,7 @@ impl<E: Engine> Endpoint<E> {
                 priority,
                 task_id,
                 group_name,
+                delta,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -753,6 +755,7 @@ impl<E: Engine> Endpoint<E> {
                 priority,
                 task_id,
                 group_name,
+                0,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)

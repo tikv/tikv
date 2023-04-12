@@ -18,14 +18,21 @@ pub struct ControlledFuture<F> {
     future: F,
     controller: Arc<ResourceController>,
     group_name: Vec<u8>,
+    delta: u64,
 }
 
 impl<F> ControlledFuture<F> {
-    pub fn new(future: F, controller: Arc<ResourceController>, group_name: Vec<u8>) -> Self {
+    pub fn new(
+        future: F,
+        controller: Arc<ResourceController>,
+        group_name: Vec<u8>,
+        delta: u64,
+    ) -> Self {
         Self {
             future,
             controller,
             group_name,
+            delta,
         }
     }
 }
@@ -39,7 +46,7 @@ impl<F: Future> Future for ControlledFuture<F> {
         let res = this.future.poll(cx);
         this.controller.consume(
             this.group_name,
-            ResourceConsumeType::CpuTime(now.saturating_elapsed()),
+            ResourceConsumeType::CpuTime(now.saturating_elapsed() * (*this.delta as u32 + 1)),
         );
         res
     }

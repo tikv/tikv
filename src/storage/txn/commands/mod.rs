@@ -722,6 +722,10 @@ impl Command {
             .to_owned()
     }
 
+    pub fn delta(&self) -> u64 {
+        self.command_ext().get_ctx().get_delta()
+    }
+
     pub fn need_flow_control(&self) -> bool {
         !self.readonly() && self.priority() != CommandPri::High
     }

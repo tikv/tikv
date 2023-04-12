@@ -1284,6 +1284,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
+        let delta = ctx.get_delta();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1414,6 +1415,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
+            delta,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -1517,7 +1519,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         self.sched
             .get_sched_pool()
-            .spawn(group_name, pri, future)
+            .spawn(group_name, pri, 0, future)
             .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
@@ -2750,6 +2752,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
+        let delta = ctx.get_delta();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = ranges
             .iter()
@@ -2825,6 +2828,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
             group_name,
+            delta,
         );
 
         async move {
@@ -2852,7 +2856,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
         Either::Right(
             self.read_pool
-                .spawn_handle(future, priority, task_id, group_meta)
+                .spawn_handle(future, priority, task_id, group_meta, 0)
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .and_then(|res| future::ready(res)),
         )

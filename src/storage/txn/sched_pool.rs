@@ -122,6 +122,7 @@ impl SchedPool {
         &self,
         group_name: &str,
         priority: CommandPri,
+        delta: u64,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
         match self {
@@ -155,6 +156,7 @@ impl SchedPool {
                         },
                         resource_ctl.clone(),
                         group_name.as_bytes().to_owned(),
+                        delta,
                     ),
                     extras,
                 )
