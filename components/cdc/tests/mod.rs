@@ -20,9 +20,9 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use online_config::OnlineConfig;
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
 use test_raftstore::*;
-use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID};
+use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID, storage::kv::LocalTablets};
 use tikv_util::{
     config::ReadableDuration,
     worker::{LazyWorker, Runnable},
@@ -185,8 +185,8 @@ impl TestSuiteBuilder {
                 cluster.cfg.storage.api_version(),
                 pd_cli.clone(),
                 worker.scheduler(),
-                raft_router,
-                cluster.engines[id].kv.clone(),
+                CdcRaftRouter(raft_router),
+                LocalTablets::Singleton(cluster.engines[id].kv.clone()),
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
