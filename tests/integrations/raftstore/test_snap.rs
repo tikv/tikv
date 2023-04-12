@@ -11,7 +11,10 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, RaftEngineReadOnly};
+use engine_rocks::{RocksCfOptions, RocksDbOptions};
+use engine_traits::{
+    Checkpointable, Checkpointer, KvEngine, MiscExt, Peekable, RaftEngineReadOnly, SyncMutable,
+};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::Environment;
@@ -28,7 +31,7 @@ use test_raftstore_macro::test_case;
 use tikv::server::{snap::send_snap, tablet_snap::send_snap as send_snap_v2};
 use tikv_util::{
     config::*,
-    time::{Instant, UnixSecs},
+    time::{Instant, Limiter, UnixSecs},
     HandyRwLock,
 };
 
@@ -738,7 +741,7 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
 }
 
 #[test]
-fn test_snap() {
+fn test_v1_receive_snap_from_v2() {
     let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
     let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
 
@@ -746,19 +749,20 @@ fn test_snap() {
     cluster_v2.run();
 
     let s1_addr = cluster_v1.get_addr(1);
-    let s2_addr = cluster_v2.get_addr(1);
-
-    for i in 0..50 {
-        let k = format!("k{:04}", i);
-        cluster_v2.must_put(k.as_bytes(), b"val");
-    }
-    let region = cluster_v2.get_region(b"k0000");
+    let region = cluster_v2.get_region(b"");
     let region_id = region.get_id();
     let engine = cluster_v2.get_engine(1);
+    let tablet = engine.get_tablet_by_id(region_id).unwrap();
+
+    for i in 0..20 {
+        let k = format!("zk{:04}", i);
+        tablet.put(k.as_bytes(), b"val").unwrap();
+    }
+
     let region_state = engine.region_local_state(region_id).unwrap().unwrap();
     let apply_state = engine.raft_apply_state(region_id).unwrap().unwrap();
-    let raft_state = engine.raft_local_state(region_id).unwrap().unwrap();
 
+    // Construct snapshot by hand
     let mut snapshot = Snapshot::default();
     snapshot.mut_metadata().set_term(apply_state.commit_term);
     snapshot.mut_metadata().set_index(apply_state.applied_index);
@@ -770,10 +774,48 @@ fn test_snap() {
     snap_data.set_version(TABLET_SNAPSHOT_VERSION);
     use protobuf::Message;
     snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
-    let tablet = engine.get_tablet_by_id(region_id).unwrap();
     let snap_key = TabletSnapKey::from_region_snap(region_id, 1, &snapshot);
+    let mgr = cluster_v2.get_snap_mgr(1);
+    let checkpointer_path = mgr.tablet_gen_path(&snap_key);
+    let mut checkpointer = tablet.new_checkpointer().unwrap();
+    checkpointer
+        .create_at(checkpointer_path.as_path(), None, 0)
+        .unwrap();
 
     let env = Arc::new(Environment::new(1));
-    let mgr = cluster_v2.get_snap_mgr(1);
-    send_snap_v2(env, mgr, security_mgr, cfg, addr, msg, limiter)
+    let security_mgr = cluster_v2.get_security_mgr();
+    let cfg = tikv::server::Config::default();
+    let mut msg = RaftMessage::default();
+    msg.region_id = region_id;
+    msg.set_to_peer(new_peer(1, 1));
+    msg.mut_message().set_snapshot(snapshot);
+    msg.mut_message().set_msg_type(MessageType::MsgSnapshot);
+    msg.set_region_epoch(region_state.get_region().get_region_epoch().clone());
+    let limit = Limiter::new(f64::INFINITY);
+    let _ = block_on(async {
+        send_snap_v2(env, mgr, security_mgr, &cfg, &s1_addr, msg, limit)
+            .unwrap()
+            .await
+    });
+
+    // The snapshot has been received by cluster v1, so check it's completeness
+    let mgr = cluster_v1.get_snap_mgr(1);
+    let path = mgr.get_snap_mgr_v2().final_recv_path(&snap_key);
+    let rocksdb = engine_rocks::util::new_engine_opt(
+        path.as_path().to_str().unwrap(),
+        RocksDbOptions::default(),
+        vec![("default", RocksCfOptions::default())],
+    )
+    .unwrap();
+
+    for i in 0..20 {
+        let k = format!("zk{:04}", i);
+        assert_eq!(
+            rocksdb
+                .get_value_cf("default", k.as_bytes())
+                .unwrap()
+                .unwrap(),
+            b"val"
+        );
+    }
 }

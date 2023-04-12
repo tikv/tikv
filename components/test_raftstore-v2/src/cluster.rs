@@ -1531,8 +1531,8 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         self.sim.rl().get_snap_dir(node_id)
     }
 
-    pub fn get_snap_mgr(&self, node_id: u64) -> &TabletSnapManager {
-        self.sim.rl().get_snap_mgr(node_id)
+    pub fn get_snap_mgr(&self, node_id: u64) -> TabletSnapManager {
+        self.sim.rl().get_snap_mgr(node_id).clone()
     }
 
     pub fn get_router(&self, node_id: u64) -> Option<StoreRouter<EK, RaftTestEngine>> {

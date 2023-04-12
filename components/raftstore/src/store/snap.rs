@@ -1388,7 +1388,8 @@ pub struct SnapManager {
     core: SnapManagerCore,
     max_total_size: Arc<AtomicU64>,
 
-    pub manager_v2: TabletSnapManager,
+    // used to receive snapshot from v2
+    core_v2: TabletSnapManager,
 }
 
 impl Clone for SnapManager {
@@ -1396,7 +1397,7 @@ impl Clone for SnapManager {
         SnapManager {
             core: self.core.clone(),
             max_total_size: self.max_total_size.clone(),
-            manager_v2: self.manager_v2.clone(),
+            core_v2: self.core_v2.clone(),
         }
     }
 }
@@ -1623,7 +1624,9 @@ impl SnapManager {
     ///
     /// NOTE: don't call it in raftstore thread.
     pub fn get_total_snap_size(&self) -> Result<u64> {
-        self.core.get_total_snap_size()
+        let size_v1 = self.core.get_total_snap_size()?;
+        let size_v2 = self.core_v2.total_snap_size()?;
+        Ok(size_v1 + size_v2)
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
@@ -1757,6 +1760,10 @@ impl SnapManager {
 
     pub fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
         self.core.delete_snapshot(key, snap, check_entry)
+    }
+
+    pub fn get_snap_mgr_v2(&self) -> &TabletSnapManager {
+        &self.core_v2
     }
 }
 
@@ -1918,7 +1925,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
-            manager_v2: snap_mgr_v2,
+            core_v2: snap_mgr_v2,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
