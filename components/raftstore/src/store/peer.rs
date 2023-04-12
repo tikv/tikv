@@ -6213,7 +6213,4 @@ mod tests {
         drop(epoch_checker);
         rx.try_recv().unwrap();
     }
-
-    #[test]
-    fn test_simple_write() {}
 }

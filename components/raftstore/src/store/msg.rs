@@ -30,7 +30,6 @@ use tracker::{get_tls_tracker_token, TrackerToken};
 use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
-    message::simple_write::SimpleWriteView,
     metrics::RaftEventDurationType,
     peer::{
         SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
@@ -772,9 +771,6 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Asks region to change replication mode.
     UpdateReplicationMode,
     Destroy(u64),
-    /// Command changes the inernal states. It will be transformed into logs and
-    /// applied on all replicas.
-    SimpleWrite(SimpleWrite),
 }
 
 impl<EK: KvEngine> ResourceMetered for PeerMsg<EK> {}
@@ -805,7 +801,6 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
-            PeerMsg::SimpleWrite(_) => write!(fmt, "SimpleWrite"),
         }
     }
 }

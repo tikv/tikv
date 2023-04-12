@@ -26,7 +26,6 @@ use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions}
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
-use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_proto::ConfChangeI;
 use raftstore::{

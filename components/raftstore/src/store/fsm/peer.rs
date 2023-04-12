@@ -689,7 +689,6 @@ where
                         }
                     }
                 }
-                PeerMsg::SimpleWrite(write) => self.handle_simple_write(write),
             }
         }
         self.on_loop_finished();
@@ -699,11 +698,6 @@ where
             .event_time
             .peer_msg
             .observe(timer.saturating_elapsed_secs());
-    }
-
-    #[inline]
-    fn handle_simple_write(write: SimpleWrite) {
-        match write {}
     }
 
     #[inline]
