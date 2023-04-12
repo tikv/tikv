@@ -120,6 +120,7 @@ pub struct StoreInfo<EK, ER> {
 /// of raftstore.
 pub trait StoreRegionMeta: Send {
     fn store_id(&self) -> u64;
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate>;
     fn region_read_progress(&self) -> &RegionReadProgressRegistry;
     fn search_region(&self, start_key: &[u8], end_key: &[u8], visitor: impl FnMut(&Region));
 }
@@ -188,6 +189,11 @@ impl StoreRegionMeta for StoreMeta {
     #[inline]
     fn region_read_progress(&self) -> &RegionReadProgressRegistry {
         &self.region_read_progress
+    }
+
+    #[inline]
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate> {
+        self.readers.get(&region_id)
     }
 }
 

@@ -2797,6 +2797,7 @@ where
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerRequest | ExtraMessageType::MsgGcPeerResponse => (),
+            ExtraMessageType::MsgFlushMemtable => (),
         }
     }
 

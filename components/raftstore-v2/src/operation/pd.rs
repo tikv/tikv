@@ -43,9 +43,12 @@ impl Store {
             let meta = ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.readers.len() as u32);
         }
+
+        let snap_stats = ctx.snap_mgr.stats();
         // todo: imple snapshot status report
         stats.set_sending_snap_count(0);
         stats.set_receiving_snap_count(0);
+        stats.set_snapshot_stats(snap_stats.stats.into());
 
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])

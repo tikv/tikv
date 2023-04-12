@@ -20,6 +20,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use file_system::{set_io_type, IoType};
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use parking_lot::Mutex;
 use protobuf::Message;
@@ -1025,6 +1026,7 @@ where
                         thread::Builder::new()
                             .name(thd_name!(tag))
                             .spawn_wrapper(move || {
+                                set_io_type(IoType::ForegroundWrite);
                                 worker.run();
                             })?;
                     cached_senders.push(tx);
