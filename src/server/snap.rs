@@ -365,7 +365,7 @@ pub struct Runner<R: RaftExtension> {
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
 
-    // only used to receive snapshot sent from raftstore-v2
+    // only used when the snapshot is setn from raftstore-v2
     limiter: Limiter,
 }
 
@@ -428,7 +428,6 @@ impl<R: RaftExtension + 'static> Runner<R> {
         }
     }
 
-    // todo
     fn receiving_busy(&self) -> Option<RpcStatus> {
         let task_num = self.recving_count.load(Ordering::SeqCst);
         if task_num >= self.cfg.concurrent_recv_snap_limit {
