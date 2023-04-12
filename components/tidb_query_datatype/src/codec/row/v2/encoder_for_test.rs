@@ -140,7 +140,6 @@ impl ChecksumHeader {
         self.0 |= ver & 0b111;
     }
 
-    #[cfg(test)]
     fn set_extra_checksum(&mut self) {
         self.0 |= 0b1000;
     }
@@ -151,32 +150,38 @@ impl ChecksumHeader {
 }
 
 impl Crc32RowChecksumHandler {
-    pub fn new() -> Self {
-        Crc32RowChecksumHandler {
+    pub fn new(has_extra_checksum: bool) -> Self {
+        let mut res = Crc32RowChecksumHandler {
             header: ChecksumHeader::new(),
             hasher: crc32fast::Hasher::new(),
+        };
+        if has_extra_checksum {
+            res.header.set_extra_checksum();
         }
+
+        res
     }
 }
 
 impl Default for Crc32RowChecksumHandler {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 pub trait RowEncoder: NumberEncoder {
     fn write_row(&mut self, ctx: &mut EvalContext, columns: Vec<Column>) -> Result<()> {
-        self.write_row_impl(ctx, columns, None)
+        self.write_row_impl(ctx, columns, None, None)
     }
 
     fn write_row_with_checksum(
         &mut self,
         ctx: &mut EvalContext,
         columns: Vec<Column>,
+        extra_checksum: Option<u32>,
     ) -> Result<()> {
-        let mut handler = Crc32RowChecksumHandler::new();
-        self.write_row_impl(ctx, columns, Some(&mut handler))
+        let mut handler = Crc32RowChecksumHandler::new(extra_checksum.is_some());
+        self.write_row_impl(ctx, columns, Some(&mut handler), extra_checksum)
     }
 
     fn write_row_impl(
@@ -184,6 +189,7 @@ pub trait RowEncoder: NumberEncoder {
         ctx: &mut EvalContext,
         columns: Vec<Column>,
         mut checksum_handler: Option<&mut dyn ChecksumHandler>,
+        extra_checksum: Option<u32>,
     ) -> Result<()> {
         let mut is_big = false;
         let mut null_ids = Vec::with_capacity(columns.len());
@@ -241,6 +247,9 @@ pub trait RowEncoder: NumberEncoder {
             let val = checksum_handler.value();
             self.write_u8(header_val)?;
             self.write_u32_le(val)?;
+            if let Some(extra) = extra_checksum {
+                self.write_u32_le(extra)?;
+            }
         }
 
         Ok(())
@@ -328,6 +337,8 @@ impl<T: BufferWriter> ScalarValueEncoder for T {}
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+
+    use codec::number::NumberDecoder;
 
     use super::{Column, RowEncoder};
     use crate::{
@@ -438,12 +449,13 @@ mod tests {
         ];
 
         let mut buf = vec![];
-        let mut handler = Crc32RowChecksumHandler::new();
+        let mut handler = Crc32RowChecksumHandler::new(false);
         handler.header.set_version(0);
         buf.write_row_impl(
             &mut EvalContext::default(),
             cols.clone(),
             Some(&mut handler),
+            None,
         )
         .unwrap();
 
@@ -455,16 +467,26 @@ mod tests {
             );
             hasher.finalize()
         };
+        let mut val_slice = &buf[buf.len() - 4..];
         assert_eq!(exp, handler.value());
+        assert_eq!(exp, val_slice.read_u32_le().unwrap());
         assert_eq!(0, handler.header_value());
 
         buf.clear();
-        let mut handler = Crc32RowChecksumHandler::new();
+        let mut handler = Crc32RowChecksumHandler::new(true);
         handler.header.set_version(1);
-        handler.header.set_extra_checksum();
-        buf.write_row_impl(&mut EvalContext::default(), cols, Some(&mut handler))
-            .unwrap();
+        buf.write_row_impl(
+            &mut EvalContext::default(),
+            cols,
+            Some(&mut handler),
+            Some(exp),
+        )
+        .unwrap();
+        let mut val_slice = &buf[buf.len() - 4..];
+        let mut extra_val_slice = &buf[buf.len() - 8..buf.len() - 4];
         assert_eq!(exp, handler.value());
+        assert_eq!(exp, val_slice.read_u32_le().unwrap());
+        assert_eq!(exp, extra_val_slice.read_u32_le().unwrap());
         assert_eq!(9, handler.header_value());
     }
 }
