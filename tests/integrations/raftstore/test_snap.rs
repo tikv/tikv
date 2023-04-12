@@ -12,9 +12,7 @@ use std::{
 };
 
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
-use engine_traits::{
-    Checkpointable, Checkpointer, KvEngine, Peekable, RaftEngineReadOnly, SyncMutable,
-};
+use engine_traits::{Checkpointer, KvEngine, Peekable, RaftEngineReadOnly, SyncMutable};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::Environment;
