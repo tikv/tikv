@@ -550,6 +550,7 @@ dependencies = [
  "pd_client",
  "pin-project",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "raft",
  "raftstore",

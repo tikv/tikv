@@ -980,6 +980,10 @@ where
                 });
             }
             RegionCheckpointOperation::PrepareMinTsForResolve => {
+                if self.observer.is_hibernating() {
+                    metrics::MISC_EVENTS.skip_resolve_no_subscription.inc();
+                    return;
+                }
                 let min_ts = self.pool.block_on(self.prepare_min_ts());
                 let start_time = Instant::now();
                 // We need to reschedule the `Resolve` task to queue, because the subscription
@@ -1155,6 +1159,7 @@ pub enum ObserveOp {
         region: Region,
         handle: ObserveHandle,
         err: Box<Error>,
+        has_failed_for: u8,
     },
     ResolveRegions {
         callback: ResolveRegionsCallback,
@@ -1185,11 +1190,13 @@ impl std::fmt::Debug for ObserveOp {
                 region,
                 handle,
                 err,
+                has_failed_for,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
                 .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
+                .field("has_failed_for", has_failed_for)
                 .finish(),
             Self::ResolveRegions { min_ts, .. } => f
                 .debug_struct("ResolveRegions")

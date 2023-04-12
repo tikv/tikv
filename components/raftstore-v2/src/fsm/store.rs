@@ -13,7 +13,7 @@ use futures::{compat::Future01CompatExt, FutureExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raftstore::store::{
-    fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry, Transport,
+    fsm::store::StoreRegionMeta, Config, ReadDelegate, RegionReadProgressRegistry, Transport,
 };
 use slog::{info, o, Logger};
 use tikv_util::{
@@ -132,6 +132,11 @@ impl<EK: Send> StoreRegionMeta for StoreMeta<EK> {
                 break;
             }
         }
+    }
+
+    #[inline]
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate> {
+        self.readers.get(&region_id).map(|e| &e.0)
     }
 }
 
