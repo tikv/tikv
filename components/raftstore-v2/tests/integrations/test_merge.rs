@@ -7,17 +7,16 @@ use kvproto::metapb::{Peer, Region};
 use raftstore::store::RAFT_INIT_LOG_INDEX;
 use tikv_util::store::new_peer;
 
-use crate::cluster::{merge_helper::merge_region, split_helper::split_region, Cluster, TestRouter};
+use crate::cluster::{merge_helper::merge_region, split_helper::split_region, Cluster};
 
 #[test]
 fn test_merge() {
     let mut cluster = Cluster::default();
     let store_id = cluster.node(0).id();
     let raft_engine = cluster.node(0).running_state().unwrap().raft_engine.clone();
-    let router = &mut cluster.routers[0];
 
     let do_split =
-        |r: &mut TestRouter, region: Region, peer: &Peer, v: u64| -> (Region, Region, Peer) {
+        |c: &mut Cluster, region: Region, peer: &Peer, v: u64| -> (Region, Region, Peer) {
             let rid = region.get_id();
             let old_region_state = raft_engine
                 .get_region_state(rid, u64::MAX)
@@ -25,11 +24,11 @@ fn test_merge() {
                 .unwrap();
             let new_peer = new_peer(store_id, peer.get_id() + 1);
             let (lhs, rhs) = split_region(
-                r,
+                c,
+                0,
                 region,
-                peer.clone(),
                 rid + 1,
-                new_peer.clone(),
+                vec![new_peer.clone()],
                 Some(format!("k{}{}", rid, v).as_bytes()),
                 Some(format!("k{}{}", rid + 1, v).as_bytes()),
                 format!("k{}", rid + 1).as_bytes(),
@@ -57,17 +56,20 @@ fn test_merge() {
             (lhs, rhs, new_peer)
         };
 
+    let router = &mut cluster.routers[0];
     let region_1 = router.region_detail(2);
     let peer_1 = region_1.get_peers()[0].clone();
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
     // Split into 6.
-    let (region_1, region_2, peer_2) = do_split(router, region_1, &peer_1, 1);
-    let (region_2, region_3, peer_3) = do_split(router, region_2, &peer_2, 2);
-    let (region_3, region_4, peer_4) = do_split(router, region_3, &peer_3, 3);
-    let (region_4, region_5, peer_5) = do_split(router, region_4, &peer_4, 4);
-    let (region_5, region_6, peer_6) = do_split(router, region_5, &peer_5, 5);
+    let (region_1, region_2, peer_2) = do_split(&mut cluster, region_1, &peer_1, 1);
+    let (region_2, region_3, peer_3) = do_split(&mut cluster, region_2, &peer_2, 2);
+    let (region_3, region_4, peer_4) = do_split(&mut cluster, region_3, &peer_3, 3);
+    let (region_4, region_5, peer_5) = do_split(&mut cluster, region_4, &peer_4, 4);
+    let (region_5, region_6, peer_6) = do_split(&mut cluster, region_5, &peer_5, 5);
     drop(raft_engine);
+
+    let router = &mut cluster.routers[0];
     // The last region version is smaller.
     for (i, v) in [1, 2, 3, 4, 5, 5].iter().enumerate() {
         let rid = region_1.get_id() + i as u64;

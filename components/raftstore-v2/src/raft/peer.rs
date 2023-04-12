@@ -26,8 +26,11 @@ use raftstore::{
         TabletSnapManager, WriteTask,
     },
 };
-use slog::{Logger, debug};
-use tikv_util::{slog_panic, time::{duration_to_sec, InstantExt}};
+use slog::{debug, Logger};
+use tikv_util::{
+    slog_panic,
+    time::{duration_to_sec, InstantExt},
+};
 
 use super::storage::Storage;
 use crate::{
@@ -890,7 +893,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         self.logger,
                         "peer has caught up logs";
                         "region_id" => self.region_id(),
-                        "peer_id" => self.peer_id(),
+                        "peer_id" => peer_id,
+                        "leader_id" => self.peer_id(),
                         "takes" => elapsed,
                     );
                     return true;

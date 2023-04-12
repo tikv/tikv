@@ -273,6 +273,20 @@ impl RpcClient {
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
+
+    // get_region_pending_peers is only used for test.
+    pub fn get_region_pending_peers(&self, region_id: u64) -> PdFuture<Option<Vec<metapb::Peer>>> {
+        let header = self.header();
+        let pd_client = self.pd_client.clone();
+        Box::pin(async move {
+            let mut resp = get_region_resp_by_id(pd_client, header, region_id).await?;
+            if resp.has_region() {
+                Ok(Some(resp.take_pending_peers().into_vec()))
+            } else {
+                Ok(None)
+            }
+        })
+    }
 }
 
 fn get_region_resp_by_id(

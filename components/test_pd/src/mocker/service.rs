@@ -24,6 +24,7 @@ pub struct Service {
     buckets: Mutex<HashMap<u64, Buckets>>,
     leaders: Mutex<HashMap<u64, Peer>>,
     feature_gate: Mutex<String>,
+    pending_peers: Mutex<HashMap<u64, Vec<Peer>>>,
 }
 
 impl Service {
@@ -37,6 +38,7 @@ impl Service {
             leaders: Mutex::new(HashMap::default()),
             feature_gate: Mutex::new(String::default()),
             buckets: Mutex::new(HashMap::default()),
+            pending_peers: Mutex::new(HashMap::default()),
         }
     }
 
@@ -180,6 +182,7 @@ impl PdMocker for Service {
         let key = req.get_region_key();
         let regions = self.regions.lock().unwrap();
         let leaders = self.leaders.lock().unwrap();
+        let pending_peers = self.pending_peers.lock().unwrap();
 
         for region in regions.values() {
             if key >= region.get_start_key()
@@ -187,6 +190,9 @@ impl PdMocker for Service {
             {
                 resp.set_header(Service::header());
                 resp.set_region(region.clone());
+                if let Some(p) = pending_peers.get(&region.get_id()) {
+                    resp.set_pending_peers(p.clone().into());
+                }
                 if let Some(leader) = leaders.get(&region.get_id()) {
                     resp.set_leader(leader.clone());
                 }
@@ -207,6 +213,7 @@ impl PdMocker for Service {
         let mut resp = GetRegionResponse::default();
         let regions = self.regions.lock().unwrap();
         let leaders = self.leaders.lock().unwrap();
+        let pending_peers = self.pending_peers.lock().unwrap();
 
         match regions.get(&req.get_region_id()) {
             Some(region) => {
@@ -214,6 +221,9 @@ impl PdMocker for Service {
                 resp.set_region(region.clone());
                 if let Some(bucket) = self.buckets.lock().unwrap().get(&req.get_region_id()) {
                     resp.set_buckets(bucket.clone());
+                }
+                if let Some(p) = pending_peers.get(&region.get_id()) {
+                    resp.set_pending_peers(p.clone().into());
                 }
                 if let Some(leader) = leaders.get(&region.get_id()) {
                     resp.set_leader(leader.clone());
@@ -255,6 +265,10 @@ impl PdMocker for Service {
             .lock()
             .unwrap()
             .insert(region_id, req.get_leader().clone());
+        self.pending_peers
+            .lock()
+            .unwrap()
+            .insert(region_id, req.get_pending_peers().to_vec());
 
         let mut resp = RegionHeartbeatResponse::default();
         resp.set_region_id(req.get_region().get_id());

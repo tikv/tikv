@@ -2,15 +2,20 @@
 
 //! This module implements the interactions with pd.
 
-use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::{sync::atomic::Ordering, time::Instant};
 
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
-use raftstore::store::{metrics::{STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, RAFT_PEER_PENDING_DURATION}, Transport};
+use raftstore::store::{
+    metrics::{RAFT_PEER_PENDING_DURATION, STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC},
+    Transport,
+};
 use slog::{debug, error};
-use tikv_util::{slog_panic, time::{InstantExt, duration_to_sec}};
+use tikv_util::{
+    slog_panic,
+    time::{duration_to_sec, InstantExt},
+};
 
 use crate::{
     batch::StoreContext,
@@ -143,7 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         let progresses = status.progress.unwrap().iter();
-        let mut peers_start_pending_time= Vec::with_capacity(self.region().get_peers().len());
+        let mut peers_start_pending_time = Vec::with_capacity(self.region().get_peers().len());
         for (&id, progress) in progresses {
             if id == self.peer_id() {
                 continue;
@@ -173,7 +178,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             self.logger,
                             "peer start pending";
                             "region_id" => self.region_id(),
-                            "peer_id" => self.peer_id(),
+                            "leader_id" => self.peer_id(),
+                            "peer_id" => id,
                             "time" => ?now,
                         );
                     }
@@ -193,7 +199,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        self.peers_start_pending_time.extend(peers_start_pending_time);
+        self.peers_start_pending_time
+            .extend(peers_start_pending_time);
         pending_peers
     }
 

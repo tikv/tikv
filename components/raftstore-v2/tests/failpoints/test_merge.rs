@@ -15,7 +15,6 @@ fn test_source_and_target_both_replay() {
     let mut cluster = Cluster::default();
     let store_id = cluster.node(0).id();
     let router = &mut cluster.routers[0];
-
     let region_1 = router.region_detail(2);
     let peer_1 = region_1.get_peers()[0].clone();
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
@@ -23,11 +22,11 @@ fn test_source_and_target_both_replay() {
     let region_1_id = region_1.get_id();
     let region_2_id = region_1_id + 1;
     let (region_1, region_2) = split_region(
-        router,
+        &mut cluster,
+        0,
         region_1,
-        peer_1.clone(),
         region_2_id,
-        peer_2,
+        vec![peer_2],
         Some(format!("k{}k", region_1_id).as_bytes()),
         Some(format!("k{}k", region_2_id).as_bytes()),
         format!("k{}", region_2_id).as_bytes(),
@@ -36,6 +35,7 @@ fn test_source_and_target_both_replay() {
     );
 
     {
+        let router = &mut cluster.routers[0];
         let _fp = fail::FailGuard::new("after_acquire_source_checkpoint", "1*return->off");
         merge_region(router, region_1, peer_1, region_2, false);
     }
@@ -70,11 +70,11 @@ fn test_source_destroy_before_target_apply() {
     let region_1_id = region_1.get_id();
     let region_2_id = region_1_id + 1;
     let (region_1, region_2) = split_region(
-        router,
+        &mut cluster,
+        0,
         region_1,
-        peer_1.clone(),
         region_2_id,
-        peer_2,
+        vec![peer_2],
         Some(format!("k{}k", region_1_id).as_bytes()),
         Some(format!("k{}k", region_2_id).as_bytes()),
         format!("k{}", region_2_id).as_bytes(),
@@ -82,6 +82,7 @@ fn test_source_destroy_before_target_apply() {
         false,
     );
 
+    let router = &mut cluster.routers[0];
     {
         // Sending CatchUpLogs will make source destroy early (without waiting for
         // AckCommitMerge).

@@ -299,6 +299,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
 
+        // check whether pending peers has caught up.
         if self.any_new_peer_catch_up(from_peer_id) {
             self.region_heartbeat_pd(ctx)
         }

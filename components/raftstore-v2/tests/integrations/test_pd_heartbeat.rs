@@ -13,7 +13,56 @@ use raftstore_v2::{
 };
 use tikv_util::{config::ReadableSize, store::new_peer};
 
-use crate::cluster::{v2_default_config, Cluster};
+use crate::cluster::{
+    conf_change_helper::add_peer, split_helper::split_region, v2_default_config, Cluster,
+};
+
+#[test]
+fn test_region_heartbeat_after_split() {
+    let mut cluster = Cluster::with_node_count(2, None);
+    let (region_id, split_region_id) = (2, 100);
+    let store_id = cluster.node(0).id();
+    let store_id1 = cluster.node(1).id();
+
+    // 1. add new peer on store
+    let (peer_id, offset_id) = (10, 1);
+    add_peer(&cluster, offset_id, region_id, peer_id, false);
+
+    // 2. split region that has at least 2 peers
+    // Region 2 ["", ""]
+    //   -> Region 2   ["", "k22"]
+    //      Region 100 ["k22", ""]
+    let router = &mut cluster.routers[0];
+    let region = router.region_detail(region_id);
+    let new_target_peers = vec![new_peer(store_id, 100), new_peer(store_id1, 200)];
+    split_region(
+        &mut cluster,
+        0,
+        region,
+        split_region_id,
+        new_target_peers,
+        Some(b"k11"),
+        Some(b"k33"),
+        b"k22",
+        b"k22",
+        false,
+    );
+    cluster.dispatch(region_id, vec![]);
+    cluster.dispatch(split_region_id, vec![]);
+
+    // 3. check new split region has no pending peers.
+    let rpc_client = cluster.node(0).pd_client();
+    for _ in 0..5 {
+        let resp = block_on(rpc_client.get_region_pending_peers(split_region_id)).unwrap();
+        if let Some(pending_peers) = resp {
+            // make sure there is no pending peers after split for new region.
+            assert_eq!(pending_peers, vec![]);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    panic!("failed to get region pending peers");
+}
 
 #[test]
 fn test_region_heartbeat() {
