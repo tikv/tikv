@@ -813,10 +813,6 @@ impl Cluster<ServerCluster> {
     pub fn get_addr(&self, node_id: u64) -> String {
         self.sim.rl().get_addr(node_id)
     }
-
-    pub fn get_security_mgr(&self) -> Arc<SecurityManager> {
-        self.sim.rl().security_mgr.clone()
-    }
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {

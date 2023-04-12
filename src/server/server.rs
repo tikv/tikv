@@ -262,7 +262,6 @@ where
                     self.raft_router.clone(),
                     security_mgr,
                     cfg,
-                    snap_cache_builder,
                 );
                 self.snap_worker.start(snap_runner);
             }

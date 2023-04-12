@@ -44,7 +44,7 @@ use tikv_util::{
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{metrics::*, Config, Error, Result};
-use crate::{server::tablet_snap::SnapCacheBuilder, tikv_util::sys::thread::ThreadBuildWrapper};
+use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -354,7 +354,7 @@ fn recv_snap<R: RaftExtension + 'static>(
     }
 }
 
-pub struct Runner<B, R: RaftExtension> {
+pub struct Runner<R: RaftExtension> {
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
@@ -365,19 +365,17 @@ pub struct Runner<B, R: RaftExtension> {
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
 
-    // the following fields are used to receive snapshot sent from raftstore-v2
-    cache_builder: B,
+    // only used to receive snapshot sent from raftstore-v2
     limiter: Limiter,
 }
 
-impl<B, R: RaftExtension + 'static> Runner<B, R> {
+impl<R: RaftExtension + 'static> Runner<R> {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
-        cache_builder: B,
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
         let config = cfg.value().clone();
@@ -404,7 +402,6 @@ impl<B, R: RaftExtension + 'static> Runner<B, R> {
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
-            cache_builder,
             limiter,
         };
         snap_worker
@@ -449,11 +446,7 @@ impl<B, R: RaftExtension + 'static> Runner<B, R> {
     }
 }
 
-impl<B, R> Runnable for Runner<B, R>
-where
-    B: SnapCacheBuilder + Clone + 'static,
-    R: RaftExtension + 'static,
-{
+impl<R: RaftExtension + 'static> Runnable for Runner<R> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -492,14 +485,13 @@ where
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.limiter.clone();
-                let cache_builder = self.cache_builder.clone();
                 let task = async move {
                     let result = crate::server::tablet_snap::recv_snap(
                         stream,
                         sink,
                         snap_mgr,
                         raft_router,
-                        cache_builder,
+                        NoSnapshotCache, // do not use cache in v1
                         limiter,
                     )
                     .await;

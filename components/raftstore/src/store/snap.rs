@@ -1437,6 +1437,8 @@ impl SnapManager {
                 }
             }
         }
+
+        self.core_v2.init()?;
         Ok(())
     }
 
@@ -1907,10 +1909,8 @@ impl SnapManagerBuilder {
             u64::MAX
         };
         let path = path.into();
-        let snap_mgr_v2 = match TabletSnapManager::new(&path) {
-            Ok(mgr) => mgr,
-            Err(e) => panic!("failed to create snapshot manager at {}: {}", path, e),
-        };
+        let mut path_v2 = path.clone();
+        path_v2.push_str("_v2");
         let mut snapshot = SnapManager {
             core: SnapManagerCore {
                 base: path,
@@ -1925,7 +1925,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
-            core_v2: snap_mgr_v2,
+            core_v2: TabletSnapManager::new_without_init(&path_v2),
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
@@ -2013,6 +2013,29 @@ impl TabletSnapManager {
             receiving: Arc::default(),
             stats: Arc::default(),
         })
+    }
+
+    pub fn new_without_init<T: Into<PathBuf>>(path: T) -> Self {
+        let path = path.into();
+        Self {
+            base: path,
+            receiving: Arc::default(),
+            stats: Arc::default(),
+        }
+    }
+
+    pub fn init(&self) -> io::Result<()> {
+        if !self.base.exists() {
+            file_system::create_dir_all(&self.base)?;
+        }
+        if !self.base.is_dir() {
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                format!("{} should be a directory", self.base.display()),
+            ));
+        }
+        file_system::clean_up_trash(&self.base)?;
+        Ok(())
     }
 
     pub fn begin_snapshot(&self, key: TabletSnapKey, start: Instant, generate_duration_sec: u64) {
