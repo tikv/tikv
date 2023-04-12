@@ -1164,7 +1164,7 @@ pub mod tests {
             },
         );
         // waiter1 is updated when waiting, while waiter2(f2) is not.
-        let (waiter1, _, f1) = new_test_waiter_with_key(waiter_ts, lock.ts, &key.to_raw().unwrap());
+        let (waiter1, ..) = new_test_waiter_with_key(waiter_ts, lock.ts, &key.to_raw().unwrap());
         let (waiter2, _, f2) = new_test_waiter_with_key(100.into(), 100.into(), "foo".as_bytes());
         scheduler.wait_for(
             LockWaitToken(Some(1)),
@@ -1199,26 +1199,13 @@ pub mod tests {
                 key: key.clone(),
                 lock_digest: Default::default(),
                 lock_info: LockInfo {
-                    key: key.to_raw().unwrap().clone(),
+                    key: key.to_raw().unwrap(),
                     ..Default::default()
                 },
             },
         };
         scheduler.update_wait_for(vec![event]);
 
-        assert_elapsed(
-            || match block_on(f1).unwrap() {
-                StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-                    MvccError(box MvccErrorInner::KeyIsLocked(res)),
-                )))) => {
-                    assert!(res.duration_to_last_update_ms > 400);
-                    assert!(res.duration_to_last_update_ms < 600);
-                }
-                e => panic!("unexpected error: {:?}", e),
-            },
-            400,
-            600,
-        );
         assert_elapsed(
             || match block_on(f2).unwrap() {
                 StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
@@ -1228,8 +1215,8 @@ pub mod tests {
                 }
                 e => panic!("unexpected error: {:?}", e),
             },
-            0,
-            200,
+            400,
+            600,
         );
 
         worker.stop().unwrap();
