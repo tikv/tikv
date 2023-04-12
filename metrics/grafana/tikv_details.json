@@ -31980,9 +31980,9 @@
             },
             {
               "exemplar": true,
-              "expr": "avg(raft_engine_recycled_file_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"})",
+              "expr": "avg(raft_engine_recycled_file_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
               "intervalFactor": 1,
-              "legendFormat": "recycle",
+              "legendFormat": "{{type}} - recycle",
               "refId": "C"
             }
           ],
