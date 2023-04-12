@@ -337,6 +337,13 @@ impl Suite {
             raft_router,
             cluster.pd_client.clone(),
             cm,
+            Arc::clone(&self.env),
+            cluster.store_metas[&id]
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone(),
+            Arc::clone(&sim.security_mgr),
         );
         worker.start(endpoint);
     }
@@ -803,6 +810,7 @@ mod test {
     };
     use futures::{Stream, StreamExt};
     use pd_client::PdClient;
+    use test_raftstore::IsolationFilterFactory;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
@@ -1231,6 +1239,17 @@ mod test {
         );
     }
 
+    async fn collect_all_current<T>(
+        mut s: impl Stream<Item = T> + Unpin,
+        max_gap: Duration,
+    ) -> Vec<T> {
+        let mut r = vec![];
+        while let Ok(Some(x)) = timeout(max_gap, s.next()).await {
+            r.push(x);
+        }
+        r
+    }
+
     async fn collect_current<T>(mut s: impl Stream<Item = T> + Unpin, goal: usize) -> Vec<T> {
         let mut r = vec![];
         while let Ok(Some(x)) = timeout(Duration::from_secs(10), s.next()).await {
@@ -1285,5 +1304,50 @@ mod test {
             suite.flushed_files.path(),
             round1.union(&round2).map(|x| x.as_slice()),
         ));
+    }
+
+    #[test]
+    fn network_partition() {
+        let mut suite = super::SuiteBuilder::new_named("network_partition")
+            .nodes(3)
+            .build();
+        let stream = suite.flush_stream();
+        suite.must_register_task(1, "network_partition");
+        let leader = suite.cluster.leader_of_region(1).unwrap();
+        let round1 = run_async_test(suite.write_records(0, 64, 1));
+
+        suite
+            .cluster
+            .add_send_filter(IsolationFilterFactory::new(leader.store_id));
+        suite.cluster.reset_leader_of_region(1);
+        suite
+            .cluster
+            .must_wait_for_leader_expire(leader.store_id, 1);
+        let leader2 = suite.cluster.leader_of_region(1).unwrap();
+        assert_ne!(leader.store_id, leader2.store_id, "leader not switched.");
+        let ts = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(make_record_key(1, 778), b"generator".to_vec())],
+            make_record_key(1, 778),
+            ts,
+        );
+        suite.sync();
+        suite.force_flush_files("network_partition");
+        suite.wait_for_flush();
+
+        let cps = run_async_test(collect_all_current(stream, Duration::from_secs(2)));
+        assert!(
+            cps.iter()
+                .flat_map(|(_s, cp)| cp.events.iter().map(|resp| resp.checkpoint))
+                .all(|cp| cp <= ts.into_inner()),
+            "ts={} cps={:?}",
+            ts,
+            cps
+        );
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.iter().map(|k| k.as_slice()),
+        ))
     }
 }

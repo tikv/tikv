@@ -990,13 +990,7 @@ where
                 ConnectionConfig {
                     keep_alive_interval: self.config.server.grpc_keepalive_time.0,
                     keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
-                    tls: self
-                        .security_mgr
-                        .client_suite()
-                        .map_err(|err| {
-                            warn!("Failed to load client TLS suite, ignoring TLS config."; "err" => %err);
-                        })
-                        .ok(),
+                    tls: Arc::clone(&self.security_mgr),
                 },
             );
             let backup_stream_endpoint = backup_stream::Endpoint::new(
@@ -1009,6 +1003,14 @@ where
                 self.router.clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
+                Arc::clone(&self.env),
+                engines
+                    .store_meta
+                    .lock()
+                    .unwrap()
+                    .region_read_progress
+                    .clone(),
+                Arc::clone(&self.security_mgr),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.to_stop.push(backup_stream_worker);
