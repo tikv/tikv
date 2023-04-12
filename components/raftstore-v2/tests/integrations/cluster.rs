@@ -852,7 +852,7 @@ pub mod merge_helper {
         cluster.routers[store_offset].send(region_id, msg).unwrap();
         // They may communicate about trimmed status.
         cluster.dispatch(region_id, vec![]);
-        let _ = block_on(sub.result()).unwrap();
+        println!("merge_region = {:?}", block_on(sub.result()).unwrap());
         // We don't check the response because it needs to do a lot of checks async
         // before actually proposing the command.
 

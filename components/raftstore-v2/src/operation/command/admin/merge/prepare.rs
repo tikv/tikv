@@ -112,6 +112,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
+        println!("propose_prepare_merge {}", self.region_id());
         self.validate_prepare_merge_command(
             store_ctx,
             req.get_admin_request().get_prepare_merge(),
@@ -571,6 +572,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         log_index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        println!("apply_prepare_merge {}", self.region_id());
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
 
         let prepare_merge = req.get_prepare_merge();
@@ -644,6 +646,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: PrepareMergeResult,
     ) {
+        println!("on_apply_res_prepare_merge {}", self.region_id());
         let region = res.region_state.get_region().clone();
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();

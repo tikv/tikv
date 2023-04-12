@@ -176,6 +176,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     // Match v1::schedule_merge.
     fn ask_target_peer_to_commit_merge<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+        println!("ask_target_peer_to_commit_merge {}", self.region_id());
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
         let target_id = target.get_id();
@@ -253,12 +254,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) {
+        println!("on_ask_commit_merge {}", self.region_id());
         match self.validate_commit_merge(&req) {
             Some(true) if self.is_leader() => {
                 let (ch, _) = CmdResChannel::pair();
                 self.on_admin_command(store_ctx, req, ch);
             }
             Some(false) => {
+                println!("reject {}", self.region_id());
                 let commit_merge = req.get_admin_request().get_commit_merge();
                 let source_id = commit_merge.get_source_state().get_region().get_id();
                 let _ = store_ctx.router.force_send(
@@ -349,6 +352,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        println!("apply_commit_merge {}", self.region_id());
         PEER_ADMIN_CMD_COUNTER.commit_merge.all.inc();
 
         self.flush();
@@ -693,6 +697,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut res: CommitMergeResult,
     ) {
+        println!("on_apply_res_commit_merge {}", self.region_id());
         let region = res.region_state.get_region();
         assert!(
             res.source.get_end_key() == region.get_end_key()
