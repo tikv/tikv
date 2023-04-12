@@ -25,7 +25,7 @@ mod ingest;
 
 pub use raftstore::store::message::simple_write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
-    SimpleWriteView,
+    SimpleWrite,
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
