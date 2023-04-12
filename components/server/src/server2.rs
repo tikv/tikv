@@ -74,6 +74,7 @@ use tikv::{
     },
     storage::{
         self,
+        config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
@@ -582,6 +583,7 @@ where
         let _cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),

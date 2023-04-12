@@ -5,7 +5,7 @@ use std::assert_matches::debug_assert_matches;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
     import_sstpb::SstMeta,
-    raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::{CodedInputStream, Message};
 use raftstore::store::WriteCallback;
@@ -270,6 +270,59 @@ impl<'a> SimpleWriteReqDecoder<'a> {
     #[inline]
     pub fn header(&self) -> &RaftRequestHeader {
         &self.header
+    }
+
+    pub fn to_raft_cmd_request(&self) -> RaftCmdRequest {
+        let mut req = RaftCmdRequest::default();
+        req.set_header(self.header().clone());
+        let decoder = Self {
+            header: Default::default(),
+            buf: self.buf,
+        };
+        for s in decoder {
+            match s {
+                SimpleWrite::Put(Put { cf, key, value }) => {
+                    let mut request = Request::default();
+                    request.set_cmd_type(CmdType::Put);
+                    request.mut_put().set_cf(cf.to_owned());
+                    request.mut_put().set_key(key.to_owned());
+                    request.mut_put().set_value(value.to_owned());
+                    req.mut_requests().push(request);
+                }
+                SimpleWrite::Delete(Delete { cf, key }) => {
+                    let mut request = Request::default();
+                    request.set_cmd_type(CmdType::Delete);
+                    request.mut_delete().set_cf(cf.to_owned());
+                    request.mut_delete().set_key(key.to_owned());
+                    req.mut_requests().push(request);
+                }
+                SimpleWrite::DeleteRange(DeleteRange {
+                    cf,
+                    start_key,
+                    end_key,
+                    notify_only,
+                }) => {
+                    let mut request = Request::default();
+                    request.set_cmd_type(CmdType::DeleteRange);
+                    request.mut_delete_range().set_cf(cf.to_owned());
+                    request
+                        .mut_delete_range()
+                        .set_start_key(start_key.to_owned());
+                    request.mut_delete_range().set_end_key(end_key.to_owned());
+                    request.mut_delete_range().set_notify_only(notify_only);
+                    req.mut_requests().push(request);
+                }
+                SimpleWrite::Ingest(ssts) => {
+                    for sst in ssts {
+                        let mut request = Request::default();
+                        request.set_cmd_type(CmdType::IngestSst);
+                        request.mut_ingest_sst().set_sst(sst);
+                        req.mut_requests().push(request);
+                    }
+                }
+            }
+        }
+        req
     }
 }
 

@@ -1,12 +1,12 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use kvproto::raft_cmdpb::RaftCmdResponse;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raftstore::{
-    coprocessor::ObserveHandle,
+    coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveLevel},
     store::{
         cmd_resp,
         fsm::{
@@ -18,6 +18,7 @@ use raftstore::{
         RegionSnapshot,
     },
 };
+use slog::info;
 
 use crate::{
     fsm::{ApplyResReporter, PeerFsmDelegate},
@@ -67,9 +68,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let ChangeObserver { region_id, ty } = observer;
 
         let is_stale_cmd = match ty {
-            ObserverType::Cdc(ObserveHandle { id, .. }) => self.observe_info_mut().cdc_id.id > id,
-            ObserverType::Rts(ObserveHandle { id, .. }) => self.observe_info_mut().rts_id.id > id,
-            ObserverType::Pitr(ObserveHandle { id, .. }) => self.observe_info_mut().pitr_id.id > id,
+            ObserverType::Cdc(ObserveHandle { id, .. }) => self.observe().info.cdc_id.id > id,
+            ObserverType::Rts(ObserveHandle { id, .. }) => self.observe().info.rts_id.id > id,
+            ObserverType::Pitr(ObserveHandle { id, .. }) => self.observe().info.pitr_id.id > id,
         };
         if is_stale_cmd {
             notify_stale_req_with_msg(
@@ -77,7 +78,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 format!(
                     "stale observe id {:?}, current id: {:?}",
                     ty.handle().id,
-                    self.observe_info_mut().pitr_id.id
+                    self.observe().info,
                 ),
                 snap_cb,
             );
@@ -96,10 +97,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 // Commit the writebatch for ensuring the following snapshot can get all
                 // previous writes.
                 self.flush();
-                RegionSnapshot::from_snapshot(
+                let (applied_index, _) = self.apply_progress();
+                let snap = RegionSnapshot::from_snapshot(
                     Arc::new(self.tablet().snapshot()),
                     Arc::new(self.region().clone()),
-                )
+                );
+                snap.set_apply_index(applied_index);
+                snap
             }
             Err(e) => {
                 // Return error if epoch not match
@@ -108,17 +112,50 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
         };
 
+        let observe = self.observe_mut();
         match ty {
             ObserverType::Cdc(id) => {
-                self.observe_info_mut().cdc_id = id;
+                observe.info.cdc_id = id;
             }
             ObserverType::Rts(id) => {
-                self.observe_info_mut().rts_id = id;
+                observe.info.rts_id = id;
             }
             ObserverType::Pitr(id) => {
-                self.observe_info_mut().pitr_id = id;
+                observe.info.pitr_id = id;
             }
         }
+        let level = observe.info.observe_level();
+        observe.level = level;
+        info!(self.logger, "capture update observe level"; "level" => ?level);
         snap_cb.set_result((RaftCmdResponse::default(), Some(Box::new(snapshot))));
+    }
+
+    pub fn observe_apply(
+        &mut self,
+        index: u64,
+        term: u64,
+        req: RaftCmdRequest,
+        resp: &RaftCmdResponse,
+    ) {
+        if self.observe().level == ObserveLevel::None {
+            return;
+        }
+
+        let cmd = Cmd::new(index, term, req, resp.clone());
+        self.observe_mut().cmds.push(cmd);
+    }
+
+    pub fn flush_observed_apply(&mut self) {
+        let level = self.observe().level;
+        if level == ObserveLevel::None {
+            return;
+        }
+
+        let region_id = self.region_id();
+        let mut cmd_batch = CmdBatch::new(&self.observe().info, region_id);
+        let cmds = mem::replace(&mut self.observe_mut().cmds, vec![]);
+        cmd_batch.extend(&self.observe().info, region_id, cmds);
+        self.coprocessor_host()
+            .on_flush_applied_cmd_batch(level, vec![cmd_batch], self.tablet());
     }
 }
