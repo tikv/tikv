@@ -487,7 +487,7 @@ mod tests {
     use super::*;
     use crate::store::Callback;
 
-    fn decoder_fallback(buf: &[u8], index: u64, term: u64) -> RaftCmdRequest {
+    fn decoder_fallback(_: &[u8], _: u64, _: u64) -> RaftCmdRequest {
         unreachable!()
     }
 
