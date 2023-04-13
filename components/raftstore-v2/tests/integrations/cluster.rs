@@ -858,17 +858,26 @@ pub mod merge_helper {
 
         // TODO: when persistent implementation is ready, we can use tablet index of
         // the parent to check whether the split is done. Now, just sleep a second.
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(1));
 
-        let new_target = cluster.routers[store_offset].region_detail(target.id);
+        let mut new_target = cluster.routers[store_offset].region_detail(target.id);
         if check {
-            if new_target.get_start_key() == source.get_start_key() {
-                // [source, target] => new_target
-                assert_eq!(new_target.get_end_key(), target.get_end_key());
-            } else {
-                // [target, source] => new_target
-                assert_eq!(new_target.get_start_key(), target.get_start_key());
-                assert_eq!(new_target.get_end_key(), source.get_end_key());
+            for i in 1..=100 {
+                let r1 = new_target.get_start_key() == source.get_start_key()
+                    && new_target.get_end_key() == target.get_end_key();
+                let r2 = new_target.get_start_key() == target.get_start_key()
+                    && new_target.get_end_key() == source.get_end_key();
+                if r1 || r2 {
+                    break;
+                } else if i == 100 {
+                    panic!(
+                        "still not merged after 5s: {:?} + {:?} != {:?}",
+                        source, target, new_target
+                    );
+                } else {
+                    thread::sleep(Duration::from_millis(50));
+                    new_target = cluster.routers[store_offset].region_detail(target.id);
+                }
             }
         }
         new_target
