@@ -40950,7 +40950,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 48
+        "y": 44
       },
       "id": 23763573235,
       "panels": [
@@ -40972,7 +40972,7 @@
             "h": 7,
             "w": 6,
             "x": 0,
-            "y": 165
+            "y": 45
           },
           "hiddenSeries": false,
           "id": 23763573350,
@@ -41081,7 +41081,7 @@
             "h": 7,
             "w": 9,
             "x": 6,
-            "y": 165
+            "y": 45
           },
           "hiddenSeries": false,
           "id": 23763573351,
@@ -41155,7 +41155,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Import RPC Duration",
+          "title": "P99 RPC Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -41212,7 +41212,7 @@
             "h": 7,
             "w": 9,
             "x": 15,
-            "y": 165
+            "y": 45
           },
           "hiddenSeries": false,
           "id": 23763573352,
@@ -41329,7 +41329,7 @@
             "h": 8,
             "w": 6,
             "x": 0,
-            "y": 172
+            "y": 52
           },
           "hiddenSeries": false,
           "id": 23763573032,
@@ -41360,7 +41360,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_import_apply_cache_event{instance=~\"$instance\"}[$__rate_interval])) by (instance, type)",
+              "expr": "sum(rate(tikv_import_apply_cache_event{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[$__rate_interval])) by (instance, type)",
               "interval": "",
               "legendFormat": "{{instance}} :: {{type}}",
               "queryType": "randomWalk",
@@ -41409,101 +41409,73 @@
           }
         },
         {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
+          "cards": {
+            "cardPadding": null,
+            "cardRound": 2
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
-            "defaults": {
-              "unit": "decbytes"
-            },
+            "defaults": {},
             "overrides": []
           },
-          "fill": 1,
-          "fillGradient": 0,
           "gridPos": {
             "h": 8,
             "w": 6,
             "x": 6,
-            "y": 172
+            "y": 52
           },
-          "hiddenSeries": false,
-          "id": 23763573346,
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 23763573348,
           "legend": {
-            "avg": false,
-            "current": false,
-            "max": false,
-            "min": false,
-            "show": true,
-            "total": false,
-            "values": false
+            "show": false
           },
-          "lines": true,
-          "linewidth": 1,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
           "pluginVersion": "7.5.11",
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
+          "reverseYBuckets": false,
           "targets": [
             {
               "exemplar": true,
-              "expr": "tikv_import_apply_cached_bytes{instance=~\"$instance\"}",
+              "expr": "sum(increase(tikv_import_rpc_duration_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", request=\"apply\"}[$__rate_interval])) by (le)",
+              "format": "heatmap",
               "interval": "",
-              "legendFormat": "{{instance}}",
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
               "queryType": "randomWalk",
               "refId": "A"
             }
           ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Cached File in Memory",
+          "title": "Overall RPC Duration",
           "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
             "show": true,
-            "values": []
+            "showHistogram": true
           },
-          "yaxes": [
-            {
-              "format": "decbytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": null,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "auto",
+          "yBucketNumber": null,
+          "yBucketSize": null
         },
         {
           "cards": {
@@ -41527,12 +41499,12 @@
             "h": 8,
             "w": 6,
             "x": 12,
-            "y": 172
+            "y": 52
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 23763573348,
+          "id": 23763573558,
           "legend": {
             "show": false
           },
@@ -41541,7 +41513,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_import_apply_duration_bucket{instance=~\"$instance\", type=\"exec_download\"}[$__rate_interval])) by (le)",
+              "expr": "sum(increase(tikv_import_apply_duration_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"exec_download\"}[$__rate_interval])) by (le)",
               "format": "heatmap",
               "interval": "",
               "intervalFactor": 2,
@@ -41596,7 +41568,7 @@
             "h": 8,
             "w": 6,
             "x": 18,
-            "y": 172
+            "y": 52
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -41610,7 +41582,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_import_engine_request_bucket{instance=~\"$instance\", type=\"queuing\"}[$__rate_interval])) by (le)",
+              "expr": "sum(increase(tikv_import_engine_request_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"queuing\"}[$__rate_interval])) by (le)",
               "format": "heatmap",
               "interval": "",
               "intervalFactor": 2,
@@ -41661,7 +41633,7 @@
             "h": 6,
             "w": 6,
             "x": 0,
-            "y": 180
+            "y": 60
           },
           "hiddenSeries": false,
           "id": 23763573349,
@@ -41692,7 +41664,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "rate(tikv_import_apply_bytes_sum{instance=~\"$instance\"}[$__rate_interval])",
+              "expr": "rate(tikv_import_apply_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[$__rate_interval])",
               "interval": "",
               "legendFormat": "{{instance}}",
               "queryType": "randomWalk",
@@ -41764,7 +41736,7 @@
             "h": 8,
             "w": 6,
             "x": 6,
-            "y": 180
+            "y": 60
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -41778,7 +41750,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_import_download_bytes_bucket{instance=~\"$instance\"}[$__rate_interval])) by (le)",
+              "expr": "sum(increase(tikv_import_download_bytes_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[$__rate_interval])) by (le)",
               "format": "heatmap",
               "interval": "",
               "intervalFactor": 2,
@@ -41833,7 +41805,7 @@
             "h": 8,
             "w": 6,
             "x": 12,
-            "y": 180
+            "y": 60
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -41847,7 +41819,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_import_apply_bytes_bucket{instance=~\"$instance\"}[$__rate_interval])) by (le)",
+              "expr": "sum(increase(tikv_import_apply_bytes_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[$__rate_interval])) by (le)",
               "format": "heatmap",
               "interval": "",
               "intervalFactor": 2,
@@ -41903,7 +41875,7 @@
             "h": 8,
             "w": 6,
             "x": 18,
-            "y": 180
+            "y": 60
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -41917,7 +41889,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_import_engine_request_bucket{instance=~\"$instance\", type=\"get_permit\"}[$__rate_interval])) by (le)",
+              "expr": "sum(increase(tikv_import_engine_request_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"get_permit\"}[$__rate_interval])) by (le)",
               "format": "heatmap",
               "interval": "",
               "intervalFactor": 2,
@@ -41968,7 +41940,7 @@
             "h": 5,
             "w": 6,
             "x": 0,
-            "y": 186
+            "y": 66
           },
           "hiddenSeries": false,
           "id": 23763573118,
@@ -41999,7 +41971,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "rate(tikv_import_applier_event{instance=~\"$instance\", type=\"begin_req\"}[$__rate_interval])",
+              "expr": "rate(tikv_import_applier_event{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"begin_req\"}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}} :: {{type}}",
@@ -42057,7 +42029,9 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "fieldConfig": {
-            "defaults": {},
+            "defaults": {
+              "unit": "decbytes"
+            },
             "overrides": []
           },
           "fill": 1,
@@ -42066,10 +42040,10 @@
             "h": 8,
             "w": 6,
             "x": 6,
-            "y": 188
+            "y": 68
           },
           "hiddenSeries": false,
-          "id": 23763573117,
+          "id": 23763573346,
           "legend": {
             "avg": false,
             "current": false,
@@ -42097,7 +42071,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "tikv_import_active_raft_applier{instance=~\"$instance\"}",
+              "expr": "tikv_import_apply_cached_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "{{instance}}",
               "queryType": "randomWalk",
@@ -42108,7 +42082,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Active Applier",
+          "title": "Cached File in Memory",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -42124,7 +42098,7 @@
           },
           "yaxes": [
             {
-              "format": "short",
+              "format": "decbytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -42161,7 +42135,7 @@
             "h": 8,
             "w": 6,
             "x": 12,
-            "y": 188
+            "y": 68
           },
           "hiddenSeries": false,
           "id": 23763573119,
@@ -42264,7 +42238,7 @@
             "h": 8,
             "w": 6,
             "x": 18,
-            "y": 188
+            "y": 68
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -42278,7 +42252,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_import_engine_request_bucket{instance=~\"$instance\", type=\"apply\"}[$__rate_interval])) by (le)",
+              "expr": "sum(increase(tikv_import_engine_request_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"apply\"}[$__rate_interval])) by (le)",
               "format": "heatmap",
               "interval": "",
               "intervalFactor": 2,
@@ -42330,7 +42304,7 @@
             "h": 5,
             "w": 6,
             "x": 0,
-            "y": 191
+            "y": 71
           },
           "hiddenSeries": false,
           "id": 23763573449,
