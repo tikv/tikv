@@ -52,8 +52,8 @@ use crate::{
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
-const TIFLASH: &str = "tiflash";
-const ENGINE: &str = "engine";
+pub const TIFLASH: &str = "tiflash";
+pub const ENGINE: &str = "engine";
 
 /// Region related task
 #[derive(Debug)]
