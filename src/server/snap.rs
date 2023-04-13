@@ -368,6 +368,9 @@ pub struct Runner<R: RaftExtension> {
 }
 
 impl<R: RaftExtension + 'static> Runner<R> {
+    // `can_receive_tablet_snapshot` being true means we are using tiflash engine
+    // within a raft group with raftstore-v2. It is set be true to enable runner
+    // to receive tablet snapshot from v2.
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
