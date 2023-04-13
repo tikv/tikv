@@ -485,6 +485,7 @@ mod tests {
     use slog::o;
 
     use super::*;
+    use crate::store::Callback;
 
     #[test]
     fn test_codec() {
@@ -496,14 +497,24 @@ mod tests {
 
         let mut header = Box::<RaftRequestHeader>::default();
         header.set_term(2);
-        let mut req_encoder = SimpleWriteReqEncoder::new(header.clone(), bin, usize::MAX, false);
+        let mut req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header.clone(),
+            bin,
+            usize::MAX,
+            false,
+        );
 
         let mut encoder = SimpleWriteEncoder::with_capacity(512);
         encoder.delete_range(CF_LOCK, b"key", b"key", true);
         encoder.delete_range("cf", b"key", b"key", false);
         let bin = encoder.encode();
         assert!(!req_encoder.amend(&header, &bin));
-        let req_encoder2 = SimpleWriteReqEncoder::new(header.clone(), bin, 0, false);
+        let req_encoder2 = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header.clone(),
+            bin,
+            0,
+            false,
+        );
 
         let (bytes, _) = req_encoder.encode();
         let logger = slog_global::borrow_global().new(o!());
@@ -550,7 +561,9 @@ mod tests {
             .collect();
         encoder.ingest(exp.clone());
         let bin = encoder.encode();
-        let req_encoder = SimpleWriteReqEncoder::new(header, bin, 0, false);
+        let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header, bin, 0, false,
+        );
         let (bytes, _) = req_encoder.encode();
         let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
@@ -605,7 +618,8 @@ mod tests {
 
         let mut header = Box::<RaftRequestHeader>::default();
         header.set_term(2);
-        let mut req_encoder = SimpleWriteReqEncoder::new(header.clone(), bin.clone(), 512, false);
+        let mut req_encoder: SimpleWriteReqEncoder<Callback<engine_rocks::RocksSnapshot>> =
+            SimpleWriteReqEncoder::new(header.clone(), bin.clone(), 512, false);
 
         let mut header2 = Box::<RaftRequestHeader>::default();
         header2.set_term(4);
@@ -616,7 +630,8 @@ mod tests {
         bin2.freeze();
         // Frozen bin can't be merged with other bin.
         assert!(!req_encoder.amend(&header, &bin2));
-        let mut req_encoder2 = SimpleWriteReqEncoder::new(header.clone(), bin2.clone(), 512, false);
+        let mut req_encoder2: SimpleWriteReqEncoder<Callback<engine_rocks::RocksSnapshot>> =
+            SimpleWriteReqEncoder::new(header.clone(), bin2.clone(), 512, false);
         assert!(!req_encoder2.amend(&header, &bin));
 
         // Batch should not excceed max size limit.
