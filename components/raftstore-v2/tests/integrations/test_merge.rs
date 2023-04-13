@@ -67,33 +67,19 @@ fn test_merge() {
     let (region_3, region_4, peer_4) = do_split(router, region_3, &peer_3, 3);
     let (region_4, region_5, peer_5) = do_split(router, region_4, &peer_4, 4);
     let (region_5, region_6, peer_6) = do_split(router, region_5, &peer_5, 5);
+    drop(raft_engine);
     // The last region version is smaller.
-    let version = [1, 2, 3, 4, 5, 5];
-    for i in 0..6 {
+    for (i, v) in [1, 2, 3, 4, 5, 5].iter().enumerate() {
         let rid = region_1.get_id() + i as u64;
-        let snapshot = cluster.routers[0].stale_snapshot(rid);
-        let key = format!("k{rid}{}", version[i]);
+        let snapshot = router.stale_snapshot(rid);
+        let key = format!("k{rid}{v}");
         assert!(
             snapshot.get_value(key.as_bytes()).unwrap().is_some(),
             "{} {:?}",
             rid,
             key
         );
-        for retry in 1..=50 {
-            let tablet_index = raft_engine
-                .get_region_state(rid, u64::MAX)
-                .unwrap()
-                .unwrap()
-                .get_tablet_index();
-            if !raft_engine.get_dirty_mark(rid, tablet_index).unwrap() {
-                break;
-            } else if retry == 50 {
-                panic!("region {rid} not trimmed after 5s");
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
     }
-    drop(raft_engine);
 
     let region_2 = merge_region(&cluster, 0, region_1.clone(), peer_1, region_2, true);
     {

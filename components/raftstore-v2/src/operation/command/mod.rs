@@ -716,7 +716,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub fn flush(&mut self) -> u64 {
-        println!("Apply::flush {}", self.region_id());
         // TODO: maybe we should check whether there is anything to flush.
         let (index, term) = self.apply_progress();
         let control = self.apply_flow_control_mut();
@@ -761,7 +760,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.metrics = mem::take(&mut self.metrics);
         apply_res.bucket_stat = self.buckets.clone();
         let written_bytes = apply_res.metrics.written_bytes;
-        println!("Apply::report {}", self.region_id());
         self.res_reporter().report(apply_res);
         if let Some(buckets) = &mut self.buckets {
             buckets.clear_stats();
