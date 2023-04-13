@@ -17,6 +17,7 @@ use tikv_util::slog_panic;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
+    operation::SimpleWriteReqEncoder,
     raft::{Apply, Peer},
     router::{ApplyTask, CmdResChannel},
 };
@@ -25,7 +26,6 @@ mod ingest;
 
 pub use raftstore::store::simple_write::{
     SimpleWrite, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
-    SimpleWriteReqEncoder,
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -88,7 +88,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
-        let bin = SimpleWriteReqEncoder::<CmdResChannel>::new(
+        let bin = SimpleWriteReqEncoder::new(
             Box::<RaftRequestHeader>::default(),
             data,
             ctx.cfg.raft_entry_max_size.0 as usize,

@@ -614,7 +614,8 @@ mod tests {
         raft_cmd.mut_requests().push(req);
         let bytes = raft_cmd.write_to_bytes().unwrap();
         let logger = slog_global::borrow_global().new(o!());
-        let decoded = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap_err();
+        let decoded =
+            SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap_err();
         // SimpleWriteReqDecoder should be able to decode naive RaftCmdRequest.
         assert_eq!(decoded, raft_cmd);
 
@@ -647,7 +648,8 @@ mod tests {
         assert!(!req_encoder.amend(&header, &encoder.encode()));
 
         let (bytes, _) = req_encoder.encode();
-        let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
+        let mut decoder =
+            SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         assert_eq!(*decoder.header(), *header);
         let req = decoder.next().unwrap();
         let SimpleWrite::Put(put) = req else { panic!("should be put") };
