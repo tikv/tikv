@@ -65,7 +65,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
-    raw_write_encoder: Option<SimpleWriteReqEncoder<CmdResChannel>>,
+    raw_write_encoder: Option<SimpleWriteReqEncoder>,
     proposals: ProposalQueue<Vec<CmdResChannel>>,
     apply_scheduler: Option<ApplyScheduler>,
 
@@ -614,14 +614,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn simple_write_encoder_mut(
-        &mut self,
-    ) -> &mut Option<SimpleWriteReqEncoder<CmdResChannel>> {
+    pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteReqEncoder> {
         &mut self.raw_write_encoder
     }
 
     #[inline]
-    pub fn simple_write_encoder(&self) -> &Option<SimpleWriteReqEncoder<CmdResChannel>> {
+    pub fn simple_write_encoder(&self) -> &Option<SimpleWriteReqEncoder> {
         &self.raw_write_encoder
     }
 

@@ -25,8 +25,76 @@ mod ingest;
 
 pub use raftstore::store::message::simple_write::{
     SimpleWrite, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
-    SimpleWriteReqEncoder,
 };
+use raftstore::store::{
+    message::simple_write::SimpleWriteReqEncoder as SimpleWriteReqEncoderV1, WriteCallback,
+};
+
+/// We usually use `RaftCmdRequest` for read write request. But the codec is
+/// not efficient enough for simple request. `SimpleWrite` is introduce to
+/// make codec alloc less and fast.
+#[derive(Debug)]
+pub struct SimpleWriteReqEncoder {
+    core: SimpleWriteReqEncoderV1,
+    channels: Vec<CmdResChannel>,
+    notify_proposed: bool,
+}
+
+impl SimpleWriteReqEncoder {
+    /// Create a request encoder.
+    ///
+    /// If `notify_proposed` is true, channels will be called `notify_proposed`
+    /// when it's appended.
+    pub fn new(
+        header: Box<RaftRequestHeader>,
+        bin: SimpleWriteBinary,
+        size_limit: usize,
+        notify_proposed: bool,
+    ) -> SimpleWriteReqEncoder {
+        SimpleWriteReqEncoder {
+            core: SimpleWriteReqEncoderV1::new(header, bin, size_limit),
+            channels: vec![],
+            notify_proposed,
+        }
+    }
+
+    /// Encode the simple write into the buffer.
+    ///
+    /// Return false if the buffer limit is reached or the binary type not
+    /// match.
+    #[inline]
+    pub fn amend(&mut self, header: &RaftRequestHeader, bin: &SimpleWriteBinary) -> bool {
+        self.core.amend(header, bin)
+    }
+
+    #[inline]
+    pub fn data_size(&self) -> usize {
+        self.core.data_size()
+    }
+
+    #[inline]
+    pub fn encode(self) -> (Vec<u8>, Vec<CmdResChannel>) {
+        (self.core.encode(), self.channels)
+    }
+
+    #[inline]
+    pub fn add_response_channel(&mut self, mut ch: CmdResChannel) {
+        if self.notify_proposed {
+            ch.notify_proposed();
+        }
+        self.channels.push(ch);
+    }
+
+    #[inline]
+    pub fn notify_proposed(&self) -> bool {
+        self.notify_proposed
+    }
+
+    #[inline]
+    pub fn header(&self) -> &RaftRequestHeader {
+        self.core.header()
+    }
+}
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
@@ -88,7 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
-        let bin = SimpleWriteReqEncoder::<CmdResChannel>::new(
+        let bin = SimpleWriteReqEncoder::new(
             Box::<RaftRequestHeader>::default(),
             data,
             ctx.cfg.raft_entry_max_size.0 as usize,

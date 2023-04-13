@@ -12,7 +12,6 @@ use slog::Logger;
 use tikv_util::slog_panic;
 
 use super::parse_at;
-use crate::store::{msg::ErrorCallback, WriteCallback};
 
 // MAGIC number to hint simple write codec is used. If it's a protobuf message,
 // the first one or several bytes are for field tag, which can't be zero.
@@ -41,22 +40,14 @@ impl SimpleWriteBinary {
 /// not efficient enough for simple request. `SimpleWrite` is introduce to
 /// make codec alloc less and fast.
 #[derive(Debug)]
-pub struct SimpleWriteReqEncoder<C>
-where
-    C: ErrorCallback + WriteCallback,
-{
+pub struct SimpleWriteReqEncoder {
     header: Box<RaftRequestHeader>,
     buf: Vec<u8>,
-    channels: Vec<C>,
     size_limit: usize,
     write_type: WriteType,
-    notify_proposed: bool,
 }
 
-impl<C> SimpleWriteReqEncoder<C>
-where
-    C: ErrorCallback + WriteCallback,
-{
+impl SimpleWriteReqEncoder {
     /// Create a request encoder.
     ///
     /// If `notify_proposed` is true, channels will be called `notify_proposed`
@@ -65,8 +56,7 @@ where
         header: Box<RaftRequestHeader>,
         bin: SimpleWriteBinary,
         size_limit: usize,
-        notify_proposed: bool,
-    ) -> SimpleWriteReqEncoder<C> {
+    ) -> SimpleWriteReqEncoder {
         let mut buf = Vec::with_capacity(256);
         buf.push(MAGIC_PREFIX);
         header.write_length_delimited_to_vec(&mut buf).unwrap();
@@ -75,10 +65,8 @@ where
         SimpleWriteReqEncoder {
             header,
             buf,
-            channels: vec![],
             size_limit,
             write_type: bin.write_type,
-            notify_proposed,
         }
     }
 
@@ -108,21 +96,8 @@ where
     }
 
     #[inline]
-    pub fn encode(self) -> (Vec<u8>, Vec<C>) {
-        (self.buf, self.channels)
-    }
-
-    #[inline]
-    pub fn add_response_channel(&mut self, mut ch: C) {
-        if self.notify_proposed {
-            ch.notify_proposed();
-        }
-        self.channels.push(ch);
-    }
-
-    #[inline]
-    pub fn notify_proposed(&self) -> bool {
-        self.notify_proposed
+    pub fn encode(self) -> Vec<u8> {
+        self.buf
     }
 
     #[inline]
