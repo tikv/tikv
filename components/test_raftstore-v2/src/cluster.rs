@@ -525,7 +525,6 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
-        let key_mgr = self.key_managers_map.get(&node_id).unwrap().clone();
         self.sim.wl().run_node(
             node_id,
             cfg,

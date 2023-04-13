@@ -2792,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=tabokie-patch-1#357ddb49358a257f1f4063e321a37b0c803ff6a9"
+source = "git+https://github.com/pingcap/kvproto.git?branch=tabokie-patch-1#62b8a18792190aabedc73ad10f1bbe57e5f5f6df"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

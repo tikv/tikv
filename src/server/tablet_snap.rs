@@ -3,8 +3,13 @@
 //! This file contains the implementation of sending and receiving tablet
 //! snapshot.
 //!
-//! Different from v1, tablet snapshot always tries to use cache to speed up
-//! transfering speed. The protocol is quite simple:
+//! v2 snapshot transfers engine data in its original form, instead of creating
+//! new files like in v1. It's possible that receiver and sender share some data
+//! files because they might derive from the same snapshot. To optimize transfer
+//! speed, we first compare their file list and only send files missing from
+//! receiver's "cache".
+//!
+//! # Protocol
 //!
 //! sender                            receiver
 //! send snapshot meta    ---->     receive snapshot meta
@@ -16,8 +21,6 @@
 //! wait for receiver       <-----  close sender
 //! finish
 
-#[cfg(any(test, feature = "testexport"))]
-use std::io;
 use std::{
     cmp,
     convert::TryFrom,
@@ -38,7 +41,7 @@ use encryption_export::DataKeyManager;
 use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use file_system::{IoType, OpenOptions, WithIoType};
 use futures::{
-    future::{Future, FutureExt},
+    future::FutureExt,
     sink::{Sink, SinkExt},
     stream::{Stream, StreamExt, TryStreamExt},
 };
@@ -61,7 +64,7 @@ use tikv_util::{
     config::{ReadableSize, Tracker, VersionTrack},
     time::Instant,
     worker::Runnable,
-    DeferContext,
+    DeferContext, Either,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
@@ -81,21 +84,57 @@ fn is_sst(file_name: &str) -> bool {
     file_name.ends_with(".sst")
 }
 
-async fn read_to(f: &mut File, to: &mut Vec<u8>, size: usize, limiter: &Limiter) -> Result<()> {
-    // It's likely in page cache already.
-    let cost = size / 2;
-    limiter.consume(cost).await;
-    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
-        .send
-        .inc_by(cost as u64);
-    to.clear();
-    to.reserve_exact(size);
-    let mut buf: BorrowedBuf<'_> = to.spare_capacity_mut().into();
-    f.read_buf_exact(buf.unfilled())?;
-    unsafe {
-        to.set_len(size);
+struct WrappedReadableFile(Either<File, encryption_export::DecrypterReader<File>>);
+
+impl WrappedReadableFile {
+    fn open(key_manager: &Option<Arc<DataKeyManager>>, path: &Path) -> Result<Self> {
+        let f = File::open(path)?;
+        let inner = if let Some(m) = key_manager {
+            Either::Right(
+                m.open_file_with_reader(path, f)
+                    .map_err(|e| Error::Other(e.into()))?,
+            )
+        } else {
+            Either::Left(f)
+        };
+        Ok(Self(inner))
     }
-    Ok(())
+
+    fn seek(&mut self, to: SeekFrom) -> Result<u64> {
+        let r = match &mut self.0 {
+            Either::Left(f) => f.seek(to)?,
+            Either::Right(f) => f.seek(to)?,
+        };
+        Ok(r)
+    }
+
+    fn len(&self) -> Result<u64> {
+        let r = match &self.0 {
+            Either::Left(f) => f.metadata()?.len(),
+            Either::Right(f) => f.inner().metadata()?.len(),
+        };
+        Ok(r)
+    }
+
+    async fn read_to(&mut self, to: &mut Vec<u8>, size: usize, limiter: &Limiter) -> Result<()> {
+        // It's likely in page cache already.
+        let cost = size / 2;
+        limiter.consume(cost).await;
+        SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+            .send
+            .inc_by(cost as u64);
+        to.clear();
+        to.reserve_exact(size);
+        let mut buf: BorrowedBuf<'_> = to.spare_capacity_mut().into();
+        match &mut self.0 {
+            Either::Left(f) => f.read_buf_exact(buf.unfilled())?,
+            Either::Right(f) => f.read_buf_exact(buf.unfilled())?,
+        }
+        unsafe {
+            to.set_len(size);
+        }
+        Ok(())
+    }
 }
 
 pub trait SnapCacheBuilder: Send + Sync {
@@ -200,10 +239,10 @@ async fn is_sst_match_preview(
     target: &Path,
     buffer: &mut Vec<u8>,
     limiter: &Limiter,
+    key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<bool> {
-    let mut f = File::open(target)?;
-    let exist_len = f.metadata()?.len();
-    if exist_len != preview_meta.file_size {
+    let mut f = WrappedReadableFile::open(key_manager, target)?;
+    if f.len()? != preview_meta.file_size {
         return Ok(false);
     }
 
@@ -218,7 +257,7 @@ async fn is_sst_match_preview(
             .into(),
         ));
     }
-    read_to(&mut f, buffer, head_len, limiter).await?;
+    f.read_to(buffer, head_len, limiter).await?;
     if *buffer != preview_meta.head_chunk {
         return Ok(false);
     }
@@ -230,7 +269,7 @@ async fn is_sst_match_preview(
     }
 
     f.seek(SeekFrom::End(-(trailing_len as i64)))?;
-    read_to(&mut f, buffer, trailing_len, limiter).await?;
+    f.read_to(buffer, trailing_len, limiter).await?;
     Ok(*buffer == preview_meta.trailing_chunk)
 }
 
@@ -239,6 +278,7 @@ async fn cleanup_cache(
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
     sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
     limiter: &Limiter,
+    key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<(u64, Vec<String>)> {
     let mut reused = 0;
     let mut exists = HashMap::default();
@@ -270,7 +310,7 @@ async fn cleanup_cache(
         let mut buffer = Vec::with_capacity(PREVIEW_CHUNK_LEN);
         for meta in preview.take_metas().into_vec() {
             if is_sst(&meta.file_name) && let Some(p) = exists.remove(&meta.file_name) {
-                if is_sst_match_preview(&meta, &p, &mut buffer, limiter).await? {
+                if is_sst_match_preview(&meta, &p, &mut buffer, limiter, key_manager).await? {
                     reused += meta.file_size;
                     continue;
                 }
@@ -297,10 +337,13 @@ async fn accept_one_file(
     mut chunk: TabletSnapshotFileChunk,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
     limiter: &Limiter,
+    key_manager: &Option<Arc<DataKeyManager>>,
     digest: &mut Digest,
 ) -> Result<u64> {
     let name = chunk.file_name;
     digest.write(name.as_bytes());
+    let iv = chunk.iv;
+    // let key = chunk.key;
     let mut f = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -323,6 +366,15 @@ async fn accept_one_file(
         f.write_all(&chunk.data)?;
         if exp_size == file_size {
             f.sync_data()?;
+            if !iv.is_empty() {
+                if let Some(_m) = key_manager {
+                    unimplemented!();
+                } else {
+                    return Err(Error::Other(
+                        "encryption not enabled on receiving end".to_string().into(),
+                    ));
+                }
+            }
             return Ok(exp_size);
         }
         chunk = match stream.next().await {
@@ -340,6 +392,7 @@ async fn accept_missing(
     missing_ssts: Vec<String>,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
     limiter: &Limiter,
+    key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<u64> {
     let mut digest = Digest::default();
     let mut received_bytes: u64 = 0;
@@ -351,7 +404,8 @@ async fn accept_missing(
         if chunk.file_name != name {
             return Err(protocol_error(&name, &chunk.file_name));
         }
-        received_bytes += accept_one_file(path, chunk, stream, limiter, &mut digest).await?;
+        received_bytes +=
+            accept_one_file(path, chunk, stream, limiter, key_manager, &mut digest).await?;
     }
     // Now receive other files.
     loop {
@@ -377,11 +431,12 @@ async fn accept_missing(
         if chunk.file_name.is_empty() {
             return Err(protocol_error("file_name", &chunk.file_name));
         }
-        received_bytes += accept_one_file(path, chunk, stream, limiter, &mut digest).await?;
+        received_bytes +=
+            accept_one_file(path, chunk, stream, limiter, key_manager, &mut digest).await?;
     }
 }
 
-async fn recv_snap_files<'a>(
+async fn recv_snap_imp<'a>(
     snap_mgr: &'a TabletSnapManager,
     cache_builder: impl SnapCacheBuilder,
     mut stream: impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin,
@@ -415,13 +470,13 @@ async fn recv_snap_files<'a>(
             info!("not using cache"; "region_id" => region_id, "err" => ?e);
             fs::create_dir_all(&path)?;
         }
-        cleanup_cache(&path, &mut stream, sink, &limiter).await?
+        cleanup_cache(&path, &mut stream, sink, &limiter, &key_manager).await?
     } else {
         info!("not using cache"; "region_id" => region_id);
         fs::create_dir_all(&path)?;
         (0, vec![])
     };
-    let received = accept_missing(&path, missing_ssts, &mut stream, &limiter).await?;
+    let received = accept_missing(&path, missing_ssts, &mut stream, &limiter, &key_manager).await?;
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;
@@ -430,7 +485,7 @@ async fn recv_snap_files<'a>(
 
 async fn recv_snap<R: RaftExtension + 'static>(
     stream: RequestStream<TabletSnapshotRequest>,
-    sink: DuplexSink<TabletSnapshotResponse>,
+    mut sink: DuplexSink<TabletSnapshotResponse>,
     snap_mgr: TabletSnapManager,
     raft_router: R,
     cache_builder: impl SnapCacheBuilder,
@@ -438,8 +493,7 @@ async fn recv_snap<R: RaftExtension + 'static>(
     key_manager: Option<Arc<DataKeyManager>>,
 ) -> Result<()> {
     let stream = stream.map_err(Error::from);
-    let mut sink = sink;
-    let res = recv_snap_files(
+    let res = recv_snap_imp(
         &snap_mgr,
         cache_builder,
         stream,
@@ -450,18 +504,20 @@ async fn recv_snap<R: RaftExtension + 'static>(
     .await
     .and_then(|context| context.finish(raft_router));
     match res {
-        Ok(()) => sink.close().await.map_err(Error::from),
+        Ok(()) => sink.close().await?,
         Err(e) => {
             let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
-            sink.fail(status).await.map_err(Error::from)
+            sink.fail(status).await?;
         }
     }
+    Ok(())
 }
 
 async fn build_one_preview(
     path: &Path,
     iter: &mut impl Iterator<Item = (&String, &u64)>,
     limiter: &Limiter,
+    key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<TabletSnapshotRequest> {
     let mut preview = TabletSnapshotPreview::default();
     for _ in 0..PREVIEW_BATCH_SIZE {
@@ -472,12 +528,15 @@ async fn build_one_preview(
         let mut meta = TabletSnapshotFileMeta::default();
         meta.file_name = name.clone();
         meta.file_size = size;
-        let mut f = File::open(path.join(name))?;
+        let mut f = WrappedReadableFile::open(key_manager, &path.join(name))?;
+
+        // let mut f = File::open(path.join(name))?;
         let to_read = cmp::min(size as usize, PREVIEW_CHUNK_LEN);
-        read_to(&mut f, &mut meta.head_chunk, to_read, limiter).await?;
+        f.read_to(&mut meta.head_chunk, to_read, limiter).await?;
         if size > PREVIEW_CHUNK_LEN as u64 {
             f.seek(SeekFrom::End(-(to_read as i64)))?;
-            read_to(&mut f, &mut meta.trailing_chunk, to_read, limiter).await?;
+            f.read_to(&mut meta.trailing_chunk, to_read, limiter)
+                .await?;
         }
         preview.mut_metas().push(meta);
     }
@@ -492,6 +551,7 @@ async fn find_missing(
     sender: &mut (impl Sink<(TabletSnapshotRequest, WriteFlags), Error = Error> + Unpin),
     receiver: &mut (impl Stream<Item = grpcio::Result<TabletSnapshotResponse>> + Unpin),
     limiter: &Limiter,
+    key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<Vec<(String, u64)>> {
     let mut sst_sizes = 0;
     let mut ssts = HashMap::default();
@@ -524,19 +584,17 @@ async fn find_missing(
     head.mut_head().set_use_cache(true);
     // Send immediately to make receiver collect cache earlier.
     sender.send((head, WriteFlags::default())).await?;
-    let sst_count = ssts.len();
-    // PREVIEW_BATCH_SIZE -> 1, PREVIEW_BATCH_SIZE + 1 = 2. sst_count can't be 0.
-    let batch_count = (sst_count - 1) / PREVIEW_BATCH_SIZE + 1;
-    let mut ssts_iter = ssts.iter();
-    for _ in 0..batch_count {
-        let req = build_one_preview(path, &mut ssts_iter, limiter).await?;
+    let mut ssts_iter = ssts.iter().peekable();
+    while ssts_iter.peek().is_some() {
+        let mut req = build_one_preview(path, &mut ssts_iter, limiter, key_manager).await?;
+        req.mut_preview().end = ssts_iter.peek().is_none();
         sender
-            .send((req, WriteFlags::default().buffer_hint(true)))
+            .send((
+                req,
+                WriteFlags::default().buffer_hint(ssts_iter.peek().is_some()),
+            ))
             .await?;
     }
-    let mut req = build_one_preview(path, &mut ssts_iter, limiter).await?;
-    req.mut_preview().end = true;
-    sender.send((req, WriteFlags::default())).await?;
 
     let accepted = match receiver.next().await {
         Some(Ok(mut req)) if req.has_files() => req.take_files().take_file_name(),
@@ -568,6 +626,8 @@ async fn send_missing(
         digest.write(chunk.file_name.as_bytes());
         chunk.file_size = file_size;
         total_sent += file_size;
+        // chunk.iv = unimplemented!();
+        // chunk.key = unimplemented!();
         if file_size == 0 {
             let mut req = TabletSnapshotRequest::default();
             req.set_chunk(chunk);
@@ -577,10 +637,11 @@ async fn send_missing(
             continue;
         }
 
-        let mut f = File::open(path.join(&chunk.file_name))?;
+        // Send encrypted content.
+        let mut f = WrappedReadableFile::open(&None, &path.join(&chunk.file_name))?;
         loop {
             let to_read = cmp::min(FILE_CHUNK_LEN as u64, file_size) as usize;
-            read_to(&mut f, &mut chunk.data, to_read, limiter).await?;
+            f.read_to(&mut chunk.data, to_read, limiter).await?;
             digest.write(&chunk.data);
             let mut req = TabletSnapshotRequest::default();
             req.set_chunk(chunk);
@@ -597,51 +658,17 @@ async fn send_missing(
     Ok((total_sent, digest.sum64()))
 }
 
-async fn send_snap_files(
-    mgr: &TabletSnapManager,
-    mut sender: impl Sink<(TabletSnapshotRequest, WriteFlags), Error = Error> + Unpin,
-    receiver: &mut (impl Stream<Item = grpcio::Result<TabletSnapshotResponse>> + Unpin),
-    msg: RaftMessage,
-    key: TabletSnapKey,
-    limiter: Limiter,
-    key_manager: Option<Arc<DataKeyManager>>,
-) -> Result<u64> {
-    let region_id = key.region_id;
-    let to_peer = key.to_peer;
-    let path = mgr.tablet_gen_path(&key);
-    info!("begin to send snapshot file"; "snap_key" => %key, "region_id" => region_id, "to_peer" => to_peer);
-    let io_type = io_type_from_raft_message(&msg)?;
-    let _with_io_type = WithIoType::new(io_type);
-    let mut head = TabletSnapshotRequest::default();
-    head.mut_head().set_message(msg);
-    let missing = find_missing(&path, head, &mut sender, receiver, &limiter).await?;
-    let (total_sent, checksum) = send_missing(&path, missing, &mut sender, &limiter).await?;
-    // In gRPC, stream in serverside can finish without error (when the connection
-    // is closed). So we need to use an explicit `Done` to indicate all messages
-    // are sent. In V1, we have checksum and meta list, so this is not a
-    // problem.
-    let mut req = TabletSnapshotRequest::default();
-    req.mut_end().set_checksum(checksum);
-    sender.send((req, WriteFlags::default())).await?;
-    info!("sent all snap file finish"; "snap_key" => %key, "region_id" => region_id, "to_peer" => to_peer);
-    sender.close().await?;
-    Ok(total_sent)
-}
-
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the
 /// snapshot file.
-pub fn send_snap(
-    env: Arc<Environment>,
-    mgr: TabletSnapManager,
-    security_mgr: Arc<SecurityManager>,
-    key_manager: Option<Arc<DataKeyManager>>,
-    cfg: &Config,
-    addr: &str,
+pub async fn send_snap(
+    client: TikvClient,
+    snap_mgr: TabletSnapManager,
     msg: RaftMessage,
     limiter: Limiter,
-) -> Result<impl Future<Output = Result<SendStat>>> {
+    key_manager: Option<Arc<DataKeyManager>>,
+) -> Result<SendStat> {
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
     let send_timer = SEND_SNAP_HISTOGRAM.start_coarse_timer();
@@ -651,51 +678,53 @@ pub fn send_snap(
         msg.get_message().get_snapshot(),
     );
     let deregister = {
-        let (mgr, key) = (mgr.clone(), key.clone());
-        DeferContext::new(move || mgr.finish_snapshot(key.clone(), timer))
+        let (snap_mgr, key) = (snap_mgr.clone(), key.clone());
+        DeferContext::new(move || snap_mgr.finish_snapshot(key, timer))
     };
 
-    let cb = ChannelBuilder::new(env)
-        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
-        .keepalive_time(cfg.grpc_keepalive_time.0)
-        .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
-        .default_compression_algorithm(cfg.grpc_compression_algorithm())
-        .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
-        .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress);
-
-    let channel = security_mgr.connect(cb, addr);
-    let client = TikvClient::new(channel);
     let (sink, mut receiver) = client.tablet_snapshot()?;
-    let send_task = async move {
-        let sink = sink.sink_map_err(Error::from);
-        let total_size = send_snap_files(
-            &mgr,
-            sink,
-            &mut receiver,
-            msg,
-            key.clone(),
-            limiter,
-            key_manager,
-        )
-        .await?;
-        let recv_result = receiver.next().await;
-        send_timer.observe_duration();
-        drop(client);
-        drop(deregister);
-        mgr.delete_snapshot(&key);
-        match recv_result {
-            None => Ok(SendStat {
-                key,
-                total_size,
-                elapsed: timer.saturating_elapsed(),
-            }),
-            Some(Err(e)) => Err(e.into()),
-            Some(Ok(resp)) => Err(Error::Other(
-                format!("receive unexpected response {:?}", resp).into(),
-            )),
-        }
-    };
-    Ok(send_task)
+    let mut sink = sink.sink_map_err(Error::from);
+    let path = snap_mgr.tablet_gen_path(&key);
+    info!("begin to send snapshot file"; "snap_key" => %key);
+    let io_type = io_type_from_raft_message(&msg)?;
+    let _with_io_type = WithIoType::new(io_type);
+    let mut head = TabletSnapshotRequest::default();
+    head.mut_head().set_message(msg);
+    let missing = find_missing(
+        &path,
+        head,
+        &mut sink,
+        &mut receiver,
+        &limiter,
+        &key_manager,
+    )
+    .await?;
+    let (total_size, checksum) = send_missing(&path, missing, &mut sink, &limiter).await?;
+    // In gRPC, stream in serverside can finish without error (when the connection
+    // is closed). So we need to use an explicit `Done` to indicate all messages
+    // are sent. In V1, we have checksum and meta list, so this is not a
+    // problem.
+    let mut req = TabletSnapshotRequest::default();
+    req.mut_end().set_checksum(checksum);
+    sink.send((req, WriteFlags::default())).await?;
+    info!("sent all snap file finish"; "snap_key" => %key);
+    sink.close().await?;
+    let recv_result = receiver.next().await;
+    send_timer.observe_duration();
+    drop(client);
+    drop(deregister);
+    snap_mgr.delete_snapshot(&key);
+    match recv_result {
+        None => Ok(SendStat {
+            key,
+            total_size,
+            elapsed: timer.saturating_elapsed(),
+        }),
+        Some(Err(e)) => Err(e.into()),
+        Some(Ok(resp)) => Err(Error::Other(
+            format!("receive unexpected response {:?}", resp).into(),
+        )),
+    }
 }
 
 pub struct TabletRunner<B, R: RaftExtension + 'static> {
@@ -809,14 +838,16 @@ where
                 }
                 SNAP_TASK_COUNTER_STATIC.recv.inc();
 
-                let snap_mgr = self.snap_mgr.clone();
-                let raft_router = self.raft_router.clone();
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
+
+                let snap_mgr = self.snap_mgr.clone();
+                let raft_router = self.raft_router.clone();
                 let limiter = self.limiter.clone();
                 let key_manager = self.key_manager.clone();
                 let cache_builder = self.cache_builder.clone();
-                let task = async move {
+
+                self.pool.spawn(async move {
                     let result = recv_snap(
                         stream,
                         sink,
@@ -831,8 +862,7 @@ where
                     if let Err(e) = result {
                         error!("failed to recv snapshot"; "err" => %e);
                     }
-                };
-                self.pool.spawn(task);
+                });
             }
             Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
@@ -847,27 +877,34 @@ where
                 }
                 SNAP_TASK_COUNTER_STATIC.send.inc();
 
-                let env = Arc::clone(&self.env);
-                let mgr = self.snap_mgr.clone();
-                let security_mgr = Arc::clone(&self.security_mgr);
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
+
+                let snap_mgr = self.snap_mgr.clone();
+                let security_mgr = Arc::clone(&self.security_mgr);
                 let limiter = self.limiter.clone();
-                let send_task = send_snap(
-                    env,
-                    mgr,
-                    security_mgr,
-                    self.key_manager.clone(),
-                    &self.cfg.clone(),
-                    &addr,
-                    msg,
-                    limiter,
-                );
-                let task = async move {
-                    let res = match send_task {
-                        Err(e) => Err(e),
-                        Ok(f) => f.await,
-                    };
+                let key_manager = self.key_manager.clone();
+
+                let channel_builder = ChannelBuilder::new(self.env.clone())
+                    .stream_initial_window_size(self.cfg.grpc_stream_initial_window_size.0 as i32)
+                    .keepalive_time(self.cfg.grpc_keepalive_time.0)
+                    .keepalive_timeout(self.cfg.grpc_keepalive_timeout.0)
+                    .default_compression_algorithm(self.cfg.grpc_compression_algorithm())
+                    .default_gzip_compression_level(self.cfg.grpc_gzip_compression_level)
+                    .default_grpc_min_message_size_to_compress(
+                        self.cfg.grpc_min_message_size_to_compress,
+                    );
+                let channel = security_mgr.connect(channel_builder, &addr);
+                let client = TikvClient::new(channel);
+
+                self.pool.spawn(async move {
+                    let res = send_snap(
+                        client,
+                        snap_mgr,
+                        msg,
+                        limiter,
+                        key_manager,
+                    ).await;
                     match res {
                         Ok(stat) => {
                             info!(
@@ -885,9 +922,7 @@ where
                         }
                     };
                     sending_count.fetch_sub(1, Ordering::SeqCst);
-                };
-
-                self.pool.spawn(task);
+                });
             }
             Task::RefreshConfigEvent => {
                 self.refresh_cfg();
@@ -927,7 +962,7 @@ pub fn copy_tablet_snapshot(
         let recv_p = recv_path.join(sender_name);
         let mut recv_f = File::create(recv_p)?;
 
-        while io::copy(&mut sender_f, &mut recv_f)? != 0 {}
+        while std::io::copy(&mut sender_f, &mut recv_f)? != 0 {}
     }
 
     let final_path = recver_snap_mgr.final_recv_path(&recv_context.key);
