@@ -467,7 +467,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
 
                 SNAP_TASK_COUNTER_STATIC.recv.inc();
 
-                let snap_mgr = self.snap_mgr.get_snap_mgr_v2().clone();
+                let snap_mgr = self.snap_mgr.tablet_snap_manager().clone();
                 let raft_router = self.raft_router.clone();
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
