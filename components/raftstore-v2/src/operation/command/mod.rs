@@ -69,9 +69,9 @@ pub use admin::{
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};
 use protobuf::Message;
-pub use write::{
-    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
-};
+pub use write::{SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder};
+pub type SimpleWriteReqEncoder =
+    raftstore::store::simple_write::SimpleWriteReqEncoder<CmdResChannel>;
 
 use self::write::SimpleWrite;
 
@@ -462,7 +462,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
-        let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
+        let decoder = match SimpleWriteReqDecoder::new(
+            |buf, index, term| parse_at(&self.logger, buf, index, term),
+            &self.logger,
+            &data,
+            u64::MAX,
+            u64::MAX,
+        ) {
             Ok(decoder) => decoder,
             Err(req) => unreachable!("unexpected request: {:?}", req),
         };
@@ -555,6 +561,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let log_index = entry.get_index();
         let req = match entry.get_entry_type() {
             EntryType::EntryNormal => match SimpleWriteReqDecoder::new(
+                |buf, index, term| parse_at(&self.logger, buf, index, term),
                 &self.logger,
                 entry.get_data(),
                 log_index,
