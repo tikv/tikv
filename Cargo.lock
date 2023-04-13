@@ -2792,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#349815129e6de9804a2900479bf6d546704d0825"
+source = "git+https://github.com/pingcap/kvproto.git#ce835ae20dfcb5f69f0aea04236070932c815b6a"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4772,6 +4772,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "protobuf",
+ "rand 0.8.5",
  "serde",
  "slog",
  "slog-global",
