@@ -11,8 +11,7 @@ use protobuf::{CodedInputStream, Message};
 use slog::Logger;
 use tikv_util::slog_panic;
 
-use super::parse_at;
-use crate::store::{msg::ErrorCallback, WriteCallback};
+use crate::store::{msg::ErrorCallback, util::parse_data_at, WriteCallback};
 
 // MAGIC number to hint simple write codec is used. If it's a protobuf message,
 // the first one or several bytes are for field tag, which can't be zero.
@@ -269,7 +268,7 @@ impl<'a> SimpleWriteReqDecoder<'a> {
                     buf: &buf[1 + read as usize..],
                 })
             }
-            _ => Err(parse_at(logger, buf, index, term)),
+            _ => Err(parse_data_at(buf, index, &format!("term: {}", term))),
         }
     }
 

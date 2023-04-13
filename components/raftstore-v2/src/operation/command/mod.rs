@@ -36,7 +36,6 @@ use raftstore::{
             Proposal,
         },
         local_metrics::RaftMetrics,
-        message::parse_at,
         metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
         util, Config, Transport, WriteCallback,
@@ -74,6 +73,20 @@ pub use write::{
 };
 
 use self::write::SimpleWrite;
+
+fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64, term: u64) -> M {
+    let mut m = M::default();
+    match m.merge_from_bytes(buf) {
+        Ok(()) => m,
+        Err(e) => slog_panic!(
+            logger,
+            "data is corrupted";
+            "term" => term,
+            "index" => index,
+            "error" => ?e,
+        ),
+    }
+}
 
 #[derive(Debug)]
 pub struct CommittedEntries {
