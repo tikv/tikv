@@ -9,10 +9,16 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
+    metapb::RegionEpoch,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{AsyncReadNotifier, FetchedLogs, GenSnapRes, RegionSnapshot};
+use raftstore::{
+    router::CdcHandle,
+    store::{
+        fsm::ChangeObserver, AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
+    },
+};
 use slog::warn;
 
 use super::PeerMsg;
@@ -167,5 +173,25 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
             router: router.clone(),
             local_reader: LocalReader::new(store_meta, router, logger),
         }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> CdcHandle<EK> for RaftRouter<EK, ER> {
+    fn capture_change(
+        &self,
+        _region_id: u64,
+        _region_epoch: RegionEpoch,
+        _change_observer: ChangeObserver,
+        _callback: Callback<EK::Snapshot>,
+    ) -> crate::Result<()> {
+        unimplemented!()
+    }
+
+    fn check_leadership(
+        &self,
+        _region_id: u64,
+        _callback: Callback<EK::Snapshot>,
+    ) -> crate::Result<()> {
+        unimplemented!()
     }
 }

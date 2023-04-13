@@ -13,7 +13,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use online_config::ConfigValue;
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
 use resolved_ts::{Observer, Task};
 use test_raftstore::*;
 use tikv::config::ResolvedTsConfig;
@@ -81,7 +81,7 @@ impl TestSuite {
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg,
                 worker.scheduler(),
-                raft_router,
+                CdcRaftRouter(raft_router),
                 cluster.store_metas[id].clone(),
                 pd_cli.clone(),
                 cm.clone(),

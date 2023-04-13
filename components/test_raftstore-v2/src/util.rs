@@ -8,20 +8,12 @@ use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
 use futures::Future;
-use kvproto::{
-    kvrpcpb::Context,
-    metapb,
-    raft_cmdpb::{ChangePeerRequest, RaftCmdResponse},
-};
-use raft::prelude::ConfChangeType;
+use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse};
 use raftstore::Result;
 use rand::RngCore;
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use test_raftstore::{
-    new_admin_request, new_change_peer_request, new_change_peer_v2_request, new_get_cmd,
-    new_put_cf_cmd, new_request, Config,
-};
+use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
@@ -240,33 +232,4 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
     cluster.sim.wl().async_read(request)
-}
-
-pub fn call_conf_change<T>(
-    cluster: &mut Cluster<T, RocksEngine>,
-    region_id: u64,
-    conf_change_type: ConfChangeType,
-    peer: metapb::Peer,
-) -> Result<RaftCmdResponse>
-where
-    T: Simulator<RocksEngine>,
-{
-    let conf_change = new_change_peer_request(conf_change_type, peer);
-    let epoch = cluster.pd_client.get_region_epoch(region_id);
-    let admin_req = new_admin_request(region_id, &epoch, conf_change);
-    cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
-}
-
-pub fn call_conf_change_v2<T>(
-    cluster: &mut Cluster<T, RocksEngine>,
-    region_id: u64,
-    changes: Vec<ChangePeerRequest>,
-) -> Result<RaftCmdResponse>
-where
-    T: Simulator<RocksEngine>,
-{
-    let conf_change = new_change_peer_v2_request(changes);
-    let epoch = cluster.pd_client.get_region_epoch(region_id);
-    let admin_req = new_admin_request(region_id, &epoch, conf_change);
-    cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
 }
