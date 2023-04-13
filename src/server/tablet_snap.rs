@@ -47,13 +47,17 @@ use grpcio::{
 };
 use kvproto::{
     raft_serverpb::{
-        RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
-        TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
+        RaftMessage, RaftSnapshotData, SnapshotMeta, TabletSnapshotFileChunk,
+        TabletSnapshotFileMeta, TabletSnapshotPreview, TabletSnapshotRequest,
+        TabletSnapshotResponse,
     },
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::store::snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager};
+use raftstore::store::{
+    snap::{gen_snapshot_meta, ReceivingGuard, TabletSnapKey, TabletSnapManager},
+    SnapKey, SnapManager,
+};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -386,6 +390,7 @@ pub(crate) async fn recv_snap_files<'a>(
     mut stream: impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin,
     sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
     limiter: Limiter,
+    snap_mgr_v1: Option<SnapManager>,
 ) -> Result<RecvTabletSnapContext<'a>> {
     let head = stream
         .next()
@@ -423,6 +428,13 @@ pub(crate) async fn recv_snap_files<'a>(
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;
+
+    if let Some(snap_mgr_v1) = snap_mgr_v1 {
+        let snap_key = SnapKey::new(context.key.region_id, context.key.term, context.key.idx);
+        let mut s = snap_mgr_v1.get_snapshot_for_receiving(&snap_key, SnapshotMeta::new())?;
+        s.set_and_save_meta()?;
+    }
+
     Ok(context)
 }
 
@@ -433,12 +445,20 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
     raft_router: R,
     cache_builder: impl SnapCacheBuilder,
     limiter: Limiter,
+    snap_mgr_v1: Option<SnapManager>,
 ) -> Result<()> {
     let stream = stream.map_err(Error::from);
     let mut sink = sink;
-    let res = recv_snap_files(&snap_mgr, cache_builder, stream, &mut sink, limiter)
-        .await
-        .and_then(|context| context.finish(raft_router));
+    let res = recv_snap_files(
+        &snap_mgr,
+        cache_builder,
+        stream,
+        &mut sink,
+        limiter,
+        snap_mgr_v1,
+    )
+    .await
+    .and_then(|context| context.finish(raft_router));
     match res {
         Ok(()) => sink.close().await.map_err(Error::from),
         Err(e) => {
@@ -793,9 +813,16 @@ where
                 let limiter = self.limiter.clone();
                 let cache_builder = self.cache_builder.clone();
                 let task = async move {
-                    let result =
-                        recv_snap(stream, sink, snap_mgr, raft_router, cache_builder, limiter)
-                            .await;
+                    let result = recv_snap(
+                        stream,
+                        sink,
+                        snap_mgr,
+                        raft_router,
+                        cache_builder,
+                        limiter,
+                        None,
+                    )
+                    .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
                         error!("failed to recv snapshot"; "err" => %e);

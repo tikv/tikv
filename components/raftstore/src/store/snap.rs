@@ -440,6 +440,8 @@ pub struct Snapshot {
     meta_file: MetaFile,
     hold_tmp_files: bool,
 
+    tablet_path: Option<PathBuf>,
+
     mgr: SnapManagerCore,
 }
 
@@ -502,11 +504,8 @@ impl Snapshot {
             meta_file,
             hold_tmp_files: false,
             mgr: mgr.clone(),
+            tablet_path: None,
         };
-
-        s.init_for_building();
-        s.meta_file.meta = Some(gen_snapshot_meta(&s.cf_files[..], false)?);
-        s.save_meta_file()?;
 
         if check_policy == CheckPolicy::None {
             return Ok(s);
@@ -1016,6 +1015,11 @@ impl Snapshot {
         if self.hold_tmp_files {
             delete_file_if_exist(&self.meta_file.tmp_path).unwrap();
         }
+    }
+
+    pub fn set_and_save_meta(&mut self) -> RaftStoreResult<()> {
+        self.meta_file.meta = Some(gen_snapshot_meta(&self.cf_files[..], false)?);
+        self.save_meta_file()
     }
 }
 

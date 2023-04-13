@@ -472,6 +472,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.snap_mgr.limiter().clone();
+                let snap_mgr_v1 = self.snap_mgr.clone();
                 let task = async move {
                     let result = crate::server::tablet_snap::recv_snap(
                         stream,
@@ -480,6 +481,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                         raft_router,
                         NoSnapshotCache, // do not use cache in v1
                         limiter,
+                        Some(snap_mgr_v1),
                     )
                     .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
