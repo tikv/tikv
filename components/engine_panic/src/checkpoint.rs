@@ -15,6 +15,10 @@ impl Checkpointable for PanicEngine {
     fn new_checkpointer(&self) -> Result<Self::Checkpointer> {
         panic!()
     }
+
+    fn merge(&self, dbs: &[&Self]) -> Result<()> {
+        panic!()
+    }
 }
 
 impl Checkpointer for PanicCheckpointer {

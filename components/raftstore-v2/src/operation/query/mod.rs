@@ -281,7 +281,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage().apply_state().get_applied_index() >= read_index
             // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
             // TODO: Add a test to cover this case
-            && !self.has_pending_merge_state()
+            && self.proposal_control().has_applied_prepare_merge()
     }
 
     #[inline]
@@ -401,6 +401,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .raft_log
             .term(meta.raft_apply.commit_index)
             .unwrap();
+        if let Some(bucket_stats) = self.region_buckets_info().bucket_stat() {
+            meta.bucket_keys = bucket_stats.meta.keys.clone();
+        }
         debug!(self.logger, "on query debug info";
             "tick" => self.raft_group().raft.election_elapsed,
             "election_timeout" => self.raft_group().raft.randomized_election_timeout(),

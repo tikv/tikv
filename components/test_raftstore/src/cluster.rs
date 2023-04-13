@@ -12,7 +12,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
@@ -1339,6 +1339,14 @@ impl<T: Simulator> Cluster<T> {
         self.sim.wl().add_send_filter(node_id, filter);
     }
 
+    pub fn clear_send_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_send_filters(node_id);
+    }
+
+    pub fn add_recv_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        self.sim.wl().add_recv_filter(node_id, filter);
+    }
+
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
@@ -1346,6 +1354,10 @@ impl<T: Simulator> Cluster<T> {
                 sim.add_send_filter(node_id, filter);
             }
         }
+    }
+
+    pub fn clear_recv_filter_on_node(&mut self, node_id: u64) {
+        self.sim.wl().clear_recv_filters(node_id);
     }
 
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
@@ -1826,6 +1838,10 @@ impl<T: Simulator> Cluster<T> {
         ctx
     }
 
+    pub fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
+        self.sim.rl().get_router(node_id)
+    }
+
     pub fn refresh_region_bucket_keys(
         &mut self,
         region: &metapb::Region,
@@ -1931,20 +1947,30 @@ impl<T: Simulator> Drop for Cluster<T> {
     }
 }
 
-pub trait RawEngine: Peekable<DbVector = RocksDbVector> + SyncMutable {
+pub trait RawEngine<EK: engine_traits::KvEngine>:
+    Peekable<DbVector = EK::DbVector> + SyncMutable
+{
     fn region_local_state(&self, region_id: u64)
     -> engine_traits::Result<Option<RegionLocalState>>;
 
-    fn raft_apply_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
-        unimplemented!()
-    }
+    fn raft_apply_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftApplyState>>;
+
+    fn raft_local_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftLocalState>>;
 }
 
-impl RawEngine for RocksEngine {
+impl RawEngine<RocksEngine> for RocksEngine {
     fn region_local_state(
         &self,
         region_id: u64,
     ) -> engine_traits::Result<Option<RegionLocalState>> {
         self.get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
     }
 }

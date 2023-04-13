@@ -9,18 +9,20 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
+    metapb::RegionEpoch,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{AsyncReadNotifier, FetchedLogs, GenSnapRes, RegionSnapshot};
+use raftstore::{
+    router::CdcHandle,
+    store::{
+        fsm::ChangeObserver, AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
+    },
+};
 use slog::warn;
 
-use super::{CmdResChannel, PeerMsg};
-use crate::{
-    batch::StoreRouter,
-    operation::{LocalReader, RequestSplit},
-    StoreMeta,
-};
+use super::PeerMsg;
+use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
     fn notify_logs_fetched(&self, region_id: u64, fetched_logs: FetchedLogs) {
@@ -48,18 +50,8 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
         split_keys: Vec<Vec<u8>>,
         source: Cow<'static, str>,
     ) {
-        let (ch, _) = CmdResChannel::pair();
-        let res = self.send(
-            region_id,
-            PeerMsg::RequestSplit {
-                request: RequestSplit {
-                    epoch: region_epoch,
-                    split_keys,
-                    source,
-                },
-                ch,
-            },
-        );
+        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string());
+        let res = self.send(region_id, msg);
         if let Err(e) = res {
             warn!(
                 self.logger(),
@@ -181,5 +173,25 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
             router: router.clone(),
             local_reader: LocalReader::new(store_meta, router, logger),
         }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> CdcHandle<EK> for RaftRouter<EK, ER> {
+    fn capture_change(
+        &self,
+        _region_id: u64,
+        _region_epoch: RegionEpoch,
+        _change_observer: ChangeObserver,
+        _callback: Callback<EK::Snapshot>,
+    ) -> crate::Result<()> {
+        unimplemented!()
+    }
+
+    fn check_leadership(
+        &self,
+        _region_id: u64,
+        _callback: Callback<EK::Snapshot>,
+    ) -> crate::Result<()> {
+        unimplemented!()
     }
 }

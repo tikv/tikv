@@ -120,6 +120,7 @@ pub struct StoreInfo<EK, ER> {
 /// of raftstore.
 pub trait StoreRegionMeta: Send {
     fn store_id(&self) -> u64;
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate>;
     fn region_read_progress(&self) -> &RegionReadProgressRegistry;
     fn search_region(&self, start_key: &[u8], end_key: &[u8], visitor: impl FnMut(&Region));
 }
@@ -188,6 +189,11 @@ impl StoreRegionMeta for StoreMeta {
     #[inline]
     fn region_read_progress(&self) -> &RegionReadProgressRegistry {
         &self.region_read_progress
+    }
+
+    #[inline]
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate> {
+        self.readers.get(&region_id)
     }
 }
 
@@ -1066,7 +1072,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     send_time: write_begin,
                     inspector: latency_inspect,
                 },
-                0,
+                None,
             ) {
                 warn!("send latency inspecting to write workers failed"; "err" => ?err);
             }
@@ -2464,6 +2470,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let snap_stats = self.ctx.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
+        stats.set_snapshot_stats(snap_stats.stats.into());
+
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])
             .set(snap_stats.sending_count as i64);
@@ -2479,14 +2487,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .engine_total_bytes_written
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         stats.set_keys_written(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_keys_written
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
 
         stats.set_is_busy(
@@ -2494,7 +2502,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .is_busy
-                .swap(false, Ordering::SeqCst),
+                .swap(false, Ordering::Relaxed),
         );
 
         let mut query_stats = QueryStats::default();
@@ -2503,21 +2511,21 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .global_stat
                 .stat
                 .engine_total_query_put
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         query_stats.set_delete(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_query_delete
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         query_stats.set_delete_range(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_query_delete_range
-                .swap(0, Ordering::SeqCst),
+                .swap(0, Ordering::Relaxed),
         );
         stats.set_query_stats(query_stats);
 

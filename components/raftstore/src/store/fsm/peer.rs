@@ -41,7 +41,7 @@ use kvproto::{
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
 use parking_lot::RwLockWriteGuard;
-use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
+use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::{
     self,
@@ -2273,12 +2273,7 @@ where
                 let applied_index = res.apply_state.applied_index;
                 let buckets = self.fsm.peer.region_buckets.as_mut();
                 if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
-                    merge_bucket_stats(
-                        &buckets.meta.keys,
-                        &mut buckets.stats,
-                        &delta.meta.keys,
-                        &delta.stats,
-                    );
+                    buckets.merge(&delta);
                 }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -2657,6 +2652,7 @@ where
             return;
         }
         if !msg.wait_data {
+            let original_remains_nr = self.fsm.peer.wait_data_peers.len();
             self.fsm
                 .peer
                 .wait_data_peers
@@ -2665,6 +2661,15 @@ where
                 "receive peer ready info";
                 "peer_id" => self.fsm.peer.peer.get_id(),
             );
+            if original_remains_nr != self.fsm.peer.wait_data_peers.len() {
+                info!(
+                   "notify pd with change peer region";
+                   "region_id" => self.fsm.region_id(),
+                   "peer_id" => from.get_id(),
+                   "region" => ?self.fsm.peer.region(),
+                );
+                self.fsm.peer.heartbeat_pd(self.ctx);
+            }
             return;
         }
         self.register_check_peers_availability_tick();
@@ -2792,6 +2797,7 @@ where
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerRequest | ExtraMessageType::MsgGcPeerResponse => (),
+            ExtraMessageType::MsgFlushMemtable => (),
         }
     }
 
@@ -5154,6 +5160,8 @@ where
             return Err(Error::IsWitness(self.region_id()));
         }
 
+        fail_point!("ignore_forbid_leader_to_be_witness", |_| Ok(None));
+
         // Forbid requests to switch it into a witness when it's a leader
         if self.fsm.peer.is_leader()
             && msg.has_admin_request()
@@ -5572,7 +5580,14 @@ where
         fail_point!("ignore request snapshot", |_| {
             self.schedule_tick(PeerTick::RequestSnapshot);
         });
-        if !self.fsm.peer.wait_data || self.fsm.peer.is_leader() {
+        if !self.fsm.peer.wait_data {
+            return;
+        }
+        if self.fsm.peer.is_leader()
+            || self.fsm.peer.is_handling_snapshot()
+            || self.fsm.peer.has_pending_snapshot()
+        {
+            self.schedule_tick(PeerTick::RequestSnapshot);
             return;
         }
         self.fsm.peer.request_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
@@ -5632,7 +5647,7 @@ where
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.schedule_tick(PeerTick::SplitRegionCheck)
+        self.schedule_tick(PeerTick::SplitRegionCheck);
     }
 
     #[inline]
@@ -5946,9 +5961,7 @@ where
             };
             meta.keys.insert(0, region.get_start_key().to_vec());
             meta.keys.push(region.get_end_key().to_vec());
-
-            let stats = new_bucket_stats(&meta);
-            region_buckets = BucketStat::new(Arc::new(meta), stats);
+            region_buckets = BucketStat::from_meta(Arc::new(meta));
         }
 
         let buckets_count = region_buckets.meta.keys.len() - 1;
@@ -5989,7 +6002,7 @@ where
 
     // generate bucket range list to run split-check (to further split buckets)
     fn gen_bucket_range_for_update(&self) -> Option<Vec<BucketRange>> {
-        if !self.ctx.coprocessor_host.cfg.enable_region_bucket {
+        if !self.ctx.coprocessor_host.cfg.enable_region_bucket() {
             return None;
         }
         let region_buckets = self.fsm.peer.region_buckets.as_ref()?;
@@ -6341,6 +6354,7 @@ where
                 "err" => ?e,
             );
         }
+        // todo: it will delete in next pr.
         region_buckets.stats = new_bucket_stats(&region_buckets.meta);
 
         self.register_report_region_buckets_tick();
@@ -6461,9 +6475,15 @@ where
         for s in sw.switches {
             let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
             if self.fsm.peer_id() == peer_id {
-                if is_witness && !self.fsm.peer.is_leader() {
-                    let _ = self.fsm.peer.get_store().clear_data();
+                if is_witness {
                     self.fsm.peer.raft_group.set_priority(-1);
+                    if !self.fsm.peer.is_leader() {
+                        let _ = self.fsm.peer.get_store().clear_data();
+                    } else {
+                        // Avoid calling `clear_data` as the region worker may be scanning snapshot,
+                        // to avoid problems (although no problems were found by testing).
+                        self.fsm.peer.delay_clean_data = true;
+                    }
                 } else {
                     self.fsm
                         .peer

@@ -3,13 +3,15 @@
 use std::{
     fmt::{self, Display, Formatter},
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
 use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
-use kvproto::metapb::Region;
+use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
+use sst_importer::SstImporter;
 use tikv_util::{
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
@@ -37,6 +39,8 @@ pub enum Task<EK> {
     },
     /// Sometimes we know for sure a tablet can be destroyed directly.
     DirectDestroy { tablet: Either<EK, PathBuf> },
+    /// Cleanup ssts.
+    CleanupImportSst(Box<[SstMeta]>),
 }
 
 impl<EK> Display for Task<EK> {
@@ -69,6 +73,9 @@ impl<EK> Display for Task<EK> {
             ),
             Task::DirectDestroy { .. } => {
                 write!(f, "direct destroy tablet")
+            }
+            Task::CleanupImportSst(ssts) => {
+                write!(f, "cleanup import ssts {:?}", ssts)
             }
         }
     }
@@ -128,6 +135,7 @@ impl<EK> Task<EK> {
 
 pub struct Runner<EK: KvEngine> {
     tablet_registry: TabletRegistry<EK>,
+    sst_importer: Arc<SstImporter>,
     logger: Logger,
 
     // region_id -> [(tablet_path, wait_for_persisted)].
@@ -140,9 +148,14 @@ pub struct Runner<EK: KvEngine> {
 }
 
 impl<EK: KvEngine> Runner<EK> {
-    pub fn new(tablet_registry: TabletRegistry<EK>, logger: Logger) -> Self {
+    pub fn new(
+        tablet_registry: TabletRegistry<EK>,
+        sst_importer: Arc<SstImporter>,
+        logger: Logger,
+    ) -> Self {
         Self {
             tablet_registry,
+            sst_importer,
             logger,
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
@@ -162,13 +175,7 @@ impl<EK: KvEngine> Runner<EK> {
         let end_key = keys::data_end_key(&end);
         let range1 = Range::new(&[], &start_key);
         let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
-        // TODO: Avoid `DeleteByRange` after compaction filter is ready.
-        if let Err(e) = tablet
-            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2])
-            .and_then(|_| {
-                tablet.delete_ranges_cfs(DeleteStrategy::DeleteByRange, &[range1, range2])
-            })
-        {
+        if let Err(e) = tablet.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2]) {
             error!(
                 self.logger,
                 "failed to trim tablet";
@@ -184,6 +191,7 @@ impl<EK: KvEngine> Runner<EK> {
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
                 for r in [range1, range2] {
+                    // When compaction filter is present, trivial move is disallowed.
                     if let Err(e) =
                         tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)
                     {
@@ -295,6 +303,14 @@ impl<EK: KvEngine> Runner<EK> {
         }
         false
     }
+
+    fn cleanup_ssts(&self, ssts: Box<[SstMeta]>) {
+        for sst in Vec::from(ssts) {
+            if let Err(e) = self.sst_importer.delete(&sst) {
+                warn!(self.logger, "failed to cleanup sst"; "err" => ?e, "sst" => ?sst);
+            }
+        }
+    }
 }
 
 impl<EK> Runnable for Runner<EK>
@@ -321,6 +337,7 @@ where
                 persisted_index,
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
+            Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
         }
     }
 }
@@ -349,6 +366,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::operation::test_util::create_tmp_importer;
 
     #[test]
     fn test_race_between_destroy_and_trim() {
@@ -362,7 +380,8 @@ mod tests {
         ));
         let registry = TabletRegistry::new(factory, dir.path()).unwrap();
         let logger = slog_global::borrow_global().new(slog::o!());
-        let mut runner = Runner::new(registry.clone(), logger);
+        let (_dir, importer) = create_tmp_importer();
+        let mut runner = Runner::new(registry.clone(), importer, logger);
 
         let mut region = Region::default();
         let rid = 1;

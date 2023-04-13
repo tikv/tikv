@@ -33,7 +33,7 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
-    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
@@ -59,12 +59,13 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
         service::DebugService,
+        tablet_snap::NoSnapshotCache,
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
     storage::{
         self,
-        kv::{FakeExtension, SnapContext},
+        kv::{FakeExtension, LocalTablets, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
@@ -354,7 +355,7 @@ impl ServerCluster {
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
                 rts_worker.scheduler(),
-                raft_router,
+                CdcRaftRouter(raft_router),
                 store_meta.clone(),
                 self.pd_client.clone(),
                 concurrency_manager.clone(),
@@ -404,7 +405,7 @@ impl ServerCluster {
         ));
         let extension = engine.raft_extension();
         let store = Storage::<_, _, F>::from_engine(
-            engine,
+            engine.clone(),
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
@@ -440,8 +441,8 @@ impl ServerCluster {
         let import_service = ImportSstService::new(
             cfg.import.clone(),
             cfg.raft_store.raft_entry_max_size,
-            sim_router.clone(),
-            engines.kv.clone(),
+            engine,
+            LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
         );
 
@@ -452,7 +453,7 @@ impl ServerCluster {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, extension.clone());
         let snap_mgr = SnapManagerBuilder::default()
-            .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+            .max_write_bytes_per_sec(cfg.server.snap_io_max_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager.clone())
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
@@ -500,7 +501,7 @@ impl ServerCluster {
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
-                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
             )
             .unwrap();
@@ -620,7 +621,9 @@ impl ServerCluster {
             )
             .unwrap();
 
-        server.start(server_cfg, security_mgr, key_manager).unwrap();
+        server
+            .start(server_cfg, security_mgr, key_manager, NoSnapshotCache)
+            .unwrap();
 
         self.metas.insert(
             node_id,

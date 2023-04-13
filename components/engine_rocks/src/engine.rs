@@ -151,7 +151,7 @@ pub struct RocksEngine {
 }
 
 impl RocksEngine {
-    pub(crate) fn new(db: DB) -> RocksEngine {
+    pub fn new(db: DB) -> RocksEngine {
         let db = Arc::new(db);
         RocksEngine {
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
@@ -193,6 +193,11 @@ impl KvEngine for RocksEngine {
     fn bad_downcast<T: 'static>(&self) -> &T {
         let e: &dyn Any = &self.db;
         e.downcast_ref().expect("bad engine downcast")
+    }
+
+    #[cfg(any(test, feature = "testexport"))]
+    fn inner_refcount(&self) -> usize {
+        Arc::strong_count(&self.db)
     }
 }
 
