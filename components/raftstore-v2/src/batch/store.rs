@@ -43,7 +43,7 @@ use tikv_util::{
     sys::SysQuota,
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    worker::{LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
@@ -506,16 +506,13 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
     fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
-        let tablet_flush = WorkerBuilder::new("tablet-flush-worker")
-            .thread_count(2)
-            .create();
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet_gc: Worker::new("tablet-gc-worker"),
             async_write: StoreWriters::new(None),
             purge,
-            tablet_flush,
+            tablet_flush: Worker::new("tablet-flush-worker"),
             background,
         }
     }
