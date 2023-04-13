@@ -431,8 +431,7 @@ pub(crate) async fn recv_snap_files<'a>(
 
     if let Some(snap_mgr_v1) = snap_mgr_v1 {
         let snap_key = SnapKey::new(context.key.region_id, context.key.term, context.key.idx);
-        let mut s = snap_mgr_v1.get_snapshot_for_receiving(&snap_key, SnapshotMeta::new())?;
-        s.set_and_save_meta()?;
+        snap_mgr_v1.get_empty_snapshot_for_receiving(&snap_key)?;
     }
 
     Ok(context)

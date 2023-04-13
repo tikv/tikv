@@ -1017,9 +1017,16 @@ impl Snapshot {
         }
     }
 
-    pub fn set_and_save_meta(&mut self) -> RaftStoreResult<()> {
-        self.meta_file.meta = Some(gen_snapshot_meta(&self.cf_files[..], false)?);
-        self.save_meta_file()
+    fn new_for_empty<T: Into<PathBuf>>(
+        dir: T,
+        key: &SnapKey,
+        mgr: &SnapManagerCore,
+    ) -> RaftStoreResult<Self> {
+        let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
+        s.init_for_building();
+        s.meta_file.meta = Some(gen_snapshot_meta(&s.cf_files[..], false)?);
+        s.save_meta_file()?;
+        Ok(s)
     }
 }
 
@@ -1613,6 +1620,13 @@ impl SnapManager {
         let base = &self.core.base;
         let f = Snapshot::new_for_receiving(base, key, &self.core, snapshot_meta)?;
         Ok(Box::new(f))
+    }
+
+    pub fn get_empty_snapshot_for_receiving(&self, key: &SnapKey) -> RaftStoreResult<()> {
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        let _ = Snapshot::new_for_empty(base, key, &self.core)?;
+        Ok(())
     }
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
