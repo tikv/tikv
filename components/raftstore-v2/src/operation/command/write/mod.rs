@@ -23,7 +23,7 @@ use crate::{
 
 mod ingest;
 
-pub use raftstore::store::message::simple_write::{
+pub use raftstore::store::simple_write::{
     SimpleWrite, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
     SimpleWriteReqEncoder,
 };

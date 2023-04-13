@@ -68,6 +68,7 @@ pub use admin::{
 };
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};
+use protobuf::Message;
 pub use write::{
     SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
 };
