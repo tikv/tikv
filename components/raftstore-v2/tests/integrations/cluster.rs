@@ -858,7 +858,7 @@ pub mod merge_helper {
 
         // TODO: when persistent implementation is ready, we can use tablet index of
         // the parent to check whether the split is done. Now, just sleep a second.
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_secs(2));
 
         let new_target = cluster.routers[store_offset].region_detail(target.id);
         if check {

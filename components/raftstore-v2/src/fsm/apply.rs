@@ -127,6 +127,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                 }
             };
             loop {
+                println!("apply {task:?} {}", self.apply.region_id());
                 match task {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
@@ -137,11 +138,15 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                         self.apply.on_refresh_buckets(bucket_meta)
                     }
                 }
+                println!("apply finished {}", self.apply.region_id());
 
                 self.apply.maybe_flush().await;
+                println!("maybe_flush finished {}", self.apply.region_id());
 
                 // Perhaps spin sometime?
-                match self.receiver.try_recv() {
+                let n = self.receiver.try_recv();
+                println!("try_receive {n:?}");
+                match n {
                     Ok(t) => task = t,
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return,
