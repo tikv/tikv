@@ -629,6 +629,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             });
         }
 
+        println!("apply_prepare_merge finished {}", self.region_id());
         Ok((
             AdminResponse::default(),
             AdminCmdResult::PrepareMerge(PrepareMergeResult {

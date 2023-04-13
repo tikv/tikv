@@ -520,7 +520,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         state.mut_merged_records().push(merged_record);
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
-        println!("apply_commit_merge finished");
+        println!("apply_commit_merge finished {}", self.region_id());
 
         Ok((
             AdminResponse::default(),
