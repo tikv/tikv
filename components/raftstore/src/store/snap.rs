@@ -1767,6 +1767,10 @@ impl SnapManager {
     pub fn get_snap_mgr_v2(&self) -> &TabletSnapManager {
         &self.core_v2
     }
+
+    pub fn limiter(&self) -> &Limiter {
+        &self.core.limiter
+    }
 }
 
 impl SnapManagerCore {

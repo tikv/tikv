@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    convert::TryFrom,
     fmt::{self, Display, Formatter},
     io::{Error as IoError, ErrorKind, Read, Write},
     pin::Pin,
@@ -37,7 +36,7 @@ use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
-    time::{Instant, Limiter, UnixSecs},
+    time::{Instant, UnixSecs},
     worker::Runnable,
     DeferContext,
 };
@@ -364,9 +363,6 @@ pub struct Runner<R: RaftExtension> {
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
-
-    // only used when the snapshot is setn from raftstore-v2
-    limiter: Limiter,
 }
 
 impl<R: RaftExtension + 'static> Runner<R> {
@@ -379,13 +375,6 @@ impl<R: RaftExtension + 'static> Runner<R> {
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
         let config = cfg.value().clone();
-        let limit = i64::try_from(config.snap_io_max_bytes_per_sec.0)
-            .unwrap_or_else(|_| panic!("snap_io_max_bytes_per_sec > i64::max_value"));
-        let limiter = Limiter::new(if limit > 0 {
-            limit as f64
-        } else {
-            f64::INFINITY
-        });
         let snap_worker = Runner {
             env,
             snap_mgr,
@@ -402,7 +391,6 @@ impl<R: RaftExtension + 'static> Runner<R> {
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
-            limiter,
         };
         snap_worker
     }
@@ -483,7 +471,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 let raft_router = self.raft_router.clone();
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
-                let limiter = self.limiter.clone();
+                let limiter = self.snap_mgr.limiter().clone();
                 let task = async move {
                     let result = crate::server::tablet_snap::recv_snap(
                         stream,
