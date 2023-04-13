@@ -18,6 +18,7 @@ use futures::{
     stream::{Stream, StreamExt, TryStreamExt},
     task::{Context, Poll},
 };
+use futures_util::FutureExt;
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, DuplexSink, Environment, RequestStream, RpcStatus,
     RpcStatusCode, WriteFlags,
@@ -363,6 +364,7 @@ pub struct Runner<R: RaftExtension> {
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
+    can_receive_tablet_snapshot: bool,
 }
 
 impl<R: RaftExtension + 'static> Runner<R> {
@@ -372,6 +374,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
+        can_receive_tablet_snapshot: bool,
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
         let config = cfg.value().clone();
@@ -391,6 +394,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
+            can_receive_tablet_snapshot,
         };
         snap_worker
     }
@@ -460,6 +464,15 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 self.pool.spawn(task);
             }
             Task::RecvTablet { stream, sink } => {
+                if !self.can_receive_tablet_snapshot {
+                    let status = RpcStatus::with_message(
+                        RpcStatusCode::UNIMPLEMENTED,
+                        "tablet snap is not supported".to_string(),
+                    );
+                    self.pool.spawn(sink.fail(status).map(|_| ()));
+                    return;
+                }
+
                 if let Some(status) = self.receiving_busy() {
                     self.pool.spawn(sink.fail(status));
                     return;
