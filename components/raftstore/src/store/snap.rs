@@ -1023,7 +1023,7 @@ impl Snapshot {
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
-        s.init_for_building();
+        s.init_for_building()?;
         s.meta_file.meta = Some(gen_snapshot_meta(&s.cf_files[..], false)?);
         s.save_meta_file()?;
         Ok(s)
@@ -1622,10 +1622,19 @@ impl SnapManager {
         Ok(Box::new(f))
     }
 
-    pub fn get_empty_snapshot_for_receiving(&self, key: &SnapKey) -> RaftStoreResult<()> {
+    pub fn get_empty_snapshot_for_receiving(
+        &self,
+        tablet_snap_key: &TabletSnapKey,
+    ) -> RaftStoreResult<()> {
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
-        let _ = Snapshot::new_for_empty(base, key, &self.core)?;
+        let tablet_snap_path = self.tablet_snap_manager.final_recv_path(tablet_snap_key);
+        let snap_key = SnapKey::new(
+            tablet_snap_key.region_id,
+            tablet_snap_key.term,
+            tablet_snap_key.idx,
+        );
+        let _ = Snapshot::new_for_empty(base, &snap_key, &self.core)?;
         Ok(())
     }
 

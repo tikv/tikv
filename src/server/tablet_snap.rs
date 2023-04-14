@@ -430,8 +430,7 @@ pub(crate) async fn recv_snap_files<'a>(
     fs::rename(&path, final_path)?;
 
     if let Some(snap_mgr_v1) = snap_mgr_v1 {
-        let snap_key = SnapKey::new(context.key.region_id, context.key.term, context.key.idx);
-        snap_mgr_v1.get_empty_snapshot_for_receiving(&snap_key)?;
+        snap_mgr_v1.get_empty_snapshot_for_receiving(&context.key)?;
     }
 
     Ok(context)
