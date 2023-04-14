@@ -99,8 +99,8 @@ pub(crate) fn parse_at<M: Message + Default>(
 pub struct CommittedEntries {
     /// Entries need to be applied. Note some entries may not be included for
     /// flow control.
-    entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
-    committed_time: Instant,
+    pub entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
+    pub committed_time: Instant,
 }
 
 fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {

@@ -4426,6 +4426,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "engine_rocks",
  "engine_test",
  "engine_traits",
  "error_code",

@@ -5824,6 +5824,16 @@ mod tests {
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
+
+        let content = r#"
+            [storage]
+            engine = "partitioned-raft-kv"
+            [cdc]
+            hibernate-regions-compatible = true
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert!(!cfg.cdc.hibernate_regions_compatible);
     }
 
     #[test]
