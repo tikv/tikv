@@ -358,6 +358,7 @@ impl IoRateLimitConfig {
         limiter.set_io_priority(IoType::Gc, self.gc_priority);
         limiter.set_io_priority(IoType::Import, self.import_priority);
         limiter.set_io_priority(IoType::Export, self.export_priority);
+        limiter.set_io_priority(IoType::RewriteLog, self.compaction_priority);
         limiter.set_io_priority(IoType::Other, self.other_priority);
         limiter
     }
