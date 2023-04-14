@@ -9,16 +9,15 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
+use raftstore::store::{
+    fsm::ChangeObserver, metrics::RaftEventDurationType, FetchedLogs, GenSnapRes,
+};
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
 
-use super::ApplyRes;
-use crate::{
-    operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit},
-    router::response_channel::{
-        CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel, QueryResSubscriber,
-    },
+use super::response_channel::{
+    AnyResChannel, CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel,
+    QueryResSubscriber,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
@@ -131,6 +130,14 @@ pub struct UnsafeWrite {
     pub data: SimpleWriteBinary,
 }
 
+#[derive(Debug)]
+pub struct CaptureChange {
+    pub observer: ChangeObserver,
+    pub region_epoch: RegionEpoch,
+    // A callback accpets a snapshot.
+    pub snap_cb: AnyResChannel,
+}
+
 /// Message that can be sent to a peer.
 #[derive(Debug)]
 pub enum PeerMsg {
@@ -220,6 +227,9 @@ pub enum PeerMsg {
     RedirectCatchUpLogs(CatchUpLogs),
     // From target [`Peer`] to source [`Peer`].
     CatchUpLogs(CatchUpLogs),
+    /// Capture changes of a region.
+    CaptureChange(CaptureChange),
+    LeaderCallback(QueryResChannel),
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
