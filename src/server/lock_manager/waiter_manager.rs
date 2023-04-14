@@ -271,7 +271,7 @@ impl Waiter {
         lock_info.set_duration_to_last_update_ms(
             self.last_updated_time
                 // round up, so that duration in (0, 1ms] won't be treated as 0.
-                .map(|t| (t.elapsed().as_micros() as f64 / 1000.0).ceil() as u64)
+                .map(|t| (t.elapsed().as_millis() as u64).max(1))
                 .unwrap_or_default(),
         );
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
