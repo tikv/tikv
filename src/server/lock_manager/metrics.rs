@@ -52,13 +52,7 @@ lazy_static! {
     pub static ref WAITER_LIFETIME_HISTOGRAM: Histogram = register_histogram!(
         "tikv_lock_manager_waiter_lifetime_duration",
         "Duration of waiters' lifetime in seconds",
-        exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 11min
-    )
-    .unwrap();
-    pub static ref WAITER_LAST_UPDATE_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_lock_manager_waiter_last_update_duration",
-        "Duration of waiters' last update in seconds",
-        exponential_buckets(0.001, 2.0, 20).unwrap() // 0.1ms ~ 17min
+        exponential_buckets(0.00001, 2.0, 26).unwrap() // 0.5ms ~ 524s
     )
     .unwrap();
     pub static ref DETECT_DURATION_HISTOGRAM: Histogram = register_histogram!(

@@ -268,13 +268,12 @@ impl Waiter {
 
     fn cancel_for_timeout(self) -> KeyLockWaitInfo {
         let mut lock_info = self.wait_info.lock_info.clone();
-        // round up, so that duration < 1ms won't be treated as 0.
-        let elapsed_ms = self
-            .last_updated_time
-            .map(|t| (t.elapsed().as_micros() as f64 / 1000.0).ceil() as u64)
-            .unwrap_or_default();
-        lock_info.set_duration_to_last_update_ms(elapsed_ms);
-        WAITER_LAST_UPDATE_DURATION_HISTOGRAM.observe(elapsed_ms as f64 / 1000.0);
+        lock_info.set_duration_to_last_update_ms(
+            self.last_updated_time
+                // round up, so that duration in (0, 1ms] won't be treated as 0.
+                .map(|t| (t.elapsed().as_micros() as f64 / 1000.0).ceil() as u64)
+                .unwrap_or_default(),
+        );
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
         self.cancel(Some(StorageError::from(TxnError::from(error))))
     }
