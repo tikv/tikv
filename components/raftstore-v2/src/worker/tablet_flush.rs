@@ -62,9 +62,9 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .tablet_registry
             .get(region_id)
             .map(|mut cache| cache.latest().cloned()) else {return};
-        let sync_flush = is_leader;
         let now = Instant::now();
-        tablet.flush_cfs(DATA_CFS, sync_flush).unwrap();
+        // sync flush for leader to let the flush happend before later checkpoint.
+        tablet.flush_cfs(DATA_CFS, is_leader).unwrap();
         let elapsed = now.saturating_elapsed();
         // to be removed after when it's stable
         info!(
