@@ -12,7 +12,7 @@ use std::{
 };
 
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
-use engine_traits::{Checkpointer, KvEngine, Peekable, RaftEngineReadOnly, SyncMutable};
+use engine_traits::{Checkpointer, KvEngine, Peekable, RaftEngineReadOnly, SyncMutable, LARGE_CFS};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::Environment;
@@ -822,7 +822,10 @@ fn test_v1_receive_snap_from_v2() {
         let rocksdb = engine_rocks::util::new_engine_opt(
             path.as_path().to_str().unwrap(),
             RocksDbOptions::default(),
-            vec![("default", RocksCfOptions::default())],
+            LARGE_CFS
+                .iter()
+                .map(|&cf| (cf, RocksCfOptions::default()))
+                .collect(),
         )
         .unwrap();
 
