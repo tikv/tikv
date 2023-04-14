@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::LockInfo;
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use crate::storage::kv::Modify;
+use crate::storage::{kv::Modify, mvcc::PessimisticLockNotFoundReason};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -306,6 +306,7 @@ pub(crate) fn make_txn_error(
             "pessimisticlocknotfound" => ErrorInner::PessimisticLockNotFound {
                 start_ts,
                 key: key.to_raw().unwrap(),
+                reason: PessimisticLockNotFoundReason::FailpointInjected,
             },
             _ => ErrorInner::Other(box_err!("unexpected error string")),
         }
@@ -815,6 +816,7 @@ pub(crate) mod tests {
             Mutation::make_put(key.clone(), v.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -859,6 +861,7 @@ pub(crate) mod tests {
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap_err();
 
@@ -872,6 +875,7 @@ pub(crate) mod tests {
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
     }
@@ -1312,6 +1316,7 @@ pub(crate) mod tests {
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1370,6 +1375,7 @@ pub(crate) mod tests {
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 DoPessimisticCheck,
+                None,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1439,6 +1445,7 @@ pub(crate) mod tests {
             mutation,
             &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
             DoPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(min_commit_ts.into_inner(), 100);

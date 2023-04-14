@@ -19,7 +19,8 @@ use crate::storage::{
             MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC,
             MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC,
         },
-        Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
+        Error, ErrorInner, Lock, LockType, MvccTxn, PessimisticLockNotFoundReason, Result,
+        SnapshotReader,
     },
     txn::{
         actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
@@ -36,6 +37,7 @@ pub fn prewrite<S: Snapshot>(
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
     pessimistic_action: PrewriteRequestPessimisticAction,
+    expected_for_update_ts: Option<TimeStamp>,
 ) -> Result<(TimeStamp, OldValue)> {
     let mut mutation =
         PrewriteMutation::from_mutation(mutation, secondary_keys, pessimistic_action, txn_props)?;
@@ -63,7 +65,7 @@ pub fn prewrite<S: Snapshot>(
     let mut lock_amended = false;
 
     let lock_status = match reader.load_lock(&mutation.key)? {
-        Some(lock) => mutation.check_lock(lock, pessimistic_action)?,
+        Some(lock) => mutation.check_lock(lock, pessimistic_action, expected_for_update_ts)?,
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
             amend_pessimistic_lock(&mut mutation, reader)?;
             lock_amended = true;
@@ -218,16 +220,18 @@ pub enum TransactionKind {
     Pessimistic(TimeStamp),
 }
 
+#[derive(Clone, Copy)]
 enum LockStatus {
     // Lock has already been locked; min_commit_ts of lock.
     Locked(TimeStamp),
-    Pessimistic,
+    // Key is pessimistic-locked; for_update_ts of lock.
+    Pessimistic(TimeStamp),
     None,
 }
 
 impl LockStatus {
     fn has_pessimistic_lock(&self) -> bool {
-        matches!(self, LockStatus::Pessimistic)
+        matches!(self, LockStatus::Pessimistic(_))
     }
 }
 
@@ -309,6 +313,7 @@ impl<'a> PrewriteMutation<'a> {
         &mut self,
         lock: Lock,
         pessimistic_action: PrewriteRequestPessimisticAction,
+        expected_for_update_ts: Option<TimeStamp>,
     ) -> Result<LockStatus> {
         if lock.ts != self.txn_props.start_ts {
             // Abort on lock belonging to other transaction if
@@ -323,6 +328,7 @@ impl<'a> PrewriteMutation<'a> {
                 return Err(ErrorInner::PessimisticLockNotFound {
                     start_ts: self.txn_props.start_ts,
                     key: self.key.to_raw()?,
+                    reason: PessimisticLockNotFoundReason::LockTsMismatch,
                 }
                 .into());
             }
@@ -344,12 +350,59 @@ impl<'a> PrewriteMutation<'a> {
                 .into());
             }
 
+            if let Some(ts) = expected_for_update_ts && lock.for_update_ts != ts {
+                // The constraint on for_update_ts of the pessimistic lock is violated.
+                // Consider the following case:
+                //
+                // 1. A pessimistic lock of transaction `T1` succeeded with`WakeUpModeForceLock`
+                //    enabled, then it returns to the client and the client continues its
+                //    execution.
+                // 2. The lock is lost for some reason such as pipelined locking or in-memory
+                //    pessimistic lock.
+                // 3. Another transaction `T2` writes the key and committed.
+                // 4. The key then receives a stale pessimistic lock request of `T1` that has
+                //    been received in step 1 (maybe because of retrying due to network issue
+                //    in step 1). Since it allows locking with conflict, though there's a newer
+                //    version that's later than the request's `for_update_ts`, the request can
+                //    still acquire the lock. However no one will check the response, which
+                //    tells the latest commit_ts it met.
+                // 5. The transaction `T1` commits. When it prewrites it checks if each key is
+                //    pessimistic-locked.
+                //
+                // Transaction `T1` won't notice anything wrong without this check since it
+                // does have a pessimistic lock of the same transaction. However, actually
+                // one of the key is locked in a larger version than that the client would
+                // expect. As a result, the conflict between transaction `T1` and `T2` is
+                // missed.
+                // To avoid this problem, we check the for_update_ts written on the
+                // pessimistic locks that's acquired in force-locking mode. If it doesn't match
+                // the one known by the client, the lock that we expected to have will be
+                // regarded as missing.
+                //
+                // It's actually theoretically safe to allow `lock.for_update_ts` <
+                // `expected_for_update_ts`, but the possibility to encounter this case is very
+                // low. For simplicity, we don't consider that case and only allow
+                // `lock.for_update_ts` to exactly match that we expect.
+                warn!("pessimistic lock have different for_update_ts than expected. the expected lock must have been lost";
+                    "key" => %self.key,
+                    "start_ts" => self.txn_props.start_ts,
+                    "expected_for_update_ts" => ts,
+                    "lock" => ?lock);
+
+                return Err(ErrorInner::PessimisticLockNotFound {
+                    start_ts: self.txn_props.start_ts,
+                    key: self.key.to_raw()?,
+                    reason: PessimisticLockNotFoundReason::LockForUpdateTsMismatch,
+                }
+                .into());
+            }
+
             // The lock is pessimistic and owned by this txn, go through to overwrite it.
             // The ttl and min_commit_ts of the lock may have been pushed forward.
             self.lock_ttl = std::cmp::max(self.lock_ttl, lock.ttl);
             self.min_commit_ts = std::cmp::max(self.min_commit_ts, lock.min_commit_ts);
 
-            return Ok(LockStatus::Pessimistic);
+            return Ok(LockStatus::Pessimistic(lock.for_update_ts));
         }
 
         // Duplicated command. No need to overwrite the lock and data.
@@ -430,6 +483,7 @@ impl<'a> PrewriteMutation<'a> {
                         return Err(ErrorInner::PessimisticLockNotFound {
                             start_ts: self.txn_props.start_ts,
                             key: self.key.clone().into_raw()?,
+                            reason: PessimisticLockNotFoundReason::NonLockKeyConflict,
                         }
                         .into());
                     }
@@ -458,13 +512,20 @@ impl<'a> PrewriteMutation<'a> {
     ) -> Result<TimeStamp> {
         let mut try_one_pc = self.try_one_pc();
 
+        let for_update_ts_to_write = match (self.txn_props.for_update_ts(), lock_status) {
+            (from_prewrite_req, LockStatus::Pessimistic(from_pessimistic_lock)) => {
+                std::cmp::max(from_prewrite_req, from_pessimistic_lock)
+            }
+            (for_update_ts_from_req, _) => for_update_ts_from_req,
+        };
+
         let mut lock = Lock::new(
             self.lock_type.unwrap(),
             self.txn_props.primary.to_vec(),
             self.txn_props.start_ts,
             self.lock_ttl,
             None,
-            self.txn_props.for_update_ts(),
+            for_update_ts_to_write,
             self.txn_props.txn_size,
             self.min_commit_ts,
         )
@@ -758,6 +819,7 @@ fn amend_pessimistic_lock<S: Snapshot>(
             return Err(ErrorInner::PessimisticLockNotFound {
                 start_ts: reader.start_ts,
                 key: mutation.key.clone().into_raw()?,
+                reason: PessimisticLockNotFoundReason::LockMissingAmendFail,
             }
             .into());
         }
@@ -798,7 +860,10 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::{
         kv::RocksSnapshot,
-        txn::{commands::prewrite::fallback_1pc_locks, tests::*},
+        txn::{
+            commands::pessimistic_rollback::tests::must_success as must_pessimistic_rollback,
+            commands::prewrite::fallback_1pc_locks, tests::*,
+        },
     };
     use crate::storage::{mvcc::tests::*, Engine};
 
@@ -869,6 +934,7 @@ pub mod tests {
             Mutation::make_insert(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )?;
         // Insert must be None if the key is not lock, or be Unspecified if the
         // key is already locked.
@@ -900,6 +966,7 @@ pub mod tests {
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
             DoPessimisticCheck,
+            None,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -922,6 +989,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -935,6 +1003,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &Some(vec![]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap_err();
         assert!(matches!(
@@ -970,6 +1039,7 @@ pub mod tests {
             Mutation::make_check_not_exists(Key::from_raw(b"k0")),
             &Some(vec![]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert!(min_ts > props.start_ts);
@@ -990,6 +1060,7 @@ pub mod tests {
             Mutation::make_check_not_exists(Key::from_raw(b"k0")),
             &Some(vec![]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(cm.max_ts(), props.start_ts);
@@ -1005,6 +1076,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert!(min_ts > 42.into());
@@ -1028,6 +1100,7 @@ pub mod tests {
                 mutation.clone(),
                 &Some(vec![b"k4".to_vec()]),
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             assert!(min_ts > 44.into());
@@ -1050,6 +1123,7 @@ pub mod tests {
                     mutation.clone(),
                     &Some(vec![b"k6".to_vec()]),
                     SkipPessimisticCheck,
+                    None,
                 )
                 .unwrap();
                 assert!(min_ts > 45.into());
@@ -1069,6 +1143,7 @@ pub mod tests {
                 mutation.clone(),
                 &Some(vec![b"k8".to_vec()]),
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             assert!(min_ts >= 46.into());
@@ -1099,6 +1174,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -1112,6 +1188,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap_err();
         assert!(matches!(
@@ -1159,6 +1236,7 @@ pub mod tests {
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
             SkipPessimisticCheck,
+            None,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -1197,6 +1275,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
             DoPessimisticCheck,
+            None,
         )
         .unwrap();
         // Pessimistic txn skips constraint check, does not read previous write.
@@ -1211,6 +1290,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &Some(vec![]),
             DoPessimisticCheck,
+            None,
         )
         .unwrap_err();
     }
@@ -1248,6 +1328,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &None,
             DoPessimisticCheck,
+            None,
         )
         .unwrap();
         // Pessimistic txn skips constraint check, does not read previous write.
@@ -1262,6 +1343,7 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &None,
             DoPessimisticCheck,
+            None,
         )
         .unwrap_err();
     }
@@ -1369,6 +1451,7 @@ pub mod tests {
                 Mutation::make_check_not_exists(Key::from_raw(key)),
                 &None,
                 SkipPessimisticCheck,
+                None,
             );
             if success {
                 let res = res.unwrap();
@@ -1384,6 +1467,7 @@ pub mod tests {
                 Mutation::make_insert(Key::from_raw(key), b"value".to_vec()),
                 &None,
                 SkipPessimisticCheck,
+                None,
             );
             if success {
                 let res = res.unwrap();
@@ -1440,6 +1524,7 @@ pub mod tests {
                 Mutation::make_put(key.clone(), b"value".to_vec()),
                 &None,
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             assert_eq!(&old_value, expected_value, "key: {}", key);
@@ -1694,6 +1779,7 @@ pub mod tests {
                 Mutation::make_put(Key::from_raw(b"k1"), b"value".to_vec()),
                 &None,
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -1749,6 +1835,7 @@ pub mod tests {
             Mutation::make_insert(Key::from_raw(b"k1"), b"v2".to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -1887,6 +1974,7 @@ pub mod tests {
                     Mutation::make_put(Key::from_raw(key), b"v2".to_vec()),
                     &None,
                     SkipPessimisticCheck,
+                    None,
                 )?;
                 Ok(old_value)
             })],
@@ -1924,6 +2012,7 @@ pub mod tests {
                     Mutation::make_insert(Key::from_raw(key), b"v2".to_vec()),
                     &None,
                     SkipPessimisticCheck,
+                    None,
                 )?;
                 Ok(old_value)
             })],
@@ -2506,5 +2595,98 @@ pub mod tests {
         assert_eq!(lock.last_change_ts, TimeStamp::zero());
         assert_eq!(lock.versions_to_last_change, 0);
         must_rollback(&mut engine, key, 40, false);
+    }
+
+    #[test]
+    fn test_pessimistic_prewrite_check_for_update_ts() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+        let value = b"v";
+
+        let prewrite = &must_pessimistic_prewrite_put_check_for_update_ts;
+        let prewrite_err = &must_pessimistic_prewrite_put_check_for_update_ts_err;
+
+        let mut test_normal = |start_ts: u64,
+                               lock_for_update_ts: u64,
+                               prewrite_req_for_update_ts: u64,
+                               expected_for_update_ts: u64,
+                               success: bool,
+                               commit_ts: u64| {
+            // In actual cases these kinds of pessimistic locks should be locked in
+            // `allow_locking_with_conflict` mode. For simplicity, we pass a large
+            // for_update_ts to the pessimistic lock to simulate that case.
+            must_acquire_pessimistic_lock(&mut engine, key, key, start_ts, lock_for_update_ts);
+            must_pessimistic_locked(&mut engine, key, start_ts, lock_for_update_ts);
+            if success {
+                prewrite(
+                    &mut engine,
+                    key,
+                    value,
+                    key,
+                    start_ts,
+                    prewrite_req_for_update_ts,
+                    Some(expected_for_update_ts),
+                );
+                must_locked(&mut engine, key, start_ts);
+                // Test idempotency.
+                prewrite(
+                    &mut engine,
+                    key,
+                    value,
+                    key,
+                    start_ts,
+                    prewrite_req_for_update_ts,
+                    Some(expected_for_update_ts),
+                );
+                let prewrite_lock = must_locked(&mut engine, key, start_ts);
+                assert_le!(
+                    TimeStamp::from(lock_for_update_ts),
+                    prewrite_lock.for_update_ts
+                );
+                must_commit(&mut engine, key, start_ts, commit_ts);
+                must_unlocked(&mut engine, key);
+            } else {
+                let e = prewrite_err(
+                    &mut engine,
+                    key,
+                    value,
+                    key,
+                    start_ts,
+                    prewrite_req_for_update_ts,
+                    Some(expected_for_update_ts),
+                );
+                match e {
+                    Error(box ErrorInner::PessimisticLockNotFound { .. }) => (),
+                    e => panic!("unexpected error: {:?}", e),
+                }
+                must_pessimistic_locked(&mut engine, key, start_ts, lock_for_update_ts);
+                must_pessimistic_rollback(&mut engine, key, start_ts, lock_for_update_ts);
+                must_unlocked(&mut engine, key);
+            }
+        };
+
+        test_normal(10, 10, 10, 10, true, 19);
+        // Note that the `for_update_ts` field in prewrite request is not guaranteed to
+        // be greater or equal to the max for_update_ts that has been written to
+        // a pessimistic lock during the transaction.
+        test_normal(20, 20, 20, 24, false, 0);
+        test_normal(30, 35, 30, 35, true, 39);
+        test_normal(40, 45, 40, 40, false, 0);
+        test_normal(50, 55, 56, 51, false, 0);
+
+        // Amend pessimistic lock cases. Once amend-lock is passed, it can be guaranteed
+        // there are no conflict, so the check won't fail.
+        // Amending succeeds.
+        must_unlocked(&mut engine, key);
+        prewrite(&mut engine, key, value, key, 100, 105, Some(102));
+        must_locked(&mut engine, key, 100);
+        must_commit(&mut engine, key, 100, 125);
+
+        // Amending fails.
+        must_unlocked(&mut engine, key);
+        prewrite_err(&mut engine, key, value, key, 120, 120, Some(120));
+        must_unlocked(&mut engine, key);
+        prewrite_err(&mut engine, key, value, key, 120, 130, Some(130));
+        must_unlocked(&mut engine, key);
     }
 }
