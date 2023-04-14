@@ -254,14 +254,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let meta = region_buckets.meta.clone();
         self.region_buckets_info_mut()
             .set_bucket_stat(Some(region_buckets.clone()));
-
-        let mut store_meta = store_ctx.store_meta.lock().unwrap();
-        if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
-            reader.0.update(ReadProgress::region_buckets(meta));
+        {
+            let mut store_meta = store_ctx.store_meta.lock().unwrap();
+            if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
+                reader.0.update(ReadProgress::region_buckets(meta));
+            }
         }
-        self.apply_scheduler()
-            .unwrap()
-            .send(ApplyTask::RefreshBucketStat(region_buckets.meta.clone()));
+        // it's possible that apply_scheduler is not initialized yet
+        if let Some(apply_scheduler) = self.apply_scheduler() {
+            apply_scheduler.send(ApplyTask::RefreshBucketStat(region_buckets.meta.clone()));
+        }
     }
 
     #[inline]

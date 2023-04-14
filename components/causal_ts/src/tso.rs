@@ -355,7 +355,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         let s = Self {
             pd_client: pd_client.clone(),
             batch_list: Arc::new(TsoBatchList::new(cache_multiplier)),
-            causal_ts_worker: WorkerBuilder::new("causal_ts_batch_tso_worker").create(),
+            causal_ts_worker: WorkerBuilder::new("causal-ts-batch-tso-worker").create(),
             renew_interval,
             renew_parameter,
             renew_request_tx,

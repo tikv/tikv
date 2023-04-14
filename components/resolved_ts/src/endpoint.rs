@@ -19,9 +19,9 @@ use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, ObserveId},
-    router::RaftStoreRouter,
+    router::CdcHandle,
     store::{
-        fsm::StoreMeta,
+        fsm::store::StoreRegionMeta,
         util::{self, RegionReadProgress, RegionReadProgressRegistry},
     },
 };
@@ -266,11 +266,11 @@ impl ObserveRegion {
     }
 }
 
-pub struct Endpoint<T, E: KvEngine> {
+pub struct Endpoint<T, E: KvEngine, S> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
     advance_notify: Arc<Notify>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<Mutex<S>>,
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
@@ -279,16 +279,17 @@ pub struct Endpoint<T, E: KvEngine> {
     _phantom: PhantomData<(T, E)>,
 }
 
-impl<T, E> Endpoint<T, E>
+impl<T, E, S> Endpoint<T, E, S>
 where
-    T: 'static + RaftStoreRouter<E>,
+    T: 'static + CdcHandle<E>,
     E: KvEngine,
+    S: StoreRegionMeta,
 {
     pub fn new(
         cfg: &ResolvedTsConfig,
         scheduler: Scheduler<Task>,
-        raft_router: T,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        cdc_handle: T,
+        store_meta: Arc<Mutex<S>>,
         pd_client: Arc<dyn PdClient>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
@@ -296,7 +297,7 @@ where
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
-            (meta.region_read_progress.clone(), meta.store_id)
+            (meta.region_read_progress().clone(), meta.store_id())
         };
         let advance_worker = AdvanceTsWorker::new(
             cfg.advance_ts_interval.0,
@@ -304,10 +305,10 @@ where
             scheduler.clone(),
             concurrency_manager,
         );
-        let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
+        let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
-            store_id.unwrap(),
+            store_id,
             pd_client.clone(),
             env,
             security_mgr,
@@ -315,7 +316,7 @@ where
             store_resolver_gc_interval,
         );
         let ep = Self {
-            store_id,
+            store_id: Some(store_id),
             cfg: cfg.clone(),
             advance_notify: Arc::new(Notify::new()),
             scheduler,
@@ -492,8 +493,8 @@ where
             let region;
             {
                 let meta = self.store_meta.lock().unwrap();
-                match meta.regions.get(&region_id) {
-                    Some(r) => region = r.clone(),
+                match meta.reader(region_id) {
+                    Some(r) => region = r.region.as_ref().clone(),
                     None => return,
                 }
             }
@@ -592,8 +593,8 @@ where
     fn get_or_init_store_id(&mut self) -> Option<u64> {
         self.store_id.or_else(|| {
             let meta = self.store_meta.lock().unwrap();
-            self.store_id = meta.store_id;
-            meta.store_id
+            self.store_id = Some(meta.store_id());
+            self.store_id
         })
     }
 }
@@ -698,10 +699,11 @@ impl fmt::Display for Task {
     }
 }
 
-impl<T, E> Runnable for Endpoint<T, E>
+impl<T, E, S> Runnable for Endpoint<T, E, S>
 where
-    T: 'static + RaftStoreRouter<E>,
+    T: 'static + CdcHandle<E>,
     E: KvEngine,
+    S: StoreRegionMeta,
 {
     type Task = Task;
 
@@ -754,10 +756,11 @@ impl ConfigManager for ResolvedTsConfigManager {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl<T, E> RunnableWithTimer for Endpoint<T, E>
+impl<T, E, S> RunnableWithTimer for Endpoint<T, E, S>
 where
-    T: 'static + RaftStoreRouter<E>,
+    T: 'static + CdcHandle<E>,
     E: KvEngine,
+    S: StoreRegionMeta,
 {
     fn on_timeout(&mut self) {
         let store_id = self.get_or_init_store_id();

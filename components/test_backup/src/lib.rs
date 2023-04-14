@@ -26,7 +26,7 @@ use tikv::{
     config::BackupConfig,
     coprocessor::{checksum_crc64_xor, dag::TikvStorage},
     storage::{
-        kv::{Engine, SnapContext},
+        kv::{Engine, LocalTablets, SnapContext},
         SnapshotStore,
     },
 };
@@ -85,7 +85,7 @@ impl TestSuite {
                 *id,
                 sim.storages[id].clone(),
                 sim.region_info_accessors[id].clone(),
-                engines.kv.clone(),
+                LocalTablets::Singleton(engines.kv.clone()),
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,

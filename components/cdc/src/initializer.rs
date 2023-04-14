@@ -17,10 +17,10 @@ use kvproto::{
 };
 use raftstore::{
     coprocessor::ObserveId,
-    router::RaftStoreRouter,
+    router::CdcHandle,
     store::{
         fsm::ChangeObserver,
-        msg::{Callback, ReadResponse, SignificantMsg},
+        msg::{Callback, ReadResponse},
     },
 };
 use resolved_ts::Resolver;
@@ -75,7 +75,7 @@ pub(crate) enum Scanner<S: Snapshot> {
 }
 
 pub(crate) struct Initializer<E> {
-    pub(crate) engine: E,
+    pub(crate) tablet: Option<E>,
     pub(crate) sched: Scheduler<Task>,
     pub(crate) sink: crate::channel::Sink,
 
@@ -102,10 +102,10 @@ pub(crate) struct Initializer<E> {
 }
 
 impl<E: KvEngine> Initializer<E> {
-    pub(crate) async fn initialize<T: 'static + RaftStoreRouter<E>>(
+    pub(crate) async fn initialize<T: 'static + CdcHandle<E>>(
         &mut self,
-        change_cmd: ChangeObserver,
-        raft_router: T,
+        change_observer: ChangeObserver,
+        cdc_handle: T,
         concurrency_semaphore: Arc<Semaphore>,
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
@@ -142,24 +142,22 @@ impl<E: KvEngine> Initializer<E> {
         let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
             tikv_util::future::paired_future_callback();
         let barrier = CdcEvent::Barrier(Some(incremental_scan_barrier_cb));
-        if let Err(e) = raft_router.significant_send(
+        if let Err(e) = cdc_handle.capture_change(
             self.region_id,
-            SignificantMsg::CaptureChange {
-                cmd: change_cmd,
-                region_epoch,
-                callback: Callback::read(Box::new(move |resp| {
-                    if let Err(e) = sched.schedule(Task::InitDownstream {
-                        region_id,
-                        downstream_id,
-                        downstream_state,
-                        sink,
-                        incremental_scan_barrier: barrier,
-                        cb: Box::new(move || cb(resp)),
-                    }) {
-                        error!("cdc schedule cdc task failed"; "error" => ?e);
-                    }
-                })),
-            },
+            region_epoch,
+            change_observer,
+            Callback::read(Box::new(move |resp| {
+                if let Err(e) = sched.schedule(Task::InitDownstream {
+                    region_id,
+                    downstream_id,
+                    downstream_state,
+                    sink,
+                    incremental_scan_barrier: barrier,
+                    cb: Box::new(move || cb(resp)),
+                }) {
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
+                }
+            })),
         ) {
             warn!("cdc send capture change cmd failed";
             "region_id" => self.region_id, "error" => ?e);
@@ -515,7 +513,11 @@ impl<E: KvEngine> Initializer<E> {
         let start_key = data_key(snap.lower_bound().unwrap_or_default());
         let end_key = data_end_key(snap.upper_bound().unwrap_or_default());
         let range = Range::new(&start_key, &end_key);
-        let collection = match self.engine.table_properties_collection(CF_WRITE, &[range]) {
+        let tablet = match self.tablet.as_ref() {
+            Some(t) => t,
+            None => return false,
+        };
+        let collection = match tablet.table_properties_collection(CF_WRITE, &[range]) {
             Ok(collection) => collection,
             Err(_) => return false,
         };
@@ -572,7 +574,7 @@ mod tests {
         cdcpb::{EventLogType, Event_oneof_event},
         errorpb::Error as ErrorHeader,
     };
-    use raftstore::{coprocessor::ObserveHandle, store::RegionSnapshot};
+    use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
     use test_raftstore::MockRaftStoreRouter;
     use tikv::storage::{
         kv::Engine,
@@ -636,12 +638,11 @@ mod tests {
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
         let initializer = Initializer {
-            engine: engine.unwrap_or_else(|| {
+            tablet: engine.or_else(|| {
                 TestEngineBuilder::new()
                     .build_without_cache()
                     .unwrap()
                     .kv_engine()
-                    .unwrap()
             }),
             sched: receiver_worker.scheduler(),
             sink,
@@ -978,7 +979,7 @@ mod tests {
             mock_initializer(total_bytes, buffer, None, kv_api, false);
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-        let raft_router = MockRaftStoreRouter::new();
+        let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
         let concurrency_semaphore = Arc::new(Semaphore::new(1));
 
         initializer.downstream_state.store(DownstreamState::Stopped);

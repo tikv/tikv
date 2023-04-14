@@ -31,11 +31,11 @@ use kvproto::{
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    coprocessor::{Config as CopConfig, CoprocessorHost},
+    coprocessor::{Config as CopConfig, CoprocessorHost, StoreHandle},
     store::{
         region_meta::{RegionLocalState, RegionMeta},
-        AutoSplitController, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager, Transport,
-        RAFT_INIT_LOG_INDEX,
+        AutoSplitController, Bucket, Config, RegionSnapshot, TabletSnapKey, TabletSnapManager,
+        Transport, RAFT_INIT_LOG_INDEX,
     },
 };
 use raftstore_v2::{
@@ -49,7 +49,7 @@ use sst_importer::SstImporter;
 use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::{
-    config::{ReadableDuration, VersionTrack},
+    config::{ReadableDuration, ReadableSize, VersionTrack},
     store::new_peer,
     worker::{LazyWorker, Worker},
 };
@@ -67,6 +67,7 @@ pub fn check_skip_wal(path: &str) {
     assert!(found, "no WAL found in {}", path);
 }
 
+#[derive(Clone)]
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
@@ -230,6 +231,11 @@ impl TestRouter {
             region.mut_peers().push(new_peer(peer.store_id, peer.id));
         }
         region
+    }
+
+    pub fn refresh_bucket(&self, region_id: u64, region_epoch: RegionEpoch, buckets: Vec<Bucket>) {
+        self.store_router()
+            .refresh_region_buckets(region_id, region_epoch, buckets, None);
     }
 }
 
@@ -464,6 +470,9 @@ impl Transport for TestTransport {
 pub fn v2_default_config() -> Config {
     let mut config = Config::default();
     config.store_io_pool_size = 1;
+    if config.region_split_check_diff.is_none() {
+        config.region_split_check_diff = Some(ReadableSize::mb(96 / 16));
+    }
     config
 }
 
@@ -649,6 +658,7 @@ pub mod split_helper {
         metapb, pdpb,
         raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, SplitRequest},
     };
+    use raftstore::store::Bucket;
     use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 
     use super::TestRouter;
@@ -755,6 +765,111 @@ pub mod split_helper {
         assert_eq!(region.get_end_key(), right.get_end_key());
 
         (left, right)
+    }
+
+    // Split the region and refresh bucket immediately
+    // This is to simulate the case when the splitted peer's storage is not
+    // initialized yet when refresh bucket happens
+    pub fn split_region_and_refresh_bucket(
+        router: &mut TestRouter,
+        region: metapb::Region,
+        peer: metapb::Peer,
+        split_region_id: u64,
+        split_peer: metapb::Peer,
+        propose_key: &[u8],
+        right_derive: bool,
+    ) {
+        let region_id = region.id;
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header()
+            .set_region_epoch(region.get_region_epoch().clone());
+        req.mut_header().set_peer(peer);
+
+        let mut split_id = pdpb::SplitId::new();
+        split_id.new_region_id = split_region_id;
+        split_id.new_peer_ids = vec![split_peer.id];
+        let admin_req = new_batch_split_region_request(
+            vec![propose_key.to_vec()],
+            vec![split_id],
+            right_derive,
+        );
+        req.mut_requests().clear();
+        req.set_admin_request(admin_req);
+
+        let (msg, sub) = PeerMsg::admin_command(req);
+        router.send(region_id, msg).unwrap();
+        block_on(sub.result()).unwrap();
+
+        let meta = router
+            .must_query_debug_info(split_region_id, Duration::from_secs(1))
+            .unwrap();
+        let epoch = &meta.region_state.epoch;
+        let buckets = vec![Bucket {
+            keys: vec![b"1".to_vec(), b"2".to_vec()],
+            size: 100,
+        }];
+        let mut region_epoch = kvproto::metapb::RegionEpoch::default();
+        region_epoch.set_conf_ver(epoch.conf_ver);
+        region_epoch.set_version(epoch.version);
+        router.refresh_bucket(split_region_id, region_epoch, buckets);
+    }
+}
+
+pub mod merge_helper {
+    use std::{thread, time::Duration};
+
+    use futures::executor::block_on;
+    use kvproto::{
+        metapb,
+        raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
+    };
+    use raftstore_v2::router::PeerMsg;
+
+    use super::TestRouter;
+
+    pub fn merge_region(
+        router: &mut TestRouter,
+        source: metapb::Region,
+        source_peer: metapb::Peer,
+        target: metapb::Region,
+        check: bool,
+    ) -> metapb::Region {
+        let region_id = source.id;
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header()
+            .set_region_epoch(source.get_region_epoch().clone());
+        req.mut_header().set_peer(source_peer);
+
+        let mut admin_req = AdminRequest::default();
+        admin_req.set_cmd_type(AdminCmdType::PrepareMerge);
+        admin_req.mut_prepare_merge().set_target(target.clone());
+        req.set_admin_request(admin_req);
+
+        let (msg, sub) = PeerMsg::admin_command(req);
+        router.send(region_id, msg).unwrap();
+        let resp = block_on(sub.result()).unwrap();
+        if check {
+            assert!(!resp.get_header().has_error(), "{:?}", resp);
+        }
+
+        // TODO: when persistent implementation is ready, we can use tablet index of
+        // the parent to check whether the split is done. Now, just sleep a second.
+        thread::sleep(Duration::from_secs(1));
+
+        let new_target = router.region_detail(target.id);
+        if check {
+            if new_target.get_start_key() == source.get_start_key() {
+                // [source, target] => new_target
+                assert_eq!(new_target.get_end_key(), target.get_end_key());
+            } else {
+                // [target, source] => new_target
+                assert_eq!(new_target.get_start_key(), target.get_start_key());
+                assert_eq!(new_target.get_end_key(), source.get_end_key());
+            }
+        }
+        new_target
     }
 }
 

@@ -32,6 +32,10 @@ make_static_metric! {
         is_recovering_marked,
         store_heartbeat,
         tso,
+
+        meta_storage_put,
+        meta_storage_get,
+        meta_storage_watch,
     }
 
     pub struct PDRequestEventHistogramVec: Histogram {
