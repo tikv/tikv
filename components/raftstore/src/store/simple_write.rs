@@ -487,7 +487,7 @@ mod tests {
     use super::*;
     use crate::store::Callback;
 
-    fn decoder_fallback(data: &[u8], index: u64, term: u64) -> RaftCmdRequest {
+    fn decoder_fallback(data: &[u8], index: u64, _: u64) -> RaftCmdRequest {
         crate::store::util::parse_data_at(data, index, "")
     }
 
