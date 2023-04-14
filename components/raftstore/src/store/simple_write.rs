@@ -8,11 +8,10 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
 };
 use protobuf::{CodedInputStream, Message};
-use raftstore::store::WriteCallback;
 use slog::Logger;
 use tikv_util::slog_panic;
 
-use crate::{operation::command::parse_at, router::CmdResChannel};
+use crate::store::{msg::ErrorCallback, WriteCallback};
 
 // MAGIC number to hint simple write codec is used. If it's a protobuf message,
 // the first one or several bytes are for field tag, which can't be zero.
@@ -38,19 +37,25 @@ impl SimpleWriteBinary {
 }
 
 /// We usually use `RaftCmdRequest` for read write request. But the codec is
-/// not efficient enough for simple request. `SimpleWrite` is introduce to make
-/// codec alloc less and fast.
+/// not efficient enough for simple request. `SimpleWrite` is introduce to
+/// make codec alloc less and fast.
 #[derive(Debug)]
-pub struct SimpleWriteReqEncoder {
+pub struct SimpleWriteReqEncoder<C>
+where
+    C: ErrorCallback + WriteCallback,
+{
     header: Box<RaftRequestHeader>,
     buf: Vec<u8>,
-    channels: Vec<CmdResChannel>,
+    channels: Vec<C>,
     size_limit: usize,
     write_type: WriteType,
     notify_proposed: bool,
 }
 
-impl SimpleWriteReqEncoder {
+impl<C> SimpleWriteReqEncoder<C>
+where
+    C: ErrorCallback + WriteCallback,
+{
     /// Create a request encoder.
     ///
     /// If `notify_proposed` is true, channels will be called `notify_proposed`
@@ -60,7 +65,7 @@ impl SimpleWriteReqEncoder {
         bin: SimpleWriteBinary,
         size_limit: usize,
         notify_proposed: bool,
-    ) -> SimpleWriteReqEncoder {
+    ) -> SimpleWriteReqEncoder<C> {
         let mut buf = Vec::with_capacity(256);
         buf.push(MAGIC_PREFIX);
         header.write_length_delimited_to_vec(&mut buf).unwrap();
@@ -102,12 +107,12 @@ impl SimpleWriteReqEncoder {
     }
 
     #[inline]
-    pub fn encode(self) -> (Vec<u8>, Vec<CmdResChannel>) {
+    pub fn encode(self) -> (Vec<u8>, Vec<C>) {
         (self.buf, self.channels)
     }
 
     #[inline]
-    pub fn add_response_channel(&mut self, mut ch: CmdResChannel) {
+    pub fn add_response_channel(&mut self, mut ch: C) {
         if self.notify_proposed {
             ch.notify_proposed();
         }
@@ -239,6 +244,7 @@ pub struct SimpleWriteReqDecoder<'a> {
 
 impl<'a> SimpleWriteReqDecoder<'a> {
     pub fn new(
+        fallback: impl FnOnce(&'a [u8], u64, u64) -> RaftCmdRequest,
         logger: &Logger,
         buf: &'a [u8],
         index: u64,
@@ -263,7 +269,7 @@ impl<'a> SimpleWriteReqDecoder<'a> {
                     buf: &buf[1 + read as usize..],
                 })
             }
-            _ => Err(parse_at(logger, buf, index, term)),
+            _ => Err(fallback(buf, index, term)),
         }
     }
 
@@ -479,6 +485,11 @@ mod tests {
     use slog::o;
 
     use super::*;
+    use crate::store::Callback;
+
+    fn decoder_fallback(data: &[u8], index: u64, _: u64) -> RaftCmdRequest {
+        crate::store::util::parse_data_at(data, index, "")
+    }
 
     #[test]
     fn test_codec() {
@@ -490,18 +501,29 @@ mod tests {
 
         let mut header = Box::<RaftRequestHeader>::default();
         header.set_term(2);
-        let mut req_encoder = SimpleWriteReqEncoder::new(header.clone(), bin, usize::MAX, false);
+        let mut req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header.clone(),
+            bin,
+            usize::MAX,
+            false,
+        );
 
         let mut encoder = SimpleWriteEncoder::with_capacity(512);
         encoder.delete_range(CF_LOCK, b"key", b"key", true);
         encoder.delete_range("cf", b"key", b"key", false);
         let bin = encoder.encode();
         assert!(!req_encoder.amend(&header, &bin));
-        let req_encoder2 = SimpleWriteReqEncoder::new(header.clone(), bin, 0, false);
+        let req_encoder2 = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header.clone(),
+            bin,
+            0,
+            false,
+        );
 
         let (bytes, _) = req_encoder.encode();
         let logger = slog_global::borrow_global().new(o!());
-        let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
+        let mut decoder =
+            SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         assert_eq!(*decoder.header(), *header);
         let write = decoder.next().unwrap();
         let SimpleWrite::Put(put) = write else { panic!("should be put") };
@@ -516,7 +538,7 @@ mod tests {
         assert_matches!(decoder.next(), None);
 
         let (bytes, _) = req_encoder2.encode();
-        decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
+        decoder = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
         let SimpleWrite::DeleteRange(dr) = write else { panic!("should be delete range") };
         assert_eq!(dr.cf, CF_LOCK);
@@ -544,9 +566,12 @@ mod tests {
             .collect();
         encoder.ingest(exp.clone());
         let bin = encoder.encode();
-        let req_encoder = SimpleWriteReqEncoder::new(header, bin, 0, false);
+        let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header, bin, 0, false,
+        );
         let (bytes, _) = req_encoder.encode();
-        let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
+        let mut decoder =
+            SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
         let SimpleWrite::Ingest(ssts) = write else { panic!("should be ingest") };
         assert_eq!(exp, ssts);
@@ -589,7 +614,8 @@ mod tests {
         raft_cmd.mut_requests().push(req);
         let bytes = raft_cmd.write_to_bytes().unwrap();
         let logger = slog_global::borrow_global().new(o!());
-        let decoded = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap_err();
+        let decoded =
+            SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap_err();
         // SimpleWriteReqDecoder should be able to decode naive RaftCmdRequest.
         assert_eq!(decoded, raft_cmd);
 
@@ -599,7 +625,8 @@ mod tests {
 
         let mut header = Box::<RaftRequestHeader>::default();
         header.set_term(2);
-        let mut req_encoder = SimpleWriteReqEncoder::new(header.clone(), bin.clone(), 512, false);
+        let mut req_encoder: SimpleWriteReqEncoder<Callback<engine_rocks::RocksSnapshot>> =
+            SimpleWriteReqEncoder::new(header.clone(), bin.clone(), 512, false);
 
         let mut header2 = Box::<RaftRequestHeader>::default();
         header2.set_term(4);
@@ -610,7 +637,8 @@ mod tests {
         bin2.freeze();
         // Frozen bin can't be merged with other bin.
         assert!(!req_encoder.amend(&header, &bin2));
-        let mut req_encoder2 = SimpleWriteReqEncoder::new(header.clone(), bin2.clone(), 512, false);
+        let mut req_encoder2: SimpleWriteReqEncoder<Callback<engine_rocks::RocksSnapshot>> =
+            SimpleWriteReqEncoder::new(header.clone(), bin2.clone(), 512, false);
         assert!(!req_encoder2.amend(&header, &bin));
 
         // Batch should not excceed max size limit.
@@ -620,7 +648,8 @@ mod tests {
         assert!(!req_encoder.amend(&header, &encoder.encode()));
 
         let (bytes, _) = req_encoder.encode();
-        let mut decoder = SimpleWriteReqDecoder::new(&logger, &bytes, 0, 0).unwrap();
+        let mut decoder =
+            SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         assert_eq!(*decoder.header(), *header);
         let req = decoder.next().unwrap();
         let SimpleWrite::Put(put) = req else { panic!("should be put") };
