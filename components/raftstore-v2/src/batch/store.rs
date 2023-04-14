@@ -43,7 +43,7 @@ use tikv_util::{
     sys::SysQuota,
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
