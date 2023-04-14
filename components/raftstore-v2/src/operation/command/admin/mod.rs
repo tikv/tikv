@@ -162,11 +162,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 "Schedule flush tablet";
                             );
                             if let Err(e) = ctx.schedulers.tablet_flush.schedule(
-                                crate::TabletFlushTask::TabletFlush {
-                                    region_id,
-                                    req: Some(req),
-                                    ch,
-                                },
+                                crate::TabletFlushTask::TabletFlush { region_id, req, ch },
                             ) {
                                 error!(
                                     self.logger,

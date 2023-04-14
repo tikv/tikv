@@ -16,7 +16,7 @@ use crate::{
 pub enum Task {
     TabletFlush {
         region_id: u64,
-        req: Option<RaftCmdRequest>,
+        req: RaftCmdRequest,
         ch: CmdResChannel,
     },
 }
@@ -50,7 +50,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
-    fn pre_flush_tablet(&mut self, region_id: u64, req: Option<RaftCmdRequest>, ch: CmdResChannel) {
+    fn pre_flush_tablet(&mut self, region_id: u64, mut req: RaftCmdRequest, ch: CmdResChannel) {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
@@ -67,7 +67,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             "duration" => ?elapsed,
         );
 
-        let mut req = req.unwrap();
         assert!(req.get_admin_request().get_cmd_type() == AdminCmdType::BatchSplit);
         req.mut_header()
             .set_flags(WriteBatchFlags::SPLIT_SECOND_PHASE.bits());
