@@ -203,6 +203,7 @@ pub(crate) struct Waiter {
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
     start_waiting_time: Instant,
+    last_updated_time: Option<Instant>,
 }
 
 impl Waiter {
@@ -224,6 +225,7 @@ impl Waiter {
             delay: Delay::new(deadline),
             diag_ctx,
             start_waiting_time,
+            last_updated_time: None,
         }
     }
 
@@ -264,8 +266,13 @@ impl Waiter {
         self.cancel(None)
     }
 
-    fn cancel_for_timeout(self, _skip_resolving_lock: bool) -> KeyLockWaitInfo {
-        let lock_info = self.wait_info.lock_info.clone();
+    fn cancel_for_timeout(self) -> KeyLockWaitInfo {
+        let mut lock_info = self.wait_info.lock_info.clone();
+        lock_info.set_duration_to_last_update_ms(
+            self.last_updated_time
+                .map(|t| t.elapsed().as_millis() as u64)
+                .unwrap_or_default(),
+        );
         // lock_info.set_skip_resolving_lock(skip_resolving_lock);
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
         self.cancel(Some(StorageError::from(TxnError::from(error))))
@@ -343,8 +350,10 @@ impl WaitTable {
     fn update_waiter(
         &mut self,
         update_event: &UpdateWaitForEvent,
+        now: Instant,
     ) -> Option<(KeyLockWaitInfo, DiagnosticContext)> {
         let waiter = self.waiter_pool.get_mut(&update_event.token)?;
+        waiter.last_updated_time = Some(now);
 
         assert_eq!(waiter.wait_info.key, update_event.wait_info.key);
 
@@ -511,7 +520,7 @@ impl WaiterManager {
             let mut wait_table = wait_table.borrow_mut();
             if let Some(waiter) = wait_table.take_waiter(token) {
                 let start_ts = waiter.start_ts;
-                let wait_info = waiter.cancel_for_timeout(false);
+                let wait_info = waiter.cancel_for_timeout();
                 detector_scheduler.clean_up_wait_for(start_ts, wait_info);
             }
         });
@@ -537,8 +546,9 @@ impl WaiterManager {
 
     fn handle_update_wait_for(&mut self, events: Vec<UpdateWaitForEvent>) {
         let mut wait_table = self.wait_table.borrow_mut();
+        let now = Instant::now();
         for event in events {
-            let previous_wait_info = wait_table.update_waiter(&event);
+            let previous_wait_info = wait_table.update_waiter(&event, now);
 
             if event.is_first_lock {
                 continue;
@@ -647,7 +657,7 @@ impl FutureRunnable<Task> for WaiterManager {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{sync::mpsc, time::Duration};
+    use std::{sync::mpsc, thread::sleep, time::Duration};
 
     use futures::{executor::block_on, future::FutureExt};
     use kvproto::kvrpcpb::LockInfo;
@@ -673,6 +683,7 @@ pub mod tests {
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
             start_waiting_time: Instant::now(),
+            last_updated_time: None,
         }
     }
 
@@ -869,7 +880,7 @@ pub mod tests {
     #[test]
     fn test_waiter_notify() {
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
-        waiter.cancel_for_timeout(false);
+        waiter.cancel_for_timeout();
         expect_key_is_locked(block_on(f).unwrap(), lock_info);
 
         // Deadlock
@@ -902,7 +913,7 @@ pub mod tests {
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
-        waiter.cancel_for_timeout(false);
+        waiter.cancel_for_timeout();
         assert_elapsed(|| block_on(f), 0, 200);
         rx.try_recv().unwrap_err();
     }
@@ -1138,6 +1149,76 @@ pub mod tests {
             0,
             200,
         );
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn test_duration_to_last_update() {
+        let (mut worker, scheduler) = start_waiter_manager(1000, 100);
+        let key = Key::from_raw(b"foo");
+        let (waiter_ts, lock) = (
+            10.into(),
+            LockDigest {
+                ts: 20.into(),
+                hash: key.gen_hash(),
+            },
+        );
+        // waiter1 is updated when waiting, while waiter2(f2) is not.
+        let (waiter1, ..) = new_test_waiter_with_key(waiter_ts, lock.ts, &key.to_raw().unwrap());
+        let (waiter2, _, f2) = new_test_waiter_with_key(100.into(), 100.into(), "foo".as_bytes());
+        scheduler.wait_for(
+            LockWaitToken(Some(1)),
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter1.start_ts,
+            waiter1.wait_info,
+            WaitTimeout::Millis(1000),
+            waiter1.cancel_callback,
+            DiagnosticContext::default(),
+        );
+        scheduler.wait_for(
+            LockWaitToken(Some(2)),
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter2.start_ts,
+            waiter2.wait_info,
+            WaitTimeout::Millis(1000),
+            waiter2.cancel_callback,
+            DiagnosticContext::default(),
+        );
+
+        // then update waiter
+        sleep(Duration::from_millis(500));
+        let event = UpdateWaitForEvent {
+            token: LockWaitToken(Some(1)),
+            start_ts: waiter1.start_ts,
+            is_first_lock: false,
+            wait_info: KeyLockWaitInfo {
+                key: key.clone(),
+                lock_digest: Default::default(),
+                lock_info: LockInfo {
+                    key: key.to_raw().unwrap(),
+                    ..Default::default()
+                },
+            },
+        };
+        scheduler.update_wait_for(vec![event]);
+
+        assert_elapsed(
+            || match block_on(f2).unwrap() {
+                StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                    MvccError(box MvccErrorInner::KeyIsLocked(res)),
+                )))) => {
+                    assert_eq!(res.duration_to_last_update_ms, 0);
+                }
+                e => panic!("unexpected error: {:?}", e),
+            },
+            400,
+            600,
+        );
+
         worker.stop().unwrap();
     }
 }

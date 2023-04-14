@@ -11,7 +11,7 @@ use futures::Future;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse};
 use raftstore::Result;
 use rand::RngCore;
-use server::server2::ConfiguredRaftEngine;
+use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
 use tikv::{
