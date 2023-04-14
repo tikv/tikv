@@ -1945,6 +1945,8 @@ impl SnapManagerBuilder {
         };
         let path = path.into();
         let mut path_v2 = path.clone();
+        // the path for tablet snap manager, it will be empty if the cluster is not
+        // to receive snapshot from cluster of raftstore-v2
         path_v2.push_str("_v2");
         let mut snapshot = SnapManager {
             core: SnapManagerCore {
