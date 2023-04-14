@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter};
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry, DATA_CFS};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use slog::{error, info, Logger};
-use tikv_util::worker::Runnable;
+use tikv_util::{time::Instant, worker::Runnable};
 use txn_types::WriteBatchFlags;
 
 use crate::{
@@ -62,12 +62,16 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .tablet_registry
             .get(region_id)
             .map(|mut cache| cache.latest().cloned()) else {return};
-        tablet.flush_cfs(DATA_CFS, false).unwrap();
+        let sync_flush = is_leader;
+        let now = Instant::now();
+        tablet.flush_cfs(DATA_CFS, sync_flush).unwrap();
+        let elapsed = now.saturating_elapsed();
         // to be removed after when it's stable
         info!(
             self.logger,
             "pre-flush memtable";
             "region_id" => region_id,
+            "duration" => ?elapsed,
             "is_leader" => is_leader,
         );
 
