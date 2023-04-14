@@ -148,6 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
             .unwrap();
+        fail::fail_point!("delay_set_apply_scheduler", |_| {});
         self.set_apply_scheduler(apply_scheduler);
     }
 

@@ -23,6 +23,7 @@ use std::{
 
 use api_version::{dispatch_api_version, KvFormat};
 use causal_ts::CausalTsProviderImpl;
+use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
@@ -31,8 +32,8 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{
-    brpb::create_backup, deadlock::create_deadlock, diagnosticspb::create_diagnostics,
-    import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion,
+    brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
+    diagnosticspb::create_diagnostics, import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
@@ -87,7 +88,7 @@ use tikv_util::{
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
     yatp_pool::CleanupMethod,
     Either,
 };
@@ -186,7 +187,8 @@ struct TikvServer<ER: RaftEngine> {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
-    check_leader_worker: Worker,
+    cdc_scheduler: Option<Scheduler<cdc::Task>>,
+    cdc_memory_quota: Option<MemoryQuota>,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
@@ -295,10 +297,6 @@ where
             info!("Causal timestamp provider startup.");
         }
 
-        // Run check leader in a dedicate thread, because it is time sensitive
-        // and crucial to TiCDC replication lag.
-        let check_leader_worker = WorkerBuilder::new("check-leader").thread_count(1).create();
-
         TikvServer {
             core: TikvServerCore {
                 config,
@@ -325,7 +323,8 @@ where
             coprocessor_host: None,
             concurrency_manager,
             env,
-            check_leader_worker,
+            cdc_scheduler: None,
+            cdc_memory_quota: None,
             sst_worker: None,
             quota_limiter,
             resource_manager,
@@ -381,7 +380,7 @@ where
         );
         lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
-        let engines = self.engines.as_ref().unwrap();
+        let engines = self.engines.as_mut().unwrap();
 
         let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = raftstore_v2::PdReporter::new(
@@ -551,13 +550,84 @@ where
             unified_read_pool_scale_receiver = Some(rx);
         }
 
+        // Run check leader in a dedicate thread, because it is time sensitive
+        // and crucial to TiCDC replication lag.
+        let check_leader_worker =
+            Box::new(WorkerBuilder::new("check-leader").thread_count(1).create());
+        // Create check leader runer.
         let check_leader_runner = CheckLeaderRunner::new(
             self.router.as_ref().unwrap().store_meta().clone(),
             self.coprocessor_host.clone().unwrap(),
         );
-        let check_leader_scheduler = self
-            .check_leader_worker
-            .start("check-leader", check_leader_runner);
+        let check_leader_scheduler = check_leader_worker.start("check-leader", check_leader_runner);
+        self.core.to_stop.push(check_leader_worker);
+
+        // Create cdc worker.
+        let cdc_worker = Box::new(LazyWorker::new("cdc"));
+        let cdc_scheduler = cdc_worker.scheduler();
+        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
+        engines
+            .engine
+            .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
+        // Register cdc observer.
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register cdc config manager.
+        cfg_controller.register(
+            tikv::config::Module::Cdc,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        );
+        // Start cdc endpoint.
+        let cdc_memory_quota = MemoryQuota::new(self.core.config.cdc.sink_memory_quota.0 as _);
+        let _cdc_endpoint = cdc::Endpoint::new(
+            self.core.config.server.cluster_id,
+            &self.core.config.cdc,
+            self.core.config.storage.api_version(),
+            self.pd_client.clone(),
+            cdc_scheduler.clone(),
+            self.router.clone().unwrap(),
+            LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
+            cdc_ob,
+            self.router.as_ref().unwrap().store_meta().clone(),
+            self.concurrency_manager.clone(),
+            self.env.clone(),
+            self.security_mgr.clone(),
+            cdc_memory_quota.clone(),
+            self.causal_ts_provider.clone(),
+        );
+        // TODO: enable cdc.
+        // cdc_worker.start_with_timer(cdc_endpoint);
+        // self.core.to_stop.push(cdc_worker);
+        self.cdc_scheduler = Some(cdc_scheduler);
+        self.cdc_memory_quota = Some(cdc_memory_quota);
+
+        // Create resolved ts.
+        if self.core.config.resolved_ts.enable {
+            let rts_worker = Box::new(LazyWorker::new("resolved-ts"));
+            // Register the resolved ts observer
+            let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager for resolved ts worker
+            cfg_controller.register(
+                tikv::config::Module::ResolvedTs,
+                Box::new(resolved_ts::ResolvedTsConfigManager::new(
+                    rts_worker.scheduler(),
+                )),
+            );
+            let _rts_endpoint = resolved_ts::Endpoint::new(
+                &self.core.config.resolved_ts,
+                rts_worker.scheduler(),
+                self.router.clone().unwrap(),
+                self.router.as_ref().unwrap().store_meta().clone(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+            );
+            // TODO: enable resolved_ts.
+            // rts_worker.start_with_timer(rts_endpoint);
+            // self.core.to_stop.push(rts_worker);
+        }
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
@@ -774,6 +844,18 @@ where
             .as_mut()
             .unwrap()
             .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
+
+        let cdc_service = cdc::Service::new(
+            self.cdc_scheduler.as_ref().unwrap().clone(),
+            self.cdc_memory_quota.as_ref().unwrap().clone(),
+        );
+        if servers
+            .server
+            .register_service(create_change_data(cdc_service))
+            .is_some()
+        {
+            fatal!("failed to register cdc service");
+        }
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
