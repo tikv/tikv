@@ -48,6 +48,7 @@ impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for M
 }
 
 /// Schedule task to `ApplyFsm`.
+#[derive(Clone)]
 pub struct ApplyScheduler {
     sender: Sender<ApplyTask>,
 }
@@ -135,6 +136,9 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
                     ApplyTask::RefreshBucketStat(bucket_meta) => {
                         self.apply.on_refresh_buckets(bucket_meta)
+                    }
+                    ApplyTask::CaptureApply(capture_change) => {
+                        self.apply.on_capture_apply(capture_change)
                     }
                 }
 
