@@ -218,15 +218,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
                         return;
                     }
-                    let _ =
-                        ctx.schedulers
-                            .tablet_flush
-                            .schedule(crate::TabletFlushTask::TabletFlush {
-                                region_id: self.region().get_id(),
-                                req: None,
-                                is_leader: false,
-                                ch: None,
-                            });
+                    let _ = ctx.schedulers.tablet_gc.schedule(
+                        crate::worker::tablet_gc::Task::TabletFlush {
+                            region_id: self.region().get_id(),
+                        },
+                    );
                     return;
                 }
                 ExtraMessageType::MsgWantRollbackMerge => {

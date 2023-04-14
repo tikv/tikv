@@ -17,8 +17,7 @@ pub enum Task {
     TabletFlush {
         region_id: u64,
         req: Option<RaftCmdRequest>,
-        is_leader: bool,
-        ch: Option<CmdResChannel>,
+        ch: CmdResChannel,
     },
 }
 
@@ -51,42 +50,31 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
-    fn flush_tablet(
-        &mut self,
-        region_id: u64,
-        req: Option<RaftCmdRequest>,
-        is_leader: bool,
-        ch: Option<CmdResChannel>,
-    ) {
+    fn pre_flush_tablet(&mut self, region_id: u64, req: Option<RaftCmdRequest>, ch: CmdResChannel) {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
             .map(|mut cache| cache.latest().cloned()) else {return};
         let now = Instant::now();
         // sync flush for leader to let the flush happend before later checkpoint.
-        tablet.flush_cfs(DATA_CFS, is_leader).unwrap();
+        tablet.flush_cfs(DATA_CFS, true).unwrap();
         let elapsed = now.saturating_elapsed();
         // to be removed after when it's stable
         info!(
             self.logger,
-            "pre-flush memtable";
+            "pre-flush memtable for leader";
             "region_id" => region_id,
             "duration" => ?elapsed,
-            "is_leader" => is_leader,
         );
-
-        if !is_leader {
-            return;
-        }
 
         let mut req = req.unwrap();
         assert!(req.get_admin_request().get_cmd_type() == AdminCmdType::BatchSplit);
         req.mut_header()
             .set_flags(WriteBatchFlags::SPLIT_SECOND_PHASE.bits());
-        if let Err(e) = self.router.send(
-            region_id,
-            PeerMsg::AdminCommand(RaftRequest::new(req, ch.unwrap())),
-        ) {
+        if let Err(e) = self
+            .router
+            .send(region_id, PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
+        {
             error!(
                 self.logger,
                 "send split request fail in the second phase";
@@ -106,12 +94,7 @@ where
 
     fn run(&mut self, task: Self::Task) {
         match task {
-            Task::TabletFlush {
-                region_id,
-                req,
-                is_leader,
-                ch,
-            } => self.flush_tablet(region_id, req, is_leader, ch),
+            Task::TabletFlush { region_id, req, ch } => self.pre_flush_tablet(region_id, req, ch),
         }
     }
 }

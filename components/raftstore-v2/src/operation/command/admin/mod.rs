@@ -165,8 +165,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 crate::TabletFlushTask::TabletFlush {
                                     region_id,
                                     req: Some(req),
-                                    is_leader: true,
-                                    ch: Some(ch),
+                                    ch,
                                 },
                             ) {
                                 error!(

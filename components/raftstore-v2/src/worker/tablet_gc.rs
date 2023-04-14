@@ -8,7 +8,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
+use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
@@ -38,9 +38,14 @@ pub enum Task<EK> {
         persisted_index: u64,
     },
     /// Sometimes we know for sure a tablet can be destroyed directly.
-    DirectDestroy { tablet: Either<EK, PathBuf> },
+    DirectDestroy {
+        tablet: Either<EK, PathBuf>,
+    },
     /// Cleanup ssts.
     CleanupImportSst(Box<[SstMeta]>),
+    TabletFlush {
+        region_id: u64,
+    },
 }
 
 impl<EK> Display for Task<EK> {
@@ -76,6 +81,9 @@ impl<EK> Display for Task<EK> {
             }
             Task::CleanupImportSst(ssts) => {
                 write!(f, "cleanup import ssts {:?}", ssts)
+            }
+            Task::TabletFlush { region_id } => {
+                write!(f, "Table flush for region_id {}", region_id)
             }
         }
     }
@@ -311,6 +319,20 @@ impl<EK: KvEngine> Runner<EK> {
             }
         }
     }
+
+    // pre flush tablet for follower
+    fn pre_flush_tablet(&self, region_id: u64) {
+        let Some(Some(tablet)) = self
+            .tablet_registry
+            .get(region_id)
+            .map(|mut cache| cache.latest().cloned()) else {return};
+        info!(
+            self.logger,
+            "pre-flush memtable for follower";
+            "region_id" => region_id,
+        );
+        tablet.flush_cfs(DATA_CFS, false).unwrap();
+    }
 }
 
 impl<EK> Runnable for Runner<EK>
@@ -338,6 +360,7 @@ where
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
+            Task::TabletFlush { region_id } => self.pre_flush_tablet(region_id),
         }
     }
 }
