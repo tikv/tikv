@@ -43,10 +43,10 @@ pub fn commit<S: Snapshot>(
 
             // It's an abnormal routine since pessimistic locks shouldn't be committed in
             // our transaction model. But a pessimistic lock will be left if the pessimistic
-            // rollback request fails to send and the transaction need not to acquire this
-            // lock again(due to WriteConflict). If the transaction is committed, we should
-            // remove the pessimistic lock (like pessimistic_rollback) instead of
-            // committing.
+            // rollback request fails to send or TiKV receives duplicated stale pessimistic
+            // lock request, and the transaction need not to acquire this lock again(due to
+            // WriteConflict). If the transaction is committed, we should remove the
+            // pessimistic lock (like pessimistic_rollback) instead of committing.
             if lock.lock_type == LockType::Pessimistic {
                 warn!(
                     "rollback a pessimistic lock when trying to commit";
@@ -92,6 +92,7 @@ pub fn commit<S: Snapshot>(
     if !commit {
         // Rollback a stale pessimistic lock. This function must be called by
         // resolve-lock in this case.
+        assert_eq!(lock.lock_type, LockType::Pessimistic);
         return Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero()));
     }
 
