@@ -8254,6 +8254,7 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -9620,6 +9621,7 @@ mod tests {
                     Some(vec![b"e".to_vec()]),
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -9718,6 +9720,7 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -9768,6 +9771,7 @@ mod tests {
                     Some(vec![k2.to_vec()]),
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -10604,6 +10608,7 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -10662,6 +10667,7 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {

@@ -563,7 +563,7 @@ where
         self.core.to_stop.push(check_leader_worker);
 
         // Create cdc worker.
-        let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
+        let cdc_worker = Box::new(LazyWorker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();
         let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
         engines
@@ -579,7 +579,7 @@ where
         );
         // Start cdc endpoint.
         let cdc_memory_quota = MemoryQuota::new(self.core.config.cdc.sink_memory_quota.0 as _);
-        let cdc_endpoint = cdc::Endpoint::new(
+        let _cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
             self.core.config.storage.api_version(),
@@ -595,14 +595,15 @@ where
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
         );
-        cdc_worker.start_with_timer(cdc_endpoint);
-        self.core.to_stop.push(cdc_worker);
+        // TODO: enable cdc.
+        // cdc_worker.start_with_timer(cdc_endpoint);
+        // self.core.to_stop.push(cdc_worker);
         self.cdc_scheduler = Some(cdc_scheduler);
         self.cdc_memory_quota = Some(cdc_memory_quota);
 
         // Create resolved ts.
         if self.core.config.resolved_ts.enable {
-            let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
+            let rts_worker = Box::new(LazyWorker::new("resolved-ts"));
             // Register the resolved ts observer
             let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
@@ -613,7 +614,7 @@ where
                     rts_worker.scheduler(),
                 )),
             );
-            let rts_endpoint = resolved_ts::Endpoint::new(
+            let _rts_endpoint = resolved_ts::Endpoint::new(
                 &self.core.config.resolved_ts,
                 rts_worker.scheduler(),
                 self.router.clone().unwrap(),
@@ -623,8 +624,9 @@ where
                 self.env.clone(),
                 self.security_mgr.clone(),
             );
-            rts_worker.start_with_timer(rts_endpoint);
-            self.core.to_stop.push(rts_worker);
+            // TODO: enable resolved_ts.
+            // rts_worker.start_with_timer(rts_endpoint);
+            // self.core.to_stop.push(rts_worker);
         }
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
