@@ -33,7 +33,7 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
-    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
@@ -355,7 +355,7 @@ impl ServerCluster {
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
                 rts_worker.scheduler(),
-                raft_router,
+                CdcRaftRouter(raft_router),
                 store_meta.clone(),
                 self.pd_client.clone(),
                 concurrency_manager.clone(),
