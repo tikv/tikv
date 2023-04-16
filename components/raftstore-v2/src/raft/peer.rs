@@ -120,11 +120,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     gc_peer_context: GcPeerContext,
 
-    /// Record the instants of peers being added into the configuration.
-    /// Remove them after they are not pending any more.
-    pub peers_start_pending_time: Vec<(u64, Instant)>,
-    /// A inaccurate cache about which peer is marked as down.
-    down_peer_ids: Vec<u64>,
+    peer_status_context: PeerStatusContext,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -209,8 +205,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
-            down_peer_ids: vec![],
-            peers_start_pending_time: vec![],
+            peer_status_context: PeerStatusContext::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -569,7 +564,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        self.down_peer_ids = down_peer_ids;
+        self.peer_status_context.collect_down_peers(down_peer_ids);
         // TODO: `refill_disk_full_peers`
         down_peers
     }
@@ -865,45 +860,126 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    #[inline]
+    pub fn peer_status_context_mut(&mut self) -> &mut PeerStatusContext {
+        &mut self.peer_status_context
+    }
+
+    #[inline]
+    pub fn peer_status_context(&self) -> &PeerStatusContext {
+        &self.peer_status_context
+    }
+
     /// Returns `true` if any peer recover from connectivity problem.
     ///
     /// A peer can become pending or down if it has not responded for a
     /// long time. If it becomes normal again, PD need to be notified.
     pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
-        if self.peers_start_pending_time.is_empty() && self.down_peer_ids.is_empty() {
+        if self.peer_status_context.is_empty() {
             return false;
         }
         if !self.is_leader() {
-            self.down_peer_ids = vec![];
-            self.peers_start_pending_time = vec![];
+            self.peer_status_context.reset();
             return false;
         }
-        for i in 0..self.peers_start_pending_time.len() {
-            if self.peers_start_pending_time[i].0 != peer_id {
-                continue;
-            }
-            // TODO check wait data peers here
-            let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
-            if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
-                if progress.matched >= truncated_idx {
-                    let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
-                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
-                    RAFT_PEER_PENDING_DURATION.observe(elapsed);
-                    debug!(
-                        self.logger,
-                        "peer has caught up logs";
-                        "region_id" => self.region_id(),
-                        "peer_id" => peer_id,
-                        "leader_id" => self.peer_id(),
-                        "takes" => elapsed,
-                    );
-                    return true;
-                }
-            }
-        }
-        if self.down_peer_ids.contains(&peer_id) {
+
+        if self.peer_status_context.has_down(peer_id) {
             return true;
         }
-        false
+
+        let mut removed = false;
+        self.peer_status_context
+            .retain_pendings(|(peer_id, pending_after)| {
+                // TODO check wait data peers here
+                let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
+                if let Some(progress) = self.raft_group.raft.prs().get(*peer_id) {
+                    if progress.matched >= truncated_idx {
+                        let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                        RAFT_PEER_PENDING_DURATION.observe(elapsed);
+                        debug!(
+                            self.logger,
+                            "peer has caught up logs";
+                            "region_id" => self.region_id(),
+                            "peer_id" => peer_id,
+                            "leader_id" => self.peer_id(),
+                            "takes" => elapsed,
+                        );
+                        removed = true;
+                        return false;
+                    }
+                }
+                true
+            });
+        removed
+    }
+}
+
+#[derive(Default)]
+struct PeerStatusContext {
+    /// Record the instants of peers being added into the configuration.
+    /// Remove them after they are not pending any more.
+    peers_start_pending_time: Vec<(u64, Instant)>,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peer_ids: Vec<u64>,
+}
+
+impl PeerStatusContext {
+    fn new() -> PeerStatusContext {
+        PeerStatusContext {
+            peers_start_pending_time: vec![],
+            down_peer_ids: vec![],
+        }
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.peers_start_pending_time.is_empty() && self.down_peer_ids.is_empty()
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.peers_start_pending_time.clear();
+        self.down_peer_ids.clear();
+    }
+
+    #[inline]
+    fn has_down(&self, peer_id: u64) -> bool {
+        if self.down_peer_ids.is_empty() {
+            return false;
+        }
+        self.down_peer_ids.contains(&peer_id)
+    }
+
+    #[inline]
+    fn collect_down_peers(&mut self, down_ids: Vec<u64>) {
+        self.down_peer_ids = down_ids;
+    }
+
+    #[inline]
+    pub fn has_pending(&self, peer_id: u64) -> bool {
+        if self.peers_start_pending_time.is_empty() {
+            return false;
+        }
+        self.peers_start_pending_time.iter().any(|p| p.0 == peer_id)
+    }
+
+    #[inline]
+    pub fn append_pendings(&mut self, peers: Vec<(u64, Instant)>) -> Vec<(u64, Instant)> {
+        self.peers_start_pending_time.append(&mut peers);
+        self.peers_start_pending_time
+    }
+
+    #[inline]
+    fn retain_pendings<F: FnMut(&(u64, Instant)) -> bool>(&mut self, f: F) {
+        self.peers_start_pending_time.retain(f);
+    }
+
+    pub fn observe_pendings(&self) {
+        self.peers_start_pending_time
+            .iter()
+            .map(|(_, pending_after)| {
+                let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                RAFT_PEER_PENDING_DURATION.observe(elapsed);
+            });
     }
 }

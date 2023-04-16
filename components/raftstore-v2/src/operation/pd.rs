@@ -7,15 +7,9 @@ use std::{sync::atomic::Ordering, time::Instant};
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
-use raftstore::store::{
-    metrics::{RAFT_PEER_PENDING_DURATION, STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC},
-    Transport,
-};
+use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, Transport};
 use slog::{debug, error};
-use tikv_util::{
-    slog_panic,
-    time::{duration_to_sec, InstantExt},
-};
+use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
@@ -141,11 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return pending_peers;
         }
 
-        for i in 0..self.peers_start_pending_time.len() {
-            let (_, pending_after) = self.peers_start_pending_time[i];
-            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
-            RAFT_PEER_PENDING_DURATION.observe(elapsed);
-        }
+        self.peer_status_context().observe_pendings();
 
         let progresses = status.progress.unwrap().iter();
         let mut peers_start_pending_time = Vec::with_capacity(self.region().get_peers().len());
@@ -167,11 +157,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.peer_from_cache(id) {
                     pending_peers.push(p);
-                    if !self
-                        .peers_start_pending_time
-                        .iter()
-                        .any(|&(pid, _)| pid == id)
-                    {
+                    if !self.peer_status_context().has_pending(id) {
                         let now = Instant::now();
                         peers_start_pending_time.push((id, now));
                         debug!(
@@ -199,8 +185,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        self.peers_start_pending_time
-            .extend(peers_start_pending_time);
+        self.peer_status_context_mut()
+            .append_pendings(peers_start_pending_time);
         pending_peers
     }
 
