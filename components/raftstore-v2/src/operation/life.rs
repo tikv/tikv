@@ -332,8 +332,15 @@ impl Store {
             ctx.schedulers.read.clone(),
             &ctx.logger,
         )
-        .and_then(|s| PeerFsm::new(&ctx.cfg, &ctx.tablet_registry, &ctx.snap_mgr, s))
-        {
+        .and_then(|s| {
+            PeerFsm::new(
+                &ctx.cfg,
+                &ctx.tablet_registry,
+                ctx.key_manager.as_deref(),
+                &ctx.snap_mgr,
+                s,
+            )
+        }) {
             Ok(p) => p,
             res => {
                 error!(self.logger(), "failed to create peer"; "region_id" => region_id, "peer_id" => to_peer.id, "err" => ?res.err());

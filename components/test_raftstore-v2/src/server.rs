@@ -475,7 +475,13 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let importer = {
             let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
-                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
+                SstImporter::new(
+                    &cfg.import,
+                    dir,
+                    key_manager.clone(),
+                    cfg.storage.api_version(),
+                )
+                .unwrap(),
             )
         };
         let import_service = ImportSstService::new(
@@ -597,6 +603,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             Arc::new(VersionTrack::new(raft_store)),
             &state,
             importer,
+            key_manager,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

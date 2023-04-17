@@ -422,6 +422,7 @@ async fn recv_snap_files<'a>(
     let received = accept_missing(&path, missing_ssts, &mut stream, &limiter).await?;
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
+    // TODO(tabokie)
     fs::rename(&path, final_path)?;
     Ok(context)
 }

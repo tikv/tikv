@@ -4431,6 +4431,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "encryption_export",
  "engine_test",
  "engine_traits",
  "error_code",

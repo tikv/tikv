@@ -434,7 +434,7 @@ mod tests {
             .unwrap();
         let snapshot = new_empty_snapshot(region.clone(), snap_index, snap_term, false);
         let mut task = WriteTask::new(region.get_id(), 5, 1);
-        s.apply_snapshot(&snapshot, &mut task, mgr, reg.clone())
+        s.apply_snapshot(&snapshot, &mut task, &mgr, &reg, None)
             .unwrap();
         // Add more entries to check if old entries are cleared. If not, it should panic
         // with memtable hole when using raft engine.

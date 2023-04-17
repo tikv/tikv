@@ -29,7 +29,11 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, ALL_CFS};
+use encryption_export::DataKeyManager;
+use engine_traits::{
+    EncryptionKeyManager, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
+    ALL_CFS,
+};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, StateRole};
@@ -136,6 +140,7 @@ pub fn recv_snap_path(
 /// Returns false if `source` doesn't exist.
 pub fn install_tablet<EK: KvEngine>(
     registry: &TabletRegistry<EK>,
+    key_manager: Option<&DataKeyManager>,
     source: &Path,
     region_id: u64,
     tablet_index: u64,
@@ -151,13 +156,28 @@ pub fn install_tablet<EK: KvEngine>(
         source.display(),
         target_path.display()
     );
+    //
+    if let Some(m) = key_manager {
+        m.link_file(
+            source.as_os_str().to_str().unwrap(),
+            target_path.as_os_str().to_str().unwrap(),
+        )
+        .unwrap();
+    }
     if let Err(e) = fs::rename(source, &target_path) {
+        if let Some(m) = key_manager {
+            m.delete_file(target_path.as_os_str().to_str().unwrap())
+                .unwrap();
+        }
         panic!(
             "failed to rename tablet {} => {}: {:?}",
             source.display(),
             target_path.display(),
             e
         );
+    }
+    if let Some(m) = key_manager {
+        m.delete_file(source.as_os_str().to_str().unwrap()).unwrap();
     }
     true
 }
@@ -544,8 +564,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         &mut self,
         snap: &Snapshot,
         task: &mut WriteTask<EK, ER>,
-        snap_mgr: TabletSnapManager,
-        reg: TabletRegistry<EK>,
+        snap_mgr: &TabletSnapManager,
+        reg: &TabletRegistry<EK>,
+        key_manager: Option<&Arc<DataKeyManager>>,
     ) -> Result<()> {
         let region_id = self.region().get_id();
         let peer_id = self.peer().get_id();
@@ -632,10 +653,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             Some(init) if init.scheduled && last_index == RAFT_INIT_LOG_INDEX => {
                 lb.put_dirty_mark(region_id, last_index, true).unwrap();
                 self.set_has_dirty_data(true);
-                (temp_split_path(&reg, region_id), false)
+                (temp_split_path(reg, region_id), false)
             }
             si => (
-                recv_snap_path(&snap_mgr, region_id, peer_id, last_term, last_index),
+                recv_snap_path(snap_mgr, region_id, peer_id, last_term, last_index),
                 si.is_some(),
             ),
         };
@@ -643,8 +664,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let logger = self.logger().clone();
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.
+        let reg = reg.clone();
+        let key_manager = key_manager.cloned();
         let hook = move || {
-            if !install_tablet(&reg, &path, region_id, last_index) {
+            if !install_tablet(&reg, key_manager.as_deref(), &path, region_id, last_index) {
                 slog_panic!(
                     logger,
                     "failed to install tablet";

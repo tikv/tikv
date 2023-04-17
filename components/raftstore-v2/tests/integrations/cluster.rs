@@ -336,6 +336,7 @@ impl RunningState {
                 background.clone(),
                 pd_worker,
                 importer,
+                None,
             )
             .unwrap();
 

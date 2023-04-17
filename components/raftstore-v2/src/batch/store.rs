@@ -16,6 +16,7 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::TrySendError;
+use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType};
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
@@ -92,6 +93,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
     pub sst_importer: Arc<SstImporter>,
+    pub key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -288,6 +290,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     snap_mgr: TabletSnapManager,
     global_stat: GlobalStoreStat,
     sst_importer: Arc<SstImporter>,
+    key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -305,6 +308,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
         sst_importer: Arc<SstImporter>,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -333,6 +337,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             coprocessor_host,
             global_stat,
             sst_importer,
+            key_manager,
         }
     }
 
@@ -364,8 +369,13 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 }
                 meta.set_region(storage.region(), storage.is_initialized(), &self.logger);
 
-                let (sender, peer_fsm) =
-                    PeerFsm::new(&cfg, &self.tablet_registry, &self.snap_mgr, storage)?;
+                let (sender, peer_fsm) = PeerFsm::new(
+                    &cfg,
+                    &self.tablet_registry,
+                    self.key_manager.as_deref(),
+                    &self.snap_mgr,
+                    storage,
+                )?;
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
 
@@ -461,6 +471,7 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             sst_importer: self.sst_importer.clone(),
+            key_manager: self.key_manager.clone(),
         };
         poll_ctx.update_ticks_timeout();
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
@@ -561,6 +572,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
         sst_importer: Arc<SstImporter>,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -672,6 +684,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             snap_mgr,
             coprocessor_host,
             sst_importer,
+            key_manager,
         );
         self.workers = Some(workers);
         self.schedulers = Some(schedulers);

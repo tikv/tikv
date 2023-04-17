@@ -760,6 +760,7 @@ where
                 raft_store,
                 &state,
                 importer.clone(),
+                self.core.encryption_key_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
