@@ -153,7 +153,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let region_id = self.region_id();
         let mut cmd_batch = CmdBatch::new(&self.observe().info, region_id);
-        let cmds = mem::replace(&mut self.observe_mut().cmds, vec![]);
+        let cmds = mem::take(&mut self.observe_mut().cmds);
         cmd_batch.extend(&self.observe().info, region_id, cmds);
         self.coprocessor_host()
             .on_flush_applied_cmd_batch(level, vec![cmd_batch], self.tablet());
