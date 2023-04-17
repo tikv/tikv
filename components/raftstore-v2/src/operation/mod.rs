@@ -14,7 +14,7 @@ pub use command::{
     SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl,
     MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
 };
-pub use life::{DestroyProgress, GcPeerContext};
+pub use life::{DestroyProgress, GcPeerContext, AbnormalPeerContext};
 pub use ready::{
     write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, SnapState, StateStorage,
 };
@@ -22,7 +22,6 @@ pub use ready::{
 pub(crate) use self::{
     bucket::BucketStatsInfo,
     command::SplitInit,
-    pd::AbnormalPeerContext,
     query::{LocalReader, ReadDelegatePair, SharedReadTablet},
     txn_ext::TxnContext,
 };

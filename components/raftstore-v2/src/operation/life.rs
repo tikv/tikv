@@ -36,9 +36,12 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, PeerState, RaftMessage},
 };
-use raftstore::store::{util, Transport, WriteTask};
+use raftstore::store::{util, Transport, WriteTask, metrics::RAFT_PEER_PENDING_DURATION};
 use slog::{debug, error, info, warn};
-use tikv_util::store::find_peer;
+use tikv_util::{
+    store::find_peer,
+    time::{duration_to_sec, Instant},
+};
 
 use super::command::SplitInit;
 use crate::{
@@ -104,6 +107,71 @@ impl DestroyProgress {
             }
             _ => panic!("must be destroying to finish"),
         }
+    }
+}
+
+#[derive(Default)]
+pub struct AbnormalPeerContext {
+    /// Record the instants of peers being added into the configuration.
+    /// Remove them after they are not pending any more.
+    peers_start_pending_time: Vec<(u64, Instant)>,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peers: Vec<u64>,
+}
+
+impl AbnormalPeerContext {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.peers_start_pending_time.is_empty() && self.down_peers.is_empty()
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.peers_start_pending_time.clear();
+        self.down_peers.clear();
+    }
+
+    #[inline]
+    pub fn is_peer_down(&self, peer_id: u64) -> bool {
+        if self.down_peers.is_empty() {
+            return false;
+        }
+        self.down_peers.contains(&peer_id)
+    }
+
+    #[inline]
+    pub fn is_peer_pending(&self, peer_id: u64) -> bool {
+        if self.peers_start_pending_time.is_empty() {
+            return false;
+        }
+        self.peers_start_pending_time.iter().any(|p| p.0 == peer_id)
+    }
+
+    #[inline]
+    pub fn collect_down_peers(&mut self, peer_ids: Vec<u64>) {
+        self.down_peers = peer_ids;
+    }
+
+    #[inline]
+    pub fn append_pending_peers(&mut self, mut peers: Vec<(u64, Instant)>) {
+        self.peers_start_pending_time.append(&mut peers);
+    }
+
+    #[inline]
+    pub fn retain_pending_peers(&mut self, f: impl FnMut(&mut (u64, Instant)) -> bool) -> bool {
+        let len = self.peers_start_pending_time.len();
+        self.peers_start_pending_time.retain_mut(f);
+        len != self.peers_start_pending_time.len()
+    }
+
+    pub fn observe_pending_peers(&self) {
+        let _ = self
+            .peers_start_pending_time
+            .iter()
+            .map(|(_, pending_after)| {
+                let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                RAFT_PEER_PENDING_DURATION.observe(elapsed);
+            });
     }
 }
 

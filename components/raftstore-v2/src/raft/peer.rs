@@ -29,7 +29,7 @@ use raftstore::{
 use slog::{debug, Logger};
 use tikv_util::{
     slog_panic,
-    time::{duration_to_sec, InstantExt},
+    time::duration_to_sec,
 };
 
 use super::storage::Storage;
