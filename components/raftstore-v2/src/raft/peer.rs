@@ -887,8 +887,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return true;
         }
 
-        let mut removed = false;
-        self.peer_status_context
+        let logger = self.logger.clone();
+        let leader_id = self.peer_id();
+        let region_id = self.region_id();
+        let removed = self
+            .peer_status_context
             .retain_pendings(|(peer_id, pending_after)| {
                 // TODO check wait data peers here
                 let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
@@ -896,15 +899,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if progress.matched >= truncated_idx {
                         let elapsed = duration_to_sec(pending_after.saturating_elapsed());
                         RAFT_PEER_PENDING_DURATION.observe(elapsed);
-                        debug!(
-                            self.logger,
-                            "peer has caught up logs";
-                            "region_id" => self.region_id(),
-                            "peer_id" => peer_id,
-                            "leader_id" => self.peer_id(),
-                            "takes" => elapsed,
-                        );
-                        removed = true;
+                        // debug!(
+                        //     logger,
+                        //     "peer has caught up logs";
+                        //     "region_id" => region_id,
+                        //     "peer_id" => peer_id,
+                        //     "leader_id" => leader_id,
+                        //     "takes" => elapsed,
+                        // );
                         return false;
                     }
                 }
@@ -915,7 +917,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 }
 
 #[derive(Default)]
-struct PeerStatusContext {
+pub struct PeerStatusContext {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     peers_start_pending_time: Vec<(u64, Instant)>,
@@ -924,13 +926,6 @@ struct PeerStatusContext {
 }
 
 impl PeerStatusContext {
-    fn new() -> PeerStatusContext {
-        PeerStatusContext {
-            peers_start_pending_time: vec![],
-            down_peer_ids: vec![],
-        }
-    }
-
     #[inline]
     fn is_empty(&self) -> bool {
         self.peers_start_pending_time.is_empty() && self.down_peer_ids.is_empty()
@@ -964,18 +959,29 @@ impl PeerStatusContext {
     }
 
     #[inline]
-    pub fn append_pendings(&mut self, peers: Vec<(u64, Instant)>) -> Vec<(u64, Instant)> {
+    pub fn append_pendings(&mut self, mut peers: Vec<(u64, Instant)>) {
         self.peers_start_pending_time.append(&mut peers);
-        self.peers_start_pending_time
     }
 
     #[inline]
-    fn retain_pendings<F: FnMut(&(u64, Instant)) -> bool>(&mut self, f: F) {
-        self.peers_start_pending_time.retain(f);
+    fn retain_pendings(&mut self, mut f: impl FnMut(&mut (u64, Instant)) -> bool) -> bool {
+        let mut changed = false;
+        let len = self.peers_start_pending_time.len();
+        let mut i = 0;
+        while i < len {
+            if !f(&mut self.peers_start_pending_time[i]) {
+                self.peers_start_pending_time.swap_remove(i);
+                changed = true;
+                continue;
+            }
+            i += 1;
+        }
+        changed
     }
 
     pub fn observe_pendings(&self) {
-        self.peers_start_pending_time
+        let _ = self
+            .peers_start_pending_time
             .iter()
             .map(|(_, pending_after)| {
                 let elapsed = duration_to_sec(pending_after.saturating_elapsed());
