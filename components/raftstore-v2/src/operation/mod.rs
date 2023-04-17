@@ -22,6 +22,7 @@ pub use ready::{
 pub(crate) use self::{
     bucket::BucketStatsInfo,
     command::SplitInit,
+    pd::AbnormalPeerContext,
     query::{LocalReader, ReadDelegatePair, SharedReadTablet},
     txn_ext::TxnContext,
 };

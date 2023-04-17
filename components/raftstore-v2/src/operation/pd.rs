@@ -7,9 +7,15 @@ use std::{sync::atomic::Ordering, time::Instant};
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
-use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, Transport};
+use raftstore::store::{
+    metrics::{RAFT_PEER_PENDING_DURATION, STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC},
+    Transport,
+};
 use slog::{debug, error};
-use tikv_util::slog_panic;
+use tikv_util::{
+    slog_panic,
+    time::{duration_to_sec, InstantExt},
+};
 
 use crate::{
     batch::StoreContext,
@@ -135,7 +141,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return pending_peers;
         }
 
-        self.peer_status_context().observe_pendings();
+        self.abnormal_peer_context().observe_pending_peers();
 
         let progresses = status.progress.unwrap().iter();
         let mut peers_start_pending_time = Vec::with_capacity(self.region().get_peers().len());
@@ -157,7 +163,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.peer_from_cache(id) {
                     pending_peers.push(p);
-                    if !self.peer_status_context().has_pending(id) {
+                    if !self.abnormal_peer_context().is_peer_pending(id) {
                         let now = Instant::now();
                         peers_start_pending_time.push((id, now));
                         debug!(
@@ -185,8 +191,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        self.peer_status_context_mut()
-            .append_pendings(peers_start_pending_time);
+        self.abnormal_peer_context_mut()
+            .append_pending_peers(peers_start_pending_time);
         pending_peers
     }
 
@@ -241,5 +247,70 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "err" => %e,
             );
         }
+    }
+}
+
+#[derive(Default)]
+pub struct AbnormalPeerContext {
+    /// Record the instants of peers being added into the configuration.
+    /// Remove them after they are not pending any more.
+    peers_start_pending_time: Vec<(u64, Instant)>,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peers: Vec<u64>,
+}
+
+impl AbnormalPeerContext {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.peers_start_pending_time.is_empty() && self.down_peers.is_empty()
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.peers_start_pending_time.clear();
+        self.down_peers.clear();
+    }
+
+    #[inline]
+    pub fn is_peer_down(&self, peer_id: u64) -> bool {
+        if self.down_peers.is_empty() {
+            return false;
+        }
+        self.down_peers.contains(&peer_id)
+    }
+
+    #[inline]
+    pub fn is_peer_pending(&self, peer_id: u64) -> bool {
+        if self.peers_start_pending_time.is_empty() {
+            return false;
+        }
+        self.peers_start_pending_time.iter().any(|p| p.0 == peer_id)
+    }
+
+    #[inline]
+    pub fn collect_down_peers(&mut self, peer_ids: Vec<u64>) {
+        self.down_peers = peer_ids;
+    }
+
+    #[inline]
+    pub fn append_pending_peers(&mut self, mut peers: Vec<(u64, Instant)>) {
+        self.peers_start_pending_time.append(&mut peers);
+    }
+
+    #[inline]
+    pub fn retain_pending_peers(&mut self, f: impl FnMut(&mut (u64, Instant)) -> bool) -> bool {
+        let len = self.peers_start_pending_time.len();
+        self.peers_start_pending_time.retain_mut(f);
+        len != self.peers_start_pending_time.len()
+    }
+
+    pub fn observe_pending_peers(&self) {
+        let _ = self
+            .peers_start_pending_time
+            .iter()
+            .map(|(_, pending_after)| {
+                let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                RAFT_PEER_PENDING_DURATION.observe(elapsed);
+            });
     }
 }

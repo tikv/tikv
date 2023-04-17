@@ -36,8 +36,9 @@ use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress, GcPeerContext,
-        MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
+        AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
+        GcPeerContext, MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
+        TxnContext,
     },
     router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -120,7 +121,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     gc_peer_context: GcPeerContext,
 
-    peer_status_context: PeerStatusContext,
+    abnormal_peer_context: AbnormalPeerContext,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -205,7 +206,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
-            peer_status_context: PeerStatusContext::default(),
+            abnormal_peer_context: AbnormalPeerContext::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -564,7 +565,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        self.peer_status_context.collect_down_peers(down_peer_ids);
+        self.abnormal_peer_context_mut()
+            .collect_down_peers(down_peer_ids);
         // TODO: `refill_disk_full_peers`
         down_peers
     }
@@ -861,37 +863,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn peer_status_context_mut(&mut self) -> &mut PeerStatusContext {
-        &mut self.peer_status_context
+    pub fn abnormal_peer_context_mut(&mut self) -> &mut AbnormalPeerContext {
+        &mut self.abnormal_peer_context
     }
 
     #[inline]
-    pub fn peer_status_context(&self) -> &PeerStatusContext {
-        &self.peer_status_context
+    pub fn abnormal_peer_context(&self) -> &AbnormalPeerContext {
+        &self.abnormal_peer_context
     }
 
-    /// Returns `true` if any peer recover from connectivity problem.
-    ///
-    /// A peer can become pending or down if it has not responded for a
-    /// long time. If it becomes normal again, PD need to be notified.
     pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
-        if self.peer_status_context.is_empty() {
+        // no pending or down peers
+        if self.abnormal_peer_context.is_empty() {
             return false;
         }
         if !self.is_leader() {
-            self.peer_status_context.reset();
+            self.abnormal_peer_context.reset();
             return false;
         }
 
-        if self.peer_status_context.has_down(peer_id) {
+        if self.abnormal_peer_context.is_peer_down(peer_id) {
             return true;
         }
 
         let logger = self.logger.clone();
-        let leader_id = self.peer_id();
-        let region_id = self.region_id();
-        self.peer_status_context
-            .retain_pendings(|(peer_id, pending_after)| {
+        self.abnormal_peer_context
+            .retain_pending_peers(|(peer_id, pending_after)| {
                 // TODO check wait data peers here
                 let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
                 if let Some(progress) = self.raft_group.raft.prs().get(*peer_id) {
@@ -901,9 +898,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         debug!(
                             logger,
                             "peer has caught up logs";
-                            "region_id" => %region_id,
-                            "peer_id" => %peer_id,
-                            "leader_id" => %leader_id,
+                            "from_peer_id" => %peer_id,
                             "takes" => %elapsed,
                         );
                         return false;
@@ -911,79 +906,5 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 true
             })
-    }
-}
-
-#[derive(Default)]
-pub struct PeerStatusContext {
-    /// Record the instants of peers being added into the configuration.
-    /// Remove them after they are not pending any more.
-    peers_start_pending_time: Vec<(u64, Instant)>,
-    /// A inaccurate cache about which peer is marked as down.
-    down_peers: Vec<u64>,
-}
-
-impl PeerStatusContext {
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.peers_start_pending_time.is_empty() && self.down_peers.is_empty()
-    }
-
-    #[inline]
-    fn reset(&mut self) {
-        self.peers_start_pending_time.clear();
-        self.down_peers.clear();
-    }
-
-    #[inline]
-    fn has_down(&self, peer_id: u64) -> bool {
-        if self.down_peers.is_empty() {
-            return false;
-        }
-        self.down_peers.contains(&peer_id)
-    }
-
-    #[inline]
-    fn collect_down_peers(&mut self, down_ids: Vec<u64>) {
-        self.down_peers = down_ids;
-    }
-
-    #[inline]
-    pub fn has_pending(&self, peer_id: u64) -> bool {
-        if self.peers_start_pending_time.is_empty() {
-            return false;
-        }
-        self.peers_start_pending_time.iter().any(|p| p.0 == peer_id)
-    }
-
-    #[inline]
-    pub fn append_pendings(&mut self, mut peers: Vec<(u64, Instant)>) {
-        self.peers_start_pending_time.append(&mut peers);
-    }
-
-    #[inline]
-    fn retain_pendings(&mut self, mut f: impl FnMut(&mut (u64, Instant)) -> bool) -> bool {
-        let mut changed = false;
-        let len = self.peers_start_pending_time.len();
-        let mut i = 0;
-        while i < len {
-            if !f(&mut self.peers_start_pending_time[i]) {
-                self.peers_start_pending_time.swap_remove(i);
-                changed = true;
-                continue;
-            }
-            i += 1;
-        }
-        changed
-    }
-
-    pub fn observe_pendings(&self) {
-        let _ = self
-            .peers_start_pending_time
-            .iter()
-            .map(|(_, pending_after)| {
-                let elapsed = duration_to_sec(pending_after.saturating_elapsed());
-                RAFT_PEER_PENDING_DURATION.observe(elapsed);
-            });
     }
 }
