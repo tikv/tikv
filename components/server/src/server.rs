@@ -794,7 +794,7 @@ where
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
-                self.router.clone(),
+                CdcRaftRouter(self.router.clone()),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 Arc::clone(&self.env),

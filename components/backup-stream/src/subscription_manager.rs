@@ -18,7 +18,7 @@ use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
-    router::RaftStoreRouter,
+    router::CdcHandle,
     store::fsm::ChangeObserver,
 };
 use resolved_ts::LeadershipResolver;
@@ -144,7 +144,7 @@ impl<E, R, RT> InitialScan for InitialDataLoader<E, R, RT>
 where
     E: KvEngine,
     R: RegionInfoProvider + Clone + 'static,
-    RT: RaftStoreRouter<E>,
+    RT: CdcHandle<E>,
 {
     fn do_initial_scan(
         &self,
@@ -380,7 +380,7 @@ where
     ) -> (Self, future![()])
     where
         E: KvEngine,
-        RT: RaftStoreRouter<E> + 'static,
+        RT: CdcHandle<E> + 'static,
     {
         let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
         let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);

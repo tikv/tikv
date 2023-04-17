@@ -16,7 +16,7 @@ use kvproto::{
 use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
-    router::RaftStoreRouter,
+    router::CdcHandle,
     store::RegionReadProgressRegistry,
 };
 use resolved_ts::LeadershipResolver;
@@ -100,7 +100,7 @@ impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
 where
     R: RegionInfoProvider + 'static + Clone,
     E: KvEngine,
-    RT: RaftStoreRouter<E> + 'static,
+    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
     S: MetaStore + 'static,
 {
@@ -212,7 +212,7 @@ where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
-    RT: RaftStoreRouter<E> + 'static,
+    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
 {
     fn get_meta_client(&self) -> MetadataClient<S> {
@@ -1282,7 +1282,7 @@ where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
-    RT: RaftStoreRouter<E> + 'static,
+    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
 {
     type Task = Task;
