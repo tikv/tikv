@@ -2048,9 +2048,6 @@ impl TabletSnapManager {
         let mut stat = SnapshotStat::default();
         stat.set_generate_duration_sec(generate_duration_sec);
         self.stats.lock().unwrap().insert(key, (start, stat));
-        if let Err(e) = self.delete_idle_snapshot() {
-            info!("delete old snapshot failed"; "err" => ?e);
-        }
     }
 
     pub fn finish_snapshot(&self, key: TabletSnapKey, send: Instant) {
@@ -2097,22 +2094,7 @@ impl TabletSnapManager {
         PathBuf::from(&self.base).join(prefix)
     }
 
-    pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
-        let path = self.tablet_gen_path(key);
-        if path.exists() && let Err(e) = file_system::trash_dir_all(&path) {
-            error!(
-                "delete snapshot failed";
-                "path" => %path.display(),
-                "err" => ?e,
-            );
-            false
-        } else {
-            true
-        }
-    }
-
-    fn delete_idle_snapshot(&self) -> Result<()> {
-        let stats = self.stats.lock().unwrap();
+    pub fn delete_snapshot(&self, region_id: u64, to_peer: u64) -> Result<()> {
         for f in file_system::read_dir(&self.base)? {
             let entry = f?;
             let ft = entry.file_type()?;
@@ -2121,9 +2103,6 @@ impl TabletSnapManager {
             }
             let os_name = entry.file_name();
             let name = os_name.to_str().unwrap().to_string();
-            if !name.starts_with(SNAP_GEN_PREFIX) {
-                continue;
-            }
 
             let parts = name
                 .split('_')
@@ -2133,10 +2112,7 @@ impl TabletSnapManager {
             if parts.len() < 4 {
                 continue;
             }
-            let keys = TabletSnapKey::new(parts[0], parts[1], parts[2], parts[3]);
-            if stats.contains_key(&keys) {
-                continue;
-            } else {
+            if parts[0] == region_id && parts[1] == to_peer {
                 file_system::trash_dir_all(entry.path())?
             }
         }
@@ -3235,26 +3211,20 @@ pub mod tests {
 
     #[test]
     fn test_remove_snapshot() {
-        let start = Instant::now();
         let snap_dir = Builder::new()
             .prefix("test_snapshot_stats")
             .tempdir()
             .unwrap();
         let mgr = TabletSnapManager::new(snap_dir.path()).unwrap();
 
-        // snapshot cann't be deleted if it is sending or generating.
+        // snapshot should be deleted after snapshot send finished (include failed).
         let key = TabletSnapKey::new(1, 2, 3, 4);
         let gen1 = mgr.tablet_gen_path(&key);
         std::fs::create_dir_all(&gen1).unwrap();
-        mgr.begin_snapshot(key.clone(), start, 1);
         assert!(gen1.exists());
-
-        // snapshot can be deleted after it finished.
-        mgr.finish_snapshot(key.clone(), start);
-        mgr.stats();
+        mgr.delete_snapshot(1, 3).unwrap();
         assert!(gen1.exists());
-        let key2 = TabletSnapKey::new(1, 4, 3, 5);
-        mgr.begin_snapshot(key2, start, 1);
+        mgr.delete_snapshot(1, 2).unwrap();
         assert!(!gen1.exists());
     }
 }

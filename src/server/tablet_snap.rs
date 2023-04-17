@@ -662,7 +662,6 @@ pub fn send_snap(
         send_timer.observe_duration();
         drop(client);
         drop(deregister);
-        mgr.delete_snapshot(&key);
         match recv_result {
             None => Ok(SendStat {
                 key,
@@ -805,6 +804,17 @@ where
             }
             Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
+                let to_peer_id = msg.get_to_peer().get_id();
+                defer!({
+                    if let Err(e) = self.snap_mgr.delete_snapshot(region_id, to_peer_id) {
+                        warn!(
+                            "delete snapshot directory failed";
+                            "to_peer_id" =>to_peer_id,
+                            "region_id" => region_id,
+                            "err" => ?e,
+                        );
+                    }
+                });
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
                     warn!(

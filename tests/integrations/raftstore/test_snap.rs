@@ -737,6 +737,10 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     raft_engine.get_all_entries_to(1, &mut dest).unwrap();
     // No new log is proposed, so there should be no log at all.
     assert!(dest.is_empty(), "{:?}", dest);
+
+    let snap_dir = cluster.get_snap_dir(2);
+    let read_dir = std::fs::read_dir(&snap_dir).unwrap();
+    assert_eq!(0, read_dir.count());
 }
 
 fn generate_snap<EK: KvEngine>(
