@@ -753,9 +753,10 @@ fn generate_snap<EK: KvEngine>(
 
     // Construct snapshot by hand
     let mut snapshot = Snapshot::default();
+    // use commit term for simplicity
     snapshot
         .mut_metadata()
-        .set_term(raft_state.get_hard_state().commit);
+        .set_term(raft_state.get_hard_state().term + 1);
     snapshot.mut_metadata().set_index(apply_state.applied_index);
     let conf_state = raftstore::store::util::conf_state_from_region(region_state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
@@ -777,7 +778,7 @@ fn generate_snap<EK: KvEngine>(
     msg.set_to_peer(new_peer(1, 1));
     msg.mut_message().set_snapshot(snapshot);
     msg.mut_message()
-        .set_term(raft_state.get_hard_state().commit);
+        .set_term(raft_state.get_hard_state().commit + 1);
     msg.mut_message().set_msg_type(MessageType::MsgSnapshot);
     msg.set_region_epoch(region_state.get_region().get_region_epoch().clone());
 
@@ -900,77 +901,115 @@ impl ApplySnapshotObserver for MockApplySnapshotObserver {
 
 #[test]
 fn test_v1_apply_snap_from_v2() {
-    let test_receive_snap = |key_num| {
-        let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
-        let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
+    let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
+    let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
 
-        cluster_v1
-            .cfg
-            .server
-            .labels
-            .insert(String::from("engine"), String::from("tiflash"));
+    cluster_v1
+        .cfg
+        .server
+        .labels
+        .insert(String::from("engine"), String::from("tiflash"));
 
-        let observer = MockApplySnapshotObserver {
-            tablet_snap_paths: Arc::default(),
-        };
-        let observer_clone = observer.clone();
-        cluster_v1.observer_register(
-            1,
-            Box::new(move |host: &mut CoprocessorHost<_>| {
-                host.registry.register_apply_snapshot_observer(
-                    1,
-                    BoxApplySnapshotObserver::new(observer_clone.clone()),
-                );
-            }),
-        );
-
-        cluster_v1.run();
-        cluster_v2.run();
-
-        let region = cluster_v2.get_region(b"");
-        cluster_v2.must_split(&region, b"k0010");
-
-        let s1_addr = cluster_v1.get_addr(1);
-        let region_id = region.get_id();
-        let engine = cluster_v2.get_engine(1);
-
-        for i in 0..key_num {
-            let k = format!("k{:04}", i);
-            cluster_v2.must_put(k.as_bytes(), b"val");
-        }
-        cluster_v2.flush_data();
-
-        let snap_mgr = cluster_v2.get_snap_mgr(1);
-        let security_mgr = cluster_v2.get_security_mgr();
-        let (msg, snap_key) = generate_snap(&engine, region_id, &snap_mgr);
-        let cfg = tikv::server::Config::default();
-        let limit = Limiter::new(f64::INFINITY);
-        let env = Arc::new(Environment::new(1));
-        let _ = block_on(async {
-            send_snap_v2(env, snap_mgr, security_mgr, &cfg, &s1_addr, msg, limit)
-                .unwrap()
-                .await
-        });
-
-        // The snapshot has been received by cluster v1, so check it's completeness
-        let snap_mgr = cluster_v1.get_snap_mgr(1);
-        let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
-        let path_str = path.as_path().to_str().unwrap();
-
-        // wait applying snapshot
-        std::thread::sleep(Duration::from_secs(1));
-
-        let pair = observer
-            .tablet_snap_paths
-            .as_ref()
-            .lock()
-            .unwrap()
-            .get(&1)
-            .unwrap()
-            .clone();
-        assert!(pair.0);
-        assert_eq!(&pair.1, path_str);
+    let observer = MockApplySnapshotObserver {
+        tablet_snap_paths: Arc::default(),
     };
+    let observer_clone = observer.clone();
+    cluster_v1.observer_register(
+        1,
+        Box::new(move |host: &mut CoprocessorHost<_>| {
+            host.registry.register_apply_snapshot_observer(
+                1,
+                BoxApplySnapshotObserver::new(observer_clone.clone()),
+            );
+        }),
+    );
 
-    test_receive_snap(50);
+    cluster_v1.run();
+    cluster_v2.run();
+
+    let region = cluster_v2.get_region(b"");
+    cluster_v2.must_split(&region, b"k0010");
+
+    let s1_addr = cluster_v1.get_addr(1);
+    let region_id = region.get_id();
+    let engine = cluster_v2.get_engine(1);
+
+    for i in 0..50 {
+        let k = format!("k{:04}", i);
+        cluster_v2.must_put(k.as_bytes(), b"val");
+    }
+    cluster_v2.flush_data();
+
+    let tablet_snap_mgr = cluster_v2.get_snap_mgr(1);
+    let security_mgr = cluster_v2.get_security_mgr();
+    let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
+    let cfg = tikv::server::Config::default();
+    let limit = Limiter::new(f64::INFINITY);
+    let env = Arc::new(Environment::new(1));
+    let _ = block_on(async {
+        send_snap_v2(
+            env.clone(),
+            tablet_snap_mgr.clone(),
+            security_mgr.clone(),
+            &cfg,
+            &s1_addr,
+            msg,
+            limit.clone(),
+        )
+        .unwrap()
+        .await
+    });
+
+    let snap_mgr = cluster_v1.get_snap_mgr(region_id);
+    let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
+    let path_str = path.as_path().to_str().unwrap();
+
+    // wait applying snapshot
+    std::thread::sleep(Duration::from_secs(1));
+
+    let pair = observer
+        .tablet_snap_paths
+        .as_ref()
+        .lock()
+        .unwrap()
+        .get(&region_id)
+        .unwrap()
+        .clone();
+    assert!(pair.0);
+    assert_eq!(&pair.1, path_str);
+
+    let region = cluster_v2.get_region(b"k0011");
+    let region_id = region.get_id();
+    let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
+    let _ = block_on(async {
+        send_snap_v2(
+            env,
+            tablet_snap_mgr,
+            security_mgr,
+            &cfg,
+            &s1_addr,
+            msg,
+            limit,
+        )
+        .unwrap()
+        .await
+    });
+
+    let snap_mgr = cluster_v1.get_snap_mgr(region_id);
+    let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
+    let path_str = path.as_path().to_str().unwrap();
+
+    // wait applying snapshot
+    std::thread::sleep(Duration::from_secs(1));
+
+    let pair = observer
+        .tablet_snap_paths
+        .as_ref()
+        .lock()
+        .unwrap()
+        .get(&region_id)
+        .unwrap()
+        .clone();
+    assert!(pair.0);
+    assert_eq!(&pair.1, path_str);
 }

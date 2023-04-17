@@ -428,8 +428,11 @@ pub(crate) async fn recv_snap_files<'a>(
     let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;
 
+    // some means we are in raftstore-v1 config and received a tablet snapshot from
+    // raftstore-v2. Now, it can only happen in tiflash node within a raftstore-v2
+    // cluster.
     if let Some(snap_mgr_v1) = snap_mgr_v1 {
-        snap_mgr_v1.get_empty_snapshot_for_receiving(&context.key)?;
+        snap_mgr_v1.gen_empty_snapshot_for_tablet_snapshot(&context.key)?;
     }
 
     Ok(context)

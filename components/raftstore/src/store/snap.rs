@@ -1014,7 +1014,7 @@ impl Snapshot {
         }
     }
 
-    fn new_for_empty<T: Into<PathBuf>>(
+    fn new_for_tablet_snapshot<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
         mgr: &SnapManagerCore,
@@ -1626,7 +1626,12 @@ impl SnapManager {
         Ok(Box::new(f))
     }
 
-    pub fn get_empty_snapshot_for_receiving(
+    // Tablet snapshot is the snapshot sent from raftstore-v2.
+    // We enable v1 to receive it to enable tiflash node to receive and apply
+    // snapshot from raftstore-v2.
+    // To make it easy, we maintain an empty `store::snapshot` with tablet snapshot
+    // path storing in it. So tiflash node can detect it and apply properly.
+    pub fn gen_empty_snapshot_for_tablet_snapshot(
         &self,
         tablet_snap_key: &TabletSnapKey,
     ) -> RaftStoreResult<()> {
@@ -1638,7 +1643,7 @@ impl SnapManager {
             tablet_snap_key.term,
             tablet_snap_key.idx,
         );
-        let _ = Snapshot::new_for_empty(
+        let _ = Snapshot::new_for_tablet_snapshot(
             base,
             &snap_key,
             &self.core,
