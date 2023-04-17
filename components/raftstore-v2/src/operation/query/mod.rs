@@ -42,6 +42,7 @@ use crate::{
     },
 };
 
+mod capture;
 mod lease;
 mod local;
 mod replica;

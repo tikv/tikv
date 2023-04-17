@@ -7,9 +7,12 @@ use engine_traits::{
 };
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
-use raftstore::store::{
-    fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
-    Config, ReadTask,
+use raftstore::{
+    coprocessor::CmdObserveInfo,
+    store::{
+        fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
+        Config, ReadTask,
+    },
 };
 use slog::Logger;
 use sst_importer::SstImporter;
@@ -59,6 +62,8 @@ pub struct Apply<EK: KvEngine, R> {
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
     sst_importer: Arc<SstImporter>,
+    observe_info: CmdObserveInfo,
+
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -110,6 +115,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
+            observe_info: CmdObserveInfo::default(),
             logger,
         }
     }
@@ -268,5 +274,15 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn sst_importer(&self) -> &SstImporter {
         &self.sst_importer
+    }
+
+    #[inline]
+    pub fn observe_info_mut(&mut self) -> &mut CmdObserveInfo {
+        &mut self.observe_info
+    }
+
+    #[inline]
+    pub fn term(&self) -> u64 {
+        self.applied_term
     }
 }
