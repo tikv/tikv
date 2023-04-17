@@ -267,7 +267,6 @@ impl Dicts {
                 None => {
                     // Could be a plaintext file not tracked by file dictionary.
                     info!("link untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
-                    println!("link plaintext file {}", src_fname);
                     return Ok(None);
                 }
             };
@@ -829,7 +828,6 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
-        println!("new file {}", fname);
         let (_, data_key) = self.dicts.current_data_key();
         let key = data_key.get_key().to_owned();
         let file = self.dicts.new_file(fname, self.method, true)?;
@@ -866,7 +864,6 @@ impl EncryptionKeyManager for DataKeyManager {
         let src_path = Path::new(src_fname);
         let dst_path = Path::new(dst_fname);
         if src_path.is_dir() {
-            println!("link dir: {}", src_path.display());
             let mut iter = walkdir::WalkDir::new(src_path).into_iter().peekable();
             while let Some(e) = iter.next() {
                 let e = e?;
@@ -883,7 +880,6 @@ impl EncryptionKeyManager for DataKeyManager {
                 let src = e.path().as_os_str().to_str().unwrap();
                 let dst_path = dst_path.join(sub_path);
                 let dst = dst_path.as_os_str().to_str().unwrap();
-                println!("link file under dir: {} -> {}", src, dst);
                 self.dicts.link_file(src, dst, iter.peek().is_none())?;
             }
         } else {
