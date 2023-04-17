@@ -4,7 +4,7 @@ use std::{
     collections::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
-        HashMap, VecDeque,
+        VecDeque,
     },
     fmt::{self, Display, Formatter},
     sync::{
@@ -16,10 +16,14 @@ use std::{
     u64,
 };
 
+use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use kvproto::{
+    metapb,
+    raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
+};
 use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
@@ -52,8 +56,20 @@ use crate::{
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
-pub const TIFLASH: &str = "tiflash";
-pub const ENGINE: &str = "engine";
+const TIFLASH: &str = "tiflash";
+const ENGINE: &str = "engine";
+
+pub fn is_tiflash_engine(store: &metapb::Store) -> bool {
+    store.get_labels().iter().any(|label| {
+        label.get_key().to_lowercase() == ENGINE && label.get_value().to_lowercase() == TIFLASH
+    })
+}
+
+pub fn contain_tiflash_engine_label(labels: &HashMap<String, String>) -> bool {
+    labels
+        .iter()
+        .any(|label| label.0.to_lowercase() == ENGINE && label.1.to_lowercase() == TIFLASH)
+}
 
 /// Region related task
 #[derive(Debug)]
@@ -803,14 +819,7 @@ where
                     } else {
                         let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
                             if let Ok(s) = pd_client.get_store(to_store_id) {
-                                if let Some(_l) = s.get_labels().iter().find(|l| {
-                                    l.key.to_lowercase() == ENGINE
-                                        && l.value.to_lowercase() == TIFLASH
-                                }) {
-                                    return true;
-                                } else {
-                                    return false;
-                                }
+                                return is_tiflash_engine(&s);
                             }
                             true
                         });

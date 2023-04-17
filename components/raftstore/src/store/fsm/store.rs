@@ -77,6 +77,7 @@ use crate::{
         config::Config,
         fsm::{
             create_apply_batch_system,
+            life::{build_peer_destroyed_report, handle_tombstone_message_on_tiflash_proxy},
             metrics::*,
             peer::{
                 maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -92,11 +93,11 @@ use crate::{
         util,
         util::{is_initial_msg, RegionReadProgressRegistry},
         worker::{
-            AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
-            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
-            GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
-            ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
-            SplitCheckTask,
+            is_tiflash_engine, AutoSplitController, CleanupRunner, CleanupSstRunner,
+            CleanupSstTask, CleanupTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
+            ConsistencyCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner,
+            RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner,
+            RegionTask, SplitCheckTask,
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -2065,6 +2066,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .inc();
             return Ok(());
         }
+
+        // To make tiflash proxy compatiable with raftstore v2, it needs to
+        // response GcPeerResponse.
+        if msg.get_is_tombstone() && is_tiflash_engine(&self.ctx.store) {
+            if let Some(msg) = handle_tombstone_message_on_tiflash_proxy(
+                &self.ctx.engines.kv,
+                self.fsm.store.id,
+                msg,
+            ) {
+                let _ = self.ctx.trans.send(msg);
+            }
+            // else {
+            // TODO: we should create the peer and destroy immediately to leave
+            //       a tombstone record, otherwise it leaks removed_record
+            //       and merged_record.
+            // }
+            return Ok(());
+        }
+
         if msg.get_is_tombstone() || msg.has_merge_target() {
             // Target tombstone peer doesn't exist, so ignore it.
             return Ok(());

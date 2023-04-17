@@ -16,8 +16,6 @@ mod split_check;
 mod split_config;
 mod split_controller;
 
-pub use region::{ENGINE, TIFLASH};
-
 #[cfg(test)]
 pub use self::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
 pub use self::{
@@ -42,7 +40,9 @@ pub use self::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,
         Task as RefreshConfigTask,
     },
-    region::{Runner as RegionRunner, Task as RegionTask},
+    region::{
+        contain_tiflash_engine_label, is_tiflash_engine, Runner as RegionRunner, Task as RegionTask,
+    },
     split_check::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },

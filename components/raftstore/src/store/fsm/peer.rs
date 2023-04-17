@@ -64,6 +64,7 @@ use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
+use super::life::forward_destroy_to_source_peer;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
 use crate::{
@@ -93,8 +94,9 @@ use crate::{
         util,
         util::{KeysInfoFormatter, LeaseState},
         worker::{
-            new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
-            GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
+            is_tiflash_engine, new_change_peer_v2_request, Bucket, BucketRange, CleanupTask,
+            ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress,
+            RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
@@ -2740,6 +2742,28 @@ where
         }
     }
 
+    // In v1, gc_peer_request is handled only when it's tiflash engine.
+    // Note: it needs to be consistent with Peer::on_gc_peer_request in v2.
+    fn on_tiflash_engine_gc_peer_request(&mut self, msg: RaftMessage) {
+        let extra_msg = msg.get_extra_msg();
+        if !is_tiflash_engine(&self.ctx.store) {
+            return;
+        }
+
+        if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
+            // Corrupted message.
+            return;
+        }
+        if self.fsm.peer.get_store().applied_index() < extra_msg.get_index() {
+            // Merge not finish.
+            return;
+        }
+
+        forward_destroy_to_source_peer(&msg, |m| {
+            let _ = self.ctx.router.send_raft_message(m);
+        });
+    }
+
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
@@ -2796,7 +2820,12 @@ where
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
             // It's v2 only message and ignore does no harm.
-            ExtraMessageType::MsgGcPeerRequest | ExtraMessageType::MsgGcPeerResponse => (),
+            ExtraMessageType::MsgGcPeerRequest => {
+                // To make tiflash proxy compatiable with raftstore v2, it needs
+                // to response GcPeerResponse.
+                self.on_tiflash_engine_gc_peer_request(msg);
+            }
+            ExtraMessageType::MsgGcPeerResponse => (),
             ExtraMessageType::MsgFlushMemtable => (),
         }
     }
