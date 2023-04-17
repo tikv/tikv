@@ -189,6 +189,7 @@ pub fn run_tikv(config: TikvConfig) {
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_STORAGE_SCHED_POOL_SIZE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
 struct TikvServer<ER: RaftEngine> {
@@ -607,6 +608,18 @@ where
                 storage.get_scheduler(),
             )),
         );
+
+        // Start the background check scheduler worker pool size periodically. This is
+        // only for the case that the resource control is enabled.
+        if self.core.config.resource_control.enabled {
+            let sched_pool = storage.get_scheduler().get_sched_pool().clone();
+            self.core.background_worker.spawn_interval_task(
+                DEFAULT_STORAGE_SCHED_POOL_SIZE_CHECK_INTERVAL,
+                move || {
+                    sched_pool.check_idle_pool();
+                },
+            );
+        }
 
         let (resolver, state) = resolve::new_resolver(
             self.pd_client.clone(),

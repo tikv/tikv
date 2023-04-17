@@ -3,7 +3,10 @@
 use std::{
     cell::RefCell,
     mem,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use collections::HashMap;
@@ -25,6 +28,7 @@ use crate::storage::{
     test_util::latest_feature_gate,
 };
 
+const DEFAULT_MIN_SCHED_POOL_SIZE: usize = 1;
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
     command_keyread_histogram_vec: LocalHistogramVec,
@@ -66,6 +70,13 @@ pub enum SchedPool {
         worker_pool: FuturePool,
         resource_ctl: Arc<ResourceController>,
     },
+    // automatically switch between the `single-queue pool` and `priority-queue pool` based on the
+    // resource group settings only used when the resource control feature is enabled.
+    Dynamic {
+        vanilla: Arc<SchedPool>,
+        priority: Arc<SchedPool>,
+        expect_pool_size: Arc<AtomicUsize>,
+    },
 }
 
 impl SchedPool {
@@ -74,7 +85,7 @@ impl SchedPool {
         pool_size: usize,
         reporter: R,
         feature_gate: FeatureGate,
-        _resource_ctl: Option<Arc<ResourceController>>,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> Self {
         let builder = |pool_size: usize, name_prefix: &str| {
             let engine = Arc::new(Mutex::new(engine.clone()));
@@ -102,26 +113,33 @@ impl SchedPool {
                     tls_flush(&reporter);
                 })
         };
-        // FIXME: for performance issue, disable priority pool temporarily
-        // if let Some(ref r) = resource_ctl {
-        //     SchedPool::Priority {
-        //         worker_pool: builder(pool_size, "sched-worker-pool")
-        //             .build_priority_future_pool(r.clone()),
-        //         resource_ctl: r.clone(),
-        //     }
-        // } else {
-        SchedPool::Vanilla {
+        let vanilla = SchedPool::Vanilla {
             worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
-            high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-high-pri-pool")
+            high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-worker-high")
                 .build_future_pool(),
+        };
+        if let Some(ref r) = resource_ctl {
+            let priority = SchedPool::Priority {
+                worker_pool: builder(pool_size, "sched-worker-priority")
+                    .build_priority_future_pool(r.clone()),
+                resource_ctl: r.clone(),
+            };
+            info!("sched-worker pool use dynamic mode");
+            SchedPool::Dynamic {
+                vanilla: Arc::new(vanilla),
+                priority: Arc::new(priority),
+                expect_pool_size: Arc::new(AtomicUsize::new(pool_size)),
+            }
+        } else {
+            info!("sched-worker pool use vanilla mode");
+            vanilla
         }
-        // }
     }
 
     pub fn spawn(
         &self,
         group_name: &str,
-        priority: CommandPri,
+        priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
         match self {
@@ -129,7 +147,7 @@ impl SchedPool {
                 high_worker_pool,
                 worker_pool,
             } => {
-                if priority == CommandPri::High {
+                if priority_level == CommandPri::High {
                     high_worker_pool.spawn(f)
                 } else {
                     worker_pool.spawn(f)
@@ -139,7 +157,7 @@ impl SchedPool {
                 worker_pool,
                 resource_ctl,
             } => {
-                let fixed_level = match priority {
+                let fixed_level = match priority_level {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
                     CommandPri::Low => Some(2),
@@ -159,6 +177,17 @@ impl SchedPool {
                     extras,
                 )
             }
+            SchedPool::Dynamic {
+                vanilla, priority, ..
+            } => {
+                if self.can_use_priority() {
+                    fail_point!("priority_pool_task");
+                    priority.spawn(group_name, priority_level, f)
+                } else {
+                    fail_point!("single_queue_pool_task");
+                    vanilla.spawn(group_name, priority_level, f)
+                }
+            }
         }
     }
 
@@ -174,22 +203,82 @@ impl SchedPool {
             SchedPool::Priority { worker_pool, .. } => {
                 worker_pool.scale_pool_size(pool_size);
             }
+            SchedPool::Dynamic {
+                vanilla,
+                priority,
+                expect_pool_size,
+            } => {
+                priority.scale_pool_size(pool_size);
+                vanilla.scale_pool_size(pool_size);
+                expect_pool_size.store(pool_size, Ordering::Release)
+            }
         }
     }
 
-    pub fn get_pool_size(&self, priority: CommandPri) -> usize {
+    // check if the pool size is correct, if not, adjust it.
+    // it's only used in dynamic mode if the pool size is switched, it's may
+    // influence the performance for a while.
+    pub fn check_idle_pool(&self) {
+        match self {
+            SchedPool::Vanilla { .. } | SchedPool::Priority { .. } => {}
+            SchedPool::Dynamic {
+                vanilla,
+                priority,
+                expect_pool_size,
+            } => {
+                let pool_size = expect_pool_size.load(Ordering::Acquire);
+                if self.can_use_priority() {
+                    if priority.get_pool_size(CommandPri::Normal) != pool_size
+                        || vanilla.get_pool_size(CommandPri::Normal) != DEFAULT_MIN_SCHED_POOL_SIZE
+                    {
+                        priority.scale_pool_size(pool_size);
+                        vanilla.scale_pool_size(DEFAULT_MIN_SCHED_POOL_SIZE);
+                    }
+                } else if vanilla.get_pool_size(CommandPri::Normal) != pool_size
+                    || priority.get_pool_size(CommandPri::Normal) != DEFAULT_MIN_SCHED_POOL_SIZE
+                {
+                    vanilla.scale_pool_size(pool_size);
+                    priority.scale_pool_size(DEFAULT_MIN_SCHED_POOL_SIZE);
+                }
+            }
+        }
+    }
+
+    fn can_use_priority(&self) -> bool {
+        match self {
+            SchedPool::Vanilla { .. } => false,
+            SchedPool::Priority { .. } => true,
+            SchedPool::Dynamic { priority, .. } => {
+                if let SchedPool::Priority { resource_ctl, .. } = &**priority {
+                    return resource_ctl.is_customized();
+                }
+                false
+            }
+        }
+    }
+
+    pub fn get_pool_size(&self, priority_level: CommandPri) -> usize {
         match self {
             SchedPool::Vanilla {
                 high_worker_pool,
                 worker_pool,
             } => {
-                if priority == CommandPri::High {
+                if priority_level == CommandPri::High {
                     high_worker_pool.get_pool_size()
                 } else {
                     worker_pool.get_pool_size()
                 }
             }
             SchedPool::Priority { worker_pool, .. } => worker_pool.get_pool_size(),
+            SchedPool::Dynamic {
+                vanilla, priority, ..
+            } => {
+                if self.can_use_priority() {
+                    priority.get_pool_size(priority_level)
+                } else {
+                    vanilla.get_pool_size(priority_level)
+                }
+            }
         }
     }
 }
