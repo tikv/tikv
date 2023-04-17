@@ -1238,7 +1238,7 @@ pub(crate) mod tests {
         must_acquire_pessimistic_lock(&mut engine, k, k, 10, 10);
         must_commit_err(&mut engine, k, 20, 30);
         must_commit(&mut engine, k, 10, 20);
-        must_seek_write(&mut engine, k, 30, 10, 20, WriteType::Lock);
+        must_seek_write_none(&mut engine, k, 30);
     }
 
     #[test]
