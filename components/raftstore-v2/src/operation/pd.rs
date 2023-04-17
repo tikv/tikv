@@ -7,10 +7,7 @@ use std::sync::atomic::Ordering;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
-use raftstore::store::{
-    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC,
-    Transport,
-};
+use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, Transport};
 use slog::{debug, error};
 use tikv_util::{slog_panic, time::Instant};
 
@@ -166,9 +163,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         debug!(
                             self.logger,
                             "peer start pending";
-                            "region_id" => self.region_id(),
-                            "leader_id" => self.peer_id(),
-                            "peer_id" => id,
+                            "get_peer_id" => id,
                             "time" => ?now,
                         );
                     }

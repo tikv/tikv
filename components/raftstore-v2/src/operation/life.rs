@@ -36,7 +36,7 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, PeerState, RaftMessage},
 };
-use raftstore::store::{util, Transport, WriteTask, metrics::RAFT_PEER_PENDING_DURATION};
+use raftstore::store::{metrics::RAFT_PEER_PENDING_DURATION, util, Transport, WriteTask};
 use slog::{debug, error, info, warn};
 use tikv_util::{
     store::find_peer,
@@ -133,17 +133,11 @@ impl AbnormalPeerContext {
 
     #[inline]
     pub fn is_peer_down(&self, peer_id: u64) -> bool {
-        if self.down_peers.is_empty() {
-            return false;
-        }
         self.down_peers.contains(&peer_id)
     }
 
     #[inline]
     pub fn is_peer_pending(&self, peer_id: u64) -> bool {
-        if self.peers_start_pending_time.is_empty() {
-            return false;
-        }
         self.peers_start_pending_time.iter().any(|p| p.0 == peer_id)
     }
 
@@ -164,6 +158,7 @@ impl AbnormalPeerContext {
         len != self.peers_start_pending_time.len()
     }
 
+    #[inline]
     pub fn observe_pending_peers(&self) {
         let _ = self
             .peers_start_pending_time
