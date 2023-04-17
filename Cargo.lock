@@ -1486,6 +1486,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "toml",
+ "walkdir",
 ]
 
 [[package]]
@@ -1630,10 +1631,14 @@ dependencies = [
 name = "engine_traits_tests"
 version = "0.0.1"
 dependencies = [
+ "encryption",
+ "encryption_export",
  "engine_test",
  "engine_traits",
+ "kvproto",
  "panic_hook",
  "tempfile",
+ "test_util",
  "tikv_alloc",
 ]
 

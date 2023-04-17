@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io::{Error as IoError, ErrorKind, Result as IoResult},
+    io::{self, Error as IoError, ErrorKind, Result as IoResult},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -192,7 +192,7 @@ impl Dicts {
         dict.files.get(fname).cloned()
     }
 
-    fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
+    fn new_file(&self, fname: &str, method: EncryptionMethod, sync: bool) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = if method != EncryptionMethod::Plaintext {
             Iv::new_ctr()
@@ -211,7 +211,7 @@ impl Dicts {
             file_dict.files.len() as _
         };
 
-        file_dict_file.insert(fname, &file)?;
+        file_dict_file.insert(fname, &file, sync)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -227,7 +227,7 @@ impl Dicts {
 
     // If the file does not exist, return Ok(())
     // In either case the intent that the file not exist is achieved.
-    fn delete_file(&self, fname: &str) -> Result<()> {
+    fn delete_file(&self, fname: &str, sync: bool) -> Result<()> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
@@ -245,7 +245,7 @@ impl Dicts {
             }
         };
 
-        file_dict_file.remove(fname)?;
+        file_dict_file.remove(fname, sync)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
@@ -255,7 +255,7 @@ impl Dicts {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<Option<()>> {
+    fn link_file(&self, src_fname: &str, dst_fname: &str, sync: bool) -> Result<Option<()>> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (method, file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
@@ -264,6 +264,7 @@ impl Dicts {
                 None => {
                     // Could be a plaintext file not tracked by file dictionary.
                     info!("link untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
+                    println!("link plaintext file {}", src_fname);
                     return Ok(None);
                 }
             };
@@ -276,7 +277,7 @@ impl Dicts {
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };
-        file_dict_file.insert(dst_fname, &file)?;
+        file_dict_file.insert(dst_fname, &file, sync)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -365,7 +366,7 @@ fn check_stale_file_exist(
             "Clean stale file information in file dictionary: {:?}",
             fname
         );
-        file_dict_file.remove(fname)?;
+        file_dict_file.remove(fname, true)?;
         let _ = file_dict.files.remove(fname);
     }
     Ok(())
@@ -479,7 +480,7 @@ impl DataKeyManager {
             if info.method != EncryptionMethod::Plaintext {
                 let retain = f(fname);
                 if !retain {
-                    file_dict_file.remove(fname).unwrap();
+                    file_dict_file.remove(fname, true).unwrap();
                 }
                 retain
             } else {
@@ -733,6 +734,26 @@ impl DataKeyManager {
         Ok(Some(encrypted_file))
     }
 
+    pub fn remove_dir(&self, dname: &str) -> IoResult<()> {
+        let path = Path::new(dname);
+        assert!(path.is_dir());
+        let mut iter = walkdir::WalkDir::new(path).into_iter().peekable();
+        while let Some(e) = iter.next() {
+            let e = e?;
+            if e.path_is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("unexpected symbolic link: {}", e.path().display()),
+                ));
+            }
+            self.dicts.delete_file(
+                e.path().as_os_str().to_str().unwrap(),
+                iter.peek().is_none(),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Return which method this manager is using.
     pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
         crypter::to_engine_encryption_method(self.method)
@@ -771,9 +792,10 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+        println!("new file {}", fname);
         let (_, data_key) = self.dicts.current_data_key();
         let key = data_key.get_key().to_owned();
-        let file = self.dicts.new_file(fname, self.method)?;
+        let file = self.dicts.new_file(fname, self.method, true)?;
         let encrypted_file = FileEncryptionInfo {
             key,
             method: crypter::to_engine_encryption_method(file.method),
@@ -786,12 +808,50 @@ impl EncryptionKeyManager for DataKeyManager {
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
             std::io::ErrorKind::Other.into()
         ));
-        self.dicts.delete_file(fname)?;
+        // `RemoveDir` is not managed, but RocksDB may use `RenameFile` on a directory,
+        // which internally calls `LinkFile` and `DeleteFile`.
+        let path = Path::new(fname);
+        if path.is_dir() {
+            let mut iter = walkdir::WalkDir::new(path).into_iter().peekable();
+            while let Some(e) = iter.next() {
+                self.dicts.delete_file(
+                    e?.path().as_os_str().to_str().unwrap(),
+                    iter.peek().is_none(),
+                )?;
+            }
+        } else {
+            self.dicts.delete_file(fname, true)?;
+        }
         Ok(())
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        self.dicts.link_file(src_fname, dst_fname)?;
+        let src_path = Path::new(src_fname);
+        let dst_path = Path::new(dst_fname);
+        if src_path.is_dir() {
+            println!("link dir: {}", src_path.display());
+            let mut iter = walkdir::WalkDir::new(src_path).into_iter().peekable();
+            while let Some(e) = iter.next() {
+                let e = e?;
+                if e.path_is_symlink() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("unexpected symbolic link: {}", e.path().display()),
+                    ));
+                }
+                if e.path().is_dir() {
+                    continue;
+                }
+                let sub_path = e.path().strip_prefix(src_path).unwrap();
+                let src = e.path().as_os_str().to_str().unwrap();
+                let dst_path = dst_path.join(sub_path);
+                let dst = dst_path.as_os_str().to_str().unwrap();
+                println!("link file under dir: {} -> {}", src, dst);
+                self.dicts.link_file(src, dst, iter.peek().is_none())?;
+            }
+        } else {
+            self.dicts.link_file(src_fname, dst_fname, true)?;
+        }
         Ok(())
     }
 }
@@ -1452,5 +1512,59 @@ mod tests {
                 test_change_method(from, to)
             }
         }
+    }
+
+    #[test]
+    fn test_rename_dir() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+        let subdir = tmp_dir.path().join("foo");
+        std::fs::create_dir(&subdir).unwrap();
+        let file_a = manager
+            .new_file(subdir.join("a").as_os_str().to_str().unwrap())
+            .unwrap();
+        File::create(subdir.join("a")).unwrap();
+        let file_b = manager
+            .new_file(subdir.join("b").as_os_str().to_str().unwrap())
+            .unwrap();
+        File::create(subdir.join("b")).unwrap();
+
+        let dstdir = tmp_dir.path().join("bar");
+        manager
+            .link_file(
+                subdir.as_os_str().to_str().unwrap(),
+                dstdir.as_os_str().to_str().unwrap(),
+            )
+            .unwrap();
+        manager
+            .delete_file(subdir.as_os_str().to_str().unwrap())
+            .unwrap();
+
+        assert_eq!(
+            manager
+                .get_file(dstdir.join("a").as_os_str().to_str().unwrap())
+                .unwrap(),
+            file_a
+        );
+        assert_eq!(
+            manager
+                .get_file_exists(subdir.join("a").as_os_str().to_str().unwrap())
+                .unwrap(),
+            None
+        );
+
+        assert_eq!(
+            manager
+                .get_file(dstdir.join("b").as_os_str().to_str().unwrap())
+                .unwrap(),
+            file_b
+        );
+        assert_eq!(
+            manager
+                .get_file_exists(subdir.join("b").as_os_str().to_str().unwrap())
+                .unwrap(),
+            None
+        );
     }
 }
