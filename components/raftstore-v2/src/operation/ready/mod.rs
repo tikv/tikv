@@ -303,7 +303,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // 1. If the peer is pending, then only AppendResponse can bring it back to up.
         // 2. If the peer is down, then HeartbeatResponse and AppendResponse can bring
         // it back to up.
-        if self.any_new_peer_catch_up(from_peer_id) {
+        if msg.get_message().get_msg_type() == MessageType::MsgAppendResponse
+            && self.any_new_peer_catch_up(from_peer_id)
+        {
             self.region_heartbeat_pd(ctx)
         }
 
