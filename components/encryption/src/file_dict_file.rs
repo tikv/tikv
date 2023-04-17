@@ -274,6 +274,13 @@ impl FileDictionaryFile {
         Ok(())
     }
 
+    pub fn sync(&mut self) -> Result<()> {
+        if self.enable_log {
+            self.append_file.as_mut().unwrap().sync_all()?;
+        }
+        Ok(())
+    }
+
     /// This function needs to be called after each append operation to check
     /// if compact is needed.
     fn check_compact(&mut self) -> Result<()> {

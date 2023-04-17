@@ -21,6 +21,7 @@ use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
 use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn};
+use tokio::sync::oneshot;
 
 use crate::{
     config::EncryptionConfig,
@@ -36,6 +37,7 @@ use crate::{
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
 const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
+const GENERATE_DATA_KEY_LIMIT: usize = 10;
 
 struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
@@ -343,19 +345,8 @@ impl Dicts {
         let duration = now.duration_since(UNIX_EPOCH).unwrap();
         let creation_time = duration.as_secs();
 
-        // let (key_id, key) = generate_data_key(method);
-        // let data_key = DataKey {
-        //     key,
-        //     method,
-        //     creation_time,
-        //     was_exposed: false,
-        //     ..Default::default()
-        // };
-        // self.rotate_key(key_id, data_key, master_key)
-
         // Generate new data key.
-        let generate_limit = 10;
-        for _ in 0..generate_limit {
+        for _ in 0..GENERATE_DATA_KEY_LIMIT {
             let (key_id, key) = generate_data_key(method);
             if key_id == 0 {
                 // 0 is invalid
@@ -376,7 +367,10 @@ impl Dicts {
             }
             return Ok(());
         }
-        Err(box_err!("key id collides {} times!", generate_limit))
+        Err(box_err!(
+            "key id collides {} times!",
+            GENERATE_DATA_KEY_LIMIT
+        ))
     }
 }
 
@@ -402,11 +396,16 @@ fn check_stale_file_exist(
     Ok(())
 }
 
+enum RotateTask {
+    Terminate,
+    Save(oneshot::Sender<()>),
+}
+
 fn run_background_rotate_work(
     dict: Arc<Dicts>,
     method: EncryptionMethod,
     master_key: &dyn Backend,
-    terminal_recv: channel::Receiver<()>,
+    rx: channel::Receiver<RotateTask>,
 ) {
     let check_period = std::cmp::min(
         Duration::from_secs(ROTATE_CHECK_PERIOD),
@@ -420,9 +419,17 @@ fn run_background_rotate_work(
                 dict.maybe_rotate_data_key(method, master_key)
                     .expect("Rotating key operation encountered error in the background worker");
             },
-            recv(terminal_recv) -> _ => {
-                info!("Key rotate worker has been cancelled.");
-                break
+            recv(rx) -> r => {
+                match r {
+                    Err(_) | Ok(RotateTask::Terminate) => {
+                        info!("Key rotate worker has been cancelled.");
+                        return;
+                    }
+                    Ok(RotateTask::Save(tx)) => {
+                        dict.save_key_dict(master_key).expect("Saving key dict encountered error in the background worker");
+                        tx.send(()).unwrap();
+                    }
+                }
             },
         }
     }
@@ -441,7 +448,7 @@ fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
 pub struct DataKeyManager {
     dicts: Arc<Dicts>,
     method: EncryptionMethod,
-    rotate_terminal: channel::Sender<()>,
+    rotate_tx: channel::Sender<RotateTask>,
     background_worker: Option<JoinHandle<()>>,
 }
 
@@ -609,7 +616,7 @@ impl DataKeyManager {
         dicts.maybe_rotate_data_key(method, &*master_key)?;
         let dicts = Arc::new(dicts);
         let dict_clone = dicts.clone();
-        let (rotate_terminal, rx) = channel::bounded(1);
+        let (rotate_tx, rx) = channel::bounded(1);
         let background_worker = std::thread::Builder::new()
             .name(thd_name!("enc:key"))
             .spawn_wrapper(move || {
@@ -621,7 +628,7 @@ impl DataKeyManager {
         Ok(DataKeyManager {
             dicts,
             method,
-            rotate_terminal,
+            rotate_tx,
             background_worker: Some(background_worker),
         })
     }
@@ -792,7 +799,7 @@ impl DataKeyManager {
 
 impl Drop for DataKeyManager {
     fn drop(&mut self) {
-        if let Err(e) = self.rotate_terminal.send(()) {
+        if let Err(e) = self.rotate_tx.send(RotateTask::Terminate) {
             info!("failed to terminate background rotation, are we shutting down?"; "err" => %e);
         }
         if let Some(Err(e)) = self.background_worker.take().map(|w| w.join()) {
@@ -883,6 +890,122 @@ impl EncryptionKeyManager for DataKeyManager {
             self.dicts.link_file(src_fname, dst_fname, true)?;
         }
         Ok(())
+    }
+}
+
+/// An RAII-style importer of data keys. It automatically creates data key that
+/// doesn't exist locally. It synchronizes log file in batch. It automatically
+/// reverts changes if caller aborts.
+pub struct DataKeyImporter<'a> {
+    manager: &'a DataKeyManager,
+    // Added file names.
+    file_additions: Vec<String>,
+    // Added key ids.
+    key_additions: Vec<u64>,
+    committed: bool,
+}
+
+#[allow(dead_code)]
+impl<'a> DataKeyImporter<'a> {
+    pub fn new(manager: &'a DataKeyManager) -> Self {
+        Self {
+            manager,
+            file_additions: Vec::new(),
+            key_additions: Vec::new(),
+            committed: false,
+        }
+    }
+
+    pub fn add(&mut self, fname: &str, iv: Vec<u8>, new_key: DataKey) -> Result<()> {
+        let method = new_key.method;
+        let mut key_id = None;
+        {
+            let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
+            for (id, data_key) in &key_dict.keys {
+                if data_key.key == new_key.key {
+                    key_id = Some(*id);
+                }
+            }
+            if key_id.is_none() {
+                for _ in 0..GENERATE_DATA_KEY_LIMIT {
+                    // Match `generate_data_key`.
+                    use rand::{rngs::OsRng, RngCore};
+                    let id = OsRng.next_u64();
+                    if let Entry::Vacant(e) = key_dict.keys.entry(id) {
+                        key_id = Some(id);
+                        e.insert(new_key);
+                        self.key_additions.push(id);
+                        break;
+                    }
+                }
+                if key_id.is_none() {
+                    return Err(box_err!(
+                        "key id collides {} times!",
+                        GENERATE_DATA_KEY_LIMIT
+                    ));
+                }
+            }
+        }
+
+        let file = FileInfo {
+            iv,
+            key_id: key_id.unwrap(),
+            method,
+            ..Default::default()
+        };
+        let mut file_dict_file = self.manager.dicts.file_dict_file.lock().unwrap();
+        let file_num = {
+            let mut file_dict = self.manager.dicts.file_dict.lock().unwrap();
+            if let Entry::Vacant(e) = file_dict.files.entry(fname.to_owned()) {
+                e.insert(file.clone());
+            } else {
+                return Err(box_err!("file name collides with existing file: {}", fname));
+            }
+            file_dict.files.len() as _
+        };
+        file_dict_file.insert(fname, &file, false)?;
+        self.file_additions.push(fname.to_owned());
+        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
+        Ok(())
+    }
+
+    pub fn commit(mut self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        if !self.file_additions.is_empty() {
+            self.manager.dicts.file_dict_file.lock().unwrap().sync()?;
+        }
+        if !self.key_additions.is_empty() {
+            self.manager.rotate_tx.send(RotateTask::Save(tx)).unwrap();
+            rx.blocking_recv().unwrap();
+        }
+        self.committed = true;
+        Ok(())
+    }
+
+    pub fn rollback(&mut self) -> Result<()> {
+        assert!(!self.committed);
+        let mut iter = self.file_additions.drain(..).peekable();
+        while let Some(f) = iter.next() {
+            self.manager.dicts.delete_file(&f, iter.peek().is_none())?;
+        }
+        for key_id in self.key_additions.drain(..) {
+            let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
+            key_dict.keys.remove(&key_id);
+        }
+        let (tx, rx) = oneshot::channel();
+        self.manager.rotate_tx.send(RotateTask::Save(tx)).unwrap();
+        rx.blocking_recv().unwrap();
+        Ok(())
+    }
+}
+
+impl<'a> Drop for DataKeyImporter<'a> {
+    fn drop(&mut self) {
+        if !self.committed {
+            if let Err(e) = self.rollback() {
+                warn!("failed to rollback imported data keys"; "err" => ?e);
+            }
+        }
     }
 }
 
@@ -1596,5 +1719,83 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn test_import_keys() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+
+        let mut importer = DataKeyImporter::new(&manager);
+        let file0 = manager.new_file("0").unwrap();
+
+        // conflict
+        importer
+            .add("0", file0.iv.clone(), DataKey::default())
+            .unwrap_err();
+        // same key
+        importer
+            .add(
+                "1",
+                file0.iv.clone(),
+                DataKey {
+                    key: file0.key.clone(),
+                    method: EncryptionMethod::Aes192Ctr,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // different key
+        let (_, key2) = generate_data_key(EncryptionMethod::Aes192Ctr);
+        importer
+            .add(
+                "2",
+                Iv::new_ctr().as_slice().to_owned(),
+                DataKey {
+                    key: key2.clone(),
+                    method: EncryptionMethod::Aes192Ctr,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(manager.get_file("0").unwrap(), file0);
+        assert_eq!(manager.get_file("1").unwrap(), file0);
+        assert_eq!(manager.get_file("2").unwrap().key, key2);
+
+        drop(importer);
+        assert_eq!(manager.get_file_exists("1").unwrap(), None);
+        assert_eq!(manager.get_file_exists("2").unwrap(), None);
+
+        let mut importer = DataKeyImporter::new(&manager);
+        // same key
+        importer
+            .add(
+                "1",
+                file0.iv.clone(),
+                DataKey {
+                    key: file0.key.clone(),
+                    method: EncryptionMethod::Aes192Ctr,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // different key
+        importer
+            .add(
+                "2",
+                Iv::new_ctr().as_slice().to_owned(),
+                DataKey {
+                    key: key2.clone(),
+                    method: EncryptionMethod::Aes192Ctr,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // importer is dropped here.
+        importer.commit().unwrap();
+        assert_eq!(manager.get_file("1").unwrap(), file0);
+        assert_eq!(manager.get_file("2").unwrap().key, key2);
     }
 }
