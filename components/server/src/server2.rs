@@ -567,14 +567,14 @@ where
 
         // Create cdc worker.
         let mut cdc_worker = self.cdc_worker.take().unwrap();
-        let cdc_scheduler = cdc_worker.scheduler();
+        let cdc_scheduler = self.cdc_scheduler.clone().unwrap();
         // Register cdc observer.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
             tikv::config::Module::Cdc,
-            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+            Box::new(CdcConfigManager(cdc_scheduler.clone())),
         );
         // Start cdc endpoint.
         let cdc_memory_quota = MemoryQuota::new(self.core.config.cdc.sink_memory_quota.0 as _);
@@ -584,7 +584,7 @@ where
             self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
-            cdc_scheduler.clone(),
+            cdc_scheduler,
             self.router.clone().unwrap(),
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             cdc_ob,
