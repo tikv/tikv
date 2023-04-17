@@ -440,8 +440,6 @@ pub struct Snapshot {
     meta_file: MetaFile,
     hold_tmp_files: bool,
 
-    tablet_path: Option<PathBuf>,
-
     mgr: SnapManagerCore,
 }
 
@@ -504,7 +502,6 @@ impl Snapshot {
             meta_file,
             hold_tmp_files: false,
             mgr: mgr.clone(),
-            tablet_path: None,
         };
 
         if check_policy == CheckPolicy::None {

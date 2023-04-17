@@ -47,16 +47,15 @@ use grpcio::{
 };
 use kvproto::{
     raft_serverpb::{
-        RaftMessage, RaftSnapshotData, SnapshotMeta, TabletSnapshotFileChunk,
-        TabletSnapshotFileMeta, TabletSnapshotPreview, TabletSnapshotRequest,
-        TabletSnapshotResponse,
+        RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
+        TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
     },
     tikvpb::TikvClient,
 };
 use protobuf::Message;
 use raftstore::store::{
-    snap::{gen_snapshot_meta, ReceivingGuard, TabletSnapKey, TabletSnapManager},
-    SnapKey, SnapManager,
+    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
+    SnapManager,
 };
 use security::SecurityManager;
 use tikv_kv::RaftExtension;

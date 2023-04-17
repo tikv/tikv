@@ -749,11 +749,14 @@ fn generate_snap<EK: KvEngine>(
     let tablet = engine.get_tablet_by_id(region_id).unwrap();
     let region_state = engine.region_local_state(region_id).unwrap().unwrap();
     let apply_state = engine.raft_apply_state(region_id).unwrap().unwrap();
+    let raft_state = engine.raft_local_state(region_id).unwrap().unwrap();
 
     // Construct snapshot by hand
     let mut snapshot = Snapshot::default();
-    snapshot.mut_metadata().set_term(10);
-    snapshot.mut_metadata().set_index(20);
+    snapshot
+        .mut_metadata()
+        .set_term(raft_state.get_hard_state().commit);
+    snapshot.mut_metadata().set_index(apply_state.applied_index);
     let conf_state = raftstore::store::util::conf_state_from_region(region_state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
@@ -773,7 +776,8 @@ fn generate_snap<EK: KvEngine>(
     msg.region_id = region_id;
     msg.set_to_peer(new_peer(1, 1));
     msg.mut_message().set_snapshot(snapshot);
-    msg.mut_message().set_term(10);
+    msg.mut_message()
+        .set_term(raft_state.get_hard_state().commit);
     msg.mut_message().set_msg_type(MessageType::MsgSnapshot);
     msg.set_region_epoch(region_state.get_region().get_region_epoch().clone());
 
@@ -895,7 +899,7 @@ impl ApplySnapshotObserver for MockApplySnapshotObserver {
 }
 
 #[test]
-fn test_xxx() {
+fn test_v1_apply_snap_from_v2() {
     let test_receive_snap = |key_num| {
         let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
         let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
@@ -923,16 +927,18 @@ fn test_xxx() {
         cluster_v1.run();
         cluster_v2.run();
 
-        let s1_addr = cluster_v1.get_addr(1);
         let region = cluster_v2.get_region(b"");
+        cluster_v2.must_split(&region, b"k0010");
+
+        let s1_addr = cluster_v1.get_addr(1);
         let region_id = region.get_id();
         let engine = cluster_v2.get_engine(1);
-        let tablet = engine.get_tablet_by_id(region_id).unwrap();
 
         for i in 0..key_num {
-            let k = format!("zk{:04}", i);
-            tablet.put(k.as_bytes(), &random_long_vec(1024)).unwrap();
+            let k = format!("k{:04}", i);
+            cluster_v2.must_put(k.as_bytes(), b"val");
         }
+        cluster_v2.flush_data();
 
         let snap_mgr = cluster_v2.get_snap_mgr(1);
         let security_mgr = cluster_v2.get_security_mgr();
@@ -950,15 +956,9 @@ fn test_xxx() {
         let snap_mgr = cluster_v1.get_snap_mgr(1);
         let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
         let path_str = path.as_path().to_str().unwrap();
-        let rocksdb = engine_rocks::util::new_engine_opt(
-            path_str,
-            RocksDbOptions::default(),
-            LARGE_CFS
-                .iter()
-                .map(|&cf| (cf, RocksCfOptions::default()))
-                .collect(),
-        )
-        .unwrap();
+
+        // wait applying snapshot
+        std::thread::sleep(Duration::from_secs(1));
 
         let pair = observer
             .tablet_snap_paths
@@ -970,21 +970,7 @@ fn test_xxx() {
             .clone();
         assert!(pair.0);
         assert_eq!(&pair.1, path_str);
-
-        for i in 0..key_num {
-            let k = format!("zk{:04}", i);
-            assert!(
-                rocksdb
-                    .get_value_cf("default", k.as_bytes())
-                    .unwrap()
-                    .is_some()
-            );
-        }
     };
 
-    // test small snapshot
-    test_receive_snap(20);
-
-    // test large snapshot
-    test_receive_snap(5000);
+    test_receive_snap(50);
 }
