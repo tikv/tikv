@@ -268,8 +268,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             unimplemented!();
         }
 
-        // message will be moved in raft_group step.
-        let msg_type = msg.get_message().get_msg_type();
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
@@ -279,12 +277,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         self.insert_peer_cache(from_peer);
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
-        if msg_type == MessageType::MsgTransferLeader {
+        if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
         } else {
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg_type == MessageType::MsgReadIndex
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
                 && self.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.peer_id())
@@ -305,7 +303,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // 1. If the peer is pending, then only AppendResponse can bring it back to up.
         // 2. If the peer is down, then HeartbeatResponse and AppendResponse can bring
         // it back to up.
-        if msg_type == MessageType::MsgAppendResponse && self.any_new_peer_catch_up(from_peer_id) {
+        if self.any_new_peer_catch_up(from_peer_id) {
             self.region_heartbeat_pd(ctx)
         }
 

@@ -879,6 +879,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
 
+        if self.abnormal_peer_context.is_peer_down(from_peer_id) {
+            return true;
+        }
+
         let logger = self.logger.clone();
         self.abnormal_peer_context
             .retain_pending_peers(|(peer_id, pending_after)| {
