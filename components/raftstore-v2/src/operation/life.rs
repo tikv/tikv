@@ -132,11 +132,6 @@ impl AbnormalPeerContext {
     }
 
     #[inline]
-    pub fn is_peer_down(&self, peer_id: u64) -> bool {
-        self.down_peers.contains(&peer_id)
-    }
-
-    #[inline]
     pub fn is_peer_pending(&self, peer_id: u64) -> bool {
         self.peers_start_pending_time.iter().any(|p| p.0 == peer_id)
     }

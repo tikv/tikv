@@ -869,7 +869,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.abnormal_peer_context
     }
 
-    pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
+    pub fn any_new_peer_catch_up(&mut self, from_peer_id: u64) -> bool {
         // no pending or down peers
         if self.abnormal_peer_context.is_empty() {
             return false;
@@ -877,10 +877,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.is_leader() {
             self.abnormal_peer_context.reset();
             return false;
-        }
-
-        if self.abnormal_peer_context.is_peer_down(peer_id) {
-            return true;
         }
 
         let logger = self.logger.clone();
@@ -895,7 +891,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         debug!(
                             logger,
                             "peer has caught up logs";
-                            "from_peer_id" => %peer_id,
+                            "from_peer_id" => %from_peer_id,
                             "takes" => %elapsed,
                         );
                         return false;
