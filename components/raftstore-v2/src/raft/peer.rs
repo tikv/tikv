@@ -890,8 +890,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let logger = self.logger.clone();
         let leader_id = self.peer_id();
         let region_id = self.region_id();
-        let removed = self
-            .peer_status_context
+        self.peer_status_context
             .retain_pendings(|(peer_id, pending_after)| {
                 // TODO check wait data peers here
                 let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
@@ -899,20 +898,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if progress.matched >= truncated_idx {
                         let elapsed = duration_to_sec(pending_after.saturating_elapsed());
                         RAFT_PEER_PENDING_DURATION.observe(elapsed);
-                        // debug!(
-                        //     logger,
-                        //     "peer has caught up logs";
-                        //     "region_id" => region_id,
-                        //     "peer_id" => peer_id,
-                        //     "leader_id" => leader_id,
-                        //     "takes" => elapsed,
-                        // );
+                        debug!(
+                            logger,
+                            "peer has caught up logs";
+                            "region_id" => %region_id,
+                            "peer_id" => %peer_id,
+                            "leader_id" => %leader_id,
+                            "takes" => %elapsed,
+                        );
                         return false;
                     }
                 }
                 true
-            });
-        removed
+            })
     }
 }
 
@@ -922,32 +920,32 @@ pub struct PeerStatusContext {
     /// Remove them after they are not pending any more.
     peers_start_pending_time: Vec<(u64, Instant)>,
     /// A inaccurate cache about which peer is marked as down.
-    down_peer_ids: Vec<u64>,
+    down_peers: Vec<u64>,
 }
 
 impl PeerStatusContext {
     #[inline]
     fn is_empty(&self) -> bool {
-        self.peers_start_pending_time.is_empty() && self.down_peer_ids.is_empty()
+        self.peers_start_pending_time.is_empty() && self.down_peers.is_empty()
     }
 
     #[inline]
     fn reset(&mut self) {
         self.peers_start_pending_time.clear();
-        self.down_peer_ids.clear();
+        self.down_peers.clear();
     }
 
     #[inline]
     fn has_down(&self, peer_id: u64) -> bool {
-        if self.down_peer_ids.is_empty() {
+        if self.down_peers.is_empty() {
             return false;
         }
-        self.down_peer_ids.contains(&peer_id)
+        self.down_peers.contains(&peer_id)
     }
 
     #[inline]
     fn collect_down_peers(&mut self, down_ids: Vec<u64>) {
-        self.down_peer_ids = down_ids;
+        self.down_peers = down_ids;
     }
 
     #[inline]
