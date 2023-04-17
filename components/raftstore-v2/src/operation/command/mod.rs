@@ -26,7 +26,6 @@ use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions}
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
-use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_proto::ConfChangeI;
 use raftstore::{
@@ -43,7 +42,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::{error, info, warn};
+use slog::{debug, error, info, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -69,9 +68,10 @@ pub use admin::{
 };
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};
-pub use write::{
-    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
-};
+use protobuf::Message;
+pub use write::{SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder};
+pub type SimpleWriteReqEncoder =
+    raftstore::store::simple_write::SimpleWriteReqEncoder<CmdResChannel>;
 
 use self::write::SimpleWrite;
 
@@ -148,6 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
             .unwrap();
+        fail::fail_point!("delay_set_apply_scheduler", |_| {});
         self.set_apply_scheduler(apply_scheduler);
     }
 
@@ -335,7 +336,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         if !self.serving() || !apply_res.admin_result.is_empty() {
             // TODO: remove following log once stable.
-            info!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
+            debug!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
         }
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
@@ -462,7 +463,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
-        let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
+        let decoder = match SimpleWriteReqDecoder::new(
+            |buf, index, term| parse_at(&self.logger, buf, index, term),
+            &self.logger,
+            &data,
+            u64::MAX,
+            u64::MAX,
+        ) {
             Ok(decoder) => decoder,
             Err(req) => unreachable!("unexpected request: {:?}", req),
         };
@@ -555,6 +562,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let log_index = entry.get_index();
         let req = match entry.get_entry_type() {
             EntryType::EntryNormal => match SimpleWriteReqDecoder::new(
+                |buf, index, term| parse_at(&self.logger, buf, index, term),
                 &self.logger,
                 entry.get_data(),
                 log_index,

@@ -22,6 +22,7 @@ mod hibernate_state;
 mod peer_storage;
 mod region_snapshot;
 mod replication_mode;
+pub mod simple_write;
 pub mod snap;
 mod txn_ext;
 mod worker;
@@ -82,7 +83,7 @@ pub use self::{
         LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate,
         ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
         SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
-        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
-        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats, ENGINE,
+        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, TIFLASH,
     },
 };

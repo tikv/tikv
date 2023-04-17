@@ -56,6 +56,7 @@ where
             Mutation::make_put(Key::from_raw(k), v.clone()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
     }
@@ -107,6 +108,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &B
                     mutation,
                     &None,
                     SkipPessimisticCheck,
+                    None,
                 )
                 .unwrap();
             }

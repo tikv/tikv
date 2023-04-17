@@ -886,6 +886,7 @@ pub mod tests {
                 m,
                 &None,
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -910,6 +911,7 @@ pub mod tests {
                 m,
                 &None,
                 DoPessimisticCheck,
+                None,
             )
             .unwrap();
             self.write(txn.into_modifies());

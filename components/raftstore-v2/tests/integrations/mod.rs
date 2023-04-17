@@ -7,6 +7,7 @@
 
 // TODO: test conflict control in integration tests after split is supported.
 
+#[allow(dead_code)]
 mod cluster;
 mod test_basic_write;
 mod test_conf_change;
