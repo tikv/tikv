@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
 use engine_traits::{Checkpointer, KvEngine, Peekable, RaftEngineReadOnly, SyncMutable, LARGE_CFS};
 use file_system::{IoOp, IoType};
@@ -19,6 +20,7 @@ use grpcio::Environment;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{
+    coprocessor::{ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost},
     store::{snap::TABLET_SNAPSHOT_VERSION, *},
     Result,
 };
@@ -844,6 +846,145 @@ fn test_v1_receive_snap_from_v2() {
     test_receive_snap(20);
 
     // test large snapshot
-    // test_receive_snap(5000);
-    std::thread::sleep(Duration::from_secs(100));
+    test_receive_snap(5000);
+}
+
+#[derive(Clone)]
+struct MockApplySnapshotObserver {
+    tablet_snap_paths: Arc<Mutex<HashMap<u64, (bool, String)>>>,
+}
+
+impl Coprocessor for MockApplySnapshotObserver {}
+
+impl ApplySnapshotObserver for MockApplySnapshotObserver {
+    fn should_pre_apply_snapshot(&self) -> bool {
+        true
+    }
+
+    fn pre_apply_snapshot(
+        &self,
+        _: &mut raftstore::coprocessor::ObserverContext<'_>,
+        peer_id: u64,
+        _: &raftstore::store::SnapKey,
+        snap: Option<&raftstore::store::Snapshot>,
+    ) {
+        let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
+        self.tablet_snap_paths
+            .lock()
+            .unwrap()
+            .insert(peer_id, (false, tablet_path));
+    }
+
+    fn post_apply_snapshot(
+        &self,
+        _: &mut raftstore::coprocessor::ObserverContext<'_>,
+        peer_id: u64,
+        _: &raftstore::store::SnapKey,
+        snap: Option<&raftstore::store::Snapshot>,
+    ) {
+        let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
+        match self.tablet_snap_paths.lock().unwrap().entry(peer_id) {
+            collections::HashMapEntry::Occupied(mut entry) => {
+                if entry.get_mut().1 == tablet_path {
+                    entry.get_mut().0 = true;
+                }
+            }
+            collections::HashMapEntry::Vacant(_) => {}
+        }
+    }
+}
+
+#[test]
+fn test_xxx() {
+    let test_receive_snap = |key_num| {
+        let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
+        let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
+
+        cluster_v1
+            .cfg
+            .server
+            .labels
+            .insert(String::from("engine"), String::from("tiflash"));
+
+        let observer = MockApplySnapshotObserver {
+            tablet_snap_paths: Arc::default(),
+        };
+        let observer_clone = observer.clone();
+        cluster_v1.observer_register(
+            1,
+            Box::new(move |host: &mut CoprocessorHost<_>| {
+                host.registry.register_apply_snapshot_observer(
+                    1,
+                    BoxApplySnapshotObserver::new(observer_clone.clone()),
+                );
+            }),
+        );
+
+        cluster_v1.run();
+        cluster_v2.run();
+
+        let s1_addr = cluster_v1.get_addr(1);
+        let region = cluster_v2.get_region(b"");
+        let region_id = region.get_id();
+        let engine = cluster_v2.get_engine(1);
+        let tablet = engine.get_tablet_by_id(region_id).unwrap();
+
+        for i in 0..key_num {
+            let k = format!("zk{:04}", i);
+            tablet.put(k.as_bytes(), &random_long_vec(1024)).unwrap();
+        }
+
+        let snap_mgr = cluster_v2.get_snap_mgr(1);
+        let security_mgr = cluster_v2.get_security_mgr();
+        let (msg, snap_key) = generate_snap(&engine, region_id, &snap_mgr);
+        let cfg = tikv::server::Config::default();
+        let limit = Limiter::new(f64::INFINITY);
+        let env = Arc::new(Environment::new(1));
+        let _ = block_on(async {
+            send_snap_v2(env, snap_mgr, security_mgr, &cfg, &s1_addr, msg, limit)
+                .unwrap()
+                .await
+        });
+
+        // The snapshot has been received by cluster v1, so check it's completeness
+        let snap_mgr = cluster_v1.get_snap_mgr(1);
+        let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
+        let path_str = path.as_path().to_str().unwrap();
+        let rocksdb = engine_rocks::util::new_engine_opt(
+            path_str,
+            RocksDbOptions::default(),
+            LARGE_CFS
+                .iter()
+                .map(|&cf| (cf, RocksCfOptions::default()))
+                .collect(),
+        )
+        .unwrap();
+
+        let pair = observer
+            .tablet_snap_paths
+            .as_ref()
+            .lock()
+            .unwrap()
+            .get(&1)
+            .unwrap()
+            .clone();
+        assert!(pair.0);
+        assert_eq!(&pair.1, path_str);
+
+        for i in 0..key_num {
+            let k = format!("zk{:04}", i);
+            assert!(
+                rocksdb
+                    .get_value_cf("default", k.as_bytes())
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    };
+
+    // test small snapshot
+    test_receive_snap(20);
+
+    // test large snapshot
+    test_receive_snap(5000);
 }
