@@ -4,7 +4,7 @@ use std::{
     borrow::ToOwned,
     io,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, Ordering}, error::Error,
 };
 
 use chrono::Local;
@@ -53,69 +53,83 @@ fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     Ok(new_path)
 }
 
-fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
+fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
     let mut path = Path::new(path).to_path_buf();
     if !sub_path.is_empty() {
         path = path.join(Path::new(sub_path));
     }
-    let path = path.to_str().unwrap_or_else(|| {
-        fatal!(
+    let path = path.to_str().ok_or_else(|| {
+        format!(
             "failed to construct engine log dir {:?}, {:?}",
             path,
             sub_path
-        );
-    });
-    config::ensure_dir_exist(path).unwrap_or_else(|e| {
-        fatal!("failed to create engine log dir: {}", e);
-    });
-    config::canonicalize_log_dir(path, filename).unwrap_or_else(|e| {
-        fatal!("failed to canonicalize engine log dir {:?}: {}", path, e);
+        )
+    })?;
+
+    config::ensure_dir_exist(path).map_err(|err| {
+        format!("failed to create engine log dir: {}", err)
+    })?;
+    let path = config::canonicalize_log_dir(path, filename).map_err(|err| {
+        format!("failed to canonicalize engine log dir {:?}: {}", path, err)
+    })?;
+
+    Ok(path)
+}
+
+fn rocksdb_log_writer(config: &TikvConfig) -> impl io::Write {
+    let info_log_dir = config.rocksdb.info_log_dir.clone();
+    let storage_data_dir = config.storage.data_dir.clone();
+    let log_max_size = config.log.file.max_size;
+    let log_max_backups = config.log.file.max_backups;
+    let log_max_days = config.log.file.max_days;
+
+    logger::lazy_file_writer(move || {
+        let rocksdb_info_log_path = if !info_log_dir.is_empty() {
+            make_engine_log_path(&info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)?
+        } else {
+            // Don't use `DEFAULT_ROCKSDB_SUB_DIR`, because of the logic of
+            // `RocksEngine::exists`.
+            make_engine_log_path(&storage_data_dir, "", DEFAULT_ROCKSDB_LOG_FILE)?
+        };
+        let writer = logger::file_writer(
+            &rocksdb_info_log_path,
+            log_max_size,
+            log_max_backups,
+            log_max_days,
+            rename_by_timestamp,
+        )?;
+        Ok(writer)
+    })
+}
+
+fn raftdb_log_writer(config: &TikvConfig) -> impl io::Write {
+    let info_log_dir = config.raftdb.info_log_dir.clone();
+    let storage_data_dir = config.storage.data_dir.clone();
+    let log_max_size = config.log.file.max_size;
+    let log_max_backups = config.log.file.max_backups;
+    let log_max_days = config.log.file.max_days;
+
+    logger::lazy_file_writer(move || {
+        let raftdb_info_log_path = if !info_log_dir.is_empty() {
+            make_engine_log_path(&info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)?
+        } else {
+            make_engine_log_path(&storage_data_dir, "", DEFAULT_RAFTDB_LOG_FILE)?
+        };
+        let writer = logger::file_writer(
+            &raftdb_info_log_path,
+            log_max_size,
+            log_max_backups,
+            log_max_days,
+            rename_by_timestamp,
+        )?;
+        Ok(writer)
     })
 }
 
 #[allow(dead_code)]
 pub fn initial_logger(config: &TikvConfig) {
-    let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
-        make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
-    } else {
-        // Don't use `DEFAULT_ROCKSDB_SUB_DIR`, because of the logic of
-        // `RocksEngine::exists`.
-        make_engine_log_path(&config.storage.data_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
-    };
-    let raftdb_info_log_path = if !config.raftdb.info_log_dir.is_empty() {
-        make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
-    } else {
-        make_engine_log_path(&config.storage.data_dir, "", DEFAULT_RAFTDB_LOG_FILE)
-    };
-    let rocksdb = logger::file_writer(
-        &rocksdb_info_log_path,
-        config.log.file.max_size,
-        config.log.file.max_backups,
-        config.log.file.max_days,
-        rename_by_timestamp,
-    )
-    .unwrap_or_else(|e| {
-        fatal!(
-            "failed to initialize rocksdb log with file {}: {}",
-            rocksdb_info_log_path,
-            e
-        );
-    });
-
-    let raftdb = logger::file_writer(
-        &raftdb_info_log_path,
-        config.log.file.max_size,
-        config.log.file.max_backups,
-        config.log.file.max_days,
-        rename_by_timestamp,
-    )
-    .unwrap_or_else(|e| {
-        fatal!(
-            "failed to initialize raftdb log with file {}: {}",
-            raftdb_info_log_path,
-            e
-        );
-    });
+    let rocksdb = rocksdb_log_writer(config);
+    let raftdb = raftdb_log_writer(config);
 
     let slow_log_writer = if config.slow_log_file.is_empty() {
         None

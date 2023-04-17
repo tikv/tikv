@@ -5,13 +5,13 @@ mod formatter;
 
 use std::{
     env, fmt,
-    io::{self, BufWriter},
+    io::{self, BufWriter, Write, Stderr},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex,
+        Mutex, OnceLock,
     },
-    thread,
+    thread, cell::RefCell, error::Error,
 };
 
 use log::{self, SetLoggerError};
@@ -135,6 +135,60 @@ pub fn exit_process_gracefully(code: i32) -> ! {
     // force async logger to flush by dropping its guard.
     *ASYNC_LOGGER_GUARD.lock().unwrap() = None;
     std::process::exit(code);
+}
+
+// Constructs a new file writer lazily, based on initialization function.
+// If initialization function fails - fallback to stderr writer. 
+pub fn lazy_file_writer<W, F>(init_fn: F) -> LazyFileWriter<W>
+where
+    W: Write,
+    F: Fn() -> Result<W, Box<dyn Error>> + Send + 'static
+{
+    let init: Box<dyn Fn() -> RefCell<FileOrFallbackWriter<W>> + Send> = Box::new(move || {
+        init_fn()
+            .map(|w| RefCell::new(FileOrFallbackWriter::File(w)))
+            .unwrap_or_else(|e| {
+                eprintln!("failed to initialize log file writer, fallbacking to stderr: {}", e);
+                RefCell::new(FileOrFallbackWriter::Fallback(io::stderr()))
+            })
+    });
+    LazyFileWriter { init, cell: OnceLock::new() }
+}
+
+pub struct LazyFileWriter<W: Write> {
+    init: Box<dyn Fn() -> RefCell<FileOrFallbackWriter<W>> + Send>,
+    cell: OnceLock<RefCell<FileOrFallbackWriter<W>>>,
+}
+
+impl <W: Write> Write for LazyFileWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.cell.get_or_init(&self.init).borrow_mut().write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.cell.get_or_init(&self.init).borrow_mut().flush()
+    }
+}
+
+enum FileOrFallbackWriter<W: Write> {
+    File(W),
+    Fallback(Stderr)
+}
+
+impl <W: Write> Write for FileOrFallbackWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            FileOrFallbackWriter::File(io) => io.write(buf),
+            FileOrFallbackWriter::Fallback(io) => io.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            FileOrFallbackWriter::File(io) => io.flush(),
+            FileOrFallbackWriter::Fallback(io) => io.flush(),
+        }
+    }
 }
 
 /// Constructs a new file writer which outputs log to a file at the specified
