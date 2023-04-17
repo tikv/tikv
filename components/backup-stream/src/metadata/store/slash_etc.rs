@@ -39,11 +39,7 @@ struct Key(Vec<u8>, i64);
 impl std::fmt::Debug for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Key")
-            .field(&format_args!(
-                "{}@{}",
-                log_wrappers::Value::key(&self.0),
-                self.1
-            ))
+            .field(&format_args!("{}@{}", self.0.escape_ascii(), self.1))
             .finish()
     }
 }

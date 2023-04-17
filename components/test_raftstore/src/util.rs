@@ -43,7 +43,7 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::RngCore;
-use server::server::ConfiguredRaftEngine;
+use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
