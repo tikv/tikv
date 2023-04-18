@@ -2789,7 +2789,7 @@ impl Default for CdcConfig {
 }
 
 impl CdcConfig {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self, raftstore_v2: bool) -> Result<(), Box<dyn Error>> {
         let default_cfg = CdcConfig::default();
         if self.min_ts_interval.is_zero() {
             warn!(
@@ -2823,6 +2823,13 @@ impl CdcConfig {
             );
             self.incremental_scan_ts_filter_ratio = default_cfg.incremental_scan_ts_filter_ratio;
         }
+        if raftstore_v2 && self.hibernate_regions_compatible {
+            warn!(
+                "cdc.hibernate_regions_compatible is overwritten to false for partitioned-raft-kv"
+            );
+            self.hibernate_regions_compatible = false;
+        }
+
         Ok(())
     }
 }
@@ -3360,7 +3367,8 @@ impl TikvConfig {
         self.import.validate()?;
         self.backup.validate()?;
         self.log_backup.validate()?;
-        self.cdc.validate()?;
+        self.cdc
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         self.resolved_ts.validate()?;
