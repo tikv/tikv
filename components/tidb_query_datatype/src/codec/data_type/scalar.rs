@@ -403,6 +403,34 @@ impl_as_ref! { Duration, as_duration }
 
 impl ScalarValue {
     #[inline]
+    pub fn as_enum(&self) -> Option<EnumRef<'_>> {
+        match self {
+            ScalarValue::Enum(x) => x.as_ref().map(|x| x.as_ref()),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
+        }
+    }
+}
+
+impl ScalarValue {
+    #[inline]
+    pub fn as_set(&self) -> Option<SetRef<'_>> {
+        match self {
+            ScalarValue::Set(x) => x.as_ref().map(|x| x.as_ref()),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
+        }
+    }
+}
+
+impl ScalarValue {
+    #[inline]
     pub fn as_json(&self) -> Option<JsonRef<'_>> {
         EvaluableRef::borrow_scalar_value(self)
     }

@@ -24,6 +24,7 @@
 use std::{i16, i32, i8, u16, u32, u8};
 
 use codec::prelude::*;
+use num_traits::Zero;
 use tipb::FieldType;
 
 use crate::{
@@ -63,6 +64,14 @@ impl Column {
         }
     }
 
+    pub fn new_with_ft(id: i64, ft: FieldType, value: impl Into<ScalarValue>) -> Self {
+        Column {
+            id,
+            ft,
+            value: value.into(),
+        }
+    }
+
     pub fn ft(&self) -> &FieldType {
         &self.ft
     }
@@ -88,6 +97,126 @@ impl Column {
         self.ft.as_mut_accessor().set_decimal(decimal);
         self
     }
+
+    pub fn encode_for_checksum(&self, buf: &mut Vec<u8>) -> Result<()> {
+        match self.ft.as_accessor().tp() {
+            FieldTypeTp::Tiny
+            | FieldTypeTp::Short
+            | FieldTypeTp::Long
+            | FieldTypeTp::LongLong
+            | FieldTypeTp::Int24
+            | FieldTypeTp::Year => {
+                let res = self.value.as_int().ok_or(Error::InvalidDataType(format!(
+                    "invalid type: {:?}",
+                    self.ft,
+                )))?;
+                buf.write_u64_le(*res as u64)?;
+            }
+            FieldTypeTp::VarChar
+            | FieldTypeTp::VarString
+            | FieldTypeTp::String
+            | FieldTypeTp::TinyBlob
+            | FieldTypeTp::MediumBlob
+            | FieldTypeTp::LongBlob
+            | FieldTypeTp::Blob => {
+                let res = self.value.as_bytes().ok_or(Error::InvalidDataType(format!(
+                    "invalid type: {:?}",
+                    self.ft,
+                )))?;
+                buf.write_u32_le(res.len() as u32)?;
+                buf.write_bytes(res)?;
+            }
+            FieldTypeTp::Timestamp
+            | FieldTypeTp::DateTime
+            | FieldTypeTp::Date
+            | FieldTypeTp::NewDate => {
+                let time = self
+                    .value
+                    .as_date_time()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_numeric_string();
+                buf.write_u32_le(time.len() as u32)?;
+                buf.write_bytes(time.as_bytes())?;
+            }
+            FieldTypeTp::Duration => {
+                let dur = self
+                    .value
+                    .as_duration()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_numeric_string();
+                buf.write_u32_le(dur.len() as u32)?;
+                buf.write_bytes(dur.as_bytes())?;
+            }
+            FieldTypeTp::Float | FieldTypeTp::Double => {
+                let mut val = self
+                    .value
+                    .as_real()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_owned();
+                if val.is_infinite() || val.is_nan() {
+                    // Because ticdc has such a transform.
+                    val.set_zero();
+                }
+                buf.write_u64_le(val.to_bits())?;
+            }
+            FieldTypeTp::NewDecimal => {
+                let dec = self
+                    .value
+                    .as_decimal()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_string();
+                buf.write_u32_le(dec.len() as u32)?;
+                buf.write_bytes(dec.as_bytes())?;
+            }
+            FieldTypeTp::Enum => {
+                let res = self
+                    .value
+                    .as_enum()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft
+                    )))?
+                    .value();
+                buf.write_u64_le(res)?;
+            }
+            FieldTypeTp::Set => {
+                let res = self
+                    .value
+                    .as_set()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft
+                    )))?
+                    .value();
+                buf.write_u64_le(res)?;
+            }
+            FieldTypeTp::Bit => {
+                // TODO: it's not supported yet.
+                buf.write_u64_le(u64::MAX)?;
+            }
+            FieldTypeTp::Json => {}
+            FieldTypeTp::Null | FieldTypeTp::Geometry => {}
+            _ => {
+                return Err(Error::Other(box_err!(
+                    "unsupported type {:?}",
+                    self.ft.as_accessor().tp()
+                )));
+            }
+        };
+        Ok(())
+    }
 }
 
 /// Checksum
@@ -97,8 +226,8 @@ impl Column {
 /// - CHECKSUM(4 bytes)
 ///   - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
 pub trait ChecksumHandler {
-    // update_col updates the checksum with the encoded value of the column.
-    fn checksum(&mut self, buf: &[u8]) -> Result<()>;
+    // update_col updates the checksum with the encoded the input column value.
+    fn checksum(&mut self, col: &Column) -> Result<()>;
 
     // header_value returns the checksum header value.
     fn header_value(&self) -> u8;
@@ -110,11 +239,17 @@ pub trait ChecksumHandler {
 pub struct Crc32RowChecksumHandler {
     header: ChecksumHeader,
     hasher: crc32fast::Hasher,
+    buf: Vec<u8>,
 }
 
 impl ChecksumHandler for Crc32RowChecksumHandler {
-    fn checksum(&mut self, buf: &[u8]) -> Result<()> {
-        self.hasher.update(buf);
+    fn checksum(&mut self, col: &Column) -> Result<()> {
+        if col.value.is_none() {
+            return Ok(());
+        }
+        self.buf.clear();
+        col.encode_for_checksum(&mut self.buf)?;
+        self.hasher.update(self.buf.as_slice());
         Ok(())
     }
 
@@ -154,6 +289,7 @@ impl Crc32RowChecksumHandler {
         let mut res = Crc32RowChecksumHandler {
             header: ChecksumHeader::new(),
             hasher: crc32fast::Hasher::new(),
+            buf: Vec::new(),
         };
         if has_extra_checksum {
             res.header.set_extra_checksum();
@@ -217,6 +353,9 @@ pub trait RowEncoder: NumberEncoder {
         for col in non_null_cols {
             non_null_ids.push(col.id);
             value_wtr.write_value(ctx, &col)?;
+            if let Some(checksum_handler_ref) = checksum_handler.as_mut() {
+                checksum_handler_ref.checksum(&col)?;
+            }
             offsets.push(value_wtr.len());
         }
         if value_wtr.len() > (u16::MAX as usize) {
@@ -243,7 +382,6 @@ pub trait RowEncoder: NumberEncoder {
 
         if let Some(checksum_handler) = checksum_handler.as_mut() {
             let header_val = checksum_handler.header_value();
-            checksum_handler.checksum(value_wtr.as_slice())?;
             let val = checksum_handler.value();
             self.write_u8(header_val)?;
             self.write_u32_le(val)?;
@@ -339,17 +477,17 @@ mod tests {
     use std::str::FromStr;
 
     use codec::number::NumberDecoder;
+    use tipb::FieldType;
 
     use super::{Column, RowEncoder};
     use crate::{
         codec::{
             data_type::ScalarValue,
             mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
-            row::v2::encoder_for_test::{
-                ChecksumHandler, Crc32RowChecksumHandler, ScalarValueEncoder,
-            },
+            row::v2::encoder_for_test::{ChecksumHandler, Crc32RowChecksumHandler},
         },
         expr::EvalContext,
+        FieldTypeTp,
     };
 
     #[test]
@@ -423,10 +561,10 @@ mod tests {
 
     #[test]
     fn test_encode_checksum() {
-        let encode_col_values = |ctx: &mut EvalContext, non_null_cols: Vec<Column>| -> Vec<u8> {
+        let encode_col_values = |non_null_cols: Vec<Column>| -> Vec<u8> {
             let mut res = vec![];
             for col in non_null_cols {
-                res.write_value(ctx, &col).unwrap();
+                col.encode_for_checksum(&mut res).unwrap();
             }
             res
         };
@@ -441,11 +579,20 @@ mod tests {
             res
         };
         let cols = vec![
-            Column::new(1, 1000),
-            Column::new(12, 2),
-            Column::new(335, ScalarValue::Int(None)),
-            Column::new(3, 3),
-            Column::new(8, 32767),
+            Column::new_with_ft(1, FieldType::from(FieldTypeTp::Short), 1000),
+            Column::new_with_ft(12, FieldType::from(FieldTypeTp::Long), 2),
+            Column::new_with_ft(
+                335,
+                FieldType::from(FieldTypeTp::Short),
+                ScalarValue::Int(None),
+            ),
+            Column::new_with_ft(3, FieldType::from(FieldTypeTp::Float), 3.55),
+            Column::new_with_ft(8, FieldType::from(FieldTypeTp::VarChar), b"abc".to_vec()),
+            Column::new_with_ft(
+                17,
+                FieldType::from(FieldTypeTp::Duration),
+                Duration::from_millis(34, 2).unwrap(),
+            ),
         ];
 
         let mut buf = vec![];
@@ -461,10 +608,7 @@ mod tests {
 
         let exp = {
             let mut hasher = crc32fast::Hasher::new();
-            hasher.update(
-                encode_col_values(&mut EvalContext::default(), get_non_null_columns(&cols))
-                    .as_slice(),
-            );
+            hasher.update(encode_col_values(get_non_null_columns(&cols)).as_slice());
             hasher.finalize()
         };
         let mut val_slice = &buf[buf.len() - 4..];
