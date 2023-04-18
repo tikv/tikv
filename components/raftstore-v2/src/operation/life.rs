@@ -159,7 +159,7 @@ impl AbnormalPeerContext {
     }
 
     #[inline]
-    pub fn observe_pending_peers(&self) {
+    pub fn flush_metrics(&self) {
         let _ = self
             .peers_start_pending_time
             .iter()

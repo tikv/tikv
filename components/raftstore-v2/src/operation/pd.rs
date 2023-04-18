@@ -135,7 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return pending_peers;
         }
 
-        self.abnormal_peer_context().observe_pending_peers();
+        self.abnormal_peer_context().flush_metrics();
 
         let progresses = status.progress.unwrap().iter();
         let mut peers_start_pending_time = Vec::with_capacity(self.region().get_peers().len());
