@@ -37,7 +37,7 @@ fn test_source_and_target_both_replay() {
 
     {
         let _fp = fail::FailGuard::new("after_acquire_source_checkpoint", "1*return->off");
-        merge_region(router, region_1, peer_1, region_2, false);
+        merge_region(&cluster, 0, region_1, peer_1, region_2, false);
     }
 
     cluster.restart(0);
@@ -87,9 +87,9 @@ fn test_source_destroy_before_target_apply() {
         // AckCommitMerge).
         let _fp1 = fail::FailGuard::new("force_send_catch_up_logs", "1*return->off");
         let _fp2 = fail::FailGuard::new("after_acquire_source_checkpoint", "1*return->off");
-        merge_region(router, region_1, peer_1.clone(), region_2, false);
+        merge_region(&cluster, 0, region_1, peer_1.clone(), region_2, false);
     }
-    assert_peer_not_exist(region_1_id, peer_1.get_id(), router);
+    assert_peer_not_exist(region_1_id, peer_1.get_id(), &cluster.routers[0]);
 
     cluster.restart(0);
     let router = &mut cluster.routers[0];
