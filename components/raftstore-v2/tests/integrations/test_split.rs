@@ -18,6 +18,7 @@ fn test_split() {
 
     let region_2 = 2;
     let region = router.region_detail(region_2);
+    let peer = region.get_peers()[0].clone();
     router.wait_applied_to_current_term(region_2, Duration::from_secs(3));
 
     // Region 2 ["", ""]
@@ -29,11 +30,11 @@ fn test_split() {
         .unwrap();
     assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
     let (left, mut right) = split_region(
-        &mut cluster,
-        0,
+        router,
         region,
+        peer.clone(),
         1000,
-        vec![new_peer(store_id, 10)],
+        new_peer(store_id, 10),
         Some(b"k11"),
         Some(b"k33"),
         b"k22",
@@ -68,11 +69,11 @@ fn test_split() {
     //   -> Region 2    ["", "k11"]
     //      Region 1001 ["k11", "k22"] peer(1, 11)
     let _ = split_region(
-        &mut cluster,
-        0,
+        router,
         left,
+        peer,
         1001,
-        vec![new_peer(store_id, 11)],
+        new_peer(store_id, 11),
         Some(b"k00"),
         Some(b"k11"),
         b"k11",
@@ -116,11 +117,11 @@ fn test_split() {
         .unwrap();
     assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
     right = split_region(
-        &mut cluster,
-        0,
+        router,
         right,
+        new_peer(store_id, 10),
         1002,
-        vec![new_peer(store_id, 12)],
+        new_peer(store_id, 12),
         Some(b"k22"),
         Some(b"k33"),
         b"k33",
@@ -156,11 +157,11 @@ fn test_split() {
     let split_key = Key::from_raw(b"k44").append_ts(TimeStamp::zero());
     let actual_split_key = split_key.clone().truncate_ts().unwrap();
     split_region(
-        &mut cluster,
-        0,
+        router,
         right,
+        new_peer(store_id, 12),
         1003,
-        vec![new_peer(store_id, 13)],
+        new_peer(store_id, 13),
         Some(b"k33"),
         Some(b"k55"),
         split_key.as_encoded(),

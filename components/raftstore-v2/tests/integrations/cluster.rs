@@ -659,12 +659,9 @@ pub mod split_helper {
         raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, SplitRequest},
     };
     use raftstore::store::Bucket;
-    use raftstore_v2::{
-        router::{PeerMsg, PeerTick},
-        SimpleWriteEncoder,
-    };
+    use raftstore_v2::{router::PeerMsg, SimpleWriteEncoder};
 
-    use super::{Cluster, TestRouter};
+    use super::TestRouter;
 
     pub fn new_batch_split_region_request(
         split_keys: Vec<Vec<u8>>,
@@ -686,58 +683,31 @@ pub mod split_helper {
         req
     }
 
-    pub fn must_split(
-        region_id: u64,
-        req: RaftCmdRequest,
-        cluster: &mut Cluster,
-        offset_id: usize,
-    ) {
+    pub fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
         let (msg, sub) = PeerMsg::admin_command(req);
-        cluster.routers[offset_id].send(region_id, msg).unwrap();
-        for _ in 0..4 {
-            cluster.routers[offset_id]
-                .send(region_id, PeerMsg::Tick(PeerTick::Raft))
-                .unwrap();
-        }
-        cluster.dispatch(region_id, vec![]);
+        router.send(region_id, msg).unwrap();
         block_on(sub.result()).unwrap();
+
         // TODO: when persistent implementation is ready, we can use tablet index of
         // the parent to check whether the split is done. Now, just sleep a second.
         thread::sleep(Duration::from_secs(1));
     }
 
-    pub fn put(
-        cluster: &mut Cluster,
-        offset_id: usize,
-        region_id: u64,
-        key: &[u8],
-    ) -> RaftCmdResponse {
-        let header = Box::new(
-            cluster.routers[offset_id]
-                .new_request_for(region_id)
-                .take_header(),
-        );
+    pub fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
+        let header = Box::new(router.new_request_for(region_id).take_header());
         let mut put = SimpleWriteEncoder::with_capacity(64);
         put.put(CF_DEFAULT, key, b"v1");
-        let (msg, sub) = PeerMsg::simple_write(header, put.encode());
-        cluster.routers[offset_id].send(region_id, msg).unwrap();
-        for _i in 0..4 {
-            cluster.routers[offset_id]
-                .send(region_id, PeerMsg::Tick(PeerTick::Raft))
-                .unwrap();
-        }
-        cluster.dispatch(region_id, vec![]);
-        block_on(sub.result()).unwrap()
+        router.simple_write(region_id, header, put).unwrap()
     }
 
     // Split the region according to the parameters
     // return the updated original region
     pub fn split_region<'a>(
-        cluster: &'a mut Cluster,
-        offset_id: usize,
+        router: &'a mut TestRouter,
         region: metapb::Region,
+        peer: metapb::Peer,
         split_region_id: u64,
-        split_peers: Vec<metapb::Peer>,
+        split_peer: metapb::Peer,
         left_key: Option<&'a [u8]>,
         right_key: Option<&'a [u8]>,
         propose_key: &[u8],
@@ -745,10 +715,15 @@ pub mod split_helper {
         right_derive: bool,
     ) -> (metapb::Region, metapb::Region) {
         let region_id = region.id;
-        let mut req = cluster.routers[offset_id].new_request_for(region_id);
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header()
+            .set_region_epoch(region.get_region_epoch().clone());
+        req.mut_header().set_peer(peer);
+
         let mut split_id = pdpb::SplitId::new();
         split_id.new_region_id = split_region_id;
-        split_id.new_peer_ids = split_peers.iter().map(|p| p.id).collect();
+        split_id.new_peer_ids = vec![split_peer.id];
         let admin_req = new_batch_split_region_request(
             vec![propose_key.to_vec()],
             vec![split_id],
@@ -757,9 +732,8 @@ pub mod split_helper {
         req.mut_requests().clear();
         req.set_admin_request(admin_req);
 
-        must_split(region_id, req, cluster, offset_id);
+        must_split(region_id, req, router);
 
-        let router = &mut cluster.routers[offset_id];
         let (left, right) = if !right_derive {
             (
                 router.region_detail(region_id),
@@ -773,15 +747,15 @@ pub mod split_helper {
         };
 
         if let Some(right_key) = right_key {
-            let resp = put(cluster, offset_id, left.id, right_key);
+            let resp = put(router, left.id, right_key);
             assert!(resp.get_header().has_error(), "{:?}", resp);
-            let resp = put(cluster, offset_id, right.id, right_key);
+            let resp = put(router, right.id, right_key);
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
         if let Some(left_key) = left_key {
-            let resp = put(cluster, offset_id, left.id, left_key);
+            let resp = put(router, left.id, left_key);
             assert!(!resp.get_header().has_error(), "{:?}", resp);
-            let resp = put(cluster, offset_id, right.id, left_key);
+            let resp = put(router, right.id, left_key);
             assert!(resp.get_header().has_error(), "{:?}", resp);
         }
 
@@ -966,66 +940,5 @@ pub mod life_helper {
         assert_eq!(msg.get_region_id(), region_id);
         assert_eq!(msg.get_to_peer().get_id(), peer_id);
         assert!(msg.get_is_tombstone());
-    }
-}
-
-pub mod conf_change_helper {
-    use std::time::Duration;
-
-    use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
-    use raft::prelude::ConfChangeType;
-    use raftstore_v2::router::{PeerMsg, PeerTick};
-    use tikv_util::store::{new_learner_peer, new_peer};
-
-    use super::Cluster;
-
-    pub fn add_peer(
-        cluster: &Cluster,
-        offset_id: usize,
-        region_id: u64,
-        peer_id: u64,
-        is_learner: bool,
-    ) -> RaftCmdRequest {
-        let store_id = cluster.node(offset_id).id();
-        let mut req = cluster.routers[0].new_request_for(region_id);
-        let admin_req = req.mut_admin_request();
-        admin_req.set_cmd_type(AdminCmdType::ChangePeer);
-        let (new_peer, node_type) = if is_learner {
-            (
-                new_learner_peer(store_id, peer_id),
-                ConfChangeType::AddLearnerNode,
-            )
-        } else {
-            (new_peer(store_id, peer_id), ConfChangeType::AddNode)
-        };
-        admin_req.mut_change_peer().set_change_type(node_type);
-        admin_req.mut_change_peer().set_peer(new_peer.clone());
-        let resp = cluster.routers[0]
-            .admin_command(region_id, req.clone())
-            .unwrap();
-        assert!(!resp.get_header().has_error(), "{:?}", resp);
-        let epoch = req.get_header().get_region_epoch();
-        let new_conf_ver = epoch.get_conf_ver() + 1;
-        let leader_peer = req.get_header().get_peer().clone();
-        let meta = cluster.routers[0]
-            .must_query_debug_info(region_id, Duration::from_secs(3))
-            .unwrap();
-        assert_eq!(meta.region_state.epoch.version, epoch.get_version());
-        assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-        assert_eq!(meta.region_state.peers, vec![leader_peer, new_peer]);
-
-        // heartbeat will create a learner.
-        cluster.dispatch(region_id, vec![]);
-        cluster.routers[0]
-            .send(region_id, PeerMsg::Tick(PeerTick::Raft))
-            .unwrap();
-        let meta = cluster.routers[offset_id]
-            .must_query_debug_info(region_id, Duration::from_secs(3))
-            .unwrap();
-        assert_eq!(meta.raft_status.id, peer_id, "{:?}", meta);
-        // Wait some time so snapshot can be generated.
-        std::thread::sleep(Duration::from_millis(100));
-        cluster.dispatch(region_id, vec![]);
-        req
     }
 }

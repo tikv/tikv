@@ -29,14 +29,14 @@ fn test_restart_resume() {
     fail::cfg(fp, "return").unwrap();
 
     let split_region_id = 1000;
-    let mut new_peer = peer;
+    let mut new_peer = peer.clone();
     new_peer.set_id(1001);
     split_region(
-        &mut cluster,
-        0,
+        router,
         region,
+        peer,
         split_region_id,
-        vec![new_peer],
+        new_peer,
         None,
         None,
         b"k11",
@@ -44,7 +44,6 @@ fn test_restart_resume() {
         true,
     );
 
-    let router = &mut cluster.routers[0];
     let mut put = SimpleWriteEncoder::with_capacity(64);
     put.put(CF_DEFAULT, b"k22", b"value");
     let header = Box::new(router.new_request_for(region_id).take_header());

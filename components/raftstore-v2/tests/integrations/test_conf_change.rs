@@ -5,7 +5,7 @@ use std::{self, time::Duration};
 use engine_traits::{Peekable, RaftEngineReadOnly, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::{
-    raft_cmdpb::AdminCmdType,
+    raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{PeerState, RaftMessage},
 };
 use raft::prelude::{ConfChangeType, MessageType};
@@ -15,7 +15,7 @@ use raftstore_v2::{
 };
 use tikv_util::store::{new_learner_peer, new_peer};
 
-use crate::cluster::{check_skip_wal, conf_change_helper::add_peer, Cluster};
+use crate::cluster::{check_skip_wal, Cluster};
 
 #[test]
 fn test_simple_change() {
@@ -23,7 +23,7 @@ fn test_simple_change() {
     let (region_id, peer_id, offset_id) = (2, 10, 1);
 
     // 1. add learner on store-2
-    add_peer(&cluster, offset_id, region_id, peer_id, true);
+    add_learner(&cluster, offset_id, region_id, peer_id);
     let meta = cluster.routers[0]
         .must_query_debug_info(region_id, Duration::from_secs(3))
         .unwrap();
@@ -48,12 +48,12 @@ fn test_simple_change() {
     // create peer by many times.
     let repeat = 3;
     for i in 1..repeat {
-        add_peer(&cluster, offset_id, region_id, peer_id + i, true);
+        add_learner(&cluster, offset_id, region_id, peer_id + i);
         write_kv(&cluster, region_id, key, val);
         remove_peer(&cluster, offset_id, region_id, peer_id + i);
     }
 
-    add_peer(&cluster, offset_id, region_id, peer_id + repeat, true);
+    add_learner(&cluster, offset_id, region_id, peer_id + repeat);
     write_kv(&cluster, region_id, key, val);
     let snap = cluster.routers[offset_id].stale_snapshot(region_id);
     assert_eq!(snap.get_value(key).unwrap().unwrap(), val);
@@ -71,7 +71,7 @@ fn test_simple_change() {
 fn test_remove_by_conf_change() {
     let cluster = Cluster::with_node_count(2, None);
     let (region_id, peer_id, offset_id) = (2, 10, 1);
-    let mut req = add_peer(&cluster, offset_id, region_id, peer_id, true);
+    let mut req = add_learner(&cluster, offset_id, region_id, peer_id);
 
     // write one kv to make flow control replicated.
     let (key, val) = (b"key", b"value");
@@ -112,6 +112,51 @@ fn test_remove_by_conf_change() {
         .unwrap();
     assert_eq!(region_state.get_state(), PeerState::Tombstone);
     assert_eq!(raft_engine.get_raft_state(region_id).unwrap(), None);
+}
+
+fn add_learner(
+    cluster: &Cluster,
+    offset_id: usize,
+    region_id: u64,
+    peer_id: u64,
+) -> RaftCmdRequest {
+    let store_id = cluster.node(offset_id).id();
+    let mut req = cluster.routers[0].new_request_for(region_id);
+    let admin_req = req.mut_admin_request();
+    admin_req.set_cmd_type(AdminCmdType::ChangePeer);
+    admin_req
+        .mut_change_peer()
+        .set_change_type(ConfChangeType::AddLearnerNode);
+    let new_peer = new_learner_peer(store_id, peer_id);
+    admin_req.mut_change_peer().set_peer(new_peer.clone());
+    let resp = cluster.routers[0]
+        .admin_command(region_id, req.clone())
+        .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    let epoch = req.get_header().get_region_epoch();
+    let new_conf_ver = epoch.get_conf_ver() + 1;
+    let leader_peer = req.get_header().get_peer().clone();
+    let meta = cluster.routers[0]
+        .must_query_debug_info(region_id, Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(meta.region_state.epoch.version, epoch.get_version());
+    assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
+    assert_eq!(meta.region_state.peers, vec![leader_peer, new_peer]);
+
+    // heartbeat will create a learner.
+    cluster.dispatch(region_id, vec![]);
+    cluster.routers[0]
+        .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+        .unwrap();
+    let meta = cluster.routers[offset_id]
+        .must_query_debug_info(region_id, Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(meta.raft_status.id, peer_id, "{:?}", meta);
+
+    // Wait some time so snapshot can be generated.
+    std::thread::sleep(Duration::from_millis(100));
+    cluster.dispatch(region_id, vec![]);
+    req
 }
 
 fn write_kv(cluster: &Cluster, region_id: u64, key: &[u8], val: &[u8]) {
