@@ -2007,36 +2007,26 @@ pub struct TabletSnapManager {
 
 impl TabletSnapManager {
     pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
-        // Initialize the directory if it doesn't exist.
-        let path = path.into();
-        if !path.exists() {
-            file_system::create_dir_all(&path)?;
-        }
-        if !path.is_dir() {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                format!("{} should be a directory", path.display()),
-            ));
-        }
-        file_system::clean_up_trash(&path)?;
-        file_system::clean_up_dir(&path, SNAP_GEN_PREFIX)?;
-        Ok(Self {
-            base: path,
+        let mgr = Self {
+            base: path.into(),
             receiving: Arc::default(),
             stats: Arc::default(),
-        })
+        };
+        mgr.init()?;
+        Ok(mgr)
     }
 
     pub fn new_without_init<T: Into<PathBuf>>(path: T) -> Self {
-        let path = path.into();
         Self {
-            base: path,
+            base: path.into(),
             receiving: Arc::default(),
             stats: Arc::default(),
         }
     }
 
+    // The function `init` should be called again that created new_without_init.
     pub fn init(&self) -> io::Result<()> {
+        // Initialize the directory if it doesn't exist.
         if !self.base.exists() {
             file_system::create_dir_all(&self.base)?;
         }
@@ -2046,8 +2036,8 @@ impl TabletSnapManager {
                 format!("{} should be a directory", self.base.display()),
             ));
         }
-        file_system::clean_up_trash(&self.base)?;
         file_system::clean_up_dir(&self.base, SNAP_GEN_PREFIX)?;
+        file_system::clean_up_trash(&self.base)?;
         Ok(())
     }
 
@@ -2101,7 +2091,7 @@ impl TabletSnapManager {
         PathBuf::from(&self.base).join(prefix)
     }
 
-    pub fn delete_snapshot(&self, region_id: u64, to_peer: Option<u64>) -> Result<()> {
+    pub fn delete_snapshot(&self, key: TabletSnapKey) -> Result<()> {
         for f in file_system::read_dir(&self.base)? {
             let entry = f?;
             let ft = entry.file_type()?;
@@ -2118,10 +2108,7 @@ impl TabletSnapManager {
             if parts.len() < 4 {
                 continue;
             }
-            if let Some(id) = to_peer&&parts[1] != id {
-                continue;
-            }
-            if parts[0] == region_id {
+            if parts[0] == key.region_id && parts[1] == key.to_peer {
                 file_system::trash_dir_all(entry.path())?
             }
         }
@@ -3232,17 +3219,13 @@ pub mod tests {
 
         // snapshot should be deleted after snapshot send finished (include failed).
         let key = TabletSnapKey::new(1, 2, 3, 4);
+        let key1 = TabletSnapKey::new(1, 3, 3, 5);
         let gen1 = mgr.tablet_gen_path(&key);
         std::fs::create_dir_all(&gen1).unwrap();
         assert!(gen1.exists());
-        mgr.delete_snapshot(1, Some(3)).unwrap();
+        mgr.delete_snapshot(key1).unwrap();
         assert!(gen1.exists());
-        mgr.delete_snapshot(1, Some(2)).unwrap();
-        assert!(!gen1.exists());
-
-        std::fs::create_dir_all(&gen1).unwrap();
-        assert!(gen1.exists());
-        mgr.delete_snapshot(1, None).unwrap();
+        mgr.delete_snapshot(key).unwrap();
         assert!(!gen1.exists());
     }
 
