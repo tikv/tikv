@@ -34,8 +34,10 @@ const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 /// The maximum RU quota that can be configured.
 const MAX_RU_QUOTA: u64 = i32::MAX as u64;
 
+#[cfg(test)]
 const LOW_PRIORITY: u32 = 1;
 const MEDIUM_PRIORITY: u32 = 8;
+#[cfg(test)]
 const HIGH_PRIORITY: u32 = 16;
 
 // the global maxinum of virtual time is u64::MAX / 16, so when the virtual
@@ -250,12 +252,9 @@ impl ResourceController {
 
     fn check_customized(&self) {
         let groups = self.resource_consumptions.read();
-        if groups.len() == 1 {
-            let group = groups.get(DEFAULT_RESOURCE_GROUP_NAME.as_bytes()).unwrap();
-            if (group.ru_quota == 0 || group.ru_quota == MAX_RU_QUOTA) && (group.group_priority != HIGH_PRIORITY && group.group_priority != LOW_PRIORITY) {
-                self.customized.store(false, Ordering::Release);
-                return;
-            }
+        if groups.len() == 1 && groups.get(DEFAULT_RESOURCE_GROUP_NAME.as_bytes()).is_some() {
+            self.customized.store(false, Ordering::Release);
+            return;
         }
         self.customized.store(true, Ordering::Release);
     }
