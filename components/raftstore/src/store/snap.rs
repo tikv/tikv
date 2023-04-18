@@ -1652,7 +1652,7 @@ impl SnapManager {
             base,
             &snap_key,
             &self.core,
-            &tablet_snap_path.to_str().unwrap(),
+            tablet_snap_path.to_str().unwrap(),
         )?;
         Ok(())
     }
