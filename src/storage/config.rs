@@ -113,7 +113,11 @@ impl Default for Config {
 }
 
 impl Config {
-    fn validate_engine_type(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate_engine_type(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.data_dir != DEFAULT_DATA_DIR {
+            self.data_dir = config::canonicalize_path(&self.data_dir)?
+        }
+
         let v1_kv_db_path =
             config::canonicalize_sub_path(&self.data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
         let v2_tablet_path =
@@ -144,10 +148,6 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.data_dir != DEFAULT_DATA_DIR {
-            self.data_dir = config::canonicalize_path(&self.data_dir)?
-        }
-
         self.validate_engine_type()?;
 
         if self.scheduler_concurrency > MAX_SCHED_CONCURRENCY {
