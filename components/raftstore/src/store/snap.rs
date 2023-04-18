@@ -2018,7 +2018,8 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_trash_with_prefix(&path, SNAP_GEN_PREFIX)?;
+        file_system::clean_up_trash(&path)?;
+        file_system::clean_up_dir(&path, SNAP_GEN_PREFIX)?;
         Ok(Self {
             base: path,
             receiving: Arc::default(),
@@ -2045,7 +2046,8 @@ impl TabletSnapManager {
                 format!("{} should be a directory", self.base.display()),
             ));
         }
-        file_system::clean_up_trash_with_prefix(&self.base, SNAP_GEN_PREFIX)?;
+        file_system::clean_up_trash(&self.base)?;
+        file_system::clean_up_dir(&self.base, SNAP_GEN_PREFIX)?;
         Ok(())
     }
 
@@ -2057,7 +2059,6 @@ impl TabletSnapManager {
 
     pub fn finish_snapshot(&self, key: TabletSnapKey, send: Instant) {
         let region_id = key.region_id;
-        let to_peer=key.to_peer;
         self.stats
             .lock()
             .unwrap()
@@ -2067,10 +2068,6 @@ impl TabletSnapManager {
                 stat.set_total_duration_sec(start.saturating_elapsed().as_secs());
                 stat.set_region_id(region_id);
             });
-
-        if let Err(e)=self.delete_snapshot(region_id, Some(to_peer)){
-            error!("delete snapshot failed";"region_id" => region_id,"to_peer" => to_peer,"error" => ?e);
-        }
     }
 
     pub fn stats(&self) -> SnapStats {
@@ -3181,9 +3178,13 @@ pub mod tests {
         assert!(mgr.stats().stats.is_empty());
 
         // filter out the total duration seconds less than one sencond.
+        let path = mgr.tablet_gen_path(&key);
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(path.exists());
         mgr.begin_snapshot(key.clone(), start, 1);
         mgr.finish_snapshot(key, start);
         assert_eq!(mgr.stats().stats.len(), 0);
+        assert!(!path.exists());
     }
 
     #[test]

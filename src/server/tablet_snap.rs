@@ -640,7 +640,12 @@ pub fn send_snap(
     );
     let deregister = {
         let (mgr, key) = (mgr.clone(), key.clone());
-        DeferContext::new(move || mgr.finish_snapshot(key.clone(), timer))
+        DeferContext::new(move || {
+            mgr.finish_snapshot(key.clone(), timer);
+            if let Err(e) = mgr.delete_snapshot(key.region_id, Some(key.to_peer)) {
+                error!("delete snapshot failed";"region_id" => key.region_id,"to_peer" => key.to_peer,"error" => ?e);
+            }
+        })
     };
 
     let cb = ChannelBuilder::new(env)
@@ -808,7 +813,7 @@ where
 
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
-                    if let Err(e) = mgr.delete_snapshot(region_id, Some(to_peer_id)) {
+                    if let Err(e) = self.snap_mgr.delete_snapshot(region_id, Some(to_peer_id)) {
                         warn!(
                             "delete snapshot directory failed";
                             "to_peer_id" => to_peer_id ,

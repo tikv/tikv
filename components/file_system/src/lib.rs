@@ -468,12 +468,14 @@ pub fn trash_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
 /// but not being actually deleted after a restart. This function can be used
 /// to resume all those removal in the given directory.
 #[inline]
-pub fn clean_up_trash_with_prefix(path: impl AsRef<Path>, prefix: &str) -> io::Result<()> {
+pub fn clean_up_trash(path: impl AsRef<Path>) -> io::Result<()> {
+    clean_up_dir(path, TRASH_PREFIX)
+}
+
+pub fn clean_up_dir(path: impl AsRef<Path>, prefix: &str) -> io::Result<()> {
     for e in read_dir(path)? {
         let e = e?;
-        if e.file_name().to_string_lossy().starts_with(TRASH_PREFIX)
-            || e.file_name().to_string_lossy().starts_with(prefix)
-        {
+        if e.file_name().to_string_lossy().starts_with(prefix) {
             remove_dir_all(e.path())?;
         }
     }
@@ -649,7 +651,6 @@ mod tests {
 
     #[test]
     fn test_trash_dir_all() {
-        let prefix = "gen";
         let tmp_dir = Builder::new()
             .prefix("test_reserve_space_for_recover")
             .tempdir()
@@ -670,16 +671,16 @@ mod tests {
         assert!(!sub_dir0.exists());
         assert!(!trash_sub_dir0.exists());
 
-        clean_up_trash_with_prefix(data_path, prefix).unwrap();
+        clean_up_trash(data_path).unwrap();
 
         create_dir_all(&trash_sub_dir0).unwrap();
         assert!(trash_sub_dir0.exists());
-        clean_up_trash_with_prefix(data_path, prefix).unwrap();
+        clean_up_trash(data_path).unwrap();
         assert!(!trash_sub_dir0.exists());
 
         create_dir_all(&sub_dir0).unwrap();
         assert!(sub_dir0.exists());
-        clean_up_trash_with_prefix(data_path, "sub").unwrap();
+        clean_up_dir(data_path, "sub").unwrap();
         assert!(!sub_dir0.exists());
     }
 }
