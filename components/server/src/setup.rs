@@ -94,7 +94,7 @@ fn rocksdb_log_writer(config: &TikvConfig) -> impl io::Write {
             make_engine_log_path(&storage_data_dir, "", DEFAULT_ROCKSDB_LOG_FILE)?
         };
         let writer = logger::file_writer(
-            &rocksdb_info_log_path,
+            rocksdb_info_log_path,
             log_max_size,
             log_max_backups,
             log_max_days,
@@ -118,7 +118,7 @@ fn raftdb_log_writer(config: &TikvConfig) -> impl io::Write {
             make_engine_log_path(&storage_data_dir, "", DEFAULT_RAFTDB_LOG_FILE)?
         };
         let writer = logger::file_writer(
-            &raftdb_info_log_path,
+            raftdb_info_log_path,
             log_max_size,
             log_max_backups,
             log_max_days,
