@@ -122,13 +122,13 @@ impl Config {
         let kv_data_exists = Path::new(&v1_kv_db_path).exists();
         let v2_tablet_exists = Path::new(&v2_tablet_path).exists();
         if kv_data_exists && v2_tablet_exists {
-            return Err("The data dir has subfolders for both RaftKv and PartitionRaftKv".into());
+            return Err("Both raft-kv and partitioned-raft-kv's data folders exist".into());
         }
 
         // v1's data exists, but the engine type is v2
         if kv_data_exists && self.engine == EngineType::RaftKv2 {
             info!(
-                "TiKV has data for RaftKv engine but the engine type in config is Partition-Raft-Kv. Ignore the config and keep Raft-Kv instead"
+                "TiKV has data for raft-kv engine but the engine type in config is partitioned-raft-kv. Ignore the config and keep raft-kv instead"
             );
             self.engine = EngineType::RaftKv;
         }
@@ -136,7 +136,7 @@ impl Config {
         // if v2's data exists, but the engine type is v1
         if v2_tablet_exists && self.engine == EngineType::RaftKv {
             info!(
-                "TiKV has data for Partition-Raft-Kv engine but the engine type in config is Raft-kv. Ignore the config and keep Partition-Raft-Kv instead"
+                "TiKV has data for partitioned-raft-kv engine but the engine type in config is raft-kv. Ignore the config and keep partitioned-raft-kv instead"
             );
             self.engine = EngineType::RaftKv2;
         }
