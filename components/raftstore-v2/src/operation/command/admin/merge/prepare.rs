@@ -117,7 +117,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             req.get_admin_request().get_prepare_merge(),
         )?;
         // We need to check three things in order:
-        // (1) `check_trim_status`
+        // (1) `start_check_trim_status`
         // (2) `check_logs_before_prepare_merge`
         // (3) `check_pessimistic_locks`
         // Check 1 and 3 are async, they yield by returning
@@ -128,9 +128,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let r = self.check_logs_before_prepare_merge(store_ctx)?;
             self.check_pessimistic_locks(r, &mut req)?
         } else {
-            self.check_trim_status(store_ctx, &mut req)?;
-            let r = self.check_logs_before_prepare_merge(store_ctx)?;
-            self.check_pessimistic_locks(r, &mut req)?
+            return self.start_check_trim_status(store_ctx, &mut req);
         };
         req.mut_admin_request()
             .mut_prepare_merge()
@@ -296,11 +294,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         })
     }
 
-    fn check_trim_status<T: Transport>(
+    fn start_check_trim_status<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
-    ) -> Result<PreProposeContext> {
+    ) -> Result<u64> {
         if self.storage().has_dirty_data() {
             return Err(box_err!(
                 "source peer {} not trimmed, skip merging.",
