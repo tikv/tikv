@@ -385,6 +385,26 @@ fn map_upper_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
             children.len()
         ));
     }
+    if children[0].get_field_type().is_binary_string_like() {
+        Ok(upper_fn_meta())
+    } else {
+        let ret_field_type = children[0].get_field_type();
+        Ok(match_template_charset! {
+            TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+                Charset::TT => upper_utf8_fn_meta::<TT>(),
+            }
+        })
+    }
+}
+
+fn map_upper_utf8_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
     let ret_field_type = children[0].get_field_type();
     Ok(match_template_charset! {
      TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
@@ -778,8 +798,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Insert => insert_fn_meta(),
         ScalarFuncSig::InsertUtf8 => insert_utf8_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
-        ScalarFuncSig::UpperUtf8 => map_upper_sig(value, children)?,
-        ScalarFuncSig::Upper => upper_fn_meta(),
+        ScalarFuncSig::UpperUtf8 => map_upper_utf8_sig(value, children)?,
+        ScalarFuncSig::Upper => map_upper_sig(value, children)?,
         ScalarFuncSig::Lower => map_lower_sig(value, children)?,
         ScalarFuncSig::LowerUtf8 => map_lower_utf8_sig(value, children)?,
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
