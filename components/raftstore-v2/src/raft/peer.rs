@@ -831,6 +831,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn add_message(&mut self, msg: RaftMessage) {
         self.pending_messages.push(msg);
+        self.set_has_ready();
     }
 
     #[inline]
