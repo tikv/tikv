@@ -12,7 +12,7 @@ use std::{
 use collections::HashMap;
 use dashmap::{mapref::one::Ref, DashMap};
 use kvproto::{
-    kvrpcpb::CommandPri,
+    kvrpcpb::{CommandPri, ResourceControlContext},
     resource_manager::{GroupMode, ResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
@@ -137,6 +137,19 @@ impl ResourceGroupManager {
     pub fn advance_min_virtual_time(&self) {
         for controller in self.registry.lock().unwrap().iter() {
             controller.update_min_virtual_time();
+        }
+    }
+
+    pub fn consume_delta(&self, delta: &ResourceControlContext) {
+        for controller in self.registry.lock().unwrap().iter() {
+            controller.consume(
+                delta.resource_group_name.as_bytes(),
+                ResourceConsumeType::IoBytes(delta.write_bytes_delta),
+            );
+            controller.consume(
+                delta.resource_group_name.as_bytes(),
+                ResourceConsumeType::CpuTime(Duration::from_nanos(delta.cpu_duration_ns_delta)),
+            );
         }
     }
 }

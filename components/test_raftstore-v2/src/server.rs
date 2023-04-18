@@ -463,9 +463,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
             casual_ts_provider.clone(),
-            resource_manager
-                .as_ref()
-                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            resource_manager.clone(),
         )?;
         self.storages.insert(node_id, raft_kv_v2.clone());
 
@@ -506,6 +504,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             concurrency_manager.clone(),
             res_tag_factory,
             quota_limiter,
+            resource_manager.clone(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;

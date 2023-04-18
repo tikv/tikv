@@ -14,6 +14,7 @@ use engine_traits::PerfLevel;
 use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
+use resource_control::ResourceGroupManager;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
@@ -68,9 +69,11 @@ pub struct Endpoint<E: Engine> {
 
     slow_log_threshold: Duration,
 
-    _phantom: PhantomData<E>,
-
     quota_limiter: Arc<QuotaLimiter>,
+
+    resource_manager: Option<Arc<ResourceGroupManager>>,
+
+    _phantom: PhantomData<E>,
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -82,6 +85,7 @@ impl<E: Engine> Endpoint<E> {
         concurrency_manager: ConcurrencyManager,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress
         // to avoid using too much memory. However, if there are a number of large
@@ -104,8 +108,9 @@ impl<E: Engine> Endpoint<E> {
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
-            _phantom: Default::default(),
             quota_limiter,
+            resource_manager,
+            _phantom: Default::default(),
         }
     }
 
@@ -486,12 +491,14 @@ impl<E: Engine> Endpoint<E> {
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
-        let group_name = req_ctx
-            .context
+        let resource_control_ctx = req_ctx.context.get_resource_control_context();
+        let group_name = resource_control_ctx
             .get_resource_group_name()
             .as_bytes()
             .to_owned();
-        let delta = req_ctx.context.get_delta();
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_delta(&resource_control_ctx);
+        }
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -503,7 +510,6 @@ impl<E: Engine> Endpoint<E> {
                 priority,
                 task_id,
                 group_name,
-                delta,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -727,11 +733,15 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let group_name = req_ctx
-            .context
+        let resource_control_ctx = req_ctx.context.get_resource_control_context();
+        let group_name = resource_control_ctx
             .get_resource_group_name()
             .as_bytes()
             .to_owned();
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_delta(&resource_control_ctx);
+        }
+
         let key_ranges = req_ctx
             .ranges
             .iter()
@@ -755,7 +765,6 @@ impl<E: Engine> Endpoint<E> {
                 priority,
                 task_id,
                 group_name,
-                0,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)

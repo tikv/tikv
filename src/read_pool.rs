@@ -121,7 +121,6 @@ impl ReadPoolHandle {
         priority: CommandPri,
         task_id: u64,
         group_meta: Vec<u8>,
-        delta: u64,
     ) -> Result<(), ReadPoolError>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -173,7 +172,6 @@ impl ReadPoolHandle {
                             },
                             resource_ctl.clone(),
                             group_meta,
-                            0,
                         )),
                         extras,
                     )
@@ -198,7 +196,6 @@ impl ReadPoolHandle {
         priority: CommandPri,
         task_id: u64,
         group_meta: Vec<u8>,
-        delta: u64,
     ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
         F: Future<Output = T> + Send + 'static,
@@ -213,7 +210,6 @@ impl ReadPoolHandle {
             priority,
             task_id,
             group_meta,
-            delta,
         );
         async move {
             res?;

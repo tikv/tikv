@@ -568,7 +568,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let deadline = cmd.deadline();
         let sched = self.clone();
         self.get_sched_pool()
-            .spawn(&cmd.group_name(), cmd.priority(), cmd.delta(), async move {
+            .spawn(&cmd.group_name(), cmd.priority(), async move {
                 match unsafe {
                     with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx))
                 } {
@@ -627,7 +627,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 // when many queuing tasks fail successively.
                 let this = self.clone();
                 self.get_sched_pool()
-                    .spawn(&group_name, pri, 0, async move {
+                    .spawn(&group_name, pri, async move {
                         this.finish_with_err(cid, err);
                     })
                     .unwrap();
@@ -668,74 +668,66 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let sched = self.clone();
 
         self.get_sched_pool()
-            .spawn(
-                &task.cmd.group_name(),
-                task.cmd.priority(),
-                task.cmd.delta(),
-                async move {
-                    fail_point!("scheduler_start_execute");
-                    if sched.check_task_deadline_exceeded(&task) {
-                        return;
-                    }
+            .spawn(&task.cmd.group_name(), task.cmd.priority(), async move {
+                fail_point!("scheduler_start_execute");
+                if sched.check_task_deadline_exceeded(&task) {
+                    return;
+                }
 
-                    let tag = task.cmd.tag();
-                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
+                let tag = task.cmd.tag();
+                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
-                    let mut snap_ctx = SnapContext {
-                        pb_ctx: task.cmd.ctx(),
-                        ..Default::default()
-                    };
-                    if matches!(
-                        task.cmd,
-                        Command::FlashbackToVersionReadPhase { .. }
-                            | Command::FlashbackToVersion { .. }
-                    ) {
-                        snap_ctx.allowed_in_flashback = true;
-                    }
-                    // The program is currently in scheduler worker threads.
-                    // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-                    match unsafe {
-                        with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx))
-                    }
+                let mut snap_ctx = SnapContext {
+                    pb_ctx: task.cmd.ctx(),
+                    ..Default::default()
+                };
+                if matches!(
+                    task.cmd,
+                    Command::FlashbackToVersionReadPhase { .. }
+                        | Command::FlashbackToVersion { .. }
+                ) {
+                    snap_ctx.allowed_in_flashback = true;
+                }
+                // The program is currently in scheduler worker threads.
+                // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+                match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }
                     .await
-                    {
-                        Ok(snapshot) => {
-                            SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
-                            let term = snapshot.ext().get_term();
-                            let extra_op = snapshot.ext().get_txn_extra_op();
-                            if !sched
-                                .inner
-                                .get_task_slot(task.cid)
-                                .get(&task.cid)
-                                .unwrap()
-                                .try_own()
-                            {
-                                sched
-                                    .finish_with_err(task.cid, StorageErrorInner::DeadlineExceeded);
-                                return;
-                            }
-
-                            if let Some(term) = term {
-                                task.cmd.ctx_mut().set_term(term.get());
-                            }
-                            task.extra_op = extra_op;
-
-                            debug!(
-                                "process cmd with snapshot";
-                                "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
-                                "trakcer" => ?task.tracker
-                            );
-                            sched.process(snapshot, task).await;
+                {
+                    Ok(snapshot) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+                        let term = snapshot.ext().get_term();
+                        let extra_op = snapshot.ext().get_txn_extra_op();
+                        if !sched
+                            .inner
+                            .get_task_slot(task.cid)
+                            .get(&task.cid)
+                            .unwrap()
+                            .try_own()
+                        {
+                            sched.finish_with_err(task.cid, StorageErrorInner::DeadlineExceeded);
+                            return;
                         }
-                        Err(err) => {
-                            SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
-                            info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                            sched.finish_with_err(task.cid, Error::from(err));
+                        if let Some(term) = term {
+                            task.cmd.ctx_mut().set_term(term.get());
                         }
+                        task.extra_op = extra_op;
+
+                        debug!(
+                            "process cmd with snapshot";
+                            "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
+                            "trakcer" => ?task.tracker
+                        );
+                        sched.process(snapshot, task).await;
                     }
-                },
-            )
+                    Err(err) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+
+                        info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                        sched.finish_with_err(task.cid, Error::from(err));
+                    }
+                }
+            })
             .unwrap();
     }
 
@@ -1008,7 +1000,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
             self.get_sched_pool()
-                .spawn(group_name, CommandPri::High, 0, async move {
+                .spawn(group_name, CommandPri::High, async move {
                     lock_wait_queues.update_lock_wait(new_acquired_locks);
                 })
                 .unwrap();
@@ -1026,7 +1018,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let self1 = self.clone();
         let group_name1 = group_name.to_owned();
         self.get_sched_pool()
-            .spawn(group_name, CommandPri::High, 0, async move {
+            .spawn(group_name, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
@@ -1046,7 +1038,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     let self2 = self1.clone();
                     self1
                         .get_sched_pool()
-                        .spawn(&group_name1, CommandPri::High, 0, async move {
+                        .spawn(&group_name1, CommandPri::High, async move {
                             let res = f.await;
                             if let Some(resumable_lock_wait_entry) = res {
                                 self2.schedule_awakened_pessimistic_locks(
@@ -2132,7 +2124,7 @@ mod tests {
         // cannot run within 500ms.
         scheduler
             .get_sched_pool()
-            .spawn("", CommandPri::Normal, 0, async {
+            .spawn("", CommandPri::Normal, async {
                 thread::sleep(Duration::from_millis(500))
             })
             .unwrap();

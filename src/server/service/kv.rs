@@ -177,7 +177,7 @@ macro_rules! handle_request {
             let begin_instant = Instant::now();
 
             let source = req.mut_context().take_request_source();
-            let resource_group_name = req.get_context().get_resource_group_name();
+            let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_group_name])
                     .inc();
@@ -1075,7 +1075,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default());
                 },
                 Some(batch_commands_request::request::Cmd::Get(mut req)) => {
-                    let resource_group_name = req.get_context().get_resource_group_name();
+                    let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                             .with_label_values(&[resource_group_name])
                             .inc();
@@ -1093,7 +1093,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
-                    let resource_group_name = req.get_context().get_resource_group_name();
+                    let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                             .with_label_values(&[resource_group_name])
                             .inc();
@@ -1111,7 +1111,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
-                    let resource_group_name = req.get_context().get_resource_group_name();
+                    let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                             .with_label_values(&[resource_group_name])
                             .inc();
@@ -1142,7 +1142,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
-                    let resource_group_name = req.get_context().get_resource_group_name();
+                    let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                             .with_label_values(&[resource_group_name])
                             .inc();

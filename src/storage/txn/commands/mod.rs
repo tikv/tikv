@@ -716,14 +716,13 @@ impl Command {
     }
 
     pub fn group_name(&self) -> String {
-        self.command_ext()
-            .get_ctx()
+        self.resource_control_ctx()
             .get_resource_group_name()
             .to_owned()
     }
 
-    pub fn delta(&self) -> u64 {
-        self.command_ext().get_ctx().get_delta()
+    pub fn resource_control_ctx(&self) -> &ResourceControlContext {
+        self.command_ext().get_ctx().get_resource_control_context()
     }
 
     pub fn need_flow_control(&self) -> bool {
