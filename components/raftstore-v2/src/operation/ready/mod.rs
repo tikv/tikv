@@ -95,6 +95,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer_mut().tick() {
             self.fsm.peer_mut().set_has_ready();
         }
+        self.fsm.peer_mut().maybe_clean_up_stale_merge_context();
         self.schedule_tick(PeerTick::Raft);
     }
 
@@ -235,6 +236,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // self.merge_context_mut().maybe_add_rollback_peer();
                         return;
                     }
+                }
+                ExtraMessageType::MsgAvailabilityRequest => {
+                    self.on_availability_request(
+                        ctx,
+                        msg.get_extra_msg()
+                            .get_availability_context()
+                            .get_from_region_id(),
+                        msg.get_from_peer(),
+                    );
+                    return;
+                }
+                ExtraMessageType::MsgAvailabilityResponse => {
+                    self.on_availability_response(
+                        ctx,
+                        msg.get_from_peer().get_id(),
+                        msg.get_extra_msg(),
+                    );
+                    return;
                 }
                 _ => (),
             }
@@ -604,6 +623,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
+        self.try_compelete_recovery();
         self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
 
         if !ready.persisted_messages().is_empty() {
