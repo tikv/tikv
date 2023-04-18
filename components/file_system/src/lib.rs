@@ -472,8 +472,6 @@ pub fn clean_up_trash(path: impl AsRef<Path>) -> io::Result<()> {
     clean_up_dir(path, TRASH_PREFIX)
 }
 
-/// When using `trash_dir_all`, it's possible the directory needs to be delete
-/// whick starts with the given prefix.
 pub fn clean_up_dir(path: impl AsRef<Path>, prefix: &str) -> io::Result<()> {
     for e in read_dir(path)? {
         let e = e?;

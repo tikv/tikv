@@ -2091,28 +2091,18 @@ impl TabletSnapManager {
         PathBuf::from(&self.base).join(prefix)
     }
 
-    pub fn delete_snapshot(&self, key: TabletSnapKey) -> Result<()> {
-        for f in file_system::read_dir(&self.base)? {
-            let entry = f?;
-            let ft = entry.file_type()?;
-            if ft.is_file() {
-                continue;
-            }
-            let os_name = entry.file_name();
-            let name = os_name.to_str().unwrap().to_string();
-            let parts = name
-                .split('_')
-                .skip(1)
-                .map(|s| s.parse().unwrap())
-                .collect::<Vec<u64>>();
-            if parts.len() < 4 {
-                continue;
-            }
-            if parts[0] == key.region_id && parts[1] == key.to_peer {
-                file_system::trash_dir_all(entry.path())?
-            }
+    pub fn delete_snapshot(&self, key: TabletSnapKey) -> bool {
+        let path = self.tablet_gen_path(&key);
+        if path.exists() && let Err(e) = file_system::trash_dir_all(&path) {
+            error!(
+                "delete snapshot failed";
+                "path" => %path.display(),
+                "err" => ?e,
+            );
+            false
+        } else {
+            true
         }
-        Ok(())
     }
 
     pub fn total_snap_size(&self) -> Result<u64> {
@@ -3168,8 +3158,7 @@ pub mod tests {
         let path = mgr.tablet_gen_path(&key);
         std::fs::create_dir_all(&path).unwrap();
         assert!(path.exists());
-        mgr.begin_snapshot(key.clone(), start, 1);
-        mgr.finish_snapshot(key, start);
+        mgr.delete_snapshot(key);
         assert_eq!(mgr.stats().stats.len(), 0);
         assert!(!path.exists());
     }
@@ -3207,26 +3196,6 @@ pub mod tests {
                 .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
-    }
-
-    #[test]
-    fn test_remove_snapshot() {
-        let snap_dir = Builder::new()
-            .prefix("test_snapshot_stats")
-            .tempdir()
-            .unwrap();
-        let mgr = TabletSnapManager::new(snap_dir.path()).unwrap();
-
-        // snapshot should be deleted after snapshot send finished (include failed).
-        let key = TabletSnapKey::new(1, 2, 3, 4);
-        let key1 = TabletSnapKey::new(1, 3, 3, 5);
-        let gen1 = mgr.tablet_gen_path(&key);
-        std::fs::create_dir_all(&gen1).unwrap();
-        assert!(gen1.exists());
-        mgr.delete_snapshot(key1).unwrap();
-        assert!(gen1.exists());
-        mgr.delete_snapshot(key).unwrap();
-        assert!(!gen1.exists());
     }
 
     #[test]

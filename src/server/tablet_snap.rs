@@ -642,9 +642,7 @@ pub fn send_snap(
         let (mgr, key) = (mgr.clone(), key.clone());
         DeferContext::new(move || {
             mgr.finish_snapshot(key.clone(), timer);
-            if let Err(e) = mgr.delete_snapshot(key.clone()) {
-                error!("delete snapshot failed";"region_id" => key.region_id,"to_peer" => key.to_peer,"error" => ?e);
-            }
+            mgr.delete_snapshot(key.clone());
         })
     };
 
@@ -809,19 +807,14 @@ where
             }
             Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
-                let to_peer_id = msg.get_to_peer().get_id();
-
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
-                    let key = TabletSnapKey::new(region_id, to_peer_id, 0, 0);
-                    if let Err(e) = self.snap_mgr.delete_snapshot(key) {
-                        warn!(
-                            "delete snapshot directory failed";
-                            "to_peer_id" => to_peer_id ,
-                            "region_id" =>region_id,
-                            "err" => ?e,
-                        );
-                    }
+                    let key = TabletSnapKey::from_region_snap(
+                        msg.get_region_id(),
+                        msg.get_to_peer().get_id(),
+                        msg.get_message().get_snapshot(),
+                    );
+                    self.snap_mgr.delete_snapshot(key);
                     warn!(
                         "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg
