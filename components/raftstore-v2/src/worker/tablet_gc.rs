@@ -10,7 +10,6 @@ use std::{
 use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
-use raftstore::store::TabletSnapManager;
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -146,15 +145,12 @@ pub struct Runner<EK: KvEngine> {
     // An independent pool to run tasks that are time-consuming but doesn't take CPU resources,
     // such as waiting for RocksDB compaction.
     background_pool: FuturePool,
-
-    tablet_snap_manager: TabletSnapManager,
 }
 
 impl<EK: KvEngine> Runner<EK> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
         sst_importer: Arc<SstImporter>,
-        tablet_snap_manager: TabletSnapManager,
         logger: Logger,
     ) -> Self {
         Self {
@@ -163,7 +159,6 @@ impl<EK: KvEngine> Runner<EK> {
             logger,
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
-            tablet_snap_manager,
             background_pool: YatpPoolBuilder::new(DefaultTicker::default())
                 .name_prefix("tablet-gc-bg")
                 .thread_count(
@@ -256,12 +251,7 @@ impl<EK: KvEngine> Runner<EK> {
         if let Some(v) = self.waiting_destroy_tasks.get_mut(&region_id) {
             v.retain(|(path, wait)| {
                 if *wait <= persisted {
-                    if !Self::process_destroy_task(
-                        &self.logger,
-                        &self.tablet_registry,
-                        path,
-                        &self.tablet_snap_manager,
-                    ) {
+                    if !Self::process_destroy_task(&self.logger, &self.tablet_registry, path) {
                         self.pending_destroy_tasks.push(path.clone());
                     }
                     return false;
@@ -273,23 +263,13 @@ impl<EK: KvEngine> Runner<EK> {
 
     fn direct_destroy(&mut self, tablet: Either<EK, PathBuf>) {
         let path = self.pause_background_work(tablet);
-        if !Self::process_destroy_task(
-            &self.logger,
-            &self.tablet_registry,
-            &path,
-            &self.tablet_snap_manager,
-        ) {
+        if !Self::process_destroy_task(&self.logger, &self.tablet_registry, &path) {
             self.pending_destroy_tasks.push(path);
         }
     }
 
     /// Returns true if task is consumed. Failure is considered consumed.
-    fn process_destroy_task(
-        logger: &Logger,
-        registry: &TabletRegistry<EK>,
-        path: &Path,
-        mgr: &TabletSnapManager,
-    ) -> bool {
+    fn process_destroy_task(logger: &Logger, registry: &TabletRegistry<EK>, path: &Path) -> bool {
         match EK::locked(path.to_str().unwrap()) {
             Err(e) => warn!(
                 logger,
@@ -301,7 +281,7 @@ impl<EK: KvEngine> Runner<EK> {
                 let (_, region_id, tablet_index) =
                     registry.parse_tablet_name(path).unwrap_or(("", 0, 0));
                 // TODO: use a meaningful table context.
-                let success = registry
+                let _ = registry
                     .tablet_factory()
                     .destroy_tablet(
                         TabletContext::with_infinite_region(region_id, Some(tablet_index)),
@@ -315,9 +295,6 @@ impl<EK: KvEngine> Runner<EK> {
                             "path" => path.display(),
                         )
                     });
-                if success.is_ok() &&let Err(e) = mgr.delete_snapshot(region_id, None){
-                    warn!(logger, "failed to delete snapshot"; "err" => ?e, "region_id" => region_id);
-                }
                 return true;
             }
             Ok(true) => {
@@ -370,14 +347,8 @@ where
     EK: KvEngine,
 {
     fn on_timeout(&mut self) {
-        self.pending_destroy_tasks.retain(|task| {
-            !Self::process_destroy_task(
-                &self.logger,
-                &self.tablet_registry,
-                task,
-                &self.tablet_snap_manager,
-            )
-        });
+        self.pending_destroy_tasks
+            .retain(|task| !Self::process_destroy_task(&self.logger, &self.tablet_registry, task));
     }
 
     fn get_interval(&self) -> Duration {
@@ -392,7 +363,6 @@ mod tests {
         kv::TestTabletFactory,
     };
     use engine_traits::{MiscExt, TabletContext, TabletRegistry};
-    use raftstore::store::TabletSnapKey;
     use tempfile::Builder;
 
     use super::*;
@@ -408,17 +378,10 @@ mod tests {
             DbOptions::default(),
             vec![("default", CfOptions::default())],
         ));
-
-        let snap_path=dir.path().join("tablet_snap");
-        let snap_mgr = TabletSnapManager::new(snap_path).unwrap();
-        let key1=TabletSnapKey::new(2, 1, 1,1);
-        let key1_path=snap_mgr.tablet_gen_path(&key1);
-        std::fs::create_dir_all(&key1_path).unwrap();
-        assert!(key1_path.exists());
         let registry = TabletRegistry::new(factory, dir.path()).unwrap();
         let logger = slog_global::borrow_global().new(slog::o!());
         let (_dir, importer) = create_tmp_importer();
-        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
+        let mut runner = Runner::new(registry.clone(), importer, logger);
 
         let mut region = Region::default();
         let rid = 1;
@@ -456,6 +419,5 @@ mod tests {
         rx.recv().unwrap();
         runner.on_timeout();
         assert!(!path.exists());
-        assert!(!key1_path.exists());
     }
 }

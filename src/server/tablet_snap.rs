@@ -805,18 +805,17 @@ where
             Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
                 let to_peer_id = msg.get_to_peer().get_id();
-                defer!({
-                    if let Err(e) = self.snap_mgr.delete_snapshot(region_id, Some(to_peer_id)) {
+
+                if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
+                {
+                    if let Err(e) = mgr.delete_snapshot(region_id, Some(to_peer_id)) {
                         warn!(
                             "delete snapshot directory failed";
-                            "to_peer_id" =>to_peer_id,
-                            "region_id" => region_id,
+                            "to_peer_id" => to_peer_id ,
+                            "region_id" =>region_id,
                             "err" => ?e,
                         );
                     }
-                });
-                if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
-                {
                     warn!(
                         "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg

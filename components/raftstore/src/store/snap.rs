@@ -2013,7 +2013,7 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_exclude_prefix(&path, SNAP_REV_PREFIX)?;
+        file_system::clean_up_trash_with_prefix(&path, SNAP_GEN_PREFIX)?;
         Ok(Self {
             base: path,
             receiving: Arc::default(),
@@ -2040,7 +2040,7 @@ impl TabletSnapManager {
                 format!("{} should be a directory", self.base.display()),
             ));
         }
-        file_system::clean_up_exclude_prefix(&self.base, SNAP_REV_PREFIX)?;
+        file_system::clean_up_trash_with_prefix(&self.base, SNAP_GEN_PREFIX)?;
         Ok(())
     }
 
@@ -2061,6 +2061,8 @@ impl TabletSnapManager {
                 stat.set_total_duration_sec(start.saturating_elapsed().as_secs());
                 stat.set_region_id(region_id);
             });
+
+        self.delete_snapshot(region_id, Some(key.to_peer));
     }
 
     pub fn stats(&self) -> SnapStats {
