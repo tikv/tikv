@@ -610,18 +610,6 @@ where
             )),
         );
 
-        // Start the background check scheduler worker pool size periodically. This is
-        // only for the case that the resource control is enabled.
-        if self.core.config.resource_control.enabled {
-            let sched_pool = storage.get_scheduler().get_sched_pool().clone();
-            self.core.background_worker.spawn_interval_task(
-                DEFAULT_STORAGE_SCHED_POOL_SIZE_CHECK_INTERVAL,
-                move || {
-                    sched_pool.check_idle_pool();
-                },
-            );
-        }
-
         let (resolver, state) = resolve::new_resolver(
             self.pd_client.clone(),
             &self.core.background_worker,

@@ -28,7 +28,6 @@ use crate::storage::{
     test_util::latest_feature_gate,
 };
 
-const DEFAULT_MIN_SCHED_POOL_SIZE: usize = 1;
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
     command_keyread_histogram_vec: LocalHistogramVec,
@@ -151,7 +150,6 @@ pub struct SchedPool {
     vanilla: Option<VanillaQueue>,
     priority: Option<PriorityQueue>,
     queue_type: QueueType,
-    expect_pool_size: Arc<AtomicUsize>,
 }
 
 impl SchedPool {
@@ -214,7 +212,6 @@ impl SchedPool {
             vanilla: Some(vanilla),
             priority,
             queue_type,
-            expect_pool_size: Arc::new(AtomicUsize::new(pool_size)),
         }
     }
 
@@ -265,43 +262,13 @@ impl SchedPool {
                 vanilla.scale_pool_size(pool_size);
             }
         }
-        self.expect_pool_size.store(pool_size, Ordering::Release)
-    }
-
-    // check if the pool size is correct, if not, adjust it.
-    // it's only used in dynamic mode if the pool size is switched, it's may
-    // influence the performance for a while.
-    pub fn check_idle_pool(&self) {
-        match self.queue_type {
-            QueueType::Vanilla | QueueType::Priority => {}
-            QueueType::Dynamic => {
-                let pool_size = self.expect_pool_size.load(Ordering::Acquire);
-                let vanilla = self.vanilla.as_ref().unwrap();
-                let priority = self.priority.as_ref().unwrap();
-                if self.can_use_priority() {
-                    if priority.get_pool_size() != pool_size
-                        || vanilla.get_pool_size(CommandPri::Normal) != DEFAULT_MIN_SCHED_POOL_SIZE
-                    {
-                        priority.scale_pool_size(pool_size);
-                        vanilla.scale_pool_size(DEFAULT_MIN_SCHED_POOL_SIZE);
-                    }
-                } else if vanilla.get_pool_size(CommandPri::Normal) != pool_size
-                    || priority.get_pool_size() != DEFAULT_MIN_SCHED_POOL_SIZE
-                {
-                    vanilla.scale_pool_size(pool_size);
-                    priority.scale_pool_size(DEFAULT_MIN_SCHED_POOL_SIZE);
-                }
-            }
-        }
     }
 
     fn can_use_priority(&self) -> bool {
         match self.queue_type {
             QueueType::Vanilla => false,
             QueueType::Priority => true,
-            QueueType::Dynamic => {
-                self.priority.as_ref().unwrap().resource_ctl.is_customized()
-            }
+            QueueType::Dynamic => self.priority.as_ref().unwrap().resource_ctl.is_customized(),
         }
     }
 
