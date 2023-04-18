@@ -550,6 +550,7 @@ dependencies = [
  "pd_client",
  "pin-project",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "raft",
  "raftstore",
@@ -2791,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#af969693ce8a7884e5bdc5d81c728f657d33065a"
+source = "git+https://github.com/pingcap/kvproto.git#ce835ae20dfcb5f69f0aea04236070932c815b6a"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4771,6 +4772,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "protobuf",
+ "rand 0.8.5",
  "serde",
  "slog",
  "slog-global",
@@ -6320,6 +6322,7 @@ dependencies = [
  "chrono-tz",
  "codec",
  "collections",
+ "crc32fast",
  "encoding_rs 0.8.29 (git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
  "error_code",
  "hex 0.4.2",

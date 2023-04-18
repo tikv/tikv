@@ -805,6 +805,10 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
             .unwrap()
             .to_owned()
     }
+
+    fn get_snap_mgr(&self, node_id: u64) -> &TabletSnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
+    }
 }
 
 impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
@@ -832,6 +836,14 @@ impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
             thread::sleep(Duration::from_millis(200));
         }
         panic!("failed to get snapshot of region {}", region_id);
+    }
+
+    pub fn get_addr(&self, node_id: u64) -> String {
+        self.sim.rl().get_addr(node_id)
+    }
+
+    pub fn get_security_mgr(&self) -> Arc<SecurityManager> {
+        self.sim.rl().security_mgr.clone()
     }
 }
 
