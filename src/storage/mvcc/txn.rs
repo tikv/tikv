@@ -108,7 +108,15 @@ impl MvccTxn {
     }
 
     pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
-        let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
+        let bytes = lock.to_bytes();
+        let reverted_lock = Lock::parse(&bytes).unwrap();
+        if lock != &reverted_lock {
+            error!("lock changed after encoding and parsing";
+            "original lock" => ?lock,
+            "lock.to_bytes().parse()" => ?reverted_lock,
+            );
+        }
+        let write = Modify::Put(CF_LOCK, key, bytes);
         self.write_size += write.size();
         self.modifies.push(write);
     }
