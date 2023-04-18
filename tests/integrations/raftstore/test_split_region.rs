@@ -1254,6 +1254,7 @@ fn test_catch_up_peers_after_split() {
 
     let pending_peers = pd_client.get_pending_peers();
 
+    // Ensure new split region has no pending peers.
     for p in right_region.get_peers() {
         assert!(!pending_peers.contains_key(&p.id))
     }
