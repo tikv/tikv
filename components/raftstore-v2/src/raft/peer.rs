@@ -25,7 +25,8 @@ use raftstore::{
         TabletSnapManager, WriteTask,
     },
 };
-use slog::Logger;
+use slog::{info, Logger};
+use tikv_util::slog_panic;
 
 use super::storage::Storage;
 use crate::{
@@ -34,7 +35,7 @@ use crate::{
         AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress, GcPeerContext,
         MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
     },
-    router::{CmdResChannel, PeerTick, QueryResChannel},
+    router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
 
@@ -44,6 +45,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
+    tablet_being_flushed: bool,
 
     /// Statistics for self.
     self_stat: PeerStat,
@@ -154,6 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
+            tablet_being_flushed: false,
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
@@ -299,6 +302,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer().get_id()
+    }
+
+    #[inline]
+    pub fn tablet_being_flushed(&self) -> bool {
+        self.tablet_being_flushed
+    }
+
+    #[inline]
+    pub fn set_tablet_being_flushed(&mut self, v: bool) {
+        self.tablet_being_flushed = v;
     }
 
     #[inline]
@@ -449,6 +462,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn pause_for_recovery(&self) -> bool {
         self.pause_for_recovery
+    }
+
+    #[inline]
+    // we may have skipped scheduling raft tick when start due to noticable gap
+    // between commit index and apply index. We should scheduling it when raft log
+    // apply catches up.
+    pub fn try_compelete_recovery(&mut self) {
+        if self.pause_for_recovery()
+            && self.storage().entry_storage().commit_index()
+                <= self.storage().entry_storage().applied_index()
+        {
+            info!(
+                self.logger,
+                "recovery completed";
+                "apply_index" =>  self.storage().entry_storage().applied_index()
+            );
+            self.set_pause_for_recovery(false);
+            // Flush to avoid recover again and again.
+            if let Some(scheduler) = self.apply_scheduler() {
+                scheduler.send(ApplyTask::ManualFlush);
+            }
+            self.add_pending_tick(PeerTick::Raft);
+        }
     }
 
     #[inline]
@@ -795,6 +831,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn add_message(&mut self, msg: RaftMessage) {
         self.pending_messages.push(msg);
+        self.set_has_ready();
     }
 
     #[inline]
@@ -827,5 +864,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn last_sent_snapshot_index(&self) -> u64 {
         self.last_sent_snapshot_index
+    }
+
+    #[inline]
+    pub fn index_term(&self, idx: u64) -> u64 {
+        match self.raft_group.raft.raft_log.term(idx) {
+            Ok(t) => t,
+            Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
+        }
     }
 }

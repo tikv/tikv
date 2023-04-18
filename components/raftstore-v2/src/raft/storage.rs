@@ -318,7 +318,7 @@ mod tests {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::TestTabletFactory,
+        kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
         FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
@@ -328,10 +328,13 @@ mod tests {
         raft_serverpb::PeerState,
     };
     use raft::{Error as RaftError, StorageError};
-    use raftstore::store::{
-        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
-        GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
-        RAFT_INIT_LOG_TERM,
+    use raftstore::{
+        coprocessor::CoprocessorHost,
+        store::{
+            util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
+            GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask,
+            RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        },
     };
     use slog::o;
     use tempfile::TempDir;
@@ -340,7 +343,7 @@ mod tests {
     use super::*;
     use crate::{
         fsm::ApplyResReporter,
-        operation::{test_util::create_tmp_importer, write_initial_states},
+        operation::{test_util::create_tmp_importer, write_initial_states, CatchUpLogs},
         raft::Apply,
         router::ApplyRes,
     };
@@ -369,6 +372,7 @@ mod tests {
 
     impl ApplyResReporter for TestRouter {
         fn report(&self, _res: ApplyRes) {}
+        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
     }
 
     fn new_region() -> Region {
@@ -499,6 +503,7 @@ mod tests {
         let mut state = RegionLocalState::default();
         state.set_region(region.clone());
         let (_tmp_dir, importer) = create_tmp_importer();
+        let host = CoprocessorHost::<KvTestEngine>::default();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -512,6 +517,7 @@ mod tests {
             5,
             None,
             importer,
+            host,
             logger,
         );
 

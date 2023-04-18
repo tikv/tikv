@@ -13,7 +13,7 @@ use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
-use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
+use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager, ENGINE, TIFLASH};
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -32,6 +32,7 @@ use super::{
     resolve::StoreAddrResolver,
     service::*,
     snap::{Runner as SnapHandler, Task as SnapTask},
+    tablet_snap::SnapCacheBuilder,
     transport::ServerTransport,
     Config, Error, Result,
 };
@@ -69,6 +70,7 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     // For sending/receiving snapshots.
     snap_mgr: Either<SnapManager, TabletSnapManager>,
     snap_worker: LazyWorker<SnapTask>,
+    tiflash_engine: bool,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
@@ -177,6 +179,12 @@ where
         let trans = ServerTransport::new(raft_client);
         health_service.set_serving_status("", ServingStatus::NotServing);
 
+        let tiflash_engine = cfg
+            .value()
+            .labels
+            .iter()
+            .any(|entry| entry.0 == ENGINE && entry.1 == TIFLASH);
+
         let svr = Server {
             env: Arc::clone(&env),
             builder_or_server: Some(builder),
@@ -192,6 +200,7 @@ where
             debug_thread_pool,
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
+            tiflash_engine,
         };
 
         Ok(svr)
@@ -251,6 +260,7 @@ where
         &mut self,
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
+        snap_cache_builder: impl SnapCacheBuilder + Clone + 'static,
     ) -> Result<()> {
         match self.snap_mgr.clone() {
             Either::Left(mgr) => {
@@ -260,6 +270,7 @@ where
                     self.raft_router.clone(),
                     security_mgr,
                     cfg,
+                    self.tiflash_engine,
                 );
                 self.snap_worker.start(snap_runner);
             }
@@ -267,6 +278,7 @@ where
                 let snap_runner = TabletRunner::new(
                     self.env.clone(),
                     mgr,
+                    snap_cache_builder,
                     self.raft_router.clone(),
                     security_mgr,
                     cfg,
@@ -458,7 +470,7 @@ mod tests {
     use crate::{
         config::CoprReadPoolConfig,
         coprocessor::{self, readpool_impl},
-        server::{raftkv::RaftRouterWrap, TestRaftStoreRouter},
+        server::{raftkv::RaftRouterWrap, tablet_snap::NoSnapshotCache, TestRaftStoreRouter},
         storage::{lock_manager::MockLockManager, TestEngineBuilder, TestStorageBuilderApiV1},
     };
 
@@ -589,7 +601,7 @@ mod tests {
         .unwrap();
 
         server.build_and_bind().unwrap();
-        server.start(cfg, security_mgr).unwrap();
+        server.start(cfg, security_mgr, NoSnapshotCache).unwrap();
 
         let mut trans = server.transport();
         router.report_unreachable(0, 0).unwrap();

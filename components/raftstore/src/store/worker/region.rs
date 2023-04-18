@@ -26,7 +26,7 @@ use tikv_util::{
     box_err, box_try,
     config::VersionTrack,
     defer, error, info, thd_name,
-    time::Instant,
+    time::{Instant, UnixSecs},
     warn,
     worker::{Runnable, RunnableWithTimer},
 };
@@ -52,8 +52,8 @@ use crate::{
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
-const TIFLASH: &str = "tiflash";
-const ENGINE: &str = "engine";
+pub const TIFLASH: &str = "tiflash";
+pub const ENGINE: &str = "engine";
 
 /// Region related task
 #[derive(Debug)]
@@ -241,6 +241,7 @@ struct SnapGenContext<EK, R> {
     engine: EK,
     mgr: SnapManager,
     router: R,
+    start: UnixSecs,
 }
 
 impl<EK, R> SnapGenContext<EK, R>
@@ -269,6 +270,7 @@ where
             last_applied_state,
             for_balance,
             allow_multi_files_snapshot,
+            self.start
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -821,6 +823,7 @@ where
                     engine: self.engine.clone(),
                     mgr: self.mgr.clone(),
                     router: self.router.clone(),
+                    start: UnixSecs::now(),
                 };
                 self.pool.spawn(async move {
                     tikv_alloc::add_thread_memory_accessor();
@@ -1140,6 +1143,7 @@ pub(crate) mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let bg_worker = Worker::new("snap-manager");
         let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();

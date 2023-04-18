@@ -30,7 +30,10 @@ use raft::{
     Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
 };
 use tikv_util::{
-    box_err, box_try, debug, defer, error, info, store::find_peer_by_id, time::Instant, warn,
+    box_err, box_try, debug, defer, error, info,
+    store::find_peer_by_id,
+    time::{Instant, UnixSecs},
+    warn,
     worker::Scheduler,
 };
 
@@ -524,7 +527,12 @@ where
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
         }
 
-        if *tried_cnt >= MAX_SNAP_TRY_CNT {
+        let max_snap_try_cnt = (|| {
+            fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
+            MAX_SNAP_TRY_CNT
+        })();
+
+        if *tried_cnt >= max_snap_try_cnt {
             let cnt = *tried_cnt;
             *tried_cnt = 0;
             return Err(raft::Error::Store(box_err!(
@@ -1055,6 +1063,7 @@ pub fn do_snapshot<E>(
     last_applied_state: RaftApplyState,
     for_balance: bool,
     allow_multi_files_snapshot: bool,
+    start: UnixSecs,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1112,6 +1121,7 @@ where
         region_state.get_region(),
         allow_multi_files_snapshot,
         for_balance,
+        start,
     )?;
     snapshot.set_data(snap_data.write_to_bytes()?.into());
 
@@ -1619,6 +1629,7 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
@@ -1755,6 +1766,7 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mut mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         mgr.set_enable_multi_snapshot_files(true);
         mgr.set_max_per_file_size(500);
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
@@ -1826,6 +1838,7 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
@@ -1905,6 +1918,7 @@ pub mod tests {
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let mut worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();

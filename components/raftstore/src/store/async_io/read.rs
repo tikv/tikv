@@ -124,7 +124,7 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         let checkpointer_path = self.snap_mgr().tablet_gen_path(snap_key);
         if checkpointer_path.as_path().exists() {
             // Remove the old checkpoint directly.
-            std::fs::remove_dir_all(checkpointer_path.as_path())?;
+            file_system::trash_dir_all(&checkpointer_path)?;
         }
         // Here not checkpoint to a temporary directory first, the temporary directory
         // logic already implemented in rocksdb.
@@ -153,6 +153,7 @@ where
                 tried_cnt,
                 term,
             } => {
+                let _guard = WithIoType::new(IoType::Replication);
                 let mut ents =
                     Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
                 let res = self.raft_engine.fetch_entries_to(
@@ -214,6 +215,7 @@ where
                 snapshot.mut_metadata().set_index(last_applied_index);
                 let conf_state = util::conf_state_from_region(region_state.get_region());
                 snapshot.mut_metadata().set_conf_state(conf_state);
+
                 // Set snapshot data.
                 let mut snap_data = RaftSnapshotData::default();
                 snap_data.set_region(region_state.get_region().clone());
@@ -222,7 +224,6 @@ where
                 snap_data.set_removed_records(region_state.get_removed_records().into());
                 snap_data.set_merged_records(region_state.get_merged_records().into());
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
-
                 // create checkpointer.
                 let snap_key = TabletSnapKey::from_region_snap(region_id, to_peer, &snapshot);
                 let mut res = None;
@@ -232,11 +233,8 @@ where
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
                 } else {
+                    let generate_duration_secs = start.saturating_elapsed().as_secs();
                     let elapsed = start.saturating_elapsed_secs();
-                    SNAP_COUNTER.generate.success.inc();
-                    SNAP_HISTOGRAM.generate.observe(elapsed);
-                    SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
-                    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_keys as f64);
                     info!(
                         "snapshot generated";
                         "region_id" => region_id,
@@ -246,6 +244,12 @@ where
                         "total_size" => total_size,
                         "total_keys" => total_keys,
                     );
+                    self.snap_mgr()
+                        .begin_snapshot(snap_key, start, generate_duration_secs);
+                    SNAP_COUNTER.generate.success.inc();
+                    SNAP_HISTOGRAM.generate.observe(elapsed);
+                    SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
+                    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_keys as f64);
                     res = Some(Box::new((snapshot, to_peer)))
                 }
 

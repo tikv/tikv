@@ -89,6 +89,7 @@ use crate::{
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
+pub const DEFAULT_TABLET_SUB_DIR: &str = "tablets";
 
 /// By default, block cache size will be set to 45% of system memory.
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
@@ -1800,7 +1801,13 @@ impl Default for RaftEngineConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            config: RawRaftEngineConfig::default(),
+            config: RawRaftEngineConfig {
+                // TODO: after update the dependency to `raft-engine` lib, revokes the
+                // following unelegant settings.
+                // Enable log recycling by default.
+                enable_log_recycle: true,
+                ..RawRaftEngineConfig::default()
+            },
         }
     }
 }
@@ -2655,6 +2662,8 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
     #[online_config(skip)]
+    pub min_ts_interval: ReadableDuration,
+
     pub max_flush_interval: ReadableDuration,
     #[online_config(skip)]
     pub num_threads: usize,
@@ -2662,7 +2671,7 @@ pub struct BackupStreamConfig {
     pub enable: bool,
     #[online_config(skip)]
     pub temp_path: String,
-    #[online_config(skip)]
+
     pub file_size_limit: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_pending_memory_quota: ReadableSize,
@@ -2681,6 +2690,20 @@ impl BackupStreamConfig {
             );
             self.num_threads = default_cfg.num_threads;
         }
+        if self.max_flush_interval < ReadableDuration::secs(10) {
+            return Err(format!(
+                "the max_flush_interval is too small, it is {}, and should be greater than 10s.",
+                self.max_flush_interval
+            )
+            .into());
+        }
+        if self.min_ts_interval < ReadableDuration::secs(1) {
+            return Err(format!(
+                "the min_ts_interval is too small, it is {}, and should be greater than 1s.",
+                self.min_ts_interval
+            )
+            .into());
+        }
         Ok(())
     }
 }
@@ -2691,6 +2714,7 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
+            min_ts_interval: ReadableDuration::secs(10),
             max_flush_interval: ReadableDuration::minutes(3),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
@@ -2766,7 +2790,7 @@ impl Default for CdcConfig {
 }
 
 impl CdcConfig {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self, raftstore_v2: bool) -> Result<(), Box<dyn Error>> {
         let default_cfg = CdcConfig::default();
         if self.min_ts_interval.is_zero() {
             warn!(
@@ -2800,6 +2824,13 @@ impl CdcConfig {
             );
             self.incremental_scan_ts_filter_ratio = default_cfg.incremental_scan_ts_filter_ratio;
         }
+        if raftstore_v2 && self.hibernate_regions_compatible {
+            warn!(
+                "cdc.hibernate_regions_compatible is overwritten to false for partitioned-raft-kv"
+            );
+            self.hibernate_regions_compatible = false;
+        }
+
         Ok(())
     }
 }
@@ -3104,7 +3135,7 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub security: SecurityConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub import: ImportConfig,
 
     #[online_config(submodule)]
@@ -3113,8 +3144,7 @@ pub struct TikvConfig {
     #[online_config(submodule)]
     // The term "log backup" and "backup stream" are identity.
     // The "log backup" should be the only product name exposed to the user.
-    #[serde(rename = "log-backup")]
-    pub backup_stream: BackupStreamConfig,
+    pub log_backup: BackupStreamConfig,
 
     #[online_config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
@@ -3179,7 +3209,7 @@ impl Default for TikvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
-            backup_stream: BackupStreamConfig::default(),
+            log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
         }
@@ -3262,7 +3292,9 @@ impl TikvConfig {
         let kv_data_exists = if self.storage.engine == EngineType::RaftKv {
             RocksEngine::exists(&kv_db_path)
         } else {
-            Path::new(&self.storage.data_dir).join("tablets").exists()
+            Path::new(&self.storage.data_dir)
+                .join(DEFAULT_TABLET_SUB_DIR)
+                .exists()
         };
 
         RaftDataStateMachine::new(
@@ -3310,8 +3342,8 @@ impl TikvConfig {
             );
         }
 
-        if self.backup_stream.temp_path.is_empty() {
-            self.backup_stream.temp_path =
+        if self.log_backup.temp_path.is_empty() {
+            self.log_backup.temp_path =
                 config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-temp")?;
         }
 
@@ -3337,8 +3369,9 @@ impl TikvConfig {
             .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.import.validate()?;
         self.backup.validate()?;
-        self.backup_stream.validate()?;
-        self.cdc.validate()?;
+        self.log_backup.validate()?;
+        self.cdc
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         self.resolved_ts.validate()?;
@@ -4126,7 +4159,7 @@ impl From<&str> for Module {
             "security" => Module::Security,
             "import" => Module::Import,
             "backup" => Module::Backup,
-            "backup_stream" => Module::BackupStream,
+            "log_backup" => Module::BackupStream,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             "cdc" => Module::Cdc,
@@ -5622,7 +5655,7 @@ mod tests {
         cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
-        cfg.backup_stream.num_threads = default_cfg.backup_stream.num_threads;
+        cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later
@@ -5812,7 +5845,7 @@ mod tests {
             ("security", Module::Security),
             ("import", Module::Import),
             ("backup", Module::Backup),
-            ("backup_stream", Module::BackupStream),
+            ("log_backup", Module::BackupStream),
             ("pessimistic_txn", Module::PessimisticTxn),
             ("gc", Module::Gc),
             ("cdc", Module::Cdc),

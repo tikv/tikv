@@ -17,7 +17,7 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use file_system::{set_io_type, IoType};
+use file_system::{set_io_type, IoType, WithIoType};
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::{StateRole, INVALID_ID};
@@ -43,7 +43,7 @@ use tikv_util::{
     sys::SysQuota,
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
@@ -51,10 +51,10 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::{SharedReadTablet, SPLIT_PREFIX},
+    operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{pd, tablet_gc},
+    worker::{pd, tablet_flush, tablet_gc},
     Error, Result,
 };
 
@@ -62,6 +62,7 @@ use crate::{
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
+    pub store_id: u64,
     pub coprocessor_host: CoprocessorHost<EK>,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
@@ -392,6 +393,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 continue;
             }
             let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
+            // Keep the checkpoint even if source is destroyed.
+            if prefix == MERGE_SOURCE_PREFIX {
+                continue;
+            }
             let fsm = match peers.get(&region_id) {
                 Some((_, fsm)) => fsm,
                 None => {
@@ -405,14 +410,17 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             if prefix == SPLIT_PREFIX {
                 file_system::remove_dir_all(&path)?;
                 continue;
-            }
-            if prefix.is_empty() {
+            } else if prefix == MERGE_IN_PROGRESS_PREFIX {
+                continue;
+            } else if prefix.is_empty() {
                 // Stale split data can be deleted.
                 if fsm.peer().storage().tablet_index() > tablet_index {
                     file_system::remove_dir_all(&path)?;
                 }
+            } else {
+                debug_assert!(false, "unexpected tablet prefix: {}", path.display());
+                warn!(self.logger, "unexpected tablet prefix"; "path" => %path.display());
             }
-            // TODO: handle other prefix
         }
         // TODO: list all available tablets and destroy those which are not in the
         // peers.
@@ -432,6 +440,7 @@ where
         let cfg = self.cfg.value().clone();
         let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
+            store_id: self.store_id,
             trans: self.trans.clone(),
             current_time: None,
             has_ready: false,
@@ -465,6 +474,7 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub pd: Scheduler<pd::Task>,
     pub tablet_gc: Scheduler<tablet_gc::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
+    pub tablet_flush: Scheduler<tablet_flush::Task>,
 
     // Following is not maintained by raftstore itself.
     pub split_check: Scheduler<SplitCheckTask>,
@@ -488,6 +498,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     tablet_gc: Worker,
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
+    tablet_flush: Worker,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
@@ -495,12 +506,16 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
     fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
+        let tablet_flush = WorkerBuilder::new("tablet-flush-worker")
+            .thread_count(2)
+            .create();
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet_gc: Worker::new("tablet-gc-worker"),
             async_write: StoreWriters::new(None),
             purge,
+            tablet_flush,
             background,
         }
     }
@@ -510,6 +525,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         self.async_read.stop();
         self.pd.stop();
         self.tablet_gc.stop();
+        self.tablet_flush.stop();
         if let Some(w) = self.purge {
             w.stop();
         }
@@ -566,6 +582,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let logger = self.logger.clone();
             let router = router.clone();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(regions) => {
                         for r in regions {
@@ -621,7 +638,16 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let tablet_gc_scheduler = workers.tablet_gc.start_with_timer(
             "tablet-gc-worker",
-            tablet_gc::Runner::new(tablet_registry.clone(), self.logger.clone()),
+            tablet_gc::Runner::new(
+                tablet_registry.clone(),
+                sst_importer.clone(),
+                self.logger.clone(),
+            ),
+        );
+
+        let tablet_flush_scheduler = workers.tablet_flush.start(
+            "tablet-flush-worker",
+            tablet_flush::Runner::new(router.clone(), tablet_registry.clone(), self.logger.clone()),
         );
 
         let schedulers = Schedulers {
@@ -630,6 +656,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet_gc: tablet_gc_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
+            tablet_flush: tablet_flush_scheduler,
         };
 
         let builder = StorePollerBuilder::new(

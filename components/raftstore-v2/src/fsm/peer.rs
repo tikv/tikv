@@ -9,10 +9,11 @@ use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{errorpb, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{Config, TabletSnapManager, Transport};
-use slog::{debug, error, info, trace, Logger};
+use slog::{debug, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slog_panic,
     time::{duration_to_sec, Instant},
 };
 
@@ -159,12 +160,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         let mb = match self.store_ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
-                error!(
-                    self.fsm.logger(),
-                    "failed to get mailbox";
-                    "tick" => ?tick,
-                );
-                return;
+                if !self.fsm.peer.serving() || self.store_ctx.router.is_shutdown() {
+                    return;
+                }
+                slog_panic!(self.fsm.logger(), "failed to get mailbox"; "tick" => ?tick);
             }
         };
         self.fsm.tick_registry[idx] = true;
@@ -218,7 +217,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
             PeerTick::CompactLog => self.on_compact_log_tick(false),
             PeerTick::SplitRegionCheck => self.on_split_region_check(),
-            PeerTick::CheckMerge => unimplemented!(),
+            PeerTick::CheckMerge => self.fsm.peer_mut().on_check_merge(self.store_ctx),
             PeerTick::CheckPeerStaleState => unimplemented!(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
             PeerTick::CheckLeaderLease => unimplemented!(),
@@ -327,6 +326,26 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::TabletTrimmed { tablet_index } => {
                     self.fsm.peer_mut().on_tablet_trimmed(tablet_index)
                 }
+                PeerMsg::CleanupImportSst(ssts) => self
+                    .fsm
+                    .peer_mut()
+                    .on_cleanup_import_sst(self.store_ctx, ssts),
+                PeerMsg::AskCommitMerge(req) => {
+                    self.fsm.peer_mut().on_ask_commit_merge(self.store_ctx, req)
+                }
+                PeerMsg::AckCommitMerge { index, target_id } => {
+                    self.fsm.peer_mut().on_ack_commit_merge(index, target_id)
+                }
+                PeerMsg::RejectCommitMerge { index } => {
+                    self.fsm.peer_mut().on_reject_commit_merge(index)
+                }
+                PeerMsg::RedirectCatchUpLogs(c) => self
+                    .fsm
+                    .peer_mut()
+                    .on_redirect_catch_up_logs(self.store_ctx, c),
+                PeerMsg::CatchUpLogs(c) => self.fsm.peer_mut().on_catch_up_logs(self.store_ctx, c),
+                PeerMsg::CaptureChange(capture_change) => self.on_capture_change(capture_change),
+                PeerMsg::LeaderCallback(ch) => self.on_leader_callback(ch),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }

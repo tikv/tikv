@@ -14,12 +14,16 @@ use futures::{
     channel::mpsc,
     compat::{Compat, Future01CompatExt},
     executor::block_on,
-    future::{self, BoxFuture, FutureExt, TryFutureExt},
+    future::{self, BoxFuture, FutureExt, TryFlattenStream, TryFutureExt},
     sink::SinkExt,
-    stream::StreamExt,
+    stream::{ErrInto, StreamExt},
+    TryStreamExt,
 };
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
+    meta_storagepb::{
+        self as mpb, GetRequest, GetResponse, PutRequest, WatchRequest, WatchResponse,
+    },
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
@@ -33,6 +37,7 @@ use txn_types::TimeStamp;
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use super::{
+    meta_storage::{Get, MetaStorageClient, Put, Watch},
     metrics::*,
     util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
     BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
@@ -42,6 +47,7 @@ use super::{
 pub const CQ_COUNT: usize = 1;
 pub const CLIENT_PREFIX: &str = "pd";
 
+#[derive(Clone)]
 pub struct RpcClient {
     cluster_id: u64,
     pd_client: Arc<Client>,
@@ -1116,4 +1122,92 @@ impl PdClient for RpcClient {
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
+}
+
+impl RpcClient {
+    fn fill_cluster_id_for(&self, header: &mut mpb::RequestHeader) {
+        header.cluster_id = self.cluster_id;
+    }
+}
+
+impl MetaStorageClient for RpcClient {
+    fn get(&self, mut req: Get) -> PdFuture<GetResponse> {
+        let timer = Instant::now();
+        self.fill_cluster_id_for(req.inner.mut_header());
+        let executor = move |client: &Client, req: GetRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                let r = inner
+                    .meta_storage
+                    .get_async_opt(&req, call_option_inner(&inner));
+                futures::future::ready(r).err_into().try_flatten()
+            };
+            Box::pin(async move {
+                fail::fail_point!("meta_storage_get", req.key.ends_with(b"rejectme"), |_| {
+                    Err(super::Error::Grpc(grpcio::Error::RemoteStopped))
+                });
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .meta_storage_get
+                    .observe(timer.saturating_elapsed_secs());
+                Ok(resp)
+            }) as _
+        };
+
+        self.pd_client
+            .request(req.into(), executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn put(&self, mut req: Put) -> PdFuture<kvproto::meta_storagepb::PutResponse> {
+        let timer = Instant::now();
+        self.fill_cluster_id_for(req.inner.mut_header());
+        let executor = move |client: &Client, req: PutRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                let r = inner
+                    .meta_storage
+                    .put_async_opt(&req, call_option_inner(&inner));
+                futures::future::ready(r).err_into().try_flatten()
+            };
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .meta_storage_put
+                    .observe(timer.saturating_elapsed_secs());
+                Ok(resp)
+            }) as _
+        };
+
+        self.pd_client
+            .request(req.into(), executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn watch(&self, mut req: Watch) -> Self::WatchStream {
+        let timer = Instant::now();
+        self.fill_cluster_id_for(req.inner.mut_header());
+        let executor = move |client: &Client, req: WatchRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                inner.meta_storage.watch(&req)
+            };
+            Box::pin(async move {
+                let resp = handler?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .meta_storage_watch
+                    .observe(timer.saturating_elapsed_secs());
+                Ok(resp.err_into())
+            }) as _
+        };
+
+        self.pd_client
+            .request(req.into(), executor, LEADER_CHANGE_RETRY)
+            .execute()
+            .try_flatten_stream()
+    }
+
+    type WatchStream = TryFlattenStream<
+        PdFuture<ErrInto<grpcio::ClientSStreamReceiver<WatchResponse>, crate::Error>>,
+    >;
 }

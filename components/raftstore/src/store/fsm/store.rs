@@ -28,6 +28,7 @@ use engine_traits::{
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
+use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -120,6 +121,7 @@ pub struct StoreInfo<EK, ER> {
 /// of raftstore.
 pub trait StoreRegionMeta: Send {
     fn store_id(&self) -> u64;
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate>;
     fn region_read_progress(&self) -> &RegionReadProgressRegistry;
     fn search_region(&self, start_key: &[u8], end_key: &[u8], visitor: impl FnMut(&Region));
 }
@@ -188,6 +190,11 @@ impl StoreRegionMeta for StoreMeta {
     #[inline]
     fn region_read_progress(&self) -> &RegionReadProgressRegistry {
         &self.region_read_progress
+    }
+
+    #[inline]
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate> {
+        self.readers.get(&region_id)
     }
 }
 
@@ -1066,7 +1073,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     send_time: write_begin,
                     inspector: latency_inspect,
                 },
-                0,
+                None,
             ) {
                 warn!("send latency inspecting to write workers failed"; "err" => ?err);
             }
@@ -1540,6 +1547,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             let raft_clone = engines.raft.clone();
             let router_clone = self.router();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(regions) => {
                         for region_id in regions {
@@ -2464,6 +2472,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let snap_stats = self.ctx.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
+        stats.set_snapshot_stats(snap_stats.stats.into());
+
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])
             .set(snap_stats.sending_count as i64);

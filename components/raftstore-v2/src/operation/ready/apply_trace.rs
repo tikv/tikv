@@ -33,6 +33,7 @@ use engine_traits::{
     data_cf_offset, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS,
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
+use fail::fail_point;
 use kvproto::{
     metapb::Region,
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
@@ -404,6 +405,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
         apply_state.set_applied_index(applied_index);
+        let mut reset_apply_index = || {
+            // Make node reply from start.
+            fail_point!("RESET_APPLY_INDEX_WHEN_RESTART", |_| {
+                apply_state.set_applied_index(5);
+            });
+        };
+        reset_apply_index();
 
         Self::create(
             store_id,

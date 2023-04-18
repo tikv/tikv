@@ -11,19 +11,28 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, RaftEngineReadOnly};
+use engine_rocks::{RocksCfOptions, RocksDbOptions};
+use engine_traits::{Checkpointer, KvEngine, Peekable, RaftEngineReadOnly, SyncMutable, LARGE_CFS};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType, Snapshot};
-use raftstore::{store::*, Result};
+use raftstore::{
+    store::{snap::TABLET_SNAPSHOT_VERSION, *},
+    Result,
+};
 use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::server::snap::send_snap;
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use test_raftstore_v2::WrapFactory;
+use tikv::server::{snap::send_snap, tablet_snap::send_snap as send_snap_v2};
+use tikv_util::{
+    config::*,
+    time::{Instant, Limiter, UnixSecs},
+    HandyRwLock,
+};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
     cluster.cfg.rocksdb.titan.enabled = true;
@@ -508,7 +517,7 @@ fn test_inspected_snapshot() {
 #[test]
 fn test_gen_during_heavy_recv() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
+    cluster.cfg.server.snap_io_max_bytes_per_sec = ReadableSize(1024 * 1024);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -554,6 +563,7 @@ fn test_gen_during_heavy_recv() {
         snap_apply_state,
         true,
         true,
+        UnixSecs::now(),
     )
     .unwrap();
 
@@ -593,8 +603,14 @@ fn test_gen_during_heavy_recv() {
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     sleep_ms(500);
     must_get_equal(&cluster.get_engine(3), b"zzz-0000", b"value");
-    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
-    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
+
+    // store 1 and store 2 must send snapshot, so stats should record the snapshot.
+    let send_stats = cluster.get_snap_mgr(1).stats();
+    let recv_stats = cluster.get_snap_mgr(2).stats();
+    assert_eq!(send_stats.sending_count, 0);
+    assert_eq!(recv_stats.receiving_count, 0);
+    assert_ne!(send_stats.stats.len(), 0);
+    assert_ne!(recv_stats.stats.len(), 0);
     drop(cluster);
     let _ = th.join();
 }
@@ -721,4 +737,111 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     raft_engine.get_all_entries_to(1, &mut dest).unwrap();
     // No new log is proposed, so there should be no log at all.
     assert!(dest.is_empty(), "{:?}", dest);
+}
+
+fn generate_snap<EK: KvEngine>(
+    engine: &WrapFactory<EK>,
+    region_id: u64,
+    snap_mgr: &TabletSnapManager,
+) -> (RaftMessage, TabletSnapKey) {
+    let tablet = engine.get_tablet_by_id(region_id).unwrap();
+    let region_state = engine.region_local_state(region_id).unwrap().unwrap();
+    let apply_state = engine.raft_apply_state(region_id).unwrap().unwrap();
+
+    // Construct snapshot by hand
+    let mut snapshot = Snapshot::default();
+    snapshot.mut_metadata().set_term(apply_state.commit_term);
+    snapshot.mut_metadata().set_index(apply_state.applied_index);
+    let conf_state = raftstore::store::util::conf_state_from_region(region_state.get_region());
+    snapshot.mut_metadata().set_conf_state(conf_state);
+
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.set_region(region_state.get_region().clone());
+    snap_data.set_version(TABLET_SNAPSHOT_VERSION);
+    use protobuf::Message;
+    snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+    let snap_key = TabletSnapKey::from_region_snap(region_id, 1, &snapshot);
+    let checkpointer_path = snap_mgr.tablet_gen_path(&snap_key);
+    let mut checkpointer = tablet.new_checkpointer().unwrap();
+    checkpointer
+        .create_at(checkpointer_path.as_path(), None, 0)
+        .unwrap();
+
+    let mut msg = RaftMessage::default();
+    msg.region_id = region_id;
+    msg.set_to_peer(new_peer(1, 1));
+    msg.mut_message().set_snapshot(snapshot);
+    msg.mut_message().set_msg_type(MessageType::MsgSnapshot);
+    msg.set_region_epoch(region_state.get_region().get_region_epoch().clone());
+
+    (msg, snap_key)
+}
+
+#[test]
+fn test_v1_receive_snap_from_v2() {
+    let test_receive_snap = |key_num| {
+        let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
+        let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
+
+        cluster_v1
+            .cfg
+            .server
+            .labels
+            .insert(String::from("engine"), String::from("tiflash"));
+
+        cluster_v1.run();
+        cluster_v2.run();
+
+        let s1_addr = cluster_v1.get_addr(1);
+        let region = cluster_v2.get_region(b"");
+        let region_id = region.get_id();
+        let engine = cluster_v2.get_engine(1);
+        let tablet = engine.get_tablet_by_id(region_id).unwrap();
+
+        for i in 0..key_num {
+            let k = format!("zk{:04}", i);
+            tablet.put(k.as_bytes(), &random_long_vec(1024)).unwrap();
+        }
+
+        let snap_mgr = cluster_v2.get_snap_mgr(1);
+        let security_mgr = cluster_v2.get_security_mgr();
+        let (msg, snap_key) = generate_snap(&engine, region_id, &snap_mgr);
+        let cfg = tikv::server::Config::default();
+        let limit = Limiter::new(f64::INFINITY);
+        let env = Arc::new(Environment::new(1));
+        let _ = block_on(async {
+            send_snap_v2(env, snap_mgr, security_mgr, &cfg, &s1_addr, msg, limit)
+                .unwrap()
+                .await
+        });
+
+        // The snapshot has been received by cluster v1, so check it's completeness
+        let snap_mgr = cluster_v1.get_snap_mgr(1);
+        let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
+        let rocksdb = engine_rocks::util::new_engine_opt(
+            path.as_path().to_str().unwrap(),
+            RocksDbOptions::default(),
+            LARGE_CFS
+                .iter()
+                .map(|&cf| (cf, RocksCfOptions::default()))
+                .collect(),
+        )
+        .unwrap();
+
+        for i in 0..key_num {
+            let k = format!("zk{:04}", i);
+            assert!(
+                rocksdb
+                    .get_value_cf("default", k.as_bytes())
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    };
+
+    // test small snapshot
+    test_receive_snap(20);
+
+    // test large snapshot
+    test_receive_snap(5000);
 }

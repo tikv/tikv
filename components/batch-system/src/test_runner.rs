@@ -11,9 +11,8 @@ use std::{
     },
 };
 
-use collections::HashMap;
 use derive_more::{Add, AddAssign};
-use resource_control::ResourceMetered;
+use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
 use tikv_util::mpsc;
 
 use crate::*;
@@ -29,12 +28,11 @@ pub enum Message {
 }
 
 impl ResourceMetered for Message {
-    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
+    fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
         match self {
             Message::Resource(group_name, bytes) => {
-                let mut map = HashMap::default();
-                map.insert(group_name.to_owned(), *bytes);
-                Some(map)
+                resource_ctl.consume(group_name.as_bytes(), ResourceConsumeType::IoBytes(*bytes));
+                Some(group_name.to_owned())
             }
             _ => None,
         }

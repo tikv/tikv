@@ -47,6 +47,7 @@ const MAX_U8: u64 = u8::MAX as u64;
 const MAX_U16: u64 = u16::MAX as u64;
 const MAX_U32: u64 = u32::MAX as u64;
 
+#[derive(Clone)]
 pub struct Column {
     id: i64,
     value: ScalarValue,
@@ -89,8 +90,107 @@ impl Column {
     }
 }
 
+/// Checksum
+/// - HEADER(1 byte)
+///   - VER: version(3 bit)
+///   - E:   has extra checksum
+/// - CHECKSUM(4 bytes)
+///   - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
+pub trait ChecksumHandler {
+    // update_col updates the checksum with the encoded value of the column.
+    fn checksum(&mut self, buf: &[u8]) -> Result<()>;
+
+    // header_value returns the checksum header value.
+    fn header_value(&self) -> u8;
+
+    // value returns the checksum value.
+    fn value(&self) -> u32;
+}
+
+pub struct Crc32RowChecksumHandler {
+    header: ChecksumHeader,
+    hasher: crc32fast::Hasher,
+}
+
+impl ChecksumHandler for Crc32RowChecksumHandler {
+    fn checksum(&mut self, buf: &[u8]) -> Result<()> {
+        self.hasher.update(buf);
+        Ok(())
+    }
+
+    fn header_value(&self) -> u8 {
+        self.header.value()
+    }
+
+    fn value(&self) -> u32 {
+        self.hasher.clone().finalize()
+    }
+}
+
+pub struct ChecksumHeader(u8);
+
+impl ChecksumHeader {
+    fn new() -> Self {
+        ChecksumHeader(0)
+    }
+
+    #[cfg(test)]
+    fn set_version(&mut self, ver: u8) {
+        self.0 &= !0b111;
+        self.0 |= ver & 0b111;
+    }
+
+    fn set_extra_checksum(&mut self) {
+        self.0 |= 0b1000;
+    }
+
+    fn value(&self) -> u8 {
+        self.0
+    }
+}
+
+impl Crc32RowChecksumHandler {
+    pub fn new(has_extra_checksum: bool) -> Self {
+        let mut res = Crc32RowChecksumHandler {
+            header: ChecksumHeader::new(),
+            hasher: crc32fast::Hasher::new(),
+        };
+        if has_extra_checksum {
+            res.header.set_extra_checksum();
+        }
+
+        res
+    }
+}
+
+impl Default for Crc32RowChecksumHandler {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
 pub trait RowEncoder: NumberEncoder {
     fn write_row(&mut self, ctx: &mut EvalContext, columns: Vec<Column>) -> Result<()> {
+        self.write_row_impl(ctx, columns, None, None)
+    }
+
+    fn write_row_with_checksum(
+        &mut self,
+        ctx: &mut EvalContext,
+        columns: Vec<Column>,
+        extra_checksum: Option<u32>,
+    ) -> Result<()> {
+        let mut handler = Crc32RowChecksumHandler::new(extra_checksum.is_some());
+        self.write_row_impl(ctx, columns, Some(&mut handler), extra_checksum)
+    }
+
+    fn write_row_impl(
+        &mut self,
+        ctx: &mut EvalContext,
+        columns: Vec<Column>,
+        mut checksum_handler: Option<&mut dyn ChecksumHandler>,
+        extra_checksum: Option<u32>,
+    ) -> Result<()> {
         let mut is_big = false;
         let mut null_ids = Vec::with_capacity(columns.len());
         let mut non_null_ids = Vec::with_capacity(columns.len());
@@ -140,6 +240,18 @@ pub trait RowEncoder: NumberEncoder {
         }
         self.write_bytes(&offset_wtr)?;
         self.write_bytes(&value_wtr)?;
+
+        if let Some(checksum_handler) = checksum_handler.as_mut() {
+            let header_val = checksum_handler.header_value();
+            checksum_handler.checksum(value_wtr.as_slice())?;
+            let val = checksum_handler.value();
+            self.write_u8(header_val)?;
+            self.write_u32_le(val)?;
+            if let Some(extra) = extra_checksum {
+                self.write_u32_le(extra)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -226,11 +338,16 @@ impl<T: BufferWriter> ScalarValueEncoder for T {}
 mod tests {
     use std::str::FromStr;
 
+    use codec::number::NumberDecoder;
+
     use super::{Column, RowEncoder};
     use crate::{
         codec::{
             data_type::ScalarValue,
             mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
+            row::v2::encoder_for_test::{
+                ChecksumHandler, Crc32RowChecksumHandler, ScalarValueEncoder,
+            },
         },
         expr::EvalContext,
     };
@@ -302,5 +419,74 @@ mod tests {
         buf.write_row(&mut EvalContext::default(), cols).unwrap();
 
         assert_eq!(exp, buf);
+    }
+
+    #[test]
+    fn test_encode_checksum() {
+        let encode_col_values = |ctx: &mut EvalContext, non_null_cols: Vec<Column>| -> Vec<u8> {
+            let mut res = vec![];
+            for col in non_null_cols {
+                res.write_value(ctx, &col).unwrap();
+            }
+            res
+        };
+        let get_non_null_columns = |cols: &Vec<Column>| -> Vec<Column> {
+            let mut res = vec![];
+            for col in cols {
+                if col.value.is_some() {
+                    res.push(col.clone());
+                }
+            }
+            res.sort_by_key(|c| c.id);
+            res
+        };
+        let cols = vec![
+            Column::new(1, 1000),
+            Column::new(12, 2),
+            Column::new(335, ScalarValue::Int(None)),
+            Column::new(3, 3),
+            Column::new(8, 32767),
+        ];
+
+        let mut buf = vec![];
+        let mut handler = Crc32RowChecksumHandler::new(false);
+        handler.header.set_version(0);
+        buf.write_row_impl(
+            &mut EvalContext::default(),
+            cols.clone(),
+            Some(&mut handler),
+            None,
+        )
+        .unwrap();
+
+        let exp = {
+            let mut hasher = crc32fast::Hasher::new();
+            hasher.update(
+                encode_col_values(&mut EvalContext::default(), get_non_null_columns(&cols))
+                    .as_slice(),
+            );
+            hasher.finalize()
+        };
+        let mut val_slice = &buf[buf.len() - 4..];
+        assert_eq!(exp, handler.value());
+        assert_eq!(exp, val_slice.read_u32_le().unwrap());
+        assert_eq!(0, handler.header_value());
+
+        buf.clear();
+        let mut handler = Crc32RowChecksumHandler::new(true);
+        handler.header.set_version(1);
+        buf.write_row_impl(
+            &mut EvalContext::default(),
+            cols,
+            Some(&mut handler),
+            Some(exp),
+        )
+        .unwrap();
+        let mut val_slice = &buf[buf.len() - 4..];
+        let mut extra_val_slice = &buf[buf.len() - 8..buf.len() - 4];
+        assert_eq!(exp, handler.value());
+        assert_eq!(exp, val_slice.read_u32_le().unwrap());
+        assert_eq!(exp, extra_val_slice.read_u32_le().unwrap());
+        assert_eq!(9, handler.header_value());
     }
 }
