@@ -188,15 +188,11 @@ impl SchedPool {
             high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-worker-high")
                 .build_future_pool(),
         };
-        let priority = if let Some(ref r) = resource_ctl {
-            Some(PriorityQueue {
-                worker_pool: builder(pool_size, "sched-worker-priority")
-                    .build_priority_future_pool(r.clone()),
-                resource_ctl: r.clone(),
-            })
-        } else {
-            None
-        };
+        let priority = resource_ctl.as_ref().map(|r| PriorityQueue {
+            worker_pool: builder(pool_size, "sched-worker-priority")
+                .build_priority_future_pool(r.clone()),
+            resource_ctl: r.clone(),
+        });
         let queue_type = if resource_ctl.is_some() {
             info!("sched-worker pool use dynamic mode");
             QueueType::Dynamic
