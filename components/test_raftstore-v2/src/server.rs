@@ -328,7 +328,10 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let (snap_mgr, snap_mgs_path) = if !self.snap_mgrs.contains_key(&node_id) {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_path = tmp.path().to_str().unwrap().to_owned();
-            (TabletSnapManager::new(snap_path)?, Some(tmp))
+            (
+                TabletSnapManager::new(snap_path, key_manager.clone())?,
+                Some(tmp),
+            )
         } else {
             (self.snap_mgrs[&node_id].clone(), None)
         };

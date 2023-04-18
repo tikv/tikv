@@ -217,7 +217,8 @@ impl FileDictionaryFile {
         Ok(file_dict)
     }
 
-    /// Append an insert operation to the log file.
+    /// Append an insert operation to the log file. The record is guaranteed to
+    /// be persisted if `sync` is set.
     ///
     /// Warning: `self.write(file_dict)` must be called before.
     pub fn insert(&mut self, name: &str, info: &FileInfo, sync: bool) -> Result<()> {

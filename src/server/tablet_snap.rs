@@ -245,6 +245,7 @@ pub(crate) async fn cleanup_cache(
         let entry = entry?;
         let ft = entry.file_type()?;
         if ft.is_dir() {
+            // TODO(tabokie)
             fs::remove_dir_all(entry.path())?;
             continue;
         }
@@ -406,6 +407,7 @@ pub(crate) async fn recv_snap_files<'a>(
     let path = snap_mgr.tmp_recv_path(&context.key);
     info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
     if path.exists() {
+        // TODO(tabokie)
         fs::remove_dir_all(&path)?;
     }
     let (reused, missing_ssts) = if context.use_cache {

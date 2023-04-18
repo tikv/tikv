@@ -520,10 +520,11 @@ where
             .unwrap()
             .to_owned();
 
-        let snap_mgr = match TabletSnapManager::new(&snap_path) {
-            Ok(mgr) => mgr,
-            Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
-        };
+        let snap_mgr =
+            match TabletSnapManager::new(&snap_path, self.core.encryption_key_manager.clone()) {
+                Ok(mgr) => mgr,
+                Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
+            };
 
         // Create coprocessor endpoint.
         let cop_read_pool_handle = if self.core.config.readpool.coprocessor.use_unified_pool() {

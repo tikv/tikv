@@ -302,7 +302,8 @@ impl RunningState {
 
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
-        let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
+        let snap_mgr =
+            TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap(), None).unwrap();
         let coprocessor_host =
             CoprocessorHost::new(router.store_router().clone(), cop_cfg.value().clone());
         let importer = Arc::new(

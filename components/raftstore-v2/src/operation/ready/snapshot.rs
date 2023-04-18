@@ -156,8 +156,7 @@ pub fn install_tablet<EK: KvEngine>(
         source.display(),
         target_path.display()
     );
-    //
-    if let Some(m) = key_manager {
+    if let Some(m) = &key_manager {
         m.link_file(
             source.as_os_str().to_str().unwrap(),
             target_path.as_os_str().to_str().unwrap(),
@@ -165,7 +164,7 @@ pub fn install_tablet<EK: KvEngine>(
         .unwrap();
     }
     if let Err(e) = fs::rename(source, &target_path) {
-        if let Some(m) = key_manager {
+        if let Some(m) = &key_manager {
             m.delete_file(target_path.as_os_str().to_str().unwrap())
                 .unwrap();
         }
@@ -176,7 +175,7 @@ pub fn install_tablet<EK: KvEngine>(
             e
         );
     }
-    if let Some(m) = key_manager {
+    if let Some(m) = &key_manager {
         m.delete_file(source.as_os_str().to_str().unwrap()).unwrap();
     }
     true
@@ -677,6 +676,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
             if clean_split {
                 let path = temp_split_path(&reg, region_id);
+                // TODO(tabokie)
                 let _ = fs::remove_dir_all(path);
             }
         };

@@ -231,7 +231,10 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_path = tmp.path().to_str().unwrap().to_owned();
-            (TabletSnapManager::new(snap_path)?, Some(tmp))
+            (
+                TabletSnapManager::new(snap_path, key_manager.clone())?,
+                Some(tmp),
+            )
         } else {
             let trans = self.trans.core.lock().unwrap();
             let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];

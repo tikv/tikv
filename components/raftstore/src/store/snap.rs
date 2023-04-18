@@ -1928,7 +1928,7 @@ impl SnapManagerBuilder {
                 registry: Default::default(),
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
-                encryption_key_manager: self.key_manager,
+                encryption_key_manager: self.key_manager.clone(),
                 max_per_file_size: Arc::new(AtomicU64::new(u64::MAX)),
                 enable_multi_snapshot_files: Arc::new(AtomicBool::new(
                     self.enable_multi_snapshot_files,
@@ -1936,7 +1936,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
-            tablet_snap_manager: TabletSnapManager::new_without_init(&path_v2),
+            tablet_snap_manager: TabletSnapManager::new_without_init(&path_v2, self.key_manager),
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
@@ -2001,12 +2001,16 @@ impl Drop for ReceivingGuard<'_> {
 pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
+    pub key_manager: Option<Arc<DataKeyManager>>,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
     stats: Arc<Mutex<HashMap<TabletSnapKey, (Instant, SnapshotStat)>>>,
 }
 
 impl TabletSnapManager {
-    pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
+    pub fn new<T: Into<PathBuf>>(
+        path: T,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> io::Result<Self> {
         // Initialize the directory if it doesn't exist.
         let path = path.into();
         if !path.exists() {
@@ -2018,18 +2022,28 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_trash(&path)?;
+        file_system::clean_up_trash(&path, |p| {
+            if let Some(m) = &key_manager {
+                m.remove_dir(p.as_os_str().to_str().unwrap())?;
+            }
+            Ok(())
+        })?;
         Ok(Self {
             base: path,
+            key_manager,
             receiving: Arc::default(),
             stats: Arc::default(),
         })
     }
 
-    pub fn new_without_init<T: Into<PathBuf>>(path: T) -> Self {
+    pub fn new_without_init<T: Into<PathBuf>>(
+        path: T,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Self {
         let path = path.into();
         Self {
             base: path,
+            key_manager,
             receiving: Arc::default(),
             stats: Arc::default(),
         }
@@ -2045,8 +2059,12 @@ impl TabletSnapManager {
                 format!("{} should be a directory", self.base.display()),
             ));
         }
-        file_system::clean_up_trash(&self.base)?;
-        Ok(())
+        file_system::clean_up_trash(&self.base, |p| {
+            if let Some(m) = &self.key_manager {
+                m.remove_dir(p.as_os_str().to_str().unwrap())?;
+            }
+            Ok(())
+        })
     }
 
     pub fn begin_snapshot(&self, key: TabletSnapKey, start: Instant, generate_duration_sec: u64) {
@@ -2101,7 +2119,12 @@ impl TabletSnapManager {
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
-        if path.exists() && let Err(e) = file_system::trash_dir_all(&path) {
+        if path.exists() && let Err(e) = file_system::trash_dir_all(&path).and_then(|_| {
+            if let Some(m) = &self.key_manager {
+                m.remove_dir(path.as_os_str().to_str().unwrap())?
+            }
+            Ok(())
+        }) {
             error!(
                 "delete snapshot failed";
                 "path" => %path.display(),
@@ -3151,7 +3174,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let start = Instant::now();
-        let mgr = TabletSnapManager::new(snap_dir.path()).unwrap();
+        let mgr = TabletSnapManager::new(snap_dir.path(), None).unwrap();
         let key = TabletSnapKey::new(1, 1, 1, 1);
         mgr.begin_snapshot(key.clone(), start - time::Duration::from_secs(2), 1);
         // filter out the snapshot that is not finished

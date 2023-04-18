@@ -474,12 +474,24 @@ pub fn trash_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
 /// When using `trash_dir_all`, it's possible the directory is marked as trash
 /// but not being actually deleted after a restart. This function can be used
 /// to resume all those removal in the given directory.
+/// `f` will be called for every newly trashed directories.
 #[inline]
-pub fn clean_up_trash(path: impl AsRef<Path>) -> io::Result<()> {
+pub fn clean_up_trash<F: Fn(&Path) -> io::Result<()>>(
+    path: impl AsRef<Path>,
+    f: F,
+    // key_manager: Option<&DataKeyManager>,
+) -> io::Result<()> {
     for e in read_dir(path)? {
         let e = e?;
-        if e.file_name().to_string_lossy().starts_with(TRASH_PREFIX) {
+        let fname = e.file_name().to_string_lossy().to_string();
+        if fname.starts_with(TRASH_PREFIX) {
             remove_dir_all(e.path())?;
+            let original = e
+                .path()
+                .parent()
+                .unwrap()
+                .join(fname.strip_prefix(TRASH_PREFIX).unwrap());
+            f(&original)?;
         }
     }
     Ok(())
@@ -674,11 +686,11 @@ mod tests {
         assert!(!sub_dir0.exists());
         assert!(!trash_sub_dir0.exists());
 
-        clean_up_trash(data_path).unwrap();
+        clean_up_trash(data_path, |_| Ok(())).unwrap();
 
         create_dir_all(&trash_sub_dir0).unwrap();
         assert!(trash_sub_dir0.exists());
-        clean_up_trash(data_path).unwrap();
+        clean_up_trash(data_path, |_| Ok(())).unwrap();
         assert!(!trash_sub_dir0.exists());
     }
 }
