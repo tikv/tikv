@@ -1427,6 +1427,12 @@ impl SnapManager {
     }
 
     pub fn init(&self) -> io::Result<()> {
+        self.init_core()?;
+        self.tablet_snap_manager.init()?;
+        Ok(())
+    }
+
+    fn init_core(&self) -> io::Result<()> {
         let enc_enabled = self.core.encryption_key_manager.is_some();
         info!(
             "Initializing SnapManager, encryption is enabled: {}",
@@ -1457,7 +1463,6 @@ impl SnapManager {
             }
         }
 
-        self.tablet_snap_manager.init()?;
         Ok(())
     }
 
@@ -2208,7 +2213,7 @@ impl TabletSnapManager {
 #[cfg(test)]
 pub mod tests {
     use std::{
-        cmp,
+        cmp, fs,
         io::{self, Read, Seek, SeekFrom, Write},
         path::{Path, PathBuf},
         sync::{
@@ -3259,5 +3264,46 @@ pub mod tests {
             .tablet_snap_manager()
             .final_recv_path(&tablet_snap_key);
         assert_eq!(expect_path.to_str().unwrap(), s.tablet_snap_path().unwrap());
+    }
+
+    fn test_init() {
+        let builder = SnapManagerBuilder::default();
+        let snap_dir = Builder::new()
+            .prefix("test_snap_path_does_not_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path().join("snap");
+        let snap_mgr = builder.build(path.as_path().to_str().unwrap());
+        snap_mgr.init().unwrap();
+
+        assert!(path.exists());
+        let mut path = path.as_path().to_str().unwrap().to_string();
+        path.push_str("_v2");
+        assert!(Path::new(&path).exists());
+
+        let builder = SnapManagerBuilder::default();
+        let snap_dir = Builder::new()
+            .prefix("test_snap_path_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path();
+        let snap_mgr = builder.build(path.to_str().unwrap());
+        snap_mgr.init().unwrap();
+
+        let mut path = path.to_str().unwrap().to_string();
+        path.push_str("_v2");
+        assert!(Path::new(&path).exists());
+
+        let builder = SnapManagerBuilder::default();
+        let snap_dir = Builder::new()
+            .prefix("test_tablet_snap_path_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path().join("snap/v2");
+        fs::create_dir_all(path).unwrap();
+        let path = snap_dir.path().join("snap");
+        let snap_mgr = builder.build(path.to_str().unwrap());
+        snap_mgr.init().unwrap();
+        assert!(path.exists());
     }
 }
