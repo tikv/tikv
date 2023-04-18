@@ -15,7 +15,7 @@ use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Resu
 use std::error::Error;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
-use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::config::{self, ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 
@@ -175,18 +175,18 @@ impl<EK: KvEngine> ConfigManager for StorageConfigManger<EK> {
                 return Err("shared block cache is disabled".into());
             }
             if let Some(size) = block_cache.remove("capacity") {
-                let s: OptionReadableSize = size.into();
-                if let Some(size) = s.0 {
+                if size != ConfigValue::None {
+                    let s: ReadableSize = size.into();
                     // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
                     // the size through any of them. Here we change it through default CF in kvdb.
                     // A better way to do it is to hold the cache reference somewhere, and use it to
                     // change cache size.
                     let opt = self.kvdb.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-                    opt.set_block_cache_capacity(size.0)?;
+                    opt.set_block_cache_capacity(s.0)?;
                     // Write config to metric
                     CONFIG_ROCKSDB_GAUGE
                         .with_label_values(&[CF_DEFAULT, "block_cache_size"])
-                        .set(size.0 as f64);
+                        .set(s.0 as f64);
                 }
             }
         } else if let Some(v) = change.remove("ttl_check_poll_interval") {
@@ -269,7 +269,7 @@ impl Default for FlowControlConfig {
 pub struct BlockCacheConfig {
     #[online_config(skip)]
     pub shared: bool,
-    pub capacity: OptionReadableSize,
+    pub capacity: Option<ReadableSize>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
     #[online_config(skip)]
@@ -284,7 +284,7 @@ impl Default for BlockCacheConfig {
     fn default() -> BlockCacheConfig {
         BlockCacheConfig {
             shared: true,
-            capacity: OptionReadableSize(None),
+            capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
             high_pri_pool_ratio: 0.8,
@@ -298,7 +298,7 @@ impl BlockCacheConfig {
         if !self.shared {
             return None;
         }
-        let capacity = match self.capacity.0 {
+        let capacity = match self.capacity {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
                 ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
