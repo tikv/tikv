@@ -26,10 +26,10 @@ use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions}
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
-use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_proto::ConfChangeI;
 use raftstore::{
+    coprocessor::ObserveLevel,
     store::{
         cmd_resp,
         fsm::{
@@ -43,7 +43,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::{debug, error, info, warn};
+use slog::{debug, error, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -55,7 +55,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerTick},
+    router::{ApplyRes, ApplyTask, CmdResChannel},
 };
 
 mod admin;
@@ -69,13 +69,19 @@ pub use admin::{
 };
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};
-pub use write::{
-    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
-};
+use protobuf::Message;
+pub use write::{SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder};
+pub type SimpleWriteReqEncoder =
+    raftstore::store::simple_write::SimpleWriteReqEncoder<CmdResChannel>;
 
 use self::write::SimpleWrite;
 
-fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64, term: u64) -> M {
+pub(crate) fn parse_at<M: Message + Default>(
+    logger: &slog::Logger,
+    buf: &[u8],
+    index: u64,
+    term: u64,
+) -> M {
     let mut m = M::default();
     match m.merge_from_bytes(buf) {
         Ok(()) => m,
@@ -141,6 +147,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.entry_storage().applied_term(),
             buckets,
             store_ctx.sst_importer.clone(),
+            store_ctx.coprocessor_host.clone(),
             logger,
         );
 
@@ -394,17 +401,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
-        if self.pause_for_recovery()
-            && self.storage().entry_storage().commit_index() <= apply_res.applied_index
-        {
-            info!(self.logger, "recovery completed"; "apply_index" => apply_res.applied_index);
-            self.set_pause_for_recovery(false);
-            // Flush to avoid recover again and again.
-            if let Some(scheduler) = self.apply_scheduler() {
-                scheduler.send(ApplyTask::ManualFlush);
-            }
-            self.add_pending_tick(PeerTick::Raft);
-        }
+        self.try_compelete_recovery();
         if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
@@ -463,7 +460,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
-        let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
+        let decoder = match SimpleWriteReqDecoder::new(
+            |buf, index, term| parse_at(&self.logger, buf, index, term),
+            &self.logger,
+            &data,
+            u64::MAX,
+            u64::MAX,
+        ) {
             Ok(decoder) => decoder,
             Err(req) => unreachable!("unexpected request: {:?}", req),
         };
@@ -527,8 +530,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     wb.set_save_point();
                     set_save_point = true;
                 }
-                let resp = match self.apply_entry(&e).await {
-                    Ok(resp) => resp,
+                let (req, resp) = match self.apply_entry(&e).await {
+                    Ok(req_resp) => req_resp,
                     Err(e) => {
                         if let Some(wb) = &mut self.write_batch {
                             if set_save_point {
@@ -537,9 +540,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 wb.clear();
                             }
                         }
-                        cmd_resp::new_error(e)
+                        (RaftCmdRequest::default(), cmd_resp::new_error(e))
                     }
                 };
+                self.observe_apply(e.get_index(), e.get_term(), req, &resp);
                 self.callbacks_mut().push((ch, resp));
             } else {
                 assert!(ch.is_empty());
@@ -551,11 +555,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 
     #[inline]
-    async fn apply_entry(&mut self, entry: &Entry) -> Result<RaftCmdResponse> {
+    async fn apply_entry(&mut self, entry: &Entry) -> Result<(RaftCmdRequest, RaftCmdResponse)> {
         let mut conf_change = None;
         let log_index = entry.get_index();
         let req = match entry.get_entry_type() {
             EntryType::EntryNormal => match SimpleWriteReqDecoder::new(
+                |buf, index, term| parse_at(&self.logger, buf, index, term),
                 &self.logger,
                 entry.get_data(),
                 log_index,
@@ -569,7 +574,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         true,
                         true,
                     )?;
-                    let res = Ok(new_response(decoder.header()));
+                    let mut req = RaftCmdRequest::default();
+                    if self.observe().level != ObserveLevel::None {
+                        req = decoder.to_raft_cmd_request();
+                    }
+                    let resp = new_response(decoder.header());
                     for req in decoder {
                         match req {
                             SimpleWrite::Put(put) => {
@@ -592,7 +601,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             }
                         }
                     }
-                    return res;
+                    return Ok((req, resp));
                 }
                 Err(req) => req,
             },
@@ -650,7 +659,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);
-            Ok(resp)
+            Ok((req, resp))
         } else {
             for r in req.get_requests() {
                 match r.get_cmd_type() {
@@ -677,7 +686,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     _ => unimplemented!(),
                 }
             }
-            Ok(new_response(req.get_header()))
+            let resp = new_response(req.get_header());
+            Ok((req, resp))
         }
     }
 
@@ -764,6 +774,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if let Some(buckets) = &mut self.buckets {
             buckets.clear_stats();
         }
+
+        // Call it before invoking callback for preventing Commit is executed before
+        // Prewrite is observed.
+        self.flush_observed_apply();
 
         // Report result first and then invoking callbacks. This may delays callback a
         // little bit, but can make sure all following messages must see the side

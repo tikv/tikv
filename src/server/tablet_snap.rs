@@ -123,7 +123,7 @@ impl SnapCacheBuilder for NoSnapshotCache {
     }
 }
 
-struct RecvTabletSnapContext<'a> {
+pub(crate) struct RecvTabletSnapContext<'a> {
     key: TabletSnapKey,
     raft_msg: RaftMessage,
     use_cache: bool,
@@ -134,7 +134,7 @@ struct RecvTabletSnapContext<'a> {
 }
 
 impl<'a> RecvTabletSnapContext<'a> {
-    fn new(mut head: TabletSnapshotRequest, mgr: &'a TabletSnapManager) -> Result<Self> {
+    pub(crate) fn new(mut head: TabletSnapshotRequest, mgr: &'a TabletSnapManager) -> Result<Self> {
         if !head.has_head() {
             return Err(box_err!("no raft message in the first chunk"));
         }
@@ -161,7 +161,7 @@ impl<'a> RecvTabletSnapContext<'a> {
         })
     }
 
-    fn finish<R: RaftExtension>(self, raft_router: R) -> Result<()> {
+    pub fn finish<R: RaftExtension>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         raft_router.feed(self.raft_msg, true);
         info!("saving all snapshot files"; "snap_key" => %key, "takes" => ?self.start.saturating_elapsed());
@@ -169,7 +169,7 @@ impl<'a> RecvTabletSnapContext<'a> {
     }
 }
 
-fn io_type_from_raft_message(msg: &RaftMessage) -> Result<IoType> {
+pub(crate) fn io_type_from_raft_message(msg: &RaftMessage) -> Result<IoType> {
     let snapshot = msg.get_message().get_snapshot();
     let data = snapshot.get_data();
     let mut snapshot_data = RaftSnapshotData::default();
@@ -194,7 +194,7 @@ fn protocol_error(exp: &str, act: impl Debug) -> Error {
 /// actual data of an SST;
 /// 3. The last `PREVIEW_CHUNK_LEN` bytes are the same, this contains checksum,
 /// properties and other medata of an SST.
-async fn is_sst_match_preview(
+pub(crate) async fn is_sst_match_preview(
     preview_meta: &TabletSnapshotFileMeta,
     target: &Path,
     buffer: &mut Vec<u8>,
@@ -233,7 +233,7 @@ async fn is_sst_match_preview(
     Ok(*buffer == preview_meta.trailing_chunk)
 }
 
-async fn cleanup_cache(
+pub(crate) async fn cleanup_cache(
     path: &Path,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
     sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
@@ -291,7 +291,7 @@ async fn cleanup_cache(
     Ok((reused, missing))
 }
 
-async fn accept_one_file(
+pub(crate) async fn accept_one_file(
     path: &Path,
     mut chunk: TabletSnapshotFileChunk,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
@@ -334,7 +334,7 @@ async fn accept_one_file(
     }
 }
 
-async fn accept_missing(
+pub(crate) async fn accept_missing(
     path: &Path,
     missing_ssts: Vec<String>,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
@@ -380,7 +380,7 @@ async fn accept_missing(
     }
 }
 
-async fn recv_snap_files<'a>(
+pub(crate) async fn recv_snap_files<'a>(
     snap_mgr: &'a TabletSnapManager,
     cache_builder: impl SnapCacheBuilder,
     mut stream: impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin,
@@ -427,7 +427,7 @@ async fn recv_snap_files<'a>(
     Ok(context)
 }
 
-async fn recv_snap<R: RaftExtension + 'static>(
+pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
     stream: RequestStream<TabletSnapshotRequest>,
     sink: DuplexSink<TabletSnapshotResponse>,
     snap_mgr: TabletSnapManager,
