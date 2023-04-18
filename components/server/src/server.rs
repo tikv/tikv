@@ -190,7 +190,6 @@ pub fn run_tikv(config: TikvConfig) {
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
-const DEFAULT_STORAGE_SCHED_POOL_SIZE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
 struct TikvServer<ER: RaftEngine> {

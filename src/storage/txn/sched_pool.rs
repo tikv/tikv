@@ -3,10 +3,7 @@
 use std::{
     cell::RefCell,
     mem,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
 };
 
 use collections::HashMap;
