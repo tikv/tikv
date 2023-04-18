@@ -2094,7 +2094,7 @@ impl TabletSnapManager {
         PathBuf::from(&self.base).join(prefix)
     }
 
-    pub fn delete_snapshot(&self, region_id: u64, to_peer: u64) -> Result<()> {
+    pub fn delete_snapshot(&self, region_id: u64, to_peer: Option<u64>) -> Result<()> {
         for f in file_system::read_dir(&self.base)? {
             let entry = f?;
             let ft = entry.file_type()?;
@@ -2103,7 +2103,6 @@ impl TabletSnapManager {
             }
             let os_name = entry.file_name();
             let name = os_name.to_str().unwrap().to_string();
-
             let parts = name
                 .split('_')
                 .skip(1)
@@ -2112,7 +2111,10 @@ impl TabletSnapManager {
             if parts.len() < 4 {
                 continue;
             }
-            if parts[0] == region_id && parts[1] == to_peer {
+            if let Some(id) = to_peer&&parts[1] != id {
+                continue;
+            }
+            if parts[0] == region_id {
                 file_system::trash_dir_all(entry.path())?
             }
         }
@@ -3222,9 +3224,14 @@ pub mod tests {
         let gen1 = mgr.tablet_gen_path(&key);
         std::fs::create_dir_all(&gen1).unwrap();
         assert!(gen1.exists());
-        mgr.delete_snapshot(1, 3).unwrap();
+        mgr.delete_snapshot(1, Some(3)).unwrap();
         assert!(gen1.exists());
-        mgr.delete_snapshot(1, 2).unwrap();
+        mgr.delete_snapshot(1, Some(2)).unwrap();
+        assert!(!gen1.exists());
+
+        std::fs::create_dir_all(&gen1).unwrap();
+        assert!(gen1.exists());
+        mgr.delete_snapshot(1, None).unwrap();
         assert!(!gen1.exists());
     }
 }
