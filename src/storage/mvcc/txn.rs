@@ -246,7 +246,7 @@ pub(crate) fn make_txn_error(
 ) -> crate::storage::mvcc::ErrorInner {
     use kvproto::kvrpcpb::WriteConflictReason;
 
-    use crate::storage::mvcc::ErrorInner;
+    use crate::storage::mvcc::{ErrorInner, PessimisticLockNotFoundReason};
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {
