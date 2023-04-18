@@ -13,6 +13,7 @@
 //! 4. there will be no callback leak.
 
 use std::{
+    any::Any,
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     future::Future,
@@ -471,6 +472,36 @@ impl CmdResChannelBuilder {
     }
 }
 
+pub type AnyResChannel = BaseChannel<(RaftCmdResponse, Option<Box<dyn Any + Send + Sync>>)>;
+
+impl Debug for AnyResChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "AnyResChannel")
+    }
+}
+
+impl ErrorCallback for AnyResChannel {
+    fn report_error(self, err: RaftCmdResponse) {
+        self.set_result((err, None));
+    }
+
+    fn is_none(&self) -> bool {
+        false
+    }
+}
+
+pub type AnyResSubscriber = BaseSubscriber<(RaftCmdResponse, Option<Box<dyn Any + Send + Sync>>)>;
+
+pub fn build_any_channel(
+    f: Box<dyn FnOnce(&mut (RaftCmdResponse, Option<Box<dyn Any + Send + Sync>>)) + Send>,
+) -> (AnyResChannel, AnyResSubscriber) {
+    let (c, s) = pair();
+    unsafe {
+        *c.core.before_set.get() = Some(f);
+    }
+    (c, s)
+}
+
 impl CmdResChannel {
     // Valid range is [1, 30]
     const PROPOSED_EVENT: u64 = 1;
@@ -584,6 +615,16 @@ impl QueryResChannel {
     #[inline]
     pub fn pair() -> (Self, QueryResSubscriber) {
         pair()
+    }
+
+    pub fn with_callback(
+        f: Box<dyn FnOnce(&mut QueryResult) + Send>,
+    ) -> (Self, QueryResSubscriber) {
+        let (c, s) = pair();
+        unsafe {
+            *c.core.before_set.get() = Some(f);
+        }
+        (c, s)
     }
 }
 

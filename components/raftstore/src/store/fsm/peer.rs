@@ -2796,8 +2796,9 @@ where
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
             // It's v2 only message and ignore does no harm.
-            ExtraMessageType::MsgGcPeerRequest | ExtraMessageType::MsgGcPeerResponse => (),
-            ExtraMessageType::MsgFlushMemtable => (),
+            ExtraMessageType::MsgGcPeerRequest
+            | ExtraMessageType::MsgGcPeerResponse
+            | ExtraMessageType::MsgFlushMemtable => (),
         }
     }
 

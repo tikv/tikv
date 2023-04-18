@@ -24,11 +24,8 @@ use kvproto::{
 use pd_client::PdClient;
 use protobuf::Message;
 use raftstore::{
-    router::RaftStoreRouter,
-    store::{
-        msg::{Callback, SignificantMsg},
-        util::RegionReadProgressRegistry,
-    },
+    router::CdcHandle,
+    store::{msg::Callback, util::RegionReadProgressRegistry},
 };
 use security::SecurityManager;
 use tikv_util::{
@@ -225,18 +222,18 @@ impl LeadershipResolver {
         &self,
         regions: Vec<u64>,
         min_ts: TimeStamp,
-        raft_router: T,
+        cdc_handle: T,
     ) -> Vec<u64>
     where
-        T: 'static + RaftStoreRouter<E>,
+        T: 'static + CdcHandle<E>,
         E: KvEngine,
     {
         let mut reqs = Vec::with_capacity(regions.len());
         for region_id in regions {
-            let raft_router_clone = raft_router.clone();
+            let cdc_handle_clone = cdc_handle.clone();
             let req = async move {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                let msg = SignificantMsg::LeaderCallback(Callback::read(Box::new(move |resp| {
+                let callback = Callback::read(Box::new(move |resp| {
                     let resp = if resp.response.get_header().has_error() {
                         None
                     } else {
@@ -245,8 +242,8 @@ impl LeadershipResolver {
                     if tx.send(resp).is_err() {
                         error!("cdc send tso response failed"; "region_id" => region_id);
                     }
-                })));
-                if let Err(e) = raft_router_clone.significant_send(region_id, msg) {
+                }));
+                if let Err(e) = cdc_handle_clone.check_leadership(region_id, callback) {
                     warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
                     return None;
                 }

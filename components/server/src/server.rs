@@ -55,7 +55,7 @@ use raftstore::{
         config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
         CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
     },
-    router::ServerRaftStoreRouter,
+    router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
         fsm,
@@ -95,6 +95,7 @@ use tikv::{
     },
     storage::{
         self,
+        config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
@@ -933,11 +934,12 @@ where
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),
-            self.router.clone(),
-            self.engines.as_ref().unwrap().engines.kv.clone(),
+            CdcRaftRouter(self.router.clone()),
+            LocalTablets::Singleton(self.engines.as_ref().unwrap().engines.kv.clone()),
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
@@ -954,7 +956,7 @@ where
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &self.core.config.resolved_ts,
                 rts_worker.scheduler(),
-                self.router.clone(),
+                CdcRaftRouter(self.router.clone()),
                 engines.store_meta.clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
