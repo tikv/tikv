@@ -58,7 +58,7 @@ use super::merge_source_path;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
-    operation::{AdminCmdResult, SimpleWriteReqDecoder},
+    operation::{command::parse_at, AdminCmdResult, SimpleWriteReqDecoder},
     raft::{Apply, Peer},
     router::CmdResChannel,
 };
@@ -263,6 +263,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 continue;
             }
             let Err(cmd) = SimpleWriteReqDecoder::new(
+                |buf, index, term| parse_at(&self.logger, buf, index, term),
                 &self.logger,
                 entry.get_data(),
                 entry.get_index(),

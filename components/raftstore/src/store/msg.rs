@@ -507,7 +507,7 @@ where
         store_id: u64,
         group_id: u64,
     },
-    /// Capture the changes of the region.
+    /// Capture changes of a region.
     CaptureChange {
         cmd: ChangeObserver,
         region_epoch: RegionEpoch,

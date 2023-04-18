@@ -25,7 +25,7 @@ use raftstore::{
         TabletSnapManager, WriteTask,
     },
 };
-use slog::Logger;
+use slog::{info, Logger};
 use tikv_util::slog_panic;
 
 use super::storage::Storage;
@@ -35,7 +35,7 @@ use crate::{
         AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress, GcPeerContext,
         MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
     },
-    router::{CmdResChannel, PeerTick, QueryResChannel},
+    router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
 
@@ -462,6 +462,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn pause_for_recovery(&self) -> bool {
         self.pause_for_recovery
+    }
+
+    #[inline]
+    // we may have skipped scheduling raft tick when start due to noticable gap
+    // between commit index and apply index. We should scheduling it when raft log
+    // apply catches up.
+    pub fn try_compelete_recovery(&mut self) {
+        if self.pause_for_recovery()
+            && self.storage().entry_storage().commit_index()
+                <= self.storage().entry_storage().applied_index()
+        {
+            info!(
+                self.logger,
+                "recovery completed";
+                "apply_index" =>  self.storage().entry_storage().applied_index()
+            );
+            self.set_pause_for_recovery(false);
+            // Flush to avoid recover again and again.
+            if let Some(scheduler) = self.apply_scheduler() {
+                scheduler.send(ApplyTask::ManualFlush);
+            }
+            self.add_pending_tick(PeerTick::Raft);
+        }
     }
 
     #[inline]
