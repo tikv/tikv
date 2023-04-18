@@ -1,10 +1,24 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+=======
+use std::{
+    collections::hash_map::Entry,
+    io::{Error as IoError, ErrorKind, Result as IoResult},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    thread::JoinHandle,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+>>>>>>> a4a287980c (encryption: fix key collision handling (#14586))
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
@@ -273,11 +287,15 @@ impl Dicts {
         Ok(Some(()))
     }
 
-    fn rotate_key(&self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<()> {
+    fn rotate_key(&self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
         info!("encryption: rotate data key."; "key_id" => key_id);
         {
             let mut key_dict = self.key_dict.lock().unwrap();
-            key_dict.keys.insert(key_id, key);
+            match key_dict.keys.entry(key_id) {
+                // key id collides
+                Entry::Occupied(_) => return Ok(false),
+                Entry::Vacant(e) => e.insert(key),
+            };
             key_dict.current_key_id = key_id;
         };
 
@@ -285,7 +303,7 @@ impl Dicts {
         self.save_key_dict(master_key)?;
         // Update current data key id.
         self.current_key_id.store(key_id, Ordering::SeqCst);
-        Ok(())
+        Ok(true)
     }
 
     fn maybe_rotate_data_key(
@@ -323,6 +341,7 @@ impl Dicts {
         let duration = now.duration_since(UNIX_EPOCH).unwrap();
         let creation_time = duration.as_secs();
 
+<<<<<<< HEAD
         let (key_id, key) = generate_data_key(method);
         let data_key = DataKey {
             key,
@@ -332,6 +351,32 @@ impl Dicts {
             ..Default::default()
         };
         self.rotate_key(key_id, data_key, master_key)
+=======
+        // Generate new data key.
+        let generate_limit = 10;
+        for _ in 0..generate_limit {
+            let (key_id, key) = generate_data_key(method);
+            if key_id == 0 {
+                // 0 is invalid
+                continue;
+            }
+            let data_key = DataKey {
+                key,
+                method,
+                creation_time,
+                was_exposed: false,
+                ..Default::default()
+            };
+
+            let ok = self.rotate_key(key_id, data_key, master_key)?;
+            if !ok {
+                // key id collides, retry
+                continue;
+            }
+            return Ok(());
+        }
+        Err(box_err!("key id collides {} times!", generate_limit))
+>>>>>>> a4a287980c (encryption: fix key collision handling (#14586))
     }
 }
 
