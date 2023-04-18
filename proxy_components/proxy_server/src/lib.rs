@@ -18,7 +18,6 @@ extern crate tikv_util;
 
 #[macro_use]
 pub mod config;
-pub mod common;
 pub mod common_override;
 pub mod engine;
 pub mod hacked_lock_mgr;

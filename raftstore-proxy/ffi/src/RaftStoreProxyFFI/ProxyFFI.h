@@ -59,6 +59,17 @@ struct StoreStats {
   uint64_t engine_keys_read;
 };
 
+enum class SSTFormatKind : uint16_t {
+  KIND_SST = 0,
+  KIND_TABLET,
+};
+
+enum class EngineIteratorSeekType : uint16_t {
+  Key = 0,
+  First,
+  Last,
+};
+
 enum class RaftProxyStatus : uint8_t {
   Idle = 0,
   Running,
@@ -154,7 +165,7 @@ struct RaftStoreProxyPtr {
 
 struct SSTReaderPtr {
   RawVoidPtr inner;
-  uint64_t kind;
+  SSTFormatKind kind;
 };
 
 struct SSTReaderInterfaces {
@@ -164,6 +175,9 @@ struct SSTReaderInterfaces {
   BaseBuffView (*fn_value)(SSTReaderPtr, ColumnFamilyType);
   void (*fn_next)(SSTReaderPtr, ColumnFamilyType);
   void (*fn_gc)(SSTReaderPtr, ColumnFamilyType);
+  SSTFormatKind (*fn_kind)(SSTReaderPtr, ColumnFamilyType);
+  void (*fn_seek)(SSTReaderPtr, ColumnFamilyType, EngineIteratorSeekType,
+                  BaseBuffView);
 };
 
 enum class MsgPBType : uint32_t {

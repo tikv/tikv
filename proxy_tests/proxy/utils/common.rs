@@ -13,6 +13,7 @@ pub use engine_traits::{
     MiscExt, Mutable, Peekable, RaftEngineDebug, RaftLogBatch, WriteBatch, CF_DEFAULT, CF_LOCK,
     CF_RAFT, CF_WRITE,
 };
+pub use futures::executor::block_on;
 pub use kvproto::{
     import_sstpb::SstMeta,
     metapb,

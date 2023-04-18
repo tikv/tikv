@@ -2,7 +2,6 @@
 pub use std::sync::*;
 
 pub use collections::HashMap;
-pub use futures::executor::block_on;
 pub use grpcio::{ChannelBuilder, Environment};
 pub use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 pub use mock_engine_store::mock_cluster::v1::{

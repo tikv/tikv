@@ -48,6 +48,14 @@ pub fn name_to_cf(cf: &str) -> ColumnFamilyType {
     }
 }
 
+pub fn cf_to_name(cf: ColumnFamilyType) -> &'static str {
+    match cf {
+        ColumnFamilyType::Default => CF_DEFAULT,
+        ColumnFamilyType::Lock => CF_LOCK,
+        ColumnFamilyType::Write => CF_WRITE,
+    }
+}
+
 impl From<usize> for ColumnFamilyType {
     fn from(i: usize) -> Self {
         match i {

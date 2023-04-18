@@ -108,6 +108,19 @@ pub mod root {
             pub engine_bytes_read: u64,
             pub engine_keys_read: u64,
         }
+        #[repr(u16)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum SSTFormatKind {
+            KIND_SST = 0,
+            KIND_TABLET = 1,
+        }
+        #[repr(u16)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum EngineIteratorSeekType {
+            Key = 0,
+            First = 1,
+            Last = 2,
+        }
         #[repr(u8)]
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
         pub enum RaftProxyStatus {
@@ -210,7 +223,7 @@ pub mod root {
         #[derive(Debug)]
         pub struct SSTReaderPtr {
             pub inner: root::DB::RawVoidPtr,
-            pub kind: u64,
+            pub kind: root::DB::SSTFormatKind,
         }
         #[repr(C)]
         #[derive(Debug)]
@@ -249,6 +262,20 @@ pub mod root {
                 unsafe extern "C" fn(
                     arg1: root::DB::SSTReaderPtr,
                     arg2: root::DB::ColumnFamilyType,
+                ),
+            >,
+            pub fn_kind: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    arg2: root::DB::ColumnFamilyType,
+                ) -> root::DB::SSTFormatKind,
+            >,
+            pub fn_seek: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    arg2: root::DB::ColumnFamilyType,
+                    arg3: root::DB::EngineIteratorSeekType,
+                    arg4: root::DB::BaseBuffView,
                 ),
             >,
         }
@@ -586,7 +613,7 @@ pub mod root {
                 ) -> root::DB::FastAddPeerRes,
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 15438096667077497650;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 3617226644007633432;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

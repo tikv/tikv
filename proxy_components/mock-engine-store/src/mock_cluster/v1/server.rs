@@ -827,6 +827,10 @@ impl Cluster<ServerCluster> {
         }
         panic!("failed to get snapshot of region {}", region_id);
     }
+
+    pub fn get_addr(&self, node_id: u64) -> String {
+        self.sim.rl().get_addr(node_id)
+    }
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {

@@ -66,7 +66,10 @@ use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
-use server::memory::*;
+use server::{
+    common::{check_system_config, EngineMetricsManager, TikvServerCore},
+    memory::*,
+};
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
@@ -106,14 +109,8 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    common::{check_system_config, EngineMetricsManager, TikvServerCore},
-    common_override::*,
-    config::ProxyConfig,
-    engine::ProxyRocksEngine,
-    fatal,
-    hacked_lock_mgr::HackedLockManager as LockManager,
-    setup::*,
-    status_server::StatusServer,
+    common_override::*, config::ProxyConfig, engine::ProxyRocksEngine, fatal,
+    hacked_lock_mgr::HackedLockManager as LockManager, setup::*, status_server::StatusServer,
     util::ffi_server_info,
 };
 

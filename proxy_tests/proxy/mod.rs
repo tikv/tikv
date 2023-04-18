@@ -23,6 +23,7 @@ mod replica_read;
 mod server_cluster_test;
 mod snapshot;
 mod store;
+mod tablet_snapshot;
 mod utils;
 mod v1_specific;
 mod v2_specific;

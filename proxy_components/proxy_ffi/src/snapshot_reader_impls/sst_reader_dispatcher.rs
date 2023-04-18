@@ -4,8 +4,8 @@
 use super::{sst_file_reader::*, tablet_reader::TabletReader, LockCFFileReader};
 use crate::{
     interfaces_ffi::{
-        BaseBuffView, ColumnFamilyType, RaftStoreProxyPtr, SSTReaderInterfaces, SSTReaderPtr,
-        SSTView,
+        BaseBuffView, ColumnFamilyType, EngineIteratorSeekType, RaftStoreProxyPtr, SSTFormatKind,
+        SSTReaderInterfaces, SSTReaderPtr, SSTView,
     },
     raftstore_proxy_helper_impls::RaftStoreProxyFFI,
 };
@@ -20,6 +20,8 @@ impl Clone for SSTReaderInterfaces {
             fn_value: self.fn_value.clone(),
             fn_next: self.fn_next.clone(),
             fn_gc: self.fn_gc.clone(),
+            fn_kind: self.fn_kind.clone(),
+            fn_seek: self.fn_seek.clone(),
         }
     }
 }
@@ -27,30 +29,36 @@ impl Clone for SSTReaderInterfaces {
 /// All impl of SST reader will be dispatched by this ptr.
 impl SSTReaderPtr {
     unsafe fn as_mut_sst_lock(&mut self) -> &mut LockCFFileReader {
-        assert_eq!(self.kind, KIND_SST);
+        assert_eq!(self.kind, SSTFormatKind::KIND_SST);
         &mut *(self.inner as *mut LockCFFileReader)
     }
 
     unsafe fn as_mut_sst_other(&mut self) -> &mut SSTFileReader {
-        assert_eq!(self.kind, KIND_SST);
+        assert_eq!(self.kind, SSTFormatKind::KIND_SST);
         &mut *(self.inner as *mut SSTFileReader)
     }
 
     unsafe fn as_mut_tablet(&mut self) -> &mut TabletReader {
-        assert_eq!(self.kind, KIND_TABLET);
+        assert_eq!(self.kind, SSTFormatKind::KIND_TABLET);
         &mut *(self.inner as *mut TabletReader)
     }
 
-    pub fn parse_kind(_view: &SSTView) -> u64 {
-        // TODO
-        // let s = view.path.to_slice();
-        KIND_SST
+    pub fn parse_kind(view: &SSTView) -> SSTFormatKind {
+        let s = view.path.to_slice();
+        if s.starts_with(b"!") {
+            return SSTFormatKind::KIND_TABLET;
+        }
+        SSTFormatKind::KIND_SST
     }
 
     // TiKV don't make guarantee that a v1 sst file ends with ".sst".
     // So instead we mark v2's tablet format with prefix "!".
     pub fn encode_v2(s: &str) -> String {
         "!".to_owned() + s
+    }
+
+    pub fn decode_v2(s: &str) -> &str {
+        &s[1..]
     }
 }
 
@@ -81,16 +89,15 @@ pub unsafe extern "C" fn ffi_make_sst_reader(
     let path = std::str::from_utf8_unchecked(view.path.to_slice());
     let key_manager = proxy_ptr.as_ref().maybe_key_manager();
     match SSTReaderPtr::parse_kind(&view) {
-        KIND_SST => match view.type_ {
+        SSTFormatKind::KIND_SST => match view.type_ {
             ColumnFamilyType::Lock => {
                 LockCFFileReader::ffi_get_cf_file_reader(path, key_manager.as_ref())
             }
             _ => SSTFileReader::ffi_get_cf_file_reader(path, key_manager.clone()),
         },
-        KIND_TABLET => {
+        SSTFormatKind::KIND_TABLET => {
             todo!()
         }
-        _ => unreachable!(),
     }
 }
 
@@ -99,12 +106,11 @@ pub unsafe extern "C" fn ffi_sst_reader_remained(
     type_: ColumnFamilyType,
 ) -> u8 {
     match reader.kind {
-        KIND_SST => match type_ {
+        SSTFormatKind::KIND_SST => match type_ {
             ColumnFamilyType::Lock => reader.as_mut_sst_lock().ffi_remained(),
             _ => reader.as_mut_sst_other().ffi_remained(),
         },
-        KIND_TABLET => reader.as_mut_tablet().ffi_remained(),
-        _ => unreachable!(),
+        SSTFormatKind::KIND_TABLET => reader.as_mut_tablet().ffi_remained(),
     }
 }
 
@@ -113,12 +119,11 @@ pub unsafe extern "C" fn ffi_sst_reader_key(
     type_: ColumnFamilyType,
 ) -> BaseBuffView {
     match reader.kind {
-        KIND_SST => match type_ {
+        SSTFormatKind::KIND_SST => match type_ {
             ColumnFamilyType::Lock => reader.as_mut_sst_lock().ffi_key(),
             _ => reader.as_mut_sst_other().ffi_key(),
         },
-        KIND_TABLET => reader.as_mut_tablet().ffi_key(),
-        _ => unreachable!(),
+        SSTFormatKind::KIND_TABLET => reader.as_mut_tablet().ffi_key(),
     }
 }
 
@@ -127,29 +132,27 @@ pub unsafe extern "C" fn ffi_sst_reader_val(
     type_: ColumnFamilyType,
 ) -> BaseBuffView {
     match reader.kind {
-        KIND_SST => match type_ {
+        SSTFormatKind::KIND_SST => match type_ {
             ColumnFamilyType::Lock => reader.as_mut_sst_lock().ffi_val(),
             _ => reader.as_mut_sst_other().ffi_val(),
         },
-        KIND_TABLET => reader.as_mut_tablet().ffi_val(),
-        _ => unreachable!(),
+        SSTFormatKind::KIND_TABLET => reader.as_mut_tablet().ffi_val(),
     }
 }
 
 pub unsafe extern "C" fn ffi_sst_reader_next(mut reader: SSTReaderPtr, type_: ColumnFamilyType) {
     match reader.kind {
-        KIND_SST => match type_ {
+        SSTFormatKind::KIND_SST => match type_ {
             ColumnFamilyType::Lock => reader.as_mut_sst_lock().ffi_next(),
             _ => reader.as_mut_sst_other().ffi_next(),
         },
-        KIND_TABLET => reader.as_mut_tablet().ffi_next(),
-        _ => unreachable!(),
+        SSTFormatKind::KIND_TABLET => reader.as_mut_tablet().ffi_next(),
     }
 }
 
 pub unsafe extern "C" fn ffi_gc_sst_reader(reader: SSTReaderPtr, type_: ColumnFamilyType) {
     match reader.kind {
-        KIND_SST => match type_ {
+        SSTFormatKind::KIND_SST => match type_ {
             ColumnFamilyType::Lock => {
                 drop(Box::from_raw(reader.inner as *mut LockCFFileReader));
             }
@@ -157,13 +160,30 @@ pub unsafe extern "C" fn ffi_gc_sst_reader(reader: SSTReaderPtr, type_: ColumnFa
                 drop(Box::from_raw(reader.inner as *mut SSTFileReader));
             }
         },
-        KIND_TABLET => {
+        SSTFormatKind::KIND_TABLET => {
             drop(Box::from_raw(reader.inner as *mut TabletReader));
         }
-        _ => unreachable!(),
     }
 }
 
-pub(crate) const KIND_SST: u64 = 0;
-#[allow(unused)]
-pub(crate) const KIND_TABLET: u64 = 1;
+pub unsafe extern "C" fn ffi_sst_reader_format_kind(
+    reader: SSTReaderPtr,
+    _: ColumnFamilyType,
+) -> SSTFormatKind {
+    reader.kind
+}
+
+pub unsafe extern "C" fn ffi_sst_reader_seek(
+    mut reader: SSTReaderPtr,
+    type_: ColumnFamilyType,
+    seek_type: EngineIteratorSeekType,
+    key: BaseBuffView,
+) {
+    match reader.kind {
+        SSTFormatKind::KIND_SST => match type_ {
+            ColumnFamilyType::Lock => reader.as_mut_sst_lock().ffi_seek(type_, seek_type, key),
+            _ => reader.as_mut_sst_other().ffi_seek(type_, seek_type, key),
+        },
+        SSTFormatKind::KIND_TABLET => reader.as_mut_tablet().ffi_seek(type_, seek_type, key),
+    }
+}

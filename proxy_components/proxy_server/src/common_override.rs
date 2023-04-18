@@ -22,11 +22,11 @@ use engine_traits::{
 };
 use file_system::{get_io_rate_limiter, File, IoBudgetAdjustor};
 use raft_log_engine::RaftLogEngine;
-use server::raft_engine_switch::*;
+use server::{common::Stop, raft_engine_switch::*};
 use tikv::config::{ConfigController, DbConfigManger, DbType, TikvConfig};
 use tikv_util::{config::RaftDataStateMachine, math::MovingAvgU32, time::Instant};
 
-use crate::{common::Stop, status_server::StatusServer};
+use crate::status_server::StatusServer;
 
 impl<E: 'static, R> Stop for StatusServer<E, R>
 where

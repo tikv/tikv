@@ -10,8 +10,9 @@ use file_system::File;
 use raftstore::store::snap::snap_io::get_decrypter_reader;
 use tikv_util::codec::bytes::CompactBytesFromFileDecoder;
 
-use super::KIND_SST;
-use crate::interfaces_ffi::{BaseBuffView, SSTReaderPtr};
+use crate::interfaces_ffi::{
+    BaseBuffView, ColumnFamilyType, EngineIteratorSeekType, SSTFormatKind, SSTReaderPtr,
+};
 
 type LockCFDecoder = BufReader<Box<dyn Read + Send>>;
 
@@ -42,7 +43,7 @@ impl LockCFFileReader {
 
         SSTReaderPtr {
             inner: Box::into_raw(Box::new(LockCFFileReader { decoder, key, val })) as *mut _,
-            kind: KIND_SST,
+            kind: SSTFormatKind::KIND_SST,
         }
     }
 
@@ -67,5 +68,9 @@ impl LockCFFileReader {
             self.val.clear();
         }
         self.key = key;
+    }
+
+    pub fn ffi_seek(&self, _: ColumnFamilyType, _: EngineIteratorSeekType, _: BaseBuffView) {
+        // Do nothing. Since seek is only usable in tablet reader.
     }
 }

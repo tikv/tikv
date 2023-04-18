@@ -5,8 +5,9 @@ use encryption::DataKeyManager;
 use engine_rocks::{get_env, RocksSstIterator, RocksSstReader};
 use engine_traits::{IterOptions, Iterator, RefIterable, SstReader};
 
-use super::KIND_SST;
-use crate::interfaces_ffi::{BaseBuffView, SSTReaderPtr};
+use crate::interfaces_ffi::{
+    BaseBuffView, ColumnFamilyType, EngineIteratorSeekType, SSTFormatKind, SSTReaderPtr,
+};
 pub struct SSTFileReader<'a> {
     iter: RefCell<Option<RocksSstIterator<'a>>>,
     remained: RefCell<bool>,
@@ -37,7 +38,7 @@ impl<'a> SSTFileReader<'a> {
         // Can't call `create_iter` due to self-referencing.
         SSTReaderPtr {
             inner: Box::into_raw(b) as *mut _,
-            kind: KIND_SST,
+            kind: SSTFormatKind::KIND_SST,
         }
     }
 
@@ -56,6 +57,7 @@ impl<'a> SSTFileReader<'a> {
             .unwrap();
     }
 
+    // If it is valid to call ffi_key or ffi_val.
     pub fn ffi_remained(&'a self) -> u8 {
         if self.iter.borrow().is_none() {
             self.create_iter();
@@ -90,5 +92,9 @@ impl<'a> SSTFileReader<'a> {
         let mut b = self.iter.borrow_mut();
         let iter = b.as_mut().unwrap();
         *self.remained.borrow_mut() = iter.next().unwrap();
+    }
+
+    pub fn ffi_seek(&'a self, _: ColumnFamilyType, _: EngineIteratorSeekType, _: BaseBuffView) {
+        // Do nothing. Since seek is only usable in tablet reader.
     }
 }

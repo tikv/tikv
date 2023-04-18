@@ -72,6 +72,8 @@ impl RaftStoreProxyFFIHelper {
                 fn_value: Some(ffi_sst_reader_val),
                 fn_next: Some(ffi_sst_reader_next),
                 fn_gc: Some(ffi_gc_sst_reader),
+                fn_kind: Some(ffi_sst_reader_format_kind),
+                fn_seek: Some(ffi_sst_reader_seek),
             },
             fn_server_info: None,
             fn_make_read_index_task: Some(ffi_make_read_index_task),
