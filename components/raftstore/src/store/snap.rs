@@ -3242,4 +3242,22 @@ pub mod tests {
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
     }
+
+    #[test]
+    fn test_generate_snap_for_tablet_snapshot() {
+        let snap_dir = Builder::new().prefix("test_snapshot").tempdir().unwrap();
+        let snap_mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        snap_mgr.init().unwrap();
+        let tablet_snap_key = TabletSnapKey::new(1, 1, 1, 1);
+        snap_mgr
+            .gen_empty_snapshot_for_tablet_snapshot(&tablet_snap_key)
+            .unwrap();
+
+        let snap_key = SnapKey::new(1, 1, 1);
+        let s = snap_mgr.get_snapshot_for_applying(&snap_key).unwrap();
+        let expect_path = snap_mgr
+            .tablet_snap_manager()
+            .final_recv_path(&tablet_snap_key);
+        assert_eq!(expect_path.to_str().unwrap(), s.tablet_snap_path().unwrap());
+    }
 }
