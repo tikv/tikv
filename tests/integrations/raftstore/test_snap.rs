@@ -739,7 +739,7 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     assert!(dest.is_empty(), "{:?}", dest);
 
     let snap_dir = cluster.get_snap_dir(2);
-    let read_dir = std::fs::read_dir(&snap_dir).unwrap();
+    let read_dir = std::fs::read_dir(snap_dir).unwrap();
     assert_eq!(0, read_dir.count());
 }
 

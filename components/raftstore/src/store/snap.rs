@@ -2013,7 +2013,7 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_trash(&path)?;
+        file_system::clean_up_exclude_prefix(&path, SNAP_REV_PREFIX)?;
         Ok(Self {
             base: path,
             receiving: Arc::default(),
@@ -2040,7 +2040,7 @@ impl TabletSnapManager {
                 format!("{} should be a directory", self.base.display()),
             ));
         }
-        file_system::clean_up_trash(&self.base)?;
+        file_system::clean_up_exclude_prefix(&self.base, SNAP_REV_PREFIX)?;
         Ok(())
     }
 
