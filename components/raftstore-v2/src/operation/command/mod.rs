@@ -29,6 +29,7 @@ use kvproto::raft_cmdpb::{
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_proto::ConfChangeI;
 use raftstore::{
+    coprocessor::ObserveLevel,
     store::{
         cmd_resp,
         fsm::{
@@ -75,7 +76,12 @@ pub type SimpleWriteReqEncoder =
 
 use self::write::SimpleWrite;
 
-fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64, term: u64) -> M {
+pub(crate) fn parse_at<M: Message + Default>(
+    logger: &slog::Logger,
+    buf: &[u8],
+    index: u64,
+    term: u64,
+) -> M {
     let mut m = M::default();
     match m.merge_from_bytes(buf) {
         Ok(()) => m,
@@ -141,6 +147,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.entry_storage().applied_term(),
             buckets,
             store_ctx.sst_importer.clone(),
+            store_ctx.coprocessor_host.clone(),
             logger,
         );
 
@@ -523,8 +530,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     wb.set_save_point();
                     set_save_point = true;
                 }
-                let resp = match self.apply_entry(&e).await {
-                    Ok(resp) => resp,
+                let (req, resp) = match self.apply_entry(&e).await {
+                    Ok(req_resp) => req_resp,
                     Err(e) => {
                         if let Some(wb) = &mut self.write_batch {
                             if set_save_point {
@@ -533,9 +540,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 wb.clear();
                             }
                         }
-                        cmd_resp::new_error(e)
+                        (RaftCmdRequest::default(), cmd_resp::new_error(e))
                     }
                 };
+                self.observe_apply(e.get_index(), e.get_term(), req, &resp);
                 self.callbacks_mut().push((ch, resp));
             } else {
                 assert!(ch.is_empty());
@@ -547,7 +555,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 
     #[inline]
-    async fn apply_entry(&mut self, entry: &Entry) -> Result<RaftCmdResponse> {
+    async fn apply_entry(&mut self, entry: &Entry) -> Result<(RaftCmdRequest, RaftCmdResponse)> {
         let mut conf_change = None;
         let log_index = entry.get_index();
         let req = match entry.get_entry_type() {
@@ -566,7 +574,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         true,
                         true,
                     )?;
-                    let res = Ok(new_response(decoder.header()));
+                    let mut req = RaftCmdRequest::default();
+                    if self.observe().level != ObserveLevel::None {
+                        req = decoder.to_raft_cmd_request();
+                    }
+                    let resp = new_response(decoder.header());
                     for req in decoder {
                         match req {
                             SimpleWrite::Put(put) => {
@@ -589,7 +601,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             }
                         }
                     }
-                    return res;
+                    return Ok((req, resp));
                 }
                 Err(req) => req,
             },
@@ -647,7 +659,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);
-            Ok(resp)
+            Ok((req, resp))
         } else {
             for r in req.get_requests() {
                 match r.get_cmd_type() {
@@ -674,7 +686,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     _ => unimplemented!(),
                 }
             }
-            Ok(new_response(req.get_header()))
+            let resp = new_response(req.get_header());
+            Ok((req, resp))
         }
     }
 
@@ -761,6 +774,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if let Some(buckets) = &mut self.buckets {
             buckets.clear_stats();
         }
+
+        // Call it before invoking callback for preventing Commit is executed before
+        // Prewrite is observed.
+        self.flush_observed_apply();
 
         // Report result first and then invoking callbacks. This may delays callback a
         // little bit, but can make sure all following messages must see the side
