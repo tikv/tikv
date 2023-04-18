@@ -694,9 +694,11 @@ pub mod split_helper {
     ) {
         let (msg, sub) = PeerMsg::admin_command(req);
         cluster.routers[offset_id].send(region_id, msg).unwrap();
-        cluster.routers[offset_id]
-            .send(region_id, PeerMsg::Tick(PeerTick::Raft))
-            .unwrap();
+        for _ in 0..4 {
+            cluster.routers[offset_id]
+                .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+                .unwrap();
+        }
         cluster.dispatch(region_id, vec![]);
         block_on(sub.result()).unwrap();
         // TODO: when persistent implementation is ready, we can use tablet index of
@@ -719,9 +721,11 @@ pub mod split_helper {
         put.put(CF_DEFAULT, key, b"v1");
         let (msg, sub) = PeerMsg::simple_write(header, put.encode());
         cluster.routers[offset_id].send(region_id, msg).unwrap();
-        cluster.routers[offset_id]
-            .send(region_id, PeerMsg::Tick(PeerTick::Raft))
-            .unwrap();
+        for _i in 0..4 {
+            cluster.routers[offset_id]
+                .send(region_id, PeerMsg::Tick(PeerTick::Raft))
+                .unwrap();
+        }
         cluster.dispatch(region_id, vec![]);
         block_on(sub.result()).unwrap()
     }
