@@ -4,14 +4,17 @@ mod file_log;
 mod formatter;
 
 use std::{
-    env, fmt,
-    io::{self, BufWriter, Write, Stderr},
+    cell::RefCell,
+    env,
+    error::Error,
+    fmt,
+    io::{self, BufWriter, Stderr, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex, OnceLock,
     },
-    thread, cell::RefCell, error::Error,
+    thread,
 };
 
 use log::{self, SetLoggerError};
@@ -138,21 +141,27 @@ pub fn exit_process_gracefully(code: i32) -> ! {
 }
 
 // Constructs a new file writer lazily, based on initialization function.
-// If initialization function fails - fallback to stderr writer. 
+// If initialization function fails - fallback to stderr writer.
 pub fn lazy_file_writer<W, F>(init_fn: F) -> LazyFileWriter<W>
 where
     W: Write,
-    F: Fn() -> Result<W, Box<dyn Error>> + Send + 'static
+    F: Fn() -> Result<W, Box<dyn Error>> + Send + 'static,
 {
     let init: Box<dyn Fn() -> RefCell<FileOrFallbackWriter<W>> + Send> = Box::new(move || {
         init_fn()
             .map(|w| RefCell::new(FileOrFallbackWriter::File(w)))
             .unwrap_or_else(|e| {
-                eprintln!("failed to initialize log file writer, fallbacking to stderr: {}", e);
+                eprintln!(
+                    "failed to initialize log file writer, fallbacking to stderr: {}",
+                    e
+                );
                 RefCell::new(FileOrFallbackWriter::Fallback(io::stderr()))
             })
     });
-    LazyFileWriter { init, cell: OnceLock::new() }
+    LazyFileWriter {
+        init,
+        cell: OnceLock::new(),
+    }
 }
 
 pub struct LazyFileWriter<W: Write> {
@@ -160,7 +169,7 @@ pub struct LazyFileWriter<W: Write> {
     cell: OnceLock<RefCell<FileOrFallbackWriter<W>>>,
 }
 
-impl <W: Write> Write for LazyFileWriter<W> {
+impl<W: Write> Write for LazyFileWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.cell.get_or_init(&self.init).borrow_mut().write(buf)
     }
@@ -172,10 +181,10 @@ impl <W: Write> Write for LazyFileWriter<W> {
 
 enum FileOrFallbackWriter<W: Write> {
     File(W),
-    Fallback(Stderr)
+    Fallback(Stderr),
 }
 
-impl <W: Write> Write for FileOrFallbackWriter<W> {
+impl<W: Write> Write for FileOrFallbackWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
             FileOrFallbackWriter::File(io) => io.write(buf),

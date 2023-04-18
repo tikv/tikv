@@ -2,9 +2,10 @@
 
 use std::{
     borrow::ToOwned,
+    error::Error,
     io,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering}, error::Error,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use chrono::Local;
@@ -53,7 +54,11 @@ fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     Ok(new_path)
 }
 
-fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
+fn make_engine_log_path(
+    path: &str,
+    sub_path: &str,
+    filename: &str,
+) -> Result<String, Box<dyn Error>> {
     let mut path = Path::new(path).to_path_buf();
     if !sub_path.is_empty() {
         path = path.join(Path::new(sub_path));
@@ -61,17 +66,14 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> Result<St
     let path = path.to_str().ok_or_else(|| {
         format!(
             "failed to construct engine log dir {:?}, {:?}",
-            path,
-            sub_path
+            path, sub_path
         )
     })?;
 
-    config::ensure_dir_exist(path).map_err(|err| {
-        format!("failed to create engine log dir: {}", err)
-    })?;
-    let path = config::canonicalize_log_dir(path, filename).map_err(|err| {
-        format!("failed to canonicalize engine log dir {:?}: {}", path, err)
-    })?;
+    config::ensure_dir_exist(path)
+        .map_err(|err| format!("failed to create engine log dir: {}", err))?;
+    let path = config::canonicalize_log_dir(path, filename)
+        .map_err(|err| format!("failed to canonicalize engine log dir {:?}: {}", path, err))?;
 
     Ok(path)
 }
