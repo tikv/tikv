@@ -270,10 +270,10 @@ impl Waiter {
         let mut lock_info = self.wait_info.lock_info.clone();
         lock_info.set_duration_to_last_update_ms(
             self.last_updated_time
-                .map(|t| t.elapsed().as_millis() as u64)
+                // round up, so that duration in (0, 1ms] won't be treated as 0.
+                .map(|t| (t.elapsed().as_millis() as u64).max(1))
                 .unwrap_or_default(),
         );
-        // lock_info.set_skip_resolving_lock(skip_resolving_lock);
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
         self.cancel(Some(StorageError::from(TxnError::from(error))))
     }
