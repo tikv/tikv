@@ -902,7 +902,7 @@ fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
 }
 
 #[test]
-fn test_issue_14548() {
+fn test_snapshot_complete_recover_raft_tick() {
     // https://github.com/tikv/tikv/issues/14548 gives the description of what the following tests.
     let mut cluster = test_raftstore_v2::new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
