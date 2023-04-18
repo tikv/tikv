@@ -3266,6 +3266,7 @@ pub mod tests {
         assert_eq!(expect_path.to_str().unwrap(), s.tablet_snap_path().unwrap());
     }
 
+    #[test]
     fn test_init() {
         let builder = SnapManagerBuilder::default();
         let snap_dir = Builder::new()
