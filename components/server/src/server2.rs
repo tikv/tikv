@@ -80,6 +80,7 @@ use tikv::{
     },
     storage::{
         self,
+        config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
@@ -193,6 +194,7 @@ struct TikvServer<ER: RaftEngine> {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
+    cdc_worker: Option<Box<LazyWorker<cdc::Task>>>,
     cdc_scheduler: Option<Scheduler<cdc::Task>>,
     cdc_memory_quota: Option<MemoryQuota>,
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
@@ -330,6 +332,7 @@ where
             coprocessor_host: None,
             concurrency_manager,
             env,
+            cdc_worker: None,
             cdc_scheduler: None,
             cdc_memory_quota: None,
             backup_stream_scheduler: None,
@@ -571,28 +574,25 @@ where
         self.core.to_stop.push(check_leader_worker);
 
         // Create cdc worker.
-        let cdc_worker = Box::new(LazyWorker::new("cdc"));
-        let cdc_scheduler = cdc_worker.scheduler();
-        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
-        engines
-            .engine
-            .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
+        let mut cdc_worker = self.cdc_worker.take().unwrap();
+        let cdc_scheduler = self.cdc_scheduler.clone().unwrap();
         // Register cdc observer.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
             tikv::config::Module::Cdc,
-            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+            Box::new(CdcConfigManager(cdc_scheduler.clone())),
         );
         // Start cdc endpoint.
         let cdc_memory_quota = MemoryQuota::new(self.core.config.cdc.sink_memory_quota.0 as _);
-        let _cdc_endpoint = cdc::Endpoint::new(
+        let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
-            cdc_scheduler.clone(),
+            cdc_scheduler,
             self.router.clone().unwrap(),
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             cdc_ob,
@@ -603,15 +603,13 @@ where
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
         );
-        // TODO: enable cdc.
-        // cdc_worker.start_with_timer(cdc_endpoint);
-        // self.core.to_stop.push(cdc_worker);
-        self.cdc_scheduler = Some(cdc_scheduler);
+        cdc_worker.start_with_timer(cdc_endpoint);
+        self.core.to_stop.push(cdc_worker);
         self.cdc_memory_quota = Some(cdc_memory_quota);
 
         // Create resolved ts.
         if self.core.config.resolved_ts.enable {
-            let rts_worker = Box::new(LazyWorker::new("resolved-ts"));
+            let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
             // Register the resolved ts observer
             let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
@@ -622,7 +620,7 @@ where
                     rts_worker.scheduler(),
                 )),
             );
-            let _rts_endpoint = resolved_ts::Endpoint::new(
+            let rts_endpoint = resolved_ts::Endpoint::new(
                 &self.core.config.resolved_ts,
                 rts_worker.scheduler(),
                 self.router.clone().unwrap(),
@@ -632,9 +630,8 @@ where
                 self.env.clone(),
                 self.security_mgr.clone(),
             );
-            // TODO: enable resolved_ts.
-            // rts_worker.start_with_timer(rts_endpoint);
-            // self.core.to_stop.push(rts_worker);
+            rts_worker.start_with_timer(rts_endpoint);
+            self.core.to_stop.push(rts_worker);
         }
 
         // Start backup stream
@@ -1302,7 +1299,12 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         );
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
-        let engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+        let cdc_worker = Box::new(LazyWorker::new("cdc"));
+        let cdc_scheduler = cdc_worker.scheduler();
+        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
+
+        let mut engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+        engine.set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
         self.engines = Some(TikvEngines {
             raft_engine,
@@ -1312,6 +1314,8 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         self.node = Some(node);
         self.coprocessor_host = Some(coprocessor_host);
         self.region_info_accessor = Some(region_info_accessor);
+        self.cdc_worker = Some(cdc_worker);
+        self.cdc_scheduler = Some(cdc_scheduler);
 
         engines_info
     }
