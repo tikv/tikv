@@ -19,15 +19,16 @@ To build TiKV you'll need to at least have the following installed:
 * `make` - Build tool (run common workflows)
 * `cmake` - Build tool (required for gRPC)
 * `awk` - Pattern scanning/processing language
+* [`protoc`](https://github.com/protocolbuffers/protobuf/releases) - Google protocol buffer compiler
 * C++ compiler - gcc 5+ (required for gRPC)
 
-If you are targeting platforms other than x86_64/aarch64 linux or MacOS, you'll also need:
+If you are targeting platforms other than x86_64/aarch64 Linux or macOS, you'll also need:
 
 * [`llvm` and `clang`](http://releases.llvm.org/download.html) - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb).
 
 ### Getting the repository
 
-```
+```bash
 git clone https://github.com/tikv/tikv.git
 cd tikv
 # Future instructions assume you are in this directory
@@ -77,6 +78,12 @@ make test
 env EXTRA_CARGO_ARGS=$TESTNAME make test
 ```
 
+Alternatively, you can use [nextest](https://github.com/nextest-rs/nextest) to run tests:
+
+```bash
+env EXTRA_CARGO_ARGS=$TESTNAME make test_with_nextest
+```
+
 TiKV follows the Rust community coding style. We use Rustfmt and [Clippy](https://github.com/Manishearth/rust-clippy) to automatically format and lint our code. Using these tools is checked in our CI. These are as part of `make dev`, you can also run them alone:
 
 ```bash
@@ -86,13 +93,13 @@ make format
 make clippy
 ```
 
-See the [style doc](https://github.com/rust-lang/rfcs/blob/master/style-guide/README.md) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
+See the [style doc](https://github.com/rust-lang/fmt-rfcs/blob/master/guide/guide.md) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
 
 Please follow this style to make TiKV easy to review, maintain, and develop.
 
 ### Build issues
 
-To reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include full debug. To decrease compilation time with another ~5% (around 10 seconds for a 4 min build time), change the `debug = true` to `debug = 1` in the Cargo.toml file to only include line numbers for `dev` and `test`. Another way to change debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
+To reduce compilation time and disk usage, TiKV builds do not include full debugging information by default &mdash; only tests package will have line debug info enabled. To change debuginfo, just precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
 
 ```bash
 RUSTFLAGS=-Cdebuginfo=1 make dev
@@ -109,13 +116,13 @@ To run TiKV as an actual key-value store, you will need to run it as a cluster (
 
 Use [PD](https://github.com/tikv/pd) to manage the cluster (even if just one node on a single machine). 
 
-Instructions are in our [docs](https://tikv.org/docs/dev/tasks/deploy/binary/) (if you build TiKV from source, you could skip `1. Download package` and `tikv-server` is in directory `/target`).
+Instructions are in our [docs](https://tikv.org/docs/latest/deploy/install/test/#install-binary-manually) (if you build TiKV from source, you could skip `1. Download package` and `tikv-server` is in directory `/target`).
 
 Tips: It's recommended to increase the open file limit above 82920. WSL2 users may refer to [the comment](https://github.com/Microsoft/WSL/issues/1688#issuecomment-532767317) if having difficulty in changing the `ulimit`.
 
 ### Configuration
 
-Read our configuration guide to learn about various [configuration options](https://tikv.org/docs/dev/tasks/configure/introduction/). There is also a [configuration template](./etc/config-template.toml).
+Read our configuration guide to learn about various [configuration options](https://tikv.org/docs/latest/deploy/configure/introduction/). There is also a [configuration template](./etc/config-template.toml).
 
 ## Contribution flow
 
@@ -127,7 +134,7 @@ This is a rough outline of what a contributor's workflow looks like:
 - Write code, add test cases, and commit your work (see below for message format).
 - Run tests and make sure all tests pass.
 - Push your changes to a branch in your fork of the repository and submit a pull request.
-  * Make sure mention the issue, which is created at step 1, in the commit meesage.
+  * Make sure to mention the issue, which is created at step 1, in the commit message.
 - Your PR will be reviewed and may be requested some changes.
   * Once you've made changes, your PR must be re-reviewed and approved.
   * If the PR becomes out of date, you can use GitHub's 'update branch' button.
@@ -225,7 +232,7 @@ Use option `git commit -s` to sign off your commits. The bot will group and dist
 
 Testing AWS can be done without an AWS account by using [localstack](https://github.com/localstack/localstack).
 
-```
+```bash
 git clone https://github.com/localstack/localstack.git
 cd localstack
 docker-compose up
@@ -233,14 +240,14 @@ docker-compose up
 
 For example, to test KMS, create a key:
 
-```
+```bash
 pip install awscli-local
 awslocal kms create-key`
 ```
 
 Then add then use the returned ID in key-id:
 
-```
+```bash
 [security.encryption.master-key]
 type = "kms"
 region = "us-west-2"
@@ -250,7 +257,7 @@ key-id = "KMS key id"
 
 When you run TiKV, make sure to set the localstack credentials
 
-```
+```bash
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 ```

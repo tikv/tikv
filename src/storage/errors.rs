@@ -1,13 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Types for storage related errors and associated helper methods.
-use std::error::Error as StdError;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
+use std::{
+    convert::TryFrom,
+    error::Error as StdError,
+    fmt::{self, Debug, Display, Formatter},
+    io::Error as IoError,
+    sync::Arc,
+};
 
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::{errorpb, kvrpcpb};
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
+use tikv_util::deadline::DeadlineError;
+use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
@@ -15,13 +21,11 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     CommandKind, Result,
 };
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use tikv_util::deadline::DeadlineError;
-use txn_types::{KvPair, TimeStamp};
 
 #[derive(Debug, Error)]
-/// Detailed errors for storage operations. This enum also unifies code for basic error
-/// handling functionality in a single place instead of being spread out.
+/// Detailed errors for storage operations. This enum also unifies code for
+/// basic error handling functionality in a single place instead of being spread
+/// out.
 pub enum ErrorInner {
     #[error("{0}")]
     Kv(#[from] kv::Error),
@@ -57,13 +61,13 @@ pub enum ErrorInner {
     CfDeprecated(String),
 
     #[error("ttl is not enabled, but get put request with ttl")]
-    TTLNotEnabled,
+    TtlNotEnabled,
 
     #[error("Deadline is exceeded")]
     DeadlineExceeded,
 
     #[error("The length of ttls does not equal to the length of pairs")]
-    TTLsLenNotEqualsToPairs,
+    TtlLenNotEqualsToPairs,
 
     #[error("Api version in request does not match with TiKV storage, cmd: {:?}, storage: {:?}, request: {:?}", .cmd, .storage_api_version, .req_api_version)]
     ApiVersionNotMatched {
@@ -152,11 +156,9 @@ impl ErrorCodeExt for Error {
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::CfDeprecated(_) => error_code::storage::CF_DEPRECATED,
-            ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
+            ErrorInner::TtlNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
-            ErrorInner::TTLsLenNotEqualsToPairs => {
-                error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
-            }
+            ErrorInner::TtlLenNotEqualsToPairs => error_code::storage::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
             ErrorInner::InvalidKeyMode { .. } => error_code::storage::INVALID_KEY_MODE,
             ErrorInner::InvalidKeyRangeMode { .. } => error_code::storage::INVALID_KEY_MODE,
@@ -178,8 +180,9 @@ pub enum ErrorHeaderKind {
 }
 
 impl ErrorHeaderKind {
-    /// TODO: This function is only used for bridging existing & legacy metric tags.
-    /// It should be removed once Coprocessor starts using new static metrics.
+    /// TODO: This function is only used for bridging existing & legacy metric
+    /// tags. It should be removed once Coprocessor starts using new static
+    /// metrics.
     pub fn get_str(&self) -> &'static str {
         match *self {
             ErrorHeaderKind::NotLeader => "not_leader",
@@ -205,8 +208,8 @@ const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
-/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
-/// Returns `ErrorHeaderKind::Other` if no match found.
+/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
+/// message. Returns `ErrorHeaderKind::Other` if no match found.
 pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     if header.has_not_leader() {
         ErrorHeaderKind::NotLeader
@@ -235,45 +238,54 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     get_error_kind_from_header(header).get_str()
 }
 
-pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
-    match *res {
+pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
+    match e {
         // TODO: use `Error::cause` instead.
-        Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e)))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+        Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))))
+        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
             box KvErrorInner::Request(ref e),
-        ))))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+        )))))
+        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
-        )))))) => Some(e.to_owned()),
-        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
+        ))))) => Some(e.to_owned()),
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
             ..
-        })))) => {
+        }))) => {
             let mut err = errorpb::Error::default();
             err.set_max_timestamp_not_synced(Default::default());
             Some(err)
         }
-        Err(Error(box ErrorInner::SchedTooBusy)) => {
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::FlashbackNotPrepared(
+            region_id,
+        )))) => {
+            let mut err = errorpb::Error::default();
+            let mut flashback_not_prepared_err = errorpb::FlashbackNotPrepared::default();
+            flashback_not_prepared_err.set_region_id(*region_id);
+            err.set_flashback_not_prepared(flashback_not_prepared_err);
+            Some(err)
+        }
+        Error(box ErrorInner::SchedTooBusy) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
-        Err(Error(box ErrorInner::GcWorkerTooBusy)) => {
+        Error(box ErrorInner::GcWorkerTooBusy) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
-        Err(Error(box ErrorInner::Closed)) => {
-            // TiKV is closing, return an RegionError to tell the client that this region is unavailable
-            // temporarily, the client should retry the request in other TiKVs.
+        Error(box ErrorInner::Closed) => {
+            // TiKV is closing, return an RegionError to tell the client that this region is
+            // unavailable temporarily, the client should retry the request in other TiKVs.
             let mut err = errorpb::Error::default();
             err.set_message("TiKV is Closing".to_string());
             Some(err)
         }
-        Err(Error(box ErrorInner::DeadlineExceeded)) => {
+        Error(box ErrorInner::DeadlineExceeded) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
@@ -281,6 +293,13 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
             Some(err)
         }
         _ => None,
+    }
+}
+
+pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
+    match res {
+        Ok(_) => None,
+        Err(e) => extract_region_error_from_error(e),
     }
 }
 
@@ -313,7 +332,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
                 conflict_commit_ts,
                 key,
                 primary,
-                ..
+                reason,
             },
         ))))) => {
             let mut write_conflict = kvrpcpb::WriteConflict::default();
@@ -322,6 +341,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
             write_conflict.set_key(key.to_owned());
             write_conflict.set_primary(primary.to_owned());
+            write_conflict.set_reason(reason.to_owned());
             key_error.set_conflict(write_conflict);
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
@@ -454,8 +474,45 @@ pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError
     }
 }
 
+/// The shared version of [`Error`]. In some cases, it's necessary to pass a
+/// single error to more than one requests, since the inner error doesn't
+/// support cloning.
+#[derive(Debug, Clone, Error)]
+#[error(transparent)]
+pub struct SharedError(pub Arc<Error>);
+
+impl SharedError {
+    pub fn inner(&self) -> &ErrorInner {
+        &self.0.0
+    }
+}
+
+impl From<ErrorInner> for SharedError {
+    fn from(e: ErrorInner) -> Self {
+        Self(Arc::new(Error::from(e)))
+    }
+}
+
+impl From<Error> for SharedError {
+    fn from(e: Error) -> Self {
+        Self(Arc::new(e))
+    }
+}
+
+/// Tries to convert the shared error to owned one. It can success only when
+/// it's the only reference to the error.
+impl TryFrom<SharedError> for Error {
+    type Error = ();
+
+    fn try_from(e: SharedError) -> std::result::Result<Self, Self::Error> {
+        Arc::try_unwrap(e.0).map_err(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use kvproto::kvrpcpb::WriteConflictReason;
+
     use super::*;
 
     #[test]
@@ -472,6 +529,7 @@ mod test {
                 conflict_commit_ts,
                 key: key.clone(),
                 primary: primary.clone(),
+                reason: WriteConflictReason::LazyUniquenessCheck,
             },
         )));
         let mut expect = kvrpcpb::KeyError::default();
@@ -481,6 +539,7 @@ mod test {
         write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
         write_conflict.set_key(key);
         write_conflict.set_primary(primary);
+        write_conflict.set_reason(WriteConflictReason::LazyUniquenessCheck);
         expect.set_conflict(write_conflict);
         expect.set_retryable(format!("{:?}", case));
 

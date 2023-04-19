@@ -1,14 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+
 use raft::eraftpb::MessageType;
 use raftstore::store::MEMTRACE_ENTRY_CACHE;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 
-// Test even if memory usage reaches high water, committed entries can still get applied slowly.
+// Test even if memory usage reaches high water, committed entries can still get
+// applied slowly.
 #[test]
 fn test_memory_usage_reaches_high_water() {
     let mut cluster = new_node_cluster(0, 1);

@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::recorder::Task;
-use crate::Collector;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
+use tikv_util::{
+    warn,
+    worker::{Scheduler, Worker},
+};
 
-use tikv_util::warn;
-use tikv_util::worker::{Scheduler, Worker};
+use crate::{recorder::Task, Collector};
 
 /// `CollectorRegHandle` accepts registrations of [Collector].
 ///
@@ -30,16 +30,16 @@ impl CollectorRegHandle {
         }
     }
 
-    /// Register a collector to the recorder. Dropping the returned [CollectorGuard] will
-    /// preform deregistering.
+    /// Register a collector to the recorder. Dropping the returned
+    /// [CollectorGuard] will preform deregistering.
     ///
-    /// The second argument `as_observer` indicates that whether the given `collector` will
-    /// control the enabled state of the recorder:
-    /// - When `as_observer` is false, the recorder will respect it and begin to profile if it's
-    ///   off before. In other words, if there is at least one non-observed collector, the recorder
-    ///   will keep running.
-    /// - When `as_observer` is true, whether the recorder to be on or off won't depend on if
-    ///   the collector exists.
+    /// The second argument `as_observer` indicates that whether the given
+    /// `collector` will control the enabled state of the recorder:
+    /// - When `as_observer` is false, the recorder will respect it and begin to
+    ///   profile if it's off before. In other words, if there is at least one
+    ///   non-observed collector, the recorder will keep running.
+    /// - When `as_observer` is true, whether the recorder to be on or off won't
+    ///   depend on if the collector exists.
     pub fn register(&self, collector: Box<dyn Collector>, as_observer: bool) -> CollectorGuard {
         static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
         let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Ordering::SeqCst));

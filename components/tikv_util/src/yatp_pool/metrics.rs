@@ -16,11 +16,11 @@ lazy_static! {
         &["name"]
     )
     .unwrap();
-    pub static ref FUTUREPOOL_SCHEDULE_DURATION_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_futurepool_schedule_duration",
-        "Histogram of future_pool handle duration.",
+    pub static ref YATP_POOL_SCHEDULE_WAIT_DURATION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_yatp_pool_schedule_wait_duration",
+        "Histogram of yatp pool schedule wait duration.",
         &["name"],
-        exponential_buckets(0.0005, 2.0, 15).unwrap()
+        exponential_buckets(1e-5, 4.0, 12).unwrap() // 10us ~ 41s
     )
     .unwrap();
 }

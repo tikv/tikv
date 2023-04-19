@@ -2,13 +2,12 @@
 
 use std::sync::Arc;
 
-use arrow::array;
-use arrow::datatypes::{self, DataType, Field};
-use arrow::record_batch::RecordBatch;
-
-use tidb_query_datatype::codec::Datum;
-use tidb_query_datatype::prelude::*;
-use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
+use arrow::{
+    array,
+    datatypes::{self, DataType, Field},
+    record_batch::RecordBatch,
+};
+use tidb_query_datatype::{codec::Datum, prelude::*, FieldTypeFlag, FieldTypeTp};
 use tipb::FieldType;
 
 pub struct Chunk {
@@ -17,10 +16,8 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn get_datum(&self, col_id: usize, row_id: usize, field_type: &FieldType) -> Datum {
-        if let Some(bitmap) = self.data.column(col_id).validity_bitmap() {
-            if !bitmap.is_set(row_id) {
-                return Datum::Null;
-            }
+        if self.data.column(col_id).is_null(row_id) {
+            return Datum::Null;
         }
 
         match field_type.as_accessor().tp() {
@@ -39,19 +36,19 @@ impl Chunk {
                         .data
                         .column(col_id)
                         .as_any()
-                        .downcast_ref::<array::PrimitiveArray<u64>>()
+                        .downcast_ref::<array::UInt64Array>()
                         .unwrap();
 
-                    Datum::U64(*data.get(row_id))
+                    Datum::U64(data.value(row_id))
                 } else {
                     let data = self
                         .data
                         .column(col_id)
                         .as_any()
-                        .downcast_ref::<array::PrimitiveArray<i64>>()
+                        .downcast_ref::<array::Int64Array>()
                         .unwrap();
 
-                    Datum::I64(*data.get(row_id))
+                    Datum::I64(data.value(row_id))
                 }
             }
             FieldTypeTp::Float | FieldTypeTp::Double => {
@@ -59,9 +56,9 @@ impl Chunk {
                     .data
                     .column(col_id)
                     .as_any()
-                    .downcast_ref::<array::PrimitiveArray<f64>>()
+                    .downcast_ref::<array::Float64Array>()
                     .unwrap();
-                Datum::F64(*data.get(row_id))
+                Datum::F64(data.value(row_id))
             }
             _ => unreachable!(),
         }
@@ -83,7 +80,7 @@ impl ChunkBuilder {
         let mut fields = Vec::with_capacity(tps.len());
         let mut arrays: Vec<Arc<dyn array::Array>> = Vec::with_capacity(tps.len());
         for (field_type, column) in tps.iter().zip(self.columns.into_iter()) {
-            let (field, data) = match field_type.as_accessor().tp() {
+            match field_type.as_accessor().tp() {
                 FieldTypeTp::Tiny
                 | FieldTypeTp::Short
                 | FieldTypeTp::Int24
@@ -95,19 +92,25 @@ impl ChunkBuilder {
                         .flag()
                         .contains(FieldTypeFlag::UNSIGNED)
                     {
-                        column.into_u64_array()
+                        let (f, d) = column.into_u64_array();
+                        fields.push(f);
+                        arrays.push(d);
                     } else {
-                        column.into_i64_array()
+                        let (f, d) = column.into_i64_array();
+                        fields.push(f);
+                        arrays.push(d);
                     }
                 }
-                FieldTypeTp::Float | FieldTypeTp::Double => column.into_f64_array(),
+                FieldTypeTp::Float | FieldTypeTp::Double => {
+                    let (f, d) = column.into_f64_array();
+                    fields.push(f);
+                    arrays.push(d);
+                }
                 _ => unreachable!(),
             };
-            fields.push(field);
-            arrays.push(data);
         }
         let schema = datatypes::Schema::new(fields);
-        let batch = RecordBatch::new(Arc::new(schema), arrays);
+        let batch = RecordBatch::try_new(Arc::new(schema), arrays).unwrap();
         Chunk { data: batch }
     }
 
@@ -132,7 +135,7 @@ impl ColumnsBuilder {
         self.data.push(data)
     }
 
-    fn into_i64_array(self) -> (Field, Arc<dyn array::Array>) {
+    fn into_i64_array(self) -> (Field, Arc<array::Int64Array>) {
         let field = Field::new("", DataType::Int64, true);
         let mut data: Vec<Option<i64>> = Vec::with_capacity(self.data.len());
         for v in self.data {

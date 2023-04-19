@@ -23,11 +23,13 @@ pub trait BufferReader {
     /// TODO: We should make the panic behaviour deterministic.
     fn advance(&mut self, count: usize);
 
-    /// Read next several bytes as a slice and advance the position of internal cursor.
+    /// Read next several bytes as a slice and advance the position of internal
+    /// cursor.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to read specified number of bytes.
+    /// Returns `Error::Io` if there is not enough space to read specified
+    /// number of bytes.
     fn read_bytes(&mut self, count: usize) -> Result<&[u8]>;
 }
 
@@ -129,14 +131,16 @@ pub trait BufferWriter {
     /// The caller may hint the underlying buffer to grow according to `size`
     /// if the underlying buffer is dynamically sized (i.e. is capable to grow).
     ///
-    /// The size of the returned slice may be less than `size` given. For example,
-    /// when underlying buffer is fixed sized and there is no enough space any more.
+    /// The size of the returned slice may be less than `size` given. For
+    /// example, when underlying buffer is fixed sized and there is no
+    /// enough space any more.
     ///
     /// # Safety
     ///
-    /// The returned mutable slice is for writing only and should be never used for
-    /// reading since it might contain uninitialized memory when underlying buffer
-    /// is dynamically sized. For this reason, this function is marked `unsafe`.
+    /// The returned mutable slice is for writing only and should be never used
+    /// for reading since it might contain uninitialized memory when
+    /// underlying buffer is dynamically sized. For this reason, this
+    /// function is marked `unsafe`.
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8];
 
     /// Advances the position of internal cursor for a previous write.
@@ -339,7 +343,7 @@ mod tests {
 
         // Read more bytes than available
         buffer.set_position(39);
-        assert!(buffer.read_bytes(2).is_err());
+        buffer.read_bytes(2).unwrap_err();
         assert_eq!(buffer.position(), 39);
         assert_eq!(buffer.bytes(), &base[39..40]);
     }
@@ -374,14 +378,14 @@ mod tests {
         assert_eq!(buffer, &base[21..40]);
         assert_eq!(buffer.bytes(), &base[21..40]);
 
-        assert!(buffer.read_bytes(20).is_err());
+        buffer.read_bytes(20).unwrap_err();
 
         buffer.advance(19);
         assert_eq!(buffer, &[]);
         assert_eq!(buffer.bytes(), &[]);
 
         assert_eq!(buffer.read_bytes(0).unwrap(), &[]);
-        assert!(buffer.read_bytes(1).is_err());
+        buffer.read_bytes(1).unwrap_err();
     }
 
     #[test]
@@ -420,7 +424,7 @@ mod tests {
             assert_eq!(buffer.position(), 20);
 
             // Write more bytes than available size
-            assert!(buffer.write_bytes(&base_write[20..]).is_err());
+            buffer.write_bytes(&base_write[20..]).unwrap_err();
             assert_eq!(&buffer.get_ref()[0..20], &base_write[0..20]);
             assert_eq!(&buffer.get_ref()[20..], &base[20..]);
             assert_eq!(buffer.position(), 20);
@@ -490,7 +494,6 @@ mod tests {
 
             let mut buffer = base.clone();
             let mut buf_slice = buffer.as_mut_slice();
-            // let buffer_viewer = std::slice::from_raw_parts(buffer as *const u8, buffer.len());
 
             buf_slice.bytes_mut(13)[..13].clone_from_slice(&base_write[0..13]);
             assert_eq!(&buf_slice[0..13], &base_write[0..13]);
@@ -519,7 +522,7 @@ mod tests {
             let mut buf_slice = &mut buffer[20..];
 
             // Buffer remain 20, write 21 bytes shall fail.
-            assert!(buf_slice.write_bytes(&base_write[20..41]).is_err());
+            buf_slice.write_bytes(&base_write[20..41]).unwrap_err();
 
             // Write remaining 20 bytes
             buf_slice.bytes_mut(20)[..20].clone_from_slice(&base_write[20..40]);
@@ -584,8 +587,8 @@ mod tests {
         }
     }
 
-    /// Test whether it is safe to store values in `Vec` after `len()`, i.e. during
-    /// reallocation these values are copied.
+    /// Test whether it is safe to store values in `Vec` after `len()`,
+    /// i.e. during reallocation these values are copied.
     #[test]
     // FIXME(#4331) Don't ignore this test.
     #[ignore]
@@ -632,7 +635,6 @@ mod tests {
             // Re-allocate the vector space and ensure that the address is changed.
             vec.reserve(::std::cmp::max(payload_len * 3, 32));
 
-            //assert_ne!(vec_ptr, vec.as_ptr());
             if vec_ptr == vec.as_ptr() {
                 in_place_reallocs += 1;
             }

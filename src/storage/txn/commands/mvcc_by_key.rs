@@ -1,14 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::mvcc::MvccReader;
-use crate::storage::txn::commands::{
-    find_mvcc_infos_by_key, Command, CommandExt, ReadCommand, TypedCommand,
-};
-use crate::storage::txn::{ProcessResult, Result};
-use crate::storage::types::MvccInfo;
-use crate::storage::{Snapshot, Statistics};
 use txn_types::{Key, TimeStamp};
+
+use crate::storage::{
+    mvcc::MvccReader,
+    txn::{
+        commands::{find_mvcc_infos_by_key, Command, CommandExt, ReadCommand, TypedCommand},
+        ProcessResult, Result,
+    },
+    types::MvccInfo,
+    Snapshot, Statistics,
+};
 
 command! {
     /// Retrieve MVCC information for the given key.

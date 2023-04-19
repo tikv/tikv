@@ -1,21 +1,24 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::mvcc::{
-    metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
+use crate::storage::{
+    mvcc::{
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
+        ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
+    },
+    txn::actions::check_txn_status::{
+        check_txn_status_missing_lock, rollback_lock, MissingLockAction,
+    },
+    Snapshot, TxnStatus,
 };
-use crate::storage::txn::actions::check_txn_status::{
-    check_txn_status_missing_lock, rollback_lock, MissingLockAction,
-};
-use crate::storage::{Snapshot, TxnStatus};
 
-/// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
-/// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
-/// transaction, the rollback record is protected from being collapsed.
+/// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If
+/// `current_ts` is 0, cleanup the lock without checking TTL. If the lock is the
+/// primary lock of a pessimistic transaction, the rollback record is protected
+/// from being collapsed.
 ///
-/// Returns the released lock. Returns error if the key is locked or has already been
-/// committed.
+/// Returns the released lock. Returns error if the key is locked or has already
+/// been committed.
 pub fn cleanup<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
@@ -36,14 +39,12 @@ pub fn cleanup<S: Snapshot>(
                     ErrorInner::KeyIsLocked(lock.clone().into_lock_info(key.into_raw()?)).into(),
                 );
             }
-
-            let is_pessimistic_txn = !lock.for_update_ts.is_zero();
             rollback_lock(
                 txn,
                 reader,
                 key,
                 lock,
-                is_pessimistic_txn,
+                lock.is_pessimistic_txn(),
                 !protect_rollback,
             )
         }
@@ -76,16 +77,14 @@ pub fn cleanup<S: Snapshot>(
 }
 
 pub mod tests {
-    use super::*;
-    use crate::storage::mvcc::tests::{must_have_write, must_not_have_write, write};
-    use crate::storage::mvcc::{Error as MvccError, WriteType};
-    use crate::storage::txn::tests::{must_commit, must_prewrite_put};
-    use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use txn_types::TimeStamp;
 
+    use super::*;
     #[cfg(test)]
     use crate::storage::{
         mvcc::tests::{
@@ -96,9 +95,17 @@ pub mod tests {
         txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
         TestEngineBuilder,
     };
+    use crate::storage::{
+        mvcc::{
+            tests::{must_have_write, must_not_have_write, write},
+            Error as MvccError, WriteType,
+        },
+        txn::tests::{must_commit, must_prewrite_put},
+        Engine,
+    };
 
     pub fn must_succeed<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
@@ -115,7 +122,7 @@ pub mod tests {
     }
 
     pub fn must_err<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
@@ -130,7 +137,7 @@ pub mod tests {
     }
 
     pub fn must_cleanup_with_gc_fence<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
@@ -176,58 +183,66 @@ pub mod tests {
     #[test]
     fn test_must_cleanup_with_gc_fence() {
         // Tests the test util
-        let engine = TestEngineBuilder::new().build().unwrap();
-        must_prewrite_put(&engine, b"k", b"v", b"k", 10);
-        must_commit(&engine, b"k", 10, 20);
-        must_cleanup_with_gc_fence(&engine, b"k", 20, 0, 30, true);
-        let w = must_written(&engine, b"k", 10, 20, WriteType::Put);
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&mut engine, b"k", b"v", b"k", 10);
+        must_commit(&mut engine, b"k", 10, 20);
+        must_cleanup_with_gc_fence(&mut engine, b"k", 20, 0, 30, true);
+        let w = must_written(&mut engine, b"k", 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         assert_eq!(w.gc_fence.unwrap(), 30.into());
     }
 
     #[test]
     fn test_cleanup() {
-        // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests that not
-        // related to TTL check should be covered by other test cases.
-        let engine = TestEngineBuilder::new().build().unwrap();
+        // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests
+        // that not related to TTL check should be covered by other test cases.
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Shorthand for composing ts.
         let ts = TimeStamp::compose;
 
         let (k, v) = (b"k", b"v");
 
-        must_prewrite_put(&engine, k, v, k, ts(10, 0));
-        must_locked(&engine, k, ts(10, 0));
-        txn_heart_beat::tests::must_success(&engine, k, ts(10, 0), 100, 100);
+        must_prewrite_put(&mut engine, k, v, k, ts(10, 0));
+        must_locked(&mut engine, k, ts(10, 0));
+        txn_heart_beat::tests::must_success(&mut engine, k, ts(10, 0), 100, 100);
         // Check the last txn_heart_beat has set the lock's TTL to 100.
-        txn_heart_beat::tests::must_success(&engine, k, ts(10, 0), 90, 100);
+        txn_heart_beat::tests::must_success(&mut engine, k, ts(10, 0), 90, 100);
 
         // TTL not expired. Do nothing but returns an error.
-        must_err(&engine, k, ts(10, 0), ts(20, 0));
-        must_locked(&engine, k, ts(10, 0));
+        must_err(&mut engine, k, ts(10, 0), ts(20, 0));
+        must_locked(&mut engine, k, ts(10, 0));
 
         // Try to cleanup another transaction's lock. Does nothing.
-        must_succeed(&engine, k, ts(10, 1), ts(120, 0));
-        // If there is no exisiting lock when cleanup, it may be a pessimistic transaction,
-        // so the rollback should be protected.
-        must_get_rollback_protected(&engine, k, ts(10, 1), true);
-        must_locked(&engine, k, ts(10, 0));
+        must_succeed(&mut engine, k, ts(10, 1), ts(120, 0));
+        // If there is no existing lock when cleanup, it may be a pessimistic
+        // transaction, so the rollback should be protected.
+        must_get_rollback_protected(&mut engine, k, ts(10, 1), true);
+        must_locked(&mut engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
-        must_succeed(&engine, k, ts(10, 0), ts(120, 0));
-        must_unlocked(&engine, k);
+        must_succeed(&mut engine, k, ts(10, 0), ts(120, 0));
+        must_unlocked(&mut engine, k);
         // Rollbacks of optimistic transactions needn't be protected
-        must_get_rollback_protected(&engine, k, ts(10, 0), false);
-        must_get_rollback_ts(&engine, k, ts(10, 0));
+        must_get_rollback_protected(&mut engine, k, ts(10, 0), false);
+        must_get_rollback_ts(&mut engine, k, ts(10, 0));
 
         // Rollbacks of primary keys in pessimistic transactions should be protected
-        must_acquire_pessimistic_lock(&engine, k, k, ts(11, 1), ts(12, 1));
-        must_succeed(&engine, k, ts(11, 1), ts(120, 0));
-        must_get_rollback_protected(&engine, k, ts(11, 1), true);
+        must_acquire_pessimistic_lock(&mut engine, k, k, ts(11, 1), ts(12, 1));
+        must_succeed(&mut engine, k, ts(11, 1), ts(120, 0));
+        must_get_rollback_protected(&mut engine, k, ts(11, 1), true);
 
-        must_acquire_pessimistic_lock(&engine, k, k, ts(13, 1), ts(14, 1));
-        must_pessimistic_prewrite_put(&engine, k, v, k, ts(13, 1), ts(14, 1), true);
-        must_succeed(&engine, k, ts(13, 1), ts(120, 0));
-        must_get_rollback_protected(&engine, k, ts(13, 1), true);
+        must_acquire_pessimistic_lock(&mut engine, k, k, ts(13, 1), ts(14, 1));
+        must_pessimistic_prewrite_put(
+            &mut engine,
+            k,
+            v,
+            k,
+            ts(13, 1),
+            ts(14, 1),
+            DoPessimisticCheck,
+        );
+        must_succeed(&mut engine, k, ts(13, 1), ts(120, 0));
+        must_get_rollback_protected(&mut engine, k, ts(13, 1), true);
     }
 }

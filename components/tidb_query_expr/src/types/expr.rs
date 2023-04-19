@@ -2,10 +2,10 @@
 
 use std::any::Any;
 
+use tidb_query_datatype::codec::data_type::ScalarValue;
 use tipb::FieldType;
 
 use super::super::function::RpnFnMeta;
-use tidb_query_datatype::codec::data_type::ScalarValue;
 
 /// A type for each node in the RPN expression list.
 #[derive(Debug)]
@@ -24,7 +24,8 @@ pub enum RpnExpressionNode {
         field_type: FieldType,
     },
 
-    /// Represents a reference to a column in the columns specified in evaluation.
+    /// Represents a reference to a column in the columns specified in
+    /// evaluation.
     ColumnRef { offset: usize },
 }
 
@@ -80,7 +81,8 @@ impl RpnExpressionNode {
     }
 }
 
-/// An expression in Reverse Polish notation, which is simply a list of RPN expression nodes.
+/// An expression in Reverse Polish notation, which is simply a list of RPN
+/// expression nodes.
 ///
 /// You may want to build it using `RpnExpressionBuilder`.
 #[derive(Debug)]

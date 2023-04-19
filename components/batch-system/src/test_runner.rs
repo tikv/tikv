@@ -2,13 +2,20 @@
 
 //! A sample Handler for test and micro-benchmark purpose.
 
-use crate::*;
+use std::{
+    borrow::Cow,
+    ops::DerefMut,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
+
 use derive_more::{Add, AddAssign};
-use std::borrow::Cow;
-use std::ops::DerefMut;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
 use tikv_util::mpsc;
+
+use crate::*;
 
 /// Message `Runner` can accepts.
 pub enum Message {
@@ -16,6 +23,20 @@ pub enum Message {
     Loop(usize),
     /// `Runner` will call the callback directly.
     Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
+    /// group name, write bytes
+    Resource(String, u64),
+}
+
+impl ResourceMetered for Message {
+    fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+        match self {
+            Message::Resource(group_name, bytes) => {
+                resource_ctl.consume(group_name.as_bytes(), ResourceConsumeType::IoBytes(*bytes));
+                Some(group_name.to_owned())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A simple runner used for benchmarking only.
@@ -96,6 +117,7 @@ impl Handler {
                     }
                 }
                 Ok(Message::Callback(cb)) => cb(self, r),
+                Ok(Message::Resource(..)) => {}
                 Err(_) => break,
             }
         }

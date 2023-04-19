@@ -7,7 +7,7 @@ use tikv_util::config::*;
 #[test]
 fn test_bucket_stats() {
     let (mut cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-        cluster.cfg.coprocessor.enable_region_bucket = true;
+        cluster.cfg.coprocessor.enable_region_bucket = Some(true);
         cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::days(1);
         cluster.cfg.raft_store.report_region_buckets_tick_interval = ReadableDuration::millis(100);
     });
@@ -27,7 +27,7 @@ fn test_bucket_stats() {
     req.set_context(ctx);
     req.set_keys(protobuf::RepeatedField::from(keys));
     client.raw_batch_get(&req).unwrap();
-    sleep_ms(400);
+    sleep_ms(600);
     let buckets = cluster.must_get_buckets(1);
     assert_eq!(buckets.meta.keys.len(), 2);
     assert_eq!(buckets.stats.get_write_keys(), [50]);

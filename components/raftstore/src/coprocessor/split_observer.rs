@@ -1,17 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use itertools::Itertools;
-
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-use tikv_util::codec::bytes;
-use tikv_util::{box_err, box_try, error, warn};
+use kvproto::{
+    metapb::Region,
+    raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
+};
+use tikv_util::{box_err, box_try, codec::bytes, error, warn};
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use crate::store::util;
-use crate::Error;
+use crate::{store::util, Error};
 
-fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
+pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     let mut slice = key.as_slice();
     let strip_len = match bytes::decode_bytes(&mut slice, false) {
         // It is an encoded key and the slice points to the remaining unparsable
@@ -25,7 +24,7 @@ fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     key
 }
 
-fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
+pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
     if key.is_empty() {
         warn!(
             "skip invalid split key: key is empty";
@@ -157,15 +156,19 @@ impl AdminObserver for SplitObserver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::coprocessor::AdminObserver;
-    use crate::coprocessor::ObserverContext;
     use byteorder::{BigEndian, WriteBytesExt};
-    use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-    use tidb_query_datatype::codec::{datum, table, Datum};
-    use tidb_query_datatype::expr::EvalContext;
+    use kvproto::{
+        metapb::Region,
+        raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
+    };
+    use tidb_query_datatype::{
+        codec::{datum, table, Datum},
+        expr::EvalContext,
+    };
     use tikv_util::codec::bytes::encode_bytes;
+
+    use super::*;
+    use crate::coprocessor::{AdminObserver, ObserverContext};
 
     fn new_split_request(key: Vec<u8>) -> AdminRequest {
         let mut req = AdminRequest::default();
@@ -237,14 +240,13 @@ mod tests {
 
         let observer = SplitObserver;
 
-        let resp = observer.pre_propose_admin(&mut ctx, &mut req);
         // since no split is defined, actual coprocessor won't be invoke.
-        assert!(resp.is_ok());
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
         assert!(!req.has_split(), "only split req should be handle.");
 
         req = new_split_request(new_row_key(1, 2, 0));
         // For compatible reason, split should supported too.
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
 
         // Empty key should be skipped.
         let mut split_keys = vec![vec![]];
@@ -254,7 +256,7 @@ mod tests {
         req = new_batch_split_request(split_keys.clone());
         // Although invalid keys should be skipped, but if all keys are
         // invalid, errors should be reported.
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_err());
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap_err();
 
         let mut key = new_row_key(1, 2, 0);
         let mut expected_key = key[..key.len() - 8].to_vec();

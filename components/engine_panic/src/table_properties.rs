@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
 use engine_traits::{Range, Result};
+
+use crate::engine::PanicEngine;
 
 pub struct UserCollectedProperties;
 impl engine_traits::UserCollectedProperties for UserCollectedProperties {

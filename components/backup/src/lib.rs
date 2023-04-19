@@ -16,4 +16,4 @@ mod writer;
 pub use endpoint::{backup_file_name, Endpoint, Task};
 pub use errors::{Error, Result};
 pub use service::Service;
-pub use writer::{BackupRawKVWriter, BackupWriter};
+pub use writer::{BackupRawKvWriter, BackupWriter};

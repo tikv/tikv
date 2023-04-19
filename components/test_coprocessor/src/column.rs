@@ -1,10 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-
-use tidb_query_datatype::codec::{datum, Datum};
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{datum, Datum},
+    expr::EvalContext,
+};
 use tipb::{ColumnInfo, FieldType};
+
+use super::*;
 
 pub const TYPE_VAR_CHAR: i32 = 1;
 pub const TYPE_LONG: i32 = 2;

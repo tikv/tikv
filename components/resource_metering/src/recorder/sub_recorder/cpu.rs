@@ -1,12 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::metrics::STAT_TASK_COUNT;
-use crate::recorder::localstorage::{LocalStorage, SharedTagInfos};
-use crate::recorder::SubRecorder;
-use crate::{RawRecord, RawRecords};
-
 use collections::HashMap;
 use tikv_util::sys::thread::{self, Pid};
+
+use crate::{
+    metrics::STAT_TASK_COUNT,
+    recorder::{
+        localstorage::{LocalStorage, SharedTagInfos},
+        SubRecorder,
+    },
+    RawRecord, RawRecords,
+};
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.
 ///
@@ -100,9 +104,10 @@ mod tests {
 #[cfg(test)]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{RawRecords, TagInfos};
-    use std::sync::Arc;
 
     fn heavy_job() -> u64 {
         let m: u64 = rand::random();

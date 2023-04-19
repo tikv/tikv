@@ -1,24 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter, str};
+use std::{cmp::Ordering, iter, str};
+
+use bstr::ByteSlice;
 use tidb_query_codegen::rpn_fn;
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{collation::*, data_type::*},
+    *,
+};
 
 use crate::impl_math::i64_to_usize;
-use bstr::ByteSlice;
-use std::cmp::Ordering;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
 const MAX_BLOB_WIDTH: i32 = 16_777_216; // FIXME: Should be isize
 
 // see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
-// mysql base64 doc: A newline is added after each 76 characters of encoded output
+// mysql base64 doc: A newline is added after each 76 characters of encoded
+// output
 const BASE64_LINE_WRAP_LENGTH: usize = 76;
 
-// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
+// mysql base64 doc: Each 3 bytes of the input data are encoded using 4
+// characters.
 const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
 const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
 const BASE64_LINE_WRAP: u8 = b'\n';
@@ -281,8 +284,8 @@ pub fn lpad_utf8(
     pad: BytesRef,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let input = str::from_utf8(&*arg)?;
-    let pad = str::from_utf8(&*pad)?;
+    let input = str::from_utf8(arg)?;
+    let pad = str::from_utf8(pad)?;
     let input_len = input.chars().count();
     let pad_len = pad.chars().count();
 
@@ -347,8 +350,8 @@ pub fn rpad_utf8(
     pad: BytesRef,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let input = str::from_utf8(&*arg)?;
-    let pad = str::from_utf8(&*pad)?;
+    let input = str::from_utf8(arg)?;
+    let pad = str::from_utf8(pad)?;
     let input_len = input.chars().count();
     let pad_len = pad.chars().count();
 
@@ -378,11 +381,13 @@ pub fn rpad_utf8(
     }
 }
 
-// when target_len is 0, return Some(0), means the pad function should return empty string
-// currently there are three conditions it return None, which means pad function should return Null
-//   1. target_len is negative
-//   2. target_len of type in byte is larger then MAX_BLOB_WIDTH
-//   3. target_len is greater than length of input string, *and* pad string is empty
+// when target_len is 0, return Some(0), means the pad function should return
+// empty string currently there are three conditions it return None, which means
+// pad function should return Null
+// - target_len is negative
+// - target_len of type in byte is larger then MAX_BLOB_WIDTH
+// - target_len is greater than length of input string, *and* pad string is
+//   empty
 // otherwise return Some(target_len)
 #[inline]
 fn validate_target_len_for_pad(
@@ -446,7 +451,7 @@ pub fn left_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesG
     if *rhs <= 0 {
         return Ok(writer.write_ref(Some(b"")));
     }
-    let s = str::from_utf8(&*lhs)?;
+    let s = str::from_utf8(lhs)?;
 
     let rhs = *rhs as usize;
     let len = s.chars().count();
@@ -511,8 +516,8 @@ pub fn insert_utf8(
     newstr_utf8: BytesRef,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let s = str::from_utf8(&*s_utf8)?;
-    let newstr = str::from_utf8(&*newstr_utf8)?;
+    let s = str::from_utf8(s_utf8)?;
+    let newstr = str::from_utf8(newstr_utf8)?;
     let pos = *pos;
     let len = *len;
     let upos: usize = pos as usize;
@@ -538,7 +543,7 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
         return Ok(writer.write_ref(Some(b"")));
     }
 
-    let s = str::from_utf8(&*lhs)?;
+    let s = str::from_utf8(lhs)?;
 
     let rhs = *rhs as usize;
     let len = s.chars().count();
@@ -1118,8 +1123,10 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
 mod tests {
     use std::{f64, i64};
 
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::codec::mysql::charset::{CHARSET_GBK, CHARSET_UTF8MB4};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::mysql::charset::{CHARSET_GBK, CHARSET_UTF8MB4},
+    };
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -4067,7 +4074,7 @@ mod tests {
             .push_param(args.1)
             .push_param(args.2)
             .evaluate(ScalarFuncSig::Trim3Args);
-        assert!(got.is_err());
+        got.unwrap_err();
 
         let invalid_utf8_cases = vec![
             (
@@ -4157,7 +4164,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate::<i64>(ScalarFuncSig::CharLengthUtf8);
-            assert!(output.is_err());
+            output.unwrap_err();
         }
     }
 

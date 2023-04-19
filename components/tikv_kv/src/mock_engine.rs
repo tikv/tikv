@@ -1,11 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Result;
-use crate::{Callback, ExtCallback, Modify, SnapContext, WriteData};
-use crate::{Engine, RocksEngine};
+use std::{
+    collections::LinkedList,
+    sync::{Arc, Mutex},
+};
+
+use collections::HashMap;
 use kvproto::kvrpcpb::Context;
-use std::collections::LinkedList;
-use std::sync::{Arc, Mutex};
+
+use super::Result;
+use crate::{Engine, Modify, OnAppliedCb, RocksEngine, SnapContext, WriteData, WriteEvent};
 
 /// A mock engine is a simple wrapper around RocksEngine
 /// but with the ability to assert the modifies,
@@ -78,7 +82,8 @@ impl ExpectedWrite {
     }
 }
 
-/// `ExpectedWriteList` represents a list of writes expected to write to the engine
+/// `ExpectedWriteList` represents a list of writes expected to write to the
+/// engine
 struct ExpectedWriteList(Mutex<LinkedList<ExpectedWrite>>);
 
 // We implement drop here instead of on MockEngine
@@ -144,47 +149,44 @@ impl Engine for MockEngine {
     type Snap = <RocksEngine as Engine>::Snap;
     type Local = <RocksEngine as Engine>::Local;
 
-    fn kv_engine(&self) -> Self::Local {
+    fn kv_engine(&self) -> Option<Self::Local> {
         self.base.kv_engine()
     }
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap> {
-        self.base.snapshot_on_kv_engine(start_key, end_key)
+    type RaftExtension = <RocksEngine as Engine>::RaftExtension;
+    fn raft_extension(&self) -> Self::RaftExtension {
+        self.base.raft_extension()
     }
 
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
-        self.base.modify_on_kv_engine(modifies)
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+        self.base.modify_on_kv_engine(region_modifies)
     }
 
-    fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
-        self.base.async_snapshot(ctx, cb)
+    type SnapshotRes = <RocksEngine as Engine>::SnapshotRes;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        self.base.async_snapshot(ctx)
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None, None)
-    }
-
-    fn async_write_ext(
+    type WriteRes = <RocksEngine as Engine>::WriteRes;
+    fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
+        subscribed: u8,
+        on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes {
         if let Some(expected_modifies) = self.expected_modifies.as_ref() {
             let mut expected_writes = expected_modifies.0.lock().unwrap();
             check_expected_write(
                 &mut expected_writes,
                 &batch.modifies,
-                proposed_cb.is_some(),
-                committed_cb.is_some(),
+                WriteEvent::subscribed_proposed(subscribed),
+                WriteEvent::subscribed_committed(subscribed),
             );
         }
         let mut last_modifies = self.last_modifies.lock().unwrap();
         last_modifies.push(batch.modifies.clone());
-        self.base
-            .async_write_ext(ctx, batch, write_cb, proposed_cb, committed_cb)
+        self.base.async_write(ctx, batch, subscribed, on_applied)
     }
 }
 

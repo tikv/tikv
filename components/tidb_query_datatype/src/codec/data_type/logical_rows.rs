@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
+// TODO: This value is chosen based on MonetDB/X100's research without our own
+// benchmarks.
 pub const BATCH_MAX_SIZE: usize = 1024;
 
 /// Identical logical row is a special case in expression evaluation that

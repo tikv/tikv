@@ -29,8 +29,7 @@ fn execute<M: criterion::measurement::Measurement + 'static>(c: &mut criterion::
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn run_bench(measurement: &str) {
     use criterion_perf_events::Perf;
-    use perfcnt::linux::HardwareEventType as Hardware;
-    use perfcnt::linux::PerfCounterBuilderLinux as Builder;
+    use perfcnt::linux::{HardwareEventType as Hardware, PerfCounterBuilderLinux as Builder};
 
     match measurement {
         "TOT_INS" => {

@@ -1,23 +1,30 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::DataSinkRegHandle;
-use crate::error::Result;
-use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
-use crate::DataSink;
-
 use std::sync::Arc;
 
-use futures::channel::mpsc::{channel, Sender};
-use futures::{SinkExt, StreamExt};
+use futures::{
+    channel::mpsc::{channel, Sender},
+    SinkExt, StreamExt,
+};
 use grpcio::{RpcContext, ServerStreamingSink, WriteFlags};
-use kvproto::resource_usage_agent::{ResourceMeteringRequest, ResourceUsageRecord};
-use kvproto::resource_usage_agent_grpc::ResourceMeteringPubSub;
+use kvproto::{
+    resource_usage_agent::{ResourceMeteringRequest, ResourceUsageRecord},
+    resource_usage_agent_grpc::ResourceMeteringPubSub,
+};
 use tikv_util::{info, warn};
+
+use super::DataSinkRegHandle;
+use crate::{
+    error::Result,
+    metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM},
+    DataSink,
+};
 
 /// `PubSubService` implements [ResourceMeteringPubSub].
 ///
-/// If a client subscribes to resource metering records, the `PubSubService` is responsible for
-/// registering them to the reporter. Then the reporter sends data to the client periodically.
+/// If a client subscribes to resource metering records, the `PubSubService` is
+/// responsible for registering them to the reporter. Then the reporter sends
+/// data to the client periodically.
 ///
 /// [ResourceMeteringPubSub]: kvproto::resource_usage_agent_grpc::ResourceMeteringPubSub
 #[derive(Clone)]

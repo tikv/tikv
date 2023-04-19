@@ -2,15 +2,16 @@
 
 //! Tests for `SstExt`
 
-use panic_hook::recover_safe;
 use std::fs;
 
-use super::tempdir;
 use engine_test::kv::KvTestEngine;
-use engine_traits::Iterator;
-use engine_traits::SeekKey;
-use engine_traits::{Error, Result};
-use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
+use engine_traits::{
+    Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstExt, SstReader,
+    SstWriter, SstWriterBuilder,
+};
+use panic_hook::recover_safe;
+
+use super::tempdir;
 
 #[test]
 fn empty() -> Result<()> {
@@ -48,9 +49,9 @@ fn basic() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
     let key = iter.key();
     let value = iter.value();
     assert_eq!(b"k1", key);
@@ -77,9 +78,9 @@ fn forward() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
 
     let key = iter.key();
     let value = iter.value();
@@ -114,9 +115,9 @@ fn reverse() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
-    iter.seek(SeekKey::End)?;
+    iter.seek_to_last()?;
 
     let key = iter.key();
     let value = iter.value();
@@ -135,7 +136,7 @@ fn reverse() -> Result<()> {
     Ok(())
 }
 
-// todo test seek_for_prev(SeekKey::Key)
+// todo test seek_for_prev(Key)
 
 #[test]
 fn delete() -> Result<()> {
@@ -152,33 +153,27 @@ fn delete() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
 
     assert_eq!(iter.valid()?, false);
 
-    assert!(iter.prev().is_err());
-    assert!(iter.next().is_err());
-    assert!(
-        recover_safe(|| {
-            iter.key();
-        })
-        .is_err()
-    );
-    assert!(
-        recover_safe(|| {
-            iter.value();
-        })
-        .is_err()
-    );
+    iter.prev().unwrap_err();
+    iter.next().unwrap_err();
+    recover_safe(|| {
+        iter.key();
+    })
+    .unwrap_err();
+    recover_safe(|| {
+        iter.value();
+    })
+    .unwrap_err();
 
-    assert_eq!(iter.seek(SeekKey::Start)?, false);
-    assert_eq!(iter.seek(SeekKey::End)?, false);
-    assert_eq!(iter.seek(SeekKey::Key(b"foo"))?, false);
-    assert_eq!(iter.seek_for_prev(SeekKey::Start)?, false);
-    assert_eq!(iter.seek_for_prev(SeekKey::End)?, false);
-    assert_eq!(iter.seek_for_prev(SeekKey::Key(b"foo"))?, false);
+    assert_eq!(iter.seek_to_first()?, false);
+    assert_eq!(iter.seek_to_last()?, false);
+    assert_eq!(iter.seek(b"foo")?, false);
+    assert_eq!(iter.seek_for_prev(b"foo")?, false);
 
     Ok(())
 }
@@ -212,9 +207,9 @@ fn same_key() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
     let key = iter.key();
     let value = iter.value();
     assert_eq!(b"k1", key);
@@ -254,9 +249,9 @@ fn reverse_key() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
     let key = iter.key();
     let value = iter.value();
     assert_eq!(b"k2", key);

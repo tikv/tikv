@@ -3,11 +3,13 @@
 #[macro_use]
 extern crate serde_derive;
 
-use std::error::Error;
-use std::fs::{self, File};
-use std::io::Read;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::{
+    error::Error,
+    fs::{self, File},
+    io::Read,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 use collections::HashSet;
 use encryption::EncryptionConfig;
@@ -37,7 +39,8 @@ pub struct SecurityConfig {
 ///
 ///  # Arguments
 ///
-///  - `tag`: only used in the error message, like "ca key", "cert key", "private key", etc.
+///  - `tag`: only used in the error message, like "ca key", "cert key",
+///    "private key", etc.
 fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<dyn Error>> {
     if path.is_empty() {
         return Ok(None);
@@ -65,9 +68,26 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<dyn Error>> {
 
 type CertResult = Result<(Vec<u8>, Vec<u8>, Vec<u8>), Box<dyn Error>>;
 
+type Pem = Box<[u8]>;
+
+pub struct Secret(pub Pem);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Secret").finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct ClientSuite {
+    pub ca: Pem,
+    pub client_cert: Pem,
+    pub client_key: Secret,
+}
+
 impl SecurityConfig {
     /// Validates ca, cert and private key.
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&self, raftstore_v2: bool) -> Result<(), Box<dyn Error>> {
         check_key_file("ca key", &self.ca_path)?;
         check_key_file("cert key", &self.cert_path)?;
         check_key_file("private key", &self.key_path)?;
@@ -76,6 +96,12 @@ impl SecurityConfig {
             && (self.ca_path.is_empty() || self.cert_path.is_empty() || self.key_path.is_empty())
         {
             return Err("ca, cert and private key should be all configured.".into());
+        }
+        if raftstore_v2
+            && self.encryption.data_encryption_method
+                != kvproto::encryptionpb::EncryptionMethod::Plaintext
+        {
+            return Err("encryption is not supported for partitioned-raft-kv".into());
         }
 
         Ok(())
@@ -95,7 +121,7 @@ impl SecurityConfig {
 
     /// Determine if the cert file has been modified.
     /// If modified, update the timestamp of this modification.
-    fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
+    pub fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
         let this = fs::metadata(&self.cert_path)?.modified()?;
         if let Some(last) = last {
             if *last == this {
@@ -116,6 +142,15 @@ impl SecurityManager {
     pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<dyn Error>> {
         Ok(SecurityManager {
             cfg: Arc::new(cfg.clone()),
+        })
+    }
+
+    pub fn client_suite(&self) -> Result<ClientSuite, Box<dyn Error>> {
+        let (ca, cert, key) = self.cfg.load_certs()?;
+        Ok(ClientSuite {
+            ca: ca.into_boxed_slice(),
+            client_cert: cert.into_boxed_slice(),
+            client_key: Secret(key.into_boxed_slice()),
         })
     }
 
@@ -144,7 +179,7 @@ impl SecurityManager {
             sb.bind(addr, port)
         } else {
             if !self.cfg.cert_allowed_cn.is_empty() {
-                let cn_checker = CNChecker {
+                let cn_checker = CnChecker {
                     allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
                 };
                 sb = sb.add_checker(cn_checker);
@@ -161,14 +196,18 @@ impl SecurityManager {
             )
         }
     }
+
+    pub fn get_config(&self) -> &SecurityConfig {
+        &self.cfg
+    }
 }
 
 #[derive(Clone)]
-struct CNChecker {
+struct CnChecker {
     allowed_cn: Arc<HashSet<String>>,
 }
 
-impl ServerChecker for CNChecker {
+impl ServerChecker for CnChecker {
     fn check(&mut self, ctx: &RpcContext<'_>) -> CheckResult {
         match check_common_name(&self.allowed_cn, ctx) {
             Ok(()) => CheckResult::Continue,
@@ -255,17 +294,17 @@ pub fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{fs, io::Write};
 
-    use std::fs;
-    use std::io::Write;
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_security() {
         let cfg = SecurityConfig::default();
         // default is disable secure connection.
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         let mgr = SecurityManager::new(&cfg).unwrap();
         assert!(mgr.cfg.ca_path.is_empty());
         assert!(mgr.cfg.cert_path.is_empty());
@@ -274,7 +313,7 @@ mod tests {
         let assert_cfg = |c: fn(&mut SecurityConfig), valid: bool| {
             let mut invalid_cfg = cfg.clone();
             c(&mut invalid_cfg);
-            assert_eq!(invalid_cfg.validate().is_ok(), valid);
+            assert_eq!(invalid_cfg.validate(false).is_ok(), valid);
         };
 
         // invalid path should be rejected.
@@ -295,18 +334,18 @@ mod tests {
             .iter()
             .enumerate()
         {
-            fs::write(f, &[id as u8]).unwrap();
+            fs::write(f, [id as u8]).unwrap();
         }
 
         let mut c = cfg.clone();
         c.cert_path = format!("{}", example_cert.display());
         c.key_path = format!("{}", example_key.display());
         // incomplete configuration.
-        c.validate().unwrap_err();
+        c.validate(false).unwrap_err();
 
         // data should be loaded from file after validating.
         c.ca_path = format!("{}", example_ca.display());
-        c.validate().unwrap();
+        c.validate(false).unwrap();
 
         let (ca, cert, key) = c.load_certs().unwrap_or_default();
         assert_eq!(ca, vec![0]);

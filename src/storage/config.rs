@@ -2,15 +2,22 @@
 
 //! Storage configuration.
 
-use crate::config::BLOCK_CACHE_RATE;
+use std::{cmp::max, error::Error, path::Path};
+
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use file_system::{IOPriority, IORateLimitMode, IORateLimiter, IOType};
+use file_system::{IoPriority, IoRateLimitMode, IoRateLimiter, IoType};
 use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::OnlineConfig;
-use std::error::Error;
-use tikv_util::config::{self, ReadableDuration, ReadableSize};
-use tikv_util::sys::SysQuota;
+use tikv_util::{
+    config::{self, ReadableDuration, ReadableSize},
+    sys::SysQuota,
+};
+
+use crate::config::{
+    BLOCK_CACHE_RATE, DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE,
+    RAFTSTORE_V2_BLOCK_CACHE_RATE,
+};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -25,6 +32,15 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
+const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EngineType {
+    RaftKv,
+    #[serde(alias = "partitioned-raft-kv")]
+    RaftKv2,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -32,6 +48,8 @@ const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 pub struct Config {
     #[online_config(skip)]
     pub data_dir: String,
+    #[online_config(skip)]
+    pub engine: EngineType,
     // Replaced by `GcConfig.ratio_threshold`. Keep it for backward compatibility.
     #[online_config(skip)]
     pub gc_ratio_threshold: f64,
@@ -46,11 +64,15 @@ pub struct Config {
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
     #[online_config(skip)]
+    pub reserve_raft_space: ReadableSize,
+    #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
     #[online_config(skip)]
     pub api_version: u8,
     #[online_config(skip)]
     pub enable_ttl: bool,
+    #[online_config(skip)]
+    pub background_error_recovery_window: ReadableDuration,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
     #[online_config(submodule)]
@@ -58,7 +80,7 @@ pub struct Config {
     #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
-    pub io_rate_limit: IORateLimitConfig,
+    pub io_rate_limit: IoRateLimitConfig,
 }
 
 impl Default for Config {
@@ -66,32 +88,68 @@ impl Default for Config {
         let cpu_num = SysQuota::cpu_cores_quota();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
+            engine: EngineType::RaftKv,
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if cpu_num >= 16.0 {
                 8
             } else {
-                std::cmp::max(1, std::cmp::min(4, cpu_num as usize))
+                cpu_num.clamp(1., 4.) as usize
             },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
+            reserve_raft_space: ReadableSize::gb(DEFAULT_RESERVED_RAFT_SPACE_GB),
             enable_async_apply_prewrite: false,
             api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
-            io_rate_limit: IORateLimitConfig::default(),
+            io_rate_limit: IoRateLimitConfig::default(),
+            background_error_recovery_window: ReadableDuration::hours(1),
         }
     }
 }
 
 impl Config {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate_engine_type(&mut self) -> Result<(), Box<dyn Error>> {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
+
+        let v1_kv_db_path =
+            config::canonicalize_sub_path(&self.data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
+        let v2_tablet_path =
+            config::canonicalize_sub_path(&self.data_dir, DEFAULT_TABLET_SUB_DIR).unwrap();
+
+        let kv_data_exists = Path::new(&v1_kv_db_path).exists();
+        let v2_tablet_exists = Path::new(&v2_tablet_path).exists();
+        if kv_data_exists && v2_tablet_exists {
+            return Err("Both raft-kv and partitioned-raft-kv's data folders exist".into());
+        }
+
+        // v1's data exists, but the engine type is v2
+        if kv_data_exists && self.engine == EngineType::RaftKv2 {
+            info!(
+                "TiKV has data for raft-kv engine but the engine type in config is partitioned-raft-kv. Ignore the config and keep raft-kv instead"
+            );
+            self.engine = EngineType::RaftKv;
+        }
+
+        // if v2's data exists, but the engine type is v1
+        if v2_tablet_exists && self.engine == EngineType::RaftKv {
+            info!(
+                "TiKV has data for partitioned-raft-kv engine but the engine type in config is raft-kv. Ignore the config and keep partitioned-raft-kv instead"
+            );
+            self.engine = EngineType::RaftKv2;
+        }
+        Ok(())
+    }
+
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.validate_engine_type()?;
+
         if self.scheduler_concurrency > MAX_SCHED_CONCURRENCY {
             warn!(
                 "TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
@@ -183,7 +241,7 @@ impl Default for FlowControlConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BlockCacheConfig {
     #[online_config(skip)]
-    pub shared: bool,
+    pub shared: Option<bool>,
     pub capacity: Option<ReadableSize>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
@@ -198,7 +256,7 @@ pub struct BlockCacheConfig {
 impl Default for BlockCacheConfig {
     fn default() -> BlockCacheConfig {
         BlockCacheConfig {
-            shared: true,
+            shared: None,
             capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
@@ -209,26 +267,39 @@ impl Default for BlockCacheConfig {
 }
 
 impl BlockCacheConfig {
-    pub fn build_shared_cache(&self) -> Option<Cache> {
-        if !self.shared {
-            return None;
+    fn adjust_shard_bits(&self, capacity: usize) -> i32 {
+        let max_shard_count = capacity / MIN_BLOCK_CACHE_SHARD_SIZE;
+        if max_shard_count < (2 << self.num_shard_bits) {
+            max((max_shard_count as f64).log2() as i32, 1)
+        } else {
+            self.num_shard_bits
+        }
+    }
+
+    pub fn build_shared_cache(&self, engine_type: EngineType) -> Cache {
+        if self.shared == Some(false) {
+            warn!("storage.block-cache.shared is deprecated, cache is always shared.");
         }
         let capacity = match self.capacity {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
-                ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
+                if engine_type == EngineType::RaftKv2 {
+                    ((total_mem as f64) * RAFTSTORE_V2_BLOCK_CACHE_RATE) as usize
+                } else {
+                    ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
+                }
             }
             Some(c) => c.0 as usize,
         };
         let mut cache_opts = LRUCacheOptions::new();
         cache_opts.set_capacity(capacity);
-        cache_opts.set_num_shard_bits(self.num_shard_bits as c_int);
+        cache_opts.set_num_shard_bits(self.adjust_shard_bits(capacity) as c_int);
         cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
         cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
         if let Some(allocator) = self.new_memory_allocator() {
             cache_opts.set_memory_allocator(allocator);
         }
-        Some(Cache::new_lru_cache(cache_opts))
+        Cache::new_lru_cache(cache_opts)
     }
 
     fn new_memory_allocator(&self) -> Option<MemoryAllocator> {
@@ -262,82 +333,83 @@ impl BlockCacheConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct IORateLimitConfig {
+pub struct IoRateLimitConfig {
     pub max_bytes_per_sec: ReadableSize,
     #[online_config(skip)]
-    pub mode: IORateLimitMode,
-    /// When this flag is off, high-priority IOs are counted but not limited. Default
-    /// set to false because the optimal throughput target provided by user might not be
-    /// the maximum available bandwidth. For multi-tenancy use case, this flag should be
-    /// turned on.
+    pub mode: IoRateLimitMode,
+    /// When this flag is off, high-priority IOs are counted but not limited.
+    /// Default set to false because the optimal throughput target provided
+    /// by user might not be the maximum available bandwidth. For
+    /// multi-tenancy use case, this flag should be turned on.
     #[online_config(skip)]
     pub strict: bool,
-    pub foreground_read_priority: IOPriority,
-    pub foreground_write_priority: IOPriority,
-    pub flush_priority: IOPriority,
-    pub level_zero_compaction_priority: IOPriority,
-    pub compaction_priority: IOPriority,
-    pub replication_priority: IOPriority,
-    pub load_balance_priority: IOPriority,
-    pub gc_priority: IOPriority,
-    pub import_priority: IOPriority,
-    pub export_priority: IOPriority,
-    pub other_priority: IOPriority,
+    pub foreground_read_priority: IoPriority,
+    pub foreground_write_priority: IoPriority,
+    pub flush_priority: IoPriority,
+    pub level_zero_compaction_priority: IoPriority,
+    pub compaction_priority: IoPriority,
+    pub replication_priority: IoPriority,
+    pub load_balance_priority: IoPriority,
+    pub gc_priority: IoPriority,
+    pub import_priority: IoPriority,
+    pub export_priority: IoPriority,
+    pub other_priority: IoPriority,
 }
 
-impl Default for IORateLimitConfig {
-    fn default() -> IORateLimitConfig {
-        IORateLimitConfig {
+impl Default for IoRateLimitConfig {
+    fn default() -> IoRateLimitConfig {
+        IoRateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(0),
-            mode: IORateLimitMode::WriteOnly,
+            mode: IoRateLimitMode::WriteOnly,
             strict: false,
-            foreground_read_priority: IOPriority::High,
-            foreground_write_priority: IOPriority::High,
-            flush_priority: IOPriority::High,
-            level_zero_compaction_priority: IOPriority::Medium,
-            compaction_priority: IOPriority::Low,
-            replication_priority: IOPriority::High,
-            load_balance_priority: IOPriority::High,
-            gc_priority: IOPriority::High,
-            import_priority: IOPriority::Medium,
-            export_priority: IOPriority::Medium,
-            other_priority: IOPriority::High,
+            foreground_read_priority: IoPriority::High,
+            foreground_write_priority: IoPriority::High,
+            flush_priority: IoPriority::High,
+            level_zero_compaction_priority: IoPriority::Medium,
+            compaction_priority: IoPriority::Low,
+            replication_priority: IoPriority::High,
+            load_balance_priority: IoPriority::High,
+            gc_priority: IoPriority::High,
+            import_priority: IoPriority::Medium,
+            export_priority: IoPriority::Medium,
+            other_priority: IoPriority::High,
         }
     }
 }
 
-impl IORateLimitConfig {
-    pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
-        let limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
+impl IoRateLimitConfig {
+    pub fn build(&self, enable_statistics: bool) -> IoRateLimiter {
+        let limiter = IoRateLimiter::new(self.mode, self.strict, enable_statistics);
         limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
-        limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
-        limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
-        limiter.set_io_priority(IOType::Flush, self.flush_priority);
+        limiter.set_io_priority(IoType::ForegroundRead, self.foreground_read_priority);
+        limiter.set_io_priority(IoType::ForegroundWrite, self.foreground_write_priority);
+        limiter.set_io_priority(IoType::Flush, self.flush_priority);
         limiter.set_io_priority(
-            IOType::LevelZeroCompaction,
+            IoType::LevelZeroCompaction,
             self.level_zero_compaction_priority,
         );
-        limiter.set_io_priority(IOType::Compaction, self.compaction_priority);
-        limiter.set_io_priority(IOType::Replication, self.replication_priority);
-        limiter.set_io_priority(IOType::LoadBalance, self.load_balance_priority);
-        limiter.set_io_priority(IOType::Gc, self.gc_priority);
-        limiter.set_io_priority(IOType::Import, self.import_priority);
-        limiter.set_io_priority(IOType::Export, self.export_priority);
-        limiter.set_io_priority(IOType::Other, self.other_priority);
+        limiter.set_io_priority(IoType::Compaction, self.compaction_priority);
+        limiter.set_io_priority(IoType::Replication, self.replication_priority);
+        limiter.set_io_priority(IoType::LoadBalance, self.load_balance_priority);
+        limiter.set_io_priority(IoType::Gc, self.gc_priority);
+        limiter.set_io_priority(IoType::Import, self.import_priority);
+        limiter.set_io_priority(IoType::Export, self.export_priority);
+        limiter.set_io_priority(IoType::RewriteLog, self.compaction_priority);
+        limiter.set_io_priority(IoType::Other, self.other_priority);
         limiter
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.other_priority != IOPriority::High {
+        if self.other_priority != IoPriority::High {
             warn!(
                 "Occasionally some critical IO operations are tagged as IOType::Other, \
                   e.g. IOs are fired from unmanaged threads, thread-local type storage exceeds \
                   capacity. To be on the safe side, change priority for IOType::Other from \
                   {:?} to {:?}",
                 self.other_priority,
-                IOPriority::High
+                IoPriority::High
             );
-            self.other_priority = IOPriority::High;
+            self.other_priority = IoPriority::High;
         }
         if self.gc_priority != self.foreground_write_priority {
             warn!(
@@ -347,7 +419,7 @@ impl IORateLimitConfig {
             );
             self.gc_priority = self.foreground_write_priority;
         }
-        if self.mode != IORateLimitMode::WriteOnly {
+        if self.mode != IoRateLimitMode::WriteOnly {
             return Err(
                 "storage.io-rate-limit.mode other than write-only is not supported.".into(),
             );
@@ -358,21 +430,71 @@ impl IORateLimitConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
     fn test_validate_storage_config() {
         let mut cfg = Config::default();
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
-        let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
         cfg.scheduler_worker_pool_size = max_pool_size;
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         cfg.scheduler_worker_pool_size = 0;
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
 
         cfg.scheduler_worker_pool_size = max_pool_size + 1;
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
+    }
+
+    #[test]
+    fn test_validate_engine_type_config() {
+        let mut cfg = Config::default();
+        cfg.engine = EngineType::RaftKv;
+        cfg.validate().unwrap();
+        assert_eq!(cfg.engine, EngineType::RaftKv);
+
+        cfg.engine = EngineType::RaftKv2;
+        cfg.validate().unwrap();
+        assert_eq!(cfg.engine, EngineType::RaftKv2);
+
+        let v1_kv_db_path =
+            config::canonicalize_sub_path(&cfg.data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
+        fs::create_dir_all(&v1_kv_db_path).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.engine, EngineType::RaftKv);
+        fs::remove_dir_all(&v1_kv_db_path).unwrap();
+
+        let v2_tablet_path =
+            config::canonicalize_sub_path(&cfg.data_dir, DEFAULT_TABLET_SUB_DIR).unwrap();
+        fs::create_dir_all(&v2_tablet_path).unwrap();
+        cfg.engine = EngineType::RaftKv;
+        cfg.validate().unwrap();
+        assert_eq!(cfg.engine, EngineType::RaftKv2);
+
+        // both v1 and v2 data exists, throw error
+        fs::create_dir_all(&v1_kv_db_path).unwrap();
+        cfg.validate().unwrap_err();
+        fs::remove_dir_all(&v1_kv_db_path).unwrap();
+        fs::remove_dir_all(&v2_tablet_path).unwrap();
+    }
+
+    #[test]
+    fn test_adjust_shard_bits() {
+        let config = BlockCacheConfig::default();
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(1).0 as usize);
+        assert_eq!(shard_bits, 3);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(4).0 as usize);
+        assert_eq!(shard_bits, 5);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(8).0 as usize);
+        assert_eq!(shard_bits, 6);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::mb(1).0 as usize);
+        assert_eq!(shard_bits, 1);
     }
 }

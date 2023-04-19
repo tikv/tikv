@@ -1,0 +1,15 @@
+[package]
+name = "tracker"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+collections = { workspace = true }
+crossbeam-utils = "0.8"
+kvproto = { workspace = true }
+lazy_static = "1"
+parking_lot = "0.12"
+pin-project = "1"
+prometheus = "0.13"
+slab = "0.4"

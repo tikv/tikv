@@ -1,62 +1,71 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::AtomicU64, Arc};
+use std::{
+    marker::PhantomData,
+    sync::{atomic::AtomicU64, Arc},
+};
 
+use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{
-    ApiVersion, ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest,
+use kvproto::{
+    kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
+    metapb,
 };
-use raftstore::coprocessor::RegionInfoProvider;
-use raftstore::router::RaftStoreBlackHole;
-use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
-use tikv::storage::config::Config;
-use tikv::storage::kv::RocksEngine;
-use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::{
-    test_util::GetConsumer, txn::commands, Engine, KvGetStatistics, PrewriteResult, Result,
-    Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
+use raftstore::coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider};
+use tikv::{
+    server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
+    storage::{
+        config::Config, kv::RocksEngine, lock_manager::MockLockManager, test_util::GetConsumer,
+        txn::commands, Engine, KvGetStatistics, PrewriteResult, Result, Storage, TestEngineBuilder,
+        TestStorageBuilder, TxnStatus,
+    },
 };
 use tikv_util::time::Instant;
+use tracker::INVALID_TRACKER_TOKEN;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
 ///
 /// Only used for test purpose.
-pub struct SyncTestStorageBuilder<E: Engine> {
+pub struct SyncTestStorageBuilder<E: Engine, F: KvFormat> {
     engine: E,
     config: Option<Config>,
     gc_config: Option<GcConfig>,
-    api_version: ApiVersion,
+    _phantom: PhantomData<F>,
 }
 
-impl SyncTestStorageBuilder<RocksEngine> {
-    pub fn new(api_version: ApiVersion) -> Self {
+/// SyncTestStorageBuilder for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type SyncTestStorageBuilderApiV1<E> = SyncTestStorageBuilder<E, ApiV1>;
+
+impl<F: KvFormat> SyncTestStorageBuilder<RocksEngine, F> {
+    pub fn new() -> Self {
         Self {
             engine: TestEngineBuilder::new()
-                .api_version(api_version)
+                .api_version(F::TAG)
                 .build()
                 .unwrap(),
             config: None,
             gc_config: None,
-            api_version,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl Default for SyncTestStorageBuilder<RocksEngine> {
+impl Default for SyncTestStorageBuilder<RocksEngine, ApiV1> {
     fn default() -> Self {
-        Self::new(ApiVersion::V1)
+        Self::new()
     }
 }
 
-impl<E: Engine> SyncTestStorageBuilder<E> {
+impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
     pub fn from_engine(engine: E) -> Self {
         Self {
             engine,
             config: None,
             gc_config: None,
-            api_version: ApiVersion::V1,
+            _phantom: PhantomData,
         }
     }
 
@@ -72,20 +81,20 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
-    pub fn build(mut self) -> Result<SyncTestStorage<E>> {
-        let mut builder = TestStorageBuilder::from_engine_and_lock_mgr(
+    pub fn build(mut self, store_id: u64) -> Result<SyncTestStorage<E, F>> {
+        let mut builder = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
             self.engine.clone(),
-            DummyLockManager {},
-            self.config
-                .as_ref()
-                .map(|cfg| cfg.api_version())
-                .unwrap_or_default(),
+            MockLockManager::new(),
         );
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
-        builder = builder.set_api_version(self.api_version);
-        SyncTestStorage::from_storage(builder.build()?, self.gc_config.unwrap_or_default())
+        builder = builder.set_api_version(F::TAG);
+        SyncTestStorage::from_storage(
+            store_id,
+            builder.build()?,
+            self.gc_config.unwrap_or_default(),
+        )
     }
 }
 
@@ -93,22 +102,30 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 ///
 /// Only used for test purpose.
 #[derive(Clone)]
-pub struct SyncTestStorage<E: Engine> {
-    gc_worker: GcWorker<E, RaftStoreBlackHole>,
-    store: Storage<E, DummyLockManager>,
+pub struct SyncTestStorage<E: Engine, F: KvFormat> {
+    gc_worker: GcWorker<E>,
+    store: Storage<E, MockLockManager, F>,
 }
 
-impl<E: Engine> SyncTestStorage<E> {
-    pub fn from_storage(storage: Storage<E, DummyLockManager>, config: GcConfig) -> Result<Self> {
+/// SyncTestStorage for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, ApiV1>;
+
+impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
+    pub fn from_storage(
+        store_id: u64,
+        storage: Storage<E, MockLockManager, F>,
+        config: GcConfig,
+    ) -> Result<Self> {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
-            RaftStoreBlackHole,
             tx,
             config,
             Default::default(),
+            Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start()?;
+        gc_worker.start(store_id)?;
         Ok(Self {
             gc_worker,
             store: storage,
@@ -124,7 +141,7 @@ impl<E: Engine> SyncTestStorage<E> {
             .unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockManager> {
+    pub fn get_storage(&self) -> Storage<E, MockLockManager, F> {
         self.store.clone()
     }
 
@@ -171,10 +188,11 @@ impl<E: Engine> SyncTestStorage<E> {
                 req
             })
             .collect();
+        let trackers = keys.iter().map(|_| INVALID_TRACKER_TOKEN).collect();
         let p = GetConsumer::new();
         block_on(
             self.store
-                .batch_get_command(requests, ids, p.clone(), Instant::now()),
+                .batch_get_command(requests, ids, trackers, p.clone(), Instant::now()),
         )?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
@@ -324,8 +342,13 @@ impl<E: Engine> SyncTestStorage<E> {
         .unwrap()
     }
 
-    pub fn gc(&self, _: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
-        wait_op!(|cb| self.gc_worker.gc(safe_point.into(), cb)).unwrap()
+    pub fn gc(
+        &self,
+        region: metapb::Region,
+        _: Context,
+        safe_point: impl Into<TimeStamp>,
+    ) -> Result<()> {
+        wait_op!(|cb| self.gc_worker.gc(region, safe_point.into(), cb)).unwrap()
     }
 
     pub fn delete_range(

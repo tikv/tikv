@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
 use engine_traits::{Range, RangePropertiesExt, Result};
+
+use crate::engine::PanicEngine;
 
 impl RangePropertiesExt for PanicEngine {
     fn get_range_approximate_keys(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {

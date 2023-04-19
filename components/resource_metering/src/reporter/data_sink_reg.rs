@@ -1,12 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Task;
-use crate::DataSink;
-
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tikv_util::warn;
-use tikv_util::worker::Scheduler;
+use tikv_util::{warn, worker::Scheduler};
+
+use super::Task;
+use crate::DataSink;
 
 /// `DataSinkRegHandle` accepts registrations of [DataSink].
 ///

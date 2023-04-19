@@ -90,8 +90,9 @@ impl ErrorCodeExt for EvaluateError {
 #[error(transparent)]
 pub struct StorageError(#[from] pub anyhow::Error);
 
-/// We want to restrict the type of errors to be either a `StorageError` or `EvaluateError`, thus
-/// `failure::Error` is not used. Instead, we introduce our own error enum.
+/// We want to restrict the type of errors to be either a `StorageError` or
+/// `EvaluateError`, thus `failure::Error` is not used. Instead, we introduce
+/// our own error enum.
 #[derive(Debug, Error)]
 pub enum ErrorInner {
     #[error("Storage error: {0}")]

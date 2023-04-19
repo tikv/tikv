@@ -16,7 +16,7 @@ impl RocksReadOptions {
 impl From<engine_traits::ReadOptions> for RocksReadOptions {
     fn from(opts: engine_traits::ReadOptions) -> Self {
         let mut r = RawReadOptions::default();
-        r.fill_cache(opts.fill_cache());
+        r.set_fill_cache(opts.fill_cache());
         RocksReadOptions(r)
     }
 }
@@ -40,6 +40,9 @@ impl From<engine_traits::WriteOptions> for RocksWriteOptions {
         let mut r = RawWriteOptions::default();
         r.set_sync(opts.sync());
         r.set_no_slowdown(opts.no_slowdown());
+        r.disable_wal(opts.disable_wal());
+        // TODO: enable it.
+        r.set_memtable_insert_hint_per_batch(false);
         RocksWriteOptions(r)
     }
 }
@@ -59,16 +62,20 @@ impl From<engine_traits::IterOptions> for RocksReadOptions {
 
 fn build_read_opts(iter_opts: engine_traits::IterOptions) -> RawReadOptions {
     let mut opts = RawReadOptions::new();
-    opts.fill_cache(iter_opts.fill_cache());
+    opts.set_fill_cache(iter_opts.fill_cache());
     opts.set_max_skippable_internal_keys(iter_opts.max_skippable_internal_keys());
     if iter_opts.key_only() {
         opts.set_titan_key_only(true);
     }
     if iter_opts.total_order_seek_used() {
         opts.set_total_order_seek(true);
+        // TODO: enable it.
+        opts.set_auto_prefix_mode(false);
     } else if iter_opts.prefix_same_as_start() {
         opts.set_prefix_same_as_start(true);
     }
+    // TODO: enable it.
+    opts.set_adaptive_readahead(false);
 
     if iter_opts.hint_min_ts().is_some() || iter_opts.hint_max_ts().is_some() {
         opts.set_table_filter(TsFilter::new(

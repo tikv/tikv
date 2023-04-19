@@ -1,51 +1,72 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+/// Provides profilers for TiKV.
 mod profile;
-pub mod region_meta;
-use self::profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
+use std::{
+    error::Error as StdError,
+    net::SocketAddr,
+    path::PathBuf,
+    pin::Pin,
+    str::{self, FromStr},
+    sync::Arc,
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
-
-use std::error::Error as StdError;
-use std::marker::PhantomData;
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::str::{self, FromStr};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
 
 use async_stream::stream;
 use collections::HashMap;
-use engine_traits::KvEngine;
-use futures::compat::{Compat01As03, Stream01CompatExt};
-use futures::future::{ok, poll_fn};
-use futures::prelude::*;
-use hyper::server::accept::Accept;
-use hyper::server::conn::{AddrIncoming, AddrStream};
-use hyper::server::Builder as HyperBuilder;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use flate2::{write::GzEncoder, Compression};
+use futures::{
+    compat::{Compat01As03, Stream01CompatExt},
+    future::{ok, poll_fn},
+    prelude::*,
+};
+use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
+use hyper::{
+    self, header,
+    server::{
+        accept::Accept,
+        conn::{AddrIncoming, AddrStream},
+        Builder as HyperBuilder,
+    },
+    service::{make_service_fn, service_fn},
+    Body, Method, Request, Response, Server, StatusCode,
+};
+use kvproto::resource_manager::ResourceGroup;
 use online_config::OnlineConfig;
-use openssl::ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use openssl::x509::X509;
+use openssl::{
+    ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
+    x509::X509,
+};
 use pin_project::pin_project;
-use raftstore::store::{transport::CasualRouter, CasualMessage};
+pub use profile::{
+    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
+    read_file, start_one_cpu_profile, start_one_heap_profile,
+};
+use prometheus::TEXT_FORMAT;
 use regex::Regex;
+use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
+use serde::Serialize;
 use serde_json::Value;
-use tikv_util::logger::set_log_level;
-use tikv_util::metrics::dump;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::runtime::{Builder, Handle, Runtime};
-use tokio::sync::oneshot::{self, Receiver, Sender};
+use tikv_kv::RaftExtension;
+use tikv_util::{
+    logger::set_log_level,
+    metrics::{dump, dump_to},
+    timer::GLOBAL_TIMER_HANDLE,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    runtime::{Builder, Handle, Runtime},
+    sync::oneshot::{self, Receiver, Sender},
+};
 use tokio_openssl::SslStream;
 
-use crate::config::{log_level_serde, ConfigController};
-use crate::server::Result;
+use crate::{
+    config::{ConfigController, LogLevel},
+    server::Result,
+    tikv_util::sys::thread::ThreadBuildWrapper,
+};
 
 static TIMER_CANCELED: &str = "tokio timer canceled";
 
@@ -59,11 +80,10 @@ static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LogLevelRequest {
-    #[serde(with = "log_level_serde")]
-    pub log_level: slog::Level,
+    pub log_level: LogLevel,
 }
 
-pub struct StatusServer<E, R> {
+pub struct StatusServer<R> {
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -72,12 +92,11 @@ pub struct StatusServer<E, R> {
     router: R,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
-    _snap: PhantomData<E>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
-impl<E, R> StatusServer<E, R>
+impl<R> StatusServer<R>
 where
-    E: 'static,
     R: 'static + Send,
 {
     pub fn new(
@@ -86,13 +105,14 @@ where
         security_config: Arc<SecurityConfig>,
         router: R,
         store_path: PathBuf,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
-            .on_thread_start(|| debug!("Status server started"))
-            .on_thread_stop(|| debug!("stopping status server"))
+            .after_start_wrapper(|| debug!("Status server started"))
+            .before_stop_wrapper(|| debug!("stopping status server"))
             .build()?;
 
         let (tx, rx) = oneshot::channel::<()>();
@@ -105,7 +125,7 @@ where
             router,
             security_config,
             store_path,
-            _snap: PhantomData,
+            resource_manager,
         })
     }
 
@@ -333,7 +353,8 @@ where
                 Ok(val) => val,
                 Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
-            None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
+            None => 99, /* Default frequency of sampling. 99Hz to avoid coincide with special
+                         * periods */
         };
 
         let prototype_content_type: hyper::http::HeaderValue =
@@ -383,7 +404,7 @@ where
 
         match log_level_request {
             Ok(req) => {
-                set_log_level(req.log_level);
+                set_log_level(req.log_level.into());
                 Ok(Response::new(Body::empty()))
             }
             Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
@@ -403,10 +424,9 @@ where
     }
 }
 
-impl<E, R> StatusServer<E, R>
+impl<R> StatusServer<R>
 where
-    E: KvEngine,
-    R: 'static + Send + CasualRouter<E> + Clone,
+    R: 'static + Send + RaftExtension + Clone,
 {
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
@@ -431,33 +451,18 @@ where
                 ));
             }
         };
-        let (tx, rx) = oneshot::channel();
-        match router.send(
-            id,
-            CasualMessage::AccessPeer(Box::new(move |peer| {
-                if let Err(meta) = tx.send(region_meta::RegionMeta::new(peer)) {
-                    error!("receiver dropped, region meta: {:?}", meta)
-                }
-            })),
-        ) {
-            Ok(_) => (),
-            Err(raftstore::Error::RegionNotFound(_)) => {
+        let f = router.query_region(id);
+        let meta = match f.await {
+            Ok(meta) => meta,
+            Err(tikv_kv::Error(box tikv_kv::ErrorInner::Request(header)))
+                if header.has_region_not_found() =>
+            {
                 return not_found(format!("region({}) not found", id));
             }
             Err(err) => {
                 return Ok(make_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("channel pending or disconnect: {}", err),
-                ));
-            }
-        }
-
-        let meta = match rx.await {
-            Ok(meta) => meta,
-            Err(_) => {
-                return Ok(make_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "query cancelled",
+                    format!("query failed: {}", err),
                 ));
             }
         };
@@ -471,6 +476,22 @@ where
                 ));
             }
         };
+
+        #[cfg(feature = "trace-tablet-lifetime")]
+        let body = {
+            let query = req.uri().query().unwrap_or("");
+            let query_pairs: HashMap<_, _> =
+                url::form_urlencoded::parse(query.as_bytes()).collect();
+
+            let mut body = body;
+            if query_pairs.contains_key("trace-tablet") {
+                for s in engine_rocks::RocksEngine::trace(id) {
+                    body.push(b'\n');
+                    body.extend_from_slice(s.as_bytes());
+                }
+            };
+            body
+        };
         match Response::builder()
             .header("content-type", "application/json")
             .body(hyper::Body::from(body))
@@ -481,6 +502,31 @@ where
                 format!("fails to build response: {}", err),
             )),
         }
+    }
+
+    fn handle_get_metrics(
+        req: Request<Body>,
+        mgr: &ConfigController,
+    ) -> hyper::Result<Response<Body>> {
+        let should_simplify = mgr.get_current().server.simplify_metrics;
+        let gz_encoding = client_accept_gzip(&req);
+        let metrics = if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder, should_simplify);
+            encoder.finish().unwrap()
+        } else {
+            dump(should_simplify).into_bytes()
+        };
+        let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+        if gz_encoding {
+            resp.headers_mut()
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        Ok(resp)
     }
 
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
@@ -494,6 +540,7 @@ where
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
+        let resource_manager = self.resource_manager.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -501,6 +548,7 @@ where
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let store_path = store_path.clone();
+            let resource_manager = resource_manager.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -509,6 +557,7 @@ where
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     let store_path = store_path.clone();
+                    let resource_manager = resource_manager.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -521,8 +570,9 @@ where
                         }
 
                         // 1. POST "/config" will modify the configuration of TiKV.
-                        // 2. GET "/region" will get start key and end key. These keys could be actual
-                        // user data since in some cases the data itself is stored in the key.
+                        // 2. GET "/region" will get start key and end key. These keys could be
+                        // actual user data since in some cases the data itself is stored in the
+                        // key.
                         let should_check_cert = !matches!(
                             (&method, path.as_ref()),
                             (&Method::GET, "/metrics")
@@ -539,7 +589,9 @@ where
                         }
 
                         match (method, path.as_ref()) {
-                            (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
+                            (Method::GET, "/metrics") => {
+                                Self::handle_get_metrics(req, &cfg_controller)
+                            }
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
@@ -580,6 +632,9 @@ where
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
+                            (Method::GET, "/resource_groups") => {
+                                Self::handle_get_all_resource_groups(resource_manager.as_ref())
+                            }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }
@@ -608,15 +663,7 @@ where
             && !self.security_config.key_path.is_empty()
             && !self.security_config.ca_path.is_empty()
         {
-            let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-            acceptor.set_ca_file(&self.security_config.ca_path)?;
-            acceptor.set_certificate_chain_file(&self.security_config.cert_path)?;
-            acceptor.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)?;
-            if !self.security_config.cert_allowed_cn.is_empty() {
-                acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
-            }
-            let acceptor = acceptor.build();
-            let tls_incoming = tls_incoming(acceptor, incoming);
+            let tls_incoming = tls_incoming(self.security_config.clone(), incoming)?;
             let server = Server::builder(tls_incoming);
             self.start_serve(server);
         } else {
@@ -624,6 +671,65 @@ where
             self.start_serve(server);
         }
         Ok(())
+    }
+
+    pub fn handle_get_all_resource_groups(
+        mgr: Option<&Arc<ResourceGroupManager>>,
+    ) -> hyper::Result<Response<Body>> {
+        let groups = if let Some(mgr) = mgr {
+            mgr.get_all_resource_groups()
+                .into_iter()
+                .map(into_debug_request_group)
+                .collect()
+        } else {
+            vec![]
+        };
+        let body = match serde_json::to_vec(&groups) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(make_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ));
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ResourceGroupSetting {
+    name: String,
+    ru: u64,
+    priority: u32,
+    burst_limit: i64,
+}
+
+fn into_debug_request_group(rg: ResourceGroup) -> ResourceGroupSetting {
+    ResourceGroupSetting {
+        name: rg.name,
+        ru: rg
+            .r_u_settings
+            .get_ref()
+            .get_r_u()
+            .get_settings()
+            .get_fill_rate(),
+        priority: rg.priority,
+        burst_limit: rg
+            .r_u_settings
+            .get_ref()
+            .get_r_u()
+            .get_settings()
+            .get_burst_limit(),
     }
 }
 
@@ -671,11 +777,41 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
     }
 }
 
+fn tls_acceptor(security_config: &SecurityConfig) -> Result<SslAcceptor> {
+    let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
+    acceptor.set_ca_file(&security_config.ca_path)?;
+    acceptor.set_certificate_chain_file(&security_config.cert_path)?;
+    acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
+    if !security_config.cert_allowed_cn.is_empty() {
+        acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+    }
+    Ok(acceptor.build())
+}
+
 fn tls_incoming(
-    acceptor: SslAcceptor,
+    security_config: Arc<SecurityConfig>,
     mut incoming: AddrIncoming,
-) -> impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error> {
-    let context = acceptor.into_context();
+) -> Result<impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error>> {
+    let mut context = tls_acceptor(&security_config)?.into_context();
+    let mut cert_last_modified_time = None;
+    let mut handle_ssl_error = move |context: &mut SslContext| {
+        match security_config.is_modified(&mut cert_last_modified_time) {
+            Ok(true) => match tls_acceptor(&security_config) {
+                Ok(acceptor) => {
+                    *context = acceptor.into_context();
+                }
+                Err(e) => {
+                    error!("Failed to reload TLS certificate: {}", e);
+                }
+            },
+            Ok(false) => {
+                // TLS certificate is not changed, do nothing
+            }
+            Err(e) => {
+                error!("Failed to load certificate file metadata: {}", e);
+            }
+        }
+    };
     let s = stream! {
         loop {
             let stream = match poll_fn(|cx| Pin::new(&mut incoming).poll_accept(cx)).await {
@@ -690,6 +826,7 @@ fn tls_incoming(
                 Ok(ssl) => ssl,
                 Err(err) => {
                     error!("Status server error: {}", err);
+                    handle_ssl_error(&mut context);
                     continue;
                 }
             };
@@ -697,6 +834,7 @@ fn tls_incoming(
                 Ok(mut ssl_stream) => match Pin::new(&mut ssl_stream).accept().await {
                     Err(_) => {
                         error!("Status server error: TLS handshake error");
+                        handle_ssl_error(&mut context);
                         continue;
                     },
                     Ok(()) => {
@@ -705,12 +843,13 @@ fn tls_incoming(
                 }
                 Err(err) => {
                     error!("Status server error: {}", err);
+                    handle_ssl_error(&mut context);
                     continue;
                 }
             };
         }
     };
-    TlsIncoming(s)
+    Ok(TlsIncoming(s))
 }
 
 #[pin_project]
@@ -787,7 +926,8 @@ async fn handle_fail_points_request(req: Request<Body>) -> hyper::Result<Respons
             Ok(Response::new(body.into()))
         }
         (Method::GET, _) => {
-            // In this scope the path must be like /fail...(/...), which starts with FAIL_POINTS_REQUEST_PATH and may or may not have a sub path
+            // In this scope the path must be like /fail...(/...), which starts with
+            // FAIL_POINTS_REQUEST_PATH and may or may not have a sub path
             // Now we return 404 when path is neither /fail nor /fail/
             if path != FAIL_POINTS_REQUEST_PATH && path != fail_path {
                 return Ok(Response::builder()
@@ -809,6 +949,21 @@ async fn handle_fail_points_request(req: Request<Body>) -> hyper::Result<Respons
             .body(Body::empty())
             .unwrap()),
     }
+}
+
+// check if the client allow return response with gzip compression
+// the following logic is port from prometheus's golang:
+// https://github.com/prometheus/client_golang/blob/24172847e35ba46025c49d90b8846b59eb5d9ead/prometheus/promhttp/http.go#L155-L176
+fn client_accept_gzip(req: &Request<Body>) -> bool {
+    let encoding = req
+        .headers()
+        .get(ACCEPT_ENCODING)
+        .map(|enc| enc.to_str().unwrap_or_default())
+        .unwrap_or_default();
+    encoding
+        .split(',')
+        .map(|s| s.trim())
+        .any(|s| s == "gzip" || s.starts_with("gzip;"))
 }
 
 // Decode different type of json value to string value
@@ -846,48 +1001,50 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
-    use futures::future::ok;
-    use futures::prelude::*;
-    use hyper::client::HttpConnector;
-    use hyper::{Body, Client, Method, Request, StatusCode, Uri};
-    use hyper_openssl::HttpsConnector;
-    use openssl::ssl::SslFiletype;
-    use openssl::ssl::{SslConnector, SslMethod};
+    use std::{env, io::Read, path::PathBuf, sync::Arc};
 
-    use std::env;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use crate::config::{ConfigController, TiKvConfig};
-    use crate::server::status_server::profile::TEST_PROFILE_MUTEX;
-    use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
-    use engine_test::kv::KvTestEngine;
+    use flate2::read::GzDecoder;
+    use futures::{
+        executor::block_on,
+        future::{ok, BoxFuture},
+        prelude::*,
+    };
+    use http::header::{HeaderValue, ACCEPT_ENCODING};
+    use hyper::{body::Buf, client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
+    use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
-    use raftstore::store::transport::CasualRouter;
-    use raftstore::store::CasualMessage;
+    use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
+    use raftstore::store::region_meta::RegionMeta;
     use security::SecurityConfig;
     use test_util::new_security_cfg;
+    use tikv_kv::RaftExtension;
     use tikv_util::logger::get_log_level;
+
+    use crate::{
+        config::{ConfigController, TikvConfig},
+        server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
+    };
 
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<KvTestEngine> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<KvTestEngine>) -> raftstore::Result<()> {
-            Err(raftstore::Error::RegionNotFound(region_id))
+    impl RaftExtension for MockRouter {
+        fn query_region(&self, region_id: u64) -> BoxFuture<'static, tikv_kv::Result<RegionMeta>> {
+            Box::pin(async move { Err(raftstore::Error::RegionNotFound(region_id).into()) })
         }
     }
 
     #[test]
     fn test_status_service() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -929,12 +1086,14 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -958,12 +1117,12 @@ mod tests {
                 .await
                 .unwrap();
             let resp_json = String::from_utf8_lossy(&v).to_string();
-            let cfg = TiKvConfig::default();
+            let cfg = TikvConfig::default();
             serde_json::to_string(&cfg.get_encoder())
                 .map(|cfg_json| {
                     assert_eq!(resp_json, cfg_json);
                 })
-                .expect("Could not convert TiKvConfig to string");
+                .expect("Could not convert TikvConfig to string");
         });
         block_on(handle).unwrap();
         status_server.stop();
@@ -973,12 +1132,14 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1088,12 +1249,14 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1131,12 +1294,14 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1166,12 +1331,14 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1238,12 +1405,14 @@ mod tests {
     #[test]
     #[ignore]
     fn test_pprof_heap_service() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1267,12 +1436,14 @@ mod tests {
     #[test]
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1297,13 +1468,72 @@ mod tests {
     }
 
     #[test]
-    fn test_change_log_level() {
+    fn test_metrics() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+            None,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+
+        // test plain test
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/metrics")
+            .build()
+            .unwrap();
+
+        let client = Client::new();
+        let url_cloned = uri.clone();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.get(url_cloned).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        String::from_utf8(body_bytes.as_ref().to_owned()).unwrap();
+
+        // test gzip
+        let handle = status_server.thread_pool.spawn(async move {
+            let body = Body::default();
+            let mut req = Request::new(body);
+            req.headers_mut()
+                .insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+            *req.uri_mut() = uri;
+            let client = Client::new();
+            client.request(req).await.unwrap()
+        });
+        let resp = block_on(handle).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("Content-Encoding").unwrap(), "gzip");
+        let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        let mut decoded_bytes = vec![];
+        GzDecoder::new(body_bytes.reader())
+            .read_to_end(&mut decoded_bytes)
+            .unwrap();
+        String::from_utf8(decoded_bytes).unwrap();
+
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_change_log_level() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            temp_dir.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1316,7 +1546,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let new_log_level = slog::Level::Debug;
+        let new_log_level = slog::Level::Debug.into();
         let mut log_level_request = Request::new(Body::from(
             serde_json::to_string(&LogLevelRequest {
                 log_level: new_log_level,
@@ -1336,7 +1566,7 @@ mod tests {
                 .await
                 .map(move |res| {
                     assert_eq!(res.status(), StatusCode::OK);
-                    assert_eq!(get_log_level(), Some(new_log_level));
+                    assert_eq!(get_log_level(), Some(new_log_level.into()));
                 })
                 .unwrap()
         });

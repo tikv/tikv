@@ -1,19 +1,15 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::super::Result;
-use super::modifier::BinaryModifier;
-use super::path_expr::PathExpression;
-use super::{Json, JsonRef};
+use super::{super::Result, modifier::BinaryModifier, path_expr::PathExpression, Json, JsonRef};
 
 impl<'a> JsonRef<'a> {
     /// Removes elements from Json,
     /// All path expressions cannot contain * or ** wildcard.
     /// If any error occurs, the input won't be changed.
     pub fn remove(&self, path_expr_list: &[PathExpression]) -> Result<Json> {
-        if path_expr_list
-            .iter()
-            .any(|expr| expr.legs.is_empty() || expr.contains_any_asterisk())
-        {
+        if path_expr_list.iter().any(|expr| {
+            expr.legs.is_empty() || expr.contains_any_asterisk() || expr.contains_any_range()
+        }) {
             return Err(box_err!("Invalid path expression"));
         }
 
@@ -28,8 +24,7 @@ impl<'a> JsonRef<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::path_expr::parse_json_path_expr;
-    use super::*;
+    use super::{super::path_expr::parse_json_path_expr, *};
 
     #[test]
     fn test_json_remove() {

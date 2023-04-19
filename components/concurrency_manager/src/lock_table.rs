@@ -1,13 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::key_handle::{KeyHandle, KeyHandleGuard};
-
-use crossbeam_skiplist::SkipMap;
 use std::{
     ops::Bound,
     sync::{Arc, Weak},
 };
+
+use crossbeam_skiplist::SkipMap;
 use txn_types::{Key, Lock};
+
+use super::key_handle::{KeyHandle, KeyHandleGuard};
 
 #[derive(Clone)]
 pub struct LockTable(pub Arc<SkipMap<Key, Weak<KeyHandle>>>);
@@ -32,12 +33,13 @@ impl LockTable {
             let entry = self.0.get_or_insert(key.clone(), weak);
             if entry.value().ptr_eq(&weak2) {
                 // If the weak ptr returned by `get_or_insert` equals to the one we inserted,
-                // `guard` refers to the KeyHandle in the lock table. Now, we can bind the handle
-                // to the table.
+                // `guard` refers to the KeyHandle in the lock table. Now, we can bind the
+                // handle to the table.
 
-                // SAFETY: The `table` field in `KeyHandle` is only accessed through the `set_table`
-                // or the `drop` method. It's impossible to have a concurrent `drop` here and `set_table`
-                // is only called here. So there is no concurrent access to the `table` field in `KeyHandle`.
+                // SAFETY: The `table` field in `KeyHandle` is only accessed through the
+                // `set_table` or the `drop` method. It's impossible to have a concurrent `drop`
+                // here and `set_table` is only called here. So there is no concurrent access to
+                // the `table` field in `KeyHandle`.
                 unsafe {
                     guard.handle().set_table(self.clone());
                 }
@@ -55,7 +57,7 @@ impl LockTable {
     ) -> Result<(), E> {
         if let Some(lock_ref) = self.get(key) {
             return lock_ref.with_lock(|lock| {
-                if let Some(lock) = &*lock {
+                if let Some(lock) = lock {
                     return check_fn(lock);
                 }
                 Ok(())
@@ -121,13 +123,15 @@ impl LockTable {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
+
     use tokio::time::sleep;
     use txn_types::LockType;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_lock_key() {
@@ -154,9 +158,9 @@ mod test {
         assert_eq!(counter.load(Ordering::SeqCst), 100);
     }
 
-    fn ts_check(lock: &Lock, ts: u64) -> Result<(), Lock> {
+    fn ts_check(lock: &Lock, ts: u64) -> Result<(), Box<Lock>> {
         if lock.ts.into_inner() < ts {
-            Err(lock.clone())
+            Err(Box::new(lock.clone()))
         } else {
             Ok(())
         }
@@ -168,7 +172,7 @@ mod test {
         let key_k = Key::from_raw(b"k");
 
         // no lock found
-        assert!(lock_table.check_key(&key_k, |_| Err(())).is_ok());
+        lock_table.check_key(&key_k, |_| Err(())).unwrap();
 
         let lock = Lock::new(
             LockType::Lock,
@@ -186,10 +190,13 @@ mod test {
         });
 
         // lock passes check_fn
-        assert!(lock_table.check_key(&key_k, |l| ts_check(l, 5)).is_ok());
+        lock_table.check_key(&key_k, |l| ts_check(l, 5)).unwrap();
 
         // lock does not pass check_fn
-        assert_eq!(lock_table.check_key(&key_k, |l| ts_check(l, 20)), Err(lock));
+        assert_eq!(
+            lock_table.check_key(&key_k, |l| ts_check(l, 20)),
+            Err(Box::new(lock))
+        );
     }
 
     #[tokio::test]
@@ -227,33 +234,29 @@ mod test {
         });
 
         // no lock found
-        assert!(
-            lock_table
-                .check_range(
-                    Some(&Key::from_raw(b"m")),
-                    Some(&Key::from_raw(b"n")),
-                    |_, _| Err(())
-                )
-                .is_ok()
-        );
+        lock_table
+            .check_range(
+                Some(&Key::from_raw(b"m")),
+                Some(&Key::from_raw(b"n")),
+                |_, _| Err(()),
+            )
+            .unwrap();
 
         // lock passes check_fn
-        assert!(
-            lock_table
-                .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
-                .is_ok()
-        );
+        lock_table
+            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
+            .unwrap();
 
         // first lock does not pass check_fn
         assert_eq!(
             lock_table.check_range(Some(&Key::from_raw(b"a")), None, |_, l| ts_check(l, 25)),
-            Err(lock_k)
+            Err(Box::new(lock_k))
         );
 
         // first lock passes check_fn but the second does not
         assert_eq!(
             lock_table.check_range(None, None, |_, l| ts_check(l, 15)),
-            Err(lock_l)
+            Err(Box::new(lock_l))
         );
     }
 

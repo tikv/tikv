@@ -15,11 +15,9 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
     flush(cluster);
     // Wait for compaction.
     sleep_ms(interval * 2);
-    for engines in cluster.engines.values() {
-        let compact_write_bytes = engines
-            .kv
-            .as_inner()
-            .get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
+    for statistics in &cluster.kv_statistics {
+        let compact_write_bytes =
+            statistics.get_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
         if written {
             assert!(compact_write_bytes > 0);
         } else {
@@ -37,12 +35,14 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.rocksdb.lockcf.disable_auto_compactions = true;
     cluster.run();
 
-    // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no compaction.
+    // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no
+    // compaction.
     for i in 0..5 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
     }
-    // Generate one sst, if there are datas only in one memtable, no compactions will be triggered.
+    // Generate one sst, if there are datas only in one memtable, no compactions
+    // will be triggered.
     flush(cluster);
 
     // Write more 40 bytes, still not reach lock_cf_compact_bytes_threshold,

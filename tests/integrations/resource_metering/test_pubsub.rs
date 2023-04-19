@@ -1,12 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::resource_metering::test_suite::TestSuite;
-
 use std::collections::HashSet;
 
-use futures::executor::block_on;
-use futures::StreamExt;
+use futures::{executor::block_on, StreamExt};
 use tikv_util::config::ReadableDuration;
+
+use crate::resource_metering::test_suite::TestSuite;
 
 #[test]
 pub fn test_basic() {

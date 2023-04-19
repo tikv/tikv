@@ -6,7 +6,7 @@
 [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
-TiKV is an open-source, distributed, and transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+TiKV is an open-source, distributed, and transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created by [PingCAP](https://en.pingcap.com) to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
 The design of TiKV ('Ti' stands for titanium) is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
 
@@ -134,10 +134,6 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Client drivers
 
-Currently, the interfaces to TiKV are the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
-
-These are the clients for TiKV:
-
 - [Go](https://github.com/tikv/client-go) (The most stable and widely used)
 - [Java](https://github.com/tikv/client-java)
 - [Rust](https://github.com/tikv/client-rust)
@@ -155,7 +151,7 @@ A third-party security auditing was performed by Cure53. See the full report [he
 
 To report a security vulnerability, please send an email to [TiKV-security](mailto:tikv-security@lists.cncf.io) group.
 
-See [Security](./security/SECURITY.md) for the process and policy followed by the TiKV project.
+See [Security](SECURITY.md) for the process and policy followed by the TiKV project.
 
 ## Communication
 

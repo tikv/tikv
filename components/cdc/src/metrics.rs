@@ -1,15 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+
+use engine_rocks::ReadPerfContext;
 use lazy_static::*;
 use prometheus::*;
 use prometheus_static_metric::*;
-use std::cell::RefCell;
-use tikv::storage::kv::PerfStatisticsDelta;
 use tikv::storage::Statistics;
 
-/// Installing a new capture contains 2 phases, one for incremental scanning and one for
-/// fetching delta changes from raftstore. They can share some similar metrics, in which
-/// case we can use this tag to distinct them.
+/// Installing a new capture contains 2 phases, one for incremental scanning and
+/// one for fetching delta changes from raftstore. They can share some similar
+/// metrics, in which case we can use this tag to distinct them.
 pub const TAG_DELTA_CHANGE: &str = "delta_change";
 pub const TAG_INCREMENTAL_SCAN: &str = "incremental_scan";
 
@@ -107,6 +108,10 @@ lazy_static! {
         "The region which has minimal resolved ts"
     )
     .unwrap();
+    pub static ref CDC_MIN_RESOLVED_TS_LAG: IntGauge = register_int_gauge!(
+        "tikv_cdc_min_resolved_ts_lag",
+        "The lag between the minimal resolved ts and the current ts"
+    ).unwrap();
     pub static ref CDC_MIN_RESOLVED_TS: IntGauge = register_int_gauge!(
         "tikv_cdc_min_resolved_ts",
         "The minimal resolved ts for current regions"
@@ -200,19 +205,26 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref CDC_RAW_OUTLIER_RESOLVED_TS_GAP: Histogram = register_histogram!(
+        "tikv_cdc_raw_outlier_resolved_ts_gap_seconds",
+        "Bucketed histogram of the gap between cdc raw outlier resolver_ts and current tso",
+        exponential_buckets(1.0, 2.0, 15).unwrap() // outlier threshold is 60s by default.
+    )
+    .unwrap();
+
     pub static ref CDC_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(CDC_ROCKSDB_PERF_COUNTER, PerfCounter);
 }
 
 thread_local! {
-    pub static TLS_CDC_PERF_STATS: RefCell<PerfStatisticsDelta> = RefCell::new(PerfStatisticsDelta::default());
+    pub static TLS_CDC_PERF_STATS: RefCell<ReadPerfContext> = RefCell::new(ReadPerfContext::default());
 }
 
 macro_rules! tls_flush_perf_stat {
     ($local_stats:ident, $stat:ident) => {
         CDC_ROCKSDB_PERF_COUNTER_STATIC
             .$stat
-            .inc_by($local_stats.0.$stat as u64);
+            .inc_by($local_stats.$stat as u64);
     };
 }
 

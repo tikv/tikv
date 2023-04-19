@@ -1,14 +1,15 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::coprocessor::{KeyRange, Request};
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::{
+    coprocessor::{KeyRange, Request},
+    kvrpcpb::{Context, IsolationLevel},
+};
 use protobuf::Message;
+use test_coprocessor::*;
 use tipb::{
     AnalyzeColumnGroup, AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp,
     AnalyzeReq, AnalyzeType,
 };
-
-use test_coprocessor::*;
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
@@ -113,7 +114,7 @@ fn test_analyze_column_with_lock() {
 
     let product = ProductTable::new();
     for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
-        let (_, endpoint) = init_data_with_commit(&product, &data, false);
+        let (_, endpoint, _) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_column_req(&product, 3, 3, 3, 3, 4, 32);
         let mut ctx = Context::default();
@@ -148,7 +149,7 @@ fn test_analyze_column() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_column_req(&product, 3, 3, 3, 3, 4, 32);
     let resp = handle_request(&endpoint, req);
@@ -180,7 +181,7 @@ fn test_analyze_single_primary_column() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_column_req(&product, 1, 3, 3, 3, 4, 32);
     let resp = handle_request(&endpoint, req);
@@ -205,7 +206,7 @@ fn test_analyze_index_with_lock() {
 
     let product = ProductTable::new();
     for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
-        let (_, endpoint) = init_data_with_commit(&product, &data, false);
+        let (_, endpoint, _) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 0, 1);
         let mut ctx = Context::default();
@@ -245,7 +246,7 @@ fn test_analyze_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 2, 2);
     let resp = handle_request(&endpoint, req);
@@ -287,7 +288,7 @@ fn test_analyze_sampling_reservoir() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
 
     // Pass the 2nd column as a column group.
     let req = new_analyze_sampling_req(&product, 1, 5, 0.0);
@@ -319,7 +320,7 @@ fn test_analyze_sampling_bernoulli() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
 
     // Pass the 2nd column as a column group.
     let req = new_analyze_sampling_req(&product, 1, 0, 0.5);
@@ -345,7 +346,7 @@ fn test_invalid_range() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _) = init_data_with_commit(&product, &data, true);
     let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 0, 1);
     let mut key_range = KeyRange::default();
     key_range.set_start(b"xxx".to_vec());

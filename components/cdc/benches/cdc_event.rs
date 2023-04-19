@@ -1,10 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use cdc::CdcEvent;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use kvproto::cdcpb::ResolvedTs;
 use protobuf::Message;
-
-use cdc::CdcEvent;
 
 fn bench_cdc_event_size(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench_cdc_event_size");

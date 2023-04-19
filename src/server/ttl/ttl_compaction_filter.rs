@@ -1,27 +1,31 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ffi::CString;
-use std::marker::PhantomData;
+use std::{ffi::CString, marker::PhantomData};
 
-use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
-use api_version::{APIVersion, KeyMode, RawValue};
-use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
+use api_version::{KeyMode, KvFormat, RawValue};
+use engine_rocks::{
+    raw::{
+        CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
+        CompactionFilterFactory, CompactionFilterValueType, DBTableFileCreationReason,
+    },
+    RocksTtlProperties,
 };
-use engine_rocks::RocksTtlProperties;
 use engine_traits::raw_ttl::ttl_current_ts;
 
+use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
+
 #[derive(Default)]
-pub struct TTLCompactionFilterFactory<API: APIVersion> {
-    _phantom: PhantomData<API>,
+pub struct TtlCompactionFilterFactory<F: KvFormat> {
+    _phantom: PhantomData<F>,
 }
 
-impl<API: APIVersion> CompactionFilterFactory for TTLCompactionFilterFactory<API> {
+impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
+    type Filter = TtlCompactionFilter<F>;
+
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
-    ) -> *mut DBCompactionFilter {
+    ) -> Option<(CString, Self::Filter)> {
         let current = ttl_current_ts();
 
         let mut min_expire_ts = u64::MAX;
@@ -35,24 +39,28 @@ impl<API: APIVersion> CompactionFilterFactory for TTLCompactionFilterFactory<API
             }
         }
         if min_expire_ts > current {
-            return std::ptr::null_mut();
+            return None;
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = TTLCompactionFilter::<API> {
+        let filter = TtlCompactionFilter::<F> {
             ts: current,
             _phantom: PhantomData,
         };
-        unsafe { new_compaction_filter_raw(name, filter) }
+        Some((name, filter))
+    }
+
+    fn should_filter_table_file_creation(&self, _reason: DBTableFileCreationReason) -> bool {
+        true
     }
 }
 
-struct TTLCompactionFilter<API: APIVersion> {
+pub struct TtlCompactionFilter<F: KvFormat> {
     ts: u64,
-    _phantom: PhantomData<API>,
+    _phantom: PhantomData<F>,
 }
 
-impl<API: APIVersion> CompactionFilter for TTLCompactionFilter<API> {
+impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
     fn featured_filter(
         &mut self,
         _level: usize,
@@ -69,11 +77,11 @@ impl<API: APIVersion> CompactionFilter for TTLCompactionFilter<API> {
             return CompactionFilterDecision::Keep;
         }
         // Only consider raw keys.
-        if API::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
+        if F::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
             return CompactionFilterDecision::Keep;
         }
 
-        match API::decode_raw_value(value) {
+        match F::decode_raw_value(value) {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..

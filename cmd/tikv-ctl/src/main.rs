@@ -9,9 +9,22 @@ mod cmd;
 mod executor;
 mod util;
 
+use std::{
+    borrow::ToOwned,
+    fs::{self, File, OpenOptions},
+    io::{self, BufRead, BufReader, Read},
+    path::Path,
+    str,
+    string::ToString,
+    sync::Arc,
+    thread,
+    time::Duration,
+    u64,
+};
+
 use encryption_export::{
-    create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
-    DataKeyManager, DecrypterReader, Iv,
+    create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
+    DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
 use engine_traits::EncryptionKeyManager;
@@ -19,33 +32,24 @@ use file_system::calc_crc32;
 use futures::executor::block_on;
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
-use kvproto::debugpb::{Db as DBType, *};
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::SplitRegionRequest;
-use kvproto::raft_serverpb::SnapshotMeta;
-use kvproto::tikvpb::TikvClient;
+use kvproto::{
+    debugpb::{Db as DbType, *},
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::SplitRegionRequest,
+    raft_serverpb::SnapshotMeta,
+    tikvpb::TikvClient,
+};
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
+use raft_log_engine::ManagedFileSystem;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
-use std::borrow::ToOwned;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read};
-use std::path::Path;
-use std::string::ToString;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{str, thread, u64};
-use structopt::clap::ErrorKind;
-use structopt::StructOpt;
-use tikv::config::TiKvConfig;
-use tikv::server::debug::BottommostLevelCompaction;
-use tikv_util::{escape, run_and_wait_child_process, unescape};
+use structopt::{clap::ErrorKind, StructOpt};
+use tikv::{config::TikvConfig, server::debug::BottommostLevelCompaction};
+use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
 use txn_types::Key;
 
-use crate::cmd::*;
-use crate::executor::*;
-use crate::util::*;
+use crate::{cmd::*, executor::*, util::*};
 
 fn main() {
     let opt = Opt::from_args();
@@ -55,14 +59,16 @@ fn main() {
 
     // Initialize configuration and security manager.
     let cfg_path = opt.config.as_ref();
-    let cfg = cfg_path.map_or_else(
+    let mut cfg = cfg_path.map_or_else(
         || {
-            let mut cfg = TiKvConfig::default();
-            cfg.log.level = tikv_util::logger::get_level_by_string("warn").unwrap();
+            let mut cfg = TikvConfig::default();
+            cfg.log.level = tikv_util::logger::get_level_by_string("warn")
+                .unwrap()
+                .into();
             cfg
         },
         |path| {
-            let s = fs::read_to_string(&path).unwrap();
+            let s = fs::read_to_string(path).unwrap();
             toml::from_str(&s).unwrap()
         },
     );
@@ -96,9 +102,18 @@ fn main() {
             match args[0].as_str() {
                 "ldb" => run_ldb_command(args, &cfg),
                 "sst_dump" => run_sst_dump_command(args, &cfg),
-                "raft-engine-ctl" => run_raft_engine_ctl_command(args),
                 _ => Opt::clap().print_help().unwrap(),
             }
+        }
+        Cmd::RaftEngineCtl { args } => {
+            let key_manager =
+                data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                    .expect("data_key_manager_from_config should success");
+            let file_system = Arc::new(ManagedFileSystem::new(
+                key_manager.map(|m| Arc::new(m)),
+                None,
+            ));
+            raft_engine_ctl::run_command(args, file_system);
         }
         Cmd::BadSsts { manifest, pd } => {
             let data_dir = opt.data_dir.as_deref();
@@ -136,7 +151,7 @@ fn main() {
             let infile1 = Path::new(infile).canonicalize().unwrap();
             let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
 
-            let mthd = encryption_method_from_db_encryption_method(file_info.method);
+            let mthd = from_engine_encryption_method(file_info.method);
             if mthd == EncryptionMethod::Plaintext {
                 println!(
                     "{} is not encrypted, skip to decrypt it into {}",
@@ -154,7 +169,7 @@ fn main() {
                 .unwrap();
 
             let iv = Iv::from_slice(&file_info.iv).unwrap();
-            let f = File::open(&infile).unwrap();
+            let f = File::open(infile).unwrap();
             let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
 
             io::copy(&mut reader, &mut outf).unwrap();
@@ -181,6 +196,19 @@ fn main() {
                 DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
             }
         },
+        Cmd::CleanupEncryptionMeta {} => {
+            let key_manager =
+                match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                    .expect("data_key_manager_from_config should success")
+                {
+                    Some(mgr) => mgr,
+                    None => {
+                        println!("Encryption is disabled");
+                        return;
+                    }
+                };
+            key_manager.retain_encrypted_files(|fname| Path::new(fname).exists())
+        }
         Cmd::CompactCluster {
             db,
             cf,
@@ -190,7 +218,7 @@ fn main() {
             bottommost,
         } => {
             let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
-            let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
+            let db_type = if db == "kv" { DbType::Kv } else { DbType::Raft };
             let cfs = cf.iter().map(|s| s.as_ref()).collect();
             let from_key = from.map(|k| unescape(&k));
             let to_key = to.map(|k| unescape(&k));
@@ -221,9 +249,8 @@ fn main() {
                 .exit();
             }
 
-            let skip_paranoid_checks = opt.skip_paranoid_checks;
-            let debug_executor =
-                new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
+            cfg.rocksdb.paranoid_checks = Some(!opt.skip_paranoid_checks);
+            let debug_executor = new_debug_executor(&cfg, data_dir, host, Arc::clone(&mgr));
 
             match cmd {
                 Cmd::Print { cf, key } => {
@@ -231,7 +258,12 @@ fn main() {
                     debug_executor.dump_value(&cf, key);
                 }
                 Cmd::Raft { cmd: subcmd } => match subcmd {
-                    RaftCmd::Log { region, index, key } => {
+                    RaftCmd::Log {
+                        region,
+                        index,
+                        key,
+                        binary,
+                    } => {
                         let (id, index) = if let Some(key) = key.as_deref() {
                             keys::decode_raft_log_key(&unescape(key)).unwrap()
                         } else {
@@ -239,14 +271,25 @@ fn main() {
                             let index = index.unwrap();
                             (id, index)
                         };
-                        debug_executor.dump_raft_log(id, index);
+                        debug_executor.dump_raft_log(id, index, binary);
                     }
                     RaftCmd::Region {
                         regions,
                         skip_tombstone,
+                        start,
+                        end,
+                        limit,
                         ..
                     } => {
-                        debug_executor.dump_region_info(regions, skip_tombstone);
+                        let start_key = from_hex(&start).unwrap();
+                        let end_key = from_hex(&end).unwrap();
+                        debug_executor.dump_region_info(
+                            regions,
+                            &start_key,
+                            &end_key,
+                            limit,
+                            skip_tombstone,
+                        );
                     }
                 },
                 Cmd::Size { region, cf } => {
@@ -304,8 +347,8 @@ fn main() {
                 } => {
                     let to_data_dir = to_data_dir.as_deref();
                     let to_host = to_host.as_deref();
-                    let to_config = to_config.map_or_else(TiKvConfig::default, |path| {
-                        let s = fs::read_to_string(&path).unwrap();
+                    let to_config = to_config.map_or_else(TikvConfig::default, |path| {
+                        let s = fs::read_to_string(path).unwrap();
                         toml::from_str(&s).unwrap()
                     });
                     debug_executor.diff_region(region, to_host, to_data_dir, &to_config, mgr);
@@ -319,7 +362,7 @@ fn main() {
                     threads,
                     bottommost,
                 } => {
-                    let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
+                    let db_type = if db == "kv" { DbType::Kv } else { DbType::Raft };
                     let from_key = from.map(|k| unescape(&k));
                     let to_key = to.map(|k| unescape(&k));
                     let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
@@ -476,6 +519,7 @@ fn main() {
                 Cmd::Cluster {} => {
                     debug_executor.dump_cluster_info();
                 }
+                Cmd::ResetToVersion { version } => debug_executor.reset_to_version(version),
                 _ => {
                     unreachable!()
                 }
@@ -579,9 +623,9 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
 
 fn compact_whole_cluster(
     pd_client: &RpcClient,
-    cfg: &TiKvConfig,
+    cfg: &TikvConfig,
     mgr: Arc<SecurityManager>,
-    db_type: DBType,
+    db_type: DbType,
     cfs: Vec<&str>,
     from: Option<Vec<u8>>,
     to: Option<Vec<u8>>,
@@ -601,9 +645,9 @@ fn compact_whole_cluster(
         let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string()).collect();
         let h = thread::Builder::new()
             .name(format!("compact-{}", addr))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_alloc::add_thread_memory_accessor();
-                let debug_executor = new_debug_executor(&cfg, None, false, Some(&addr), mgr);
+                let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
                 for cf in cfs {
                     debug_executor.compact(
                         Some(&addr),
@@ -642,27 +686,24 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
-fn run_ldb_command(args: Vec<String>, cfg: &TiKvConfig) {
+fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
-    let env = get_env(key_manager, None /*io_rate_limiter*/).unwrap();
-    let mut opts = cfg.rocksdb.build_opt();
-    opts.set_env(env);
-
-    engine_rocks::raw::run_ldb_tool(&args, &opts);
+    let env = get_env(key_manager, None /* io_rate_limiter */).unwrap();
+    let resource = cfg.rocksdb.build_resources(env);
+    cfg.rocksdb.build_opt(&resource, cfg.storage.engine)
 }
 
-fn run_sst_dump_command(args: Vec<String>, cfg: &TiKvConfig) {
-    let opts = cfg.rocksdb.build_opt();
-    engine_rocks::raw::run_sst_dump_tool(&args, &opts);
+fn run_ldb_command(args: Vec<String>, cfg: &TikvConfig) {
+    engine_rocks::raw::run_ldb_tool(&args, &build_rocks_opts(cfg));
 }
 
-fn run_raft_engine_ctl_command(args: Vec<String>) {
-    raft_engine_ctl::run_command(args);
+fn run_sst_dump_command(args: Vec<String>, cfg: &TikvConfig) {
+    engine_rocks::raw::run_sst_dump_tool(&args, &build_rocks_opts(cfg));
 }
 
-fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {
+fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TikvConfig) {
     let db = &cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
     println!(
         "\nstart to print bad ssts; data_dir:{}; db:{}",
@@ -678,7 +719,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
 
     let stderr = BufferRedirect::stderr().unwrap();
     let stdout = BufferRedirect::stdout().unwrap();
-    let opts = cfg.rocksdb.build_opt();
+    let opts = build_rocks_opts(cfg);
 
     match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)) {
         Ok(code) => {
@@ -710,7 +751,9 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     for line in corruptions.lines() {
         println!("--------------------------------------------------------");
         // The corruption format may like this:
+        // ```text
         // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch: expected 3754995957, got 708533950  in /path/to/db/057155.sst offset 3126049 size 22724
+        // ```
         println!("corruption info:\n{}", line);
 
         let r = Regex::new(r"/\w*\.sst").unwrap();
@@ -770,8 +813,10 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
 
         println!("\nsst meta:");
         // The output may like this:
+        // ```text
         // --------------- Column family "write"  (ID 2) --------------
         // 63:132906243[3555338 .. 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73' seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
+        // ```
         let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
         if let Some(m) = column_r.captures(&output) {
             println!(
@@ -823,7 +868,8 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                 println!("unexpected key {}", log_wrappers::Value(&start));
             }
         } else {
-            // it is expected when the sst is output of a compaction and the sst isn't added to manifest yet.
+            // it is expected when the sst is output of a compaction and the sst isn't added
+            // to manifest yet.
             println!(
                 "sst {} is not found in manifest: {}",
                 sst_file_number, output

@@ -2,11 +2,12 @@
 
 use std::io::Write;
 
-use crate::Result;
 use byteorder::{BigEndian, ByteOrder};
 use tikv_util::box_err;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+use crate::Result;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Version {
     // The content only contains the encrypted part.
     V1 = 1,
@@ -38,7 +39,7 @@ impl Version {
 ///  |   | Reserved  (3 bytes)
 ///  | Version (1 bytes)
 /// ```
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Header {
     version: Version,
     crc32: u32,

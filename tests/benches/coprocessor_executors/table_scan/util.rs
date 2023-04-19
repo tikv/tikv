@@ -1,23 +1,21 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
+use api_version::ApiV1;
 use criterion::black_box;
-
+use futures::executor::block_on;
 use kvproto::coprocessor::KeyRange;
-use tipb::ColumnInfo;
-
 use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_executors::interface::*;
-use tidb_query_executors::BatchTableScanExecutor;
-use tikv::coprocessor::dag::TiKVStorage;
-use tikv::coprocessor::RequestHandler;
-use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
+use tidb_query_executors::{interface::*, BatchTableScanExecutor};
+use tikv::{
+    coprocessor::{dag::TikvStorage, RequestHandler},
+    storage::{RocksEngine, Statistics, Store as TxnStore},
+};
+use tipb::ColumnInfo;
 
-use crate::util::executor_descriptor::table_scan;
-use crate::util::scan_bencher;
+use crate::util::{executor_descriptor::table_scan, scan_bencher};
 
 pub type TableScanParam = ();
 
@@ -36,8 +34,8 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         store: &Store<RocksEngine>,
         _: (),
     ) -> Self::E {
-        let mut executor = BatchTableScanExecutor::new(
-            black_box(TiKVStorage::new(
+        let mut executor = BatchTableScanExecutor::<_, ApiV1>::new(
+            black_box(TikvStorage::new(
                 ToTxnStore::<Self::T>::to_store(store),
                 false,
             )),
@@ -52,17 +50,17 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
-        executor.next_batch(1);
+        block_on(executor.next_batch(1));
         Box::new(executor) as Box<dyn BatchExecutor<StorageStats = Statistics>>
     }
 }
 
-pub struct TableScanExecutorDAGBuilder<T: TxnStore + 'static> {
+pub struct TableScanExecutorDagBuilder<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
-    for TableScanExecutorDAGBuilder<T>
+impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDagHandlerBuilder
+    for TableScanExecutorDagBuilder<T>
 {
     type T = T;
     type P = TableScanParam;
@@ -81,4 +79,4 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
 
 pub type BatchTableScanNext1024Bencher<T> =
     scan_bencher::BatchScanNext1024Bencher<BatchTableScanExecutorBuilder<T>>;
-pub type TableScanDAGBencher<T> = scan_bencher::ScanDAGBencher<TableScanExecutorDAGBuilder<T>>;
+pub type TableScanDagBencher<T> = scan_bencher::ScanDagBencher<TableScanExecutorDagBuilder<T>>;

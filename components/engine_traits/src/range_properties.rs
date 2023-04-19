@@ -5,8 +5,7 @@
 //! In RocksDB these are typically implemented with user collected properties,
 //! which might require the database to be constructed with specific options.
 
-use crate::errors::Result;
-use crate::Range;
+use crate::{errors::Result, Range};
 
 pub trait RangePropertiesExt {
     /// Gets the number of keys in a range.
@@ -33,7 +32,8 @@ pub trait RangePropertiesExt {
         large_threshold: u64,
     ) -> Result<u64>;
 
-    /// Get range approximate split keys to split range evenly into key_count + 1 parts .
+    /// Get range approximate split keys to split range evenly into key_count +
+    /// 1 parts .
     fn get_range_approximate_split_keys(
         &self,
         range: Range<'_>,

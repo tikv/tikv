@@ -15,8 +15,8 @@ impl<T: GbkCollator> Collator for T {
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
-        // All GBK code point are in BMP, if the incoming character is not, convert it to '?'.
-        // This should not happened.
+        // All GBK code point are in BMP, if the incoming character is not, convert it
+        // to '?'. This should not happened.
         let r = ch as usize;
         if r > 0xFFFF {
             return '?' as u16;
@@ -71,7 +71,8 @@ impl GbkCollator for CollatorGbkBin {
     const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_BIN_TABLE;
 }
 
-/// Collator for `gbk_chinese_ci` collation with padding behavior (trims right spaces).
+/// Collator for `gbk_chinese_ci` collation with padding behavior (trims right
+/// spaces).
 #[derive(Debug)]
 pub struct CollatorGbkChineseCi;
 
@@ -80,10 +81,12 @@ impl GbkCollator for CollatorGbkChineseCi {
     const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_CHINESE_CI_TABLE;
 }
 
-// GBK_BIN_TABLE are the encoding tables from Unicode to GBK code, it is totally the same with golang's GBK encoding.
-// If there is no mapping code in GBK, use 0x3F(?) instead. It should not happened.
+// GBK_BIN_TABLE are the encoding tables from Unicode to GBK code, it is totally
+// the same with golang's GBK encoding. If there is no mapping code in GBK, use
+// 0x3F(?) instead. It should not happened.
 const GBK_BIN_TABLE: &[u8; (0xffff + 1) * 2] = include_bytes!("gbk_bin.data");
 
 // GBK_CHINESE_CI_TABLE are the sort key tables for GBK codepoint.
-// If there is no mapping code in GBK, use 0x3F(?) instead. It should not happened.
+// If there is no mapping code in GBK, use 0x3F(?) instead. It should not
+// happened.
 const GBK_CHINESE_CI_TABLE: &[u8; (0xffff + 1) * 2] = include_bytes!("gbk_chinese_ci.data");

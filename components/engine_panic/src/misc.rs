@@ -1,14 +1,33 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use engine_traits::{DeleteStrategy, MiscExt, Range, Result};
+use engine_traits::{DeleteStrategy, MiscExt, Range, Result, StatisticsReporter};
 
-impl MiscExt for PanicEngine {
-    fn flush(&self, sync: bool) -> Result<()> {
+use crate::engine::PanicEngine;
+
+pub struct PanicReporter;
+
+impl StatisticsReporter<PanicEngine> for PanicReporter {
+    fn new(name: &str) -> Self {
         panic!()
     }
 
-    fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
+    fn collect(&mut self, engine: &PanicEngine) {
+        panic!()
+    }
+
+    fn flush(&mut self) {
+        panic!()
+    }
+}
+
+impl MiscExt for PanicEngine {
+    type StatisticsReporter = PanicReporter;
+
+    fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()> {
+        panic!()
+    }
+
+    fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         panic!()
     }
 
@@ -29,11 +48,11 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_engine_used_size(&self) -> Result<u64> {
+    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         panic!()
     }
 
-    fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+    fn get_engine_used_size(&self) -> Result<u64> {
         panic!()
     }
 
@@ -45,7 +64,19 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn pause_background_work(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn continue_background_work(&self) -> Result<()> {
+        panic!()
+    }
+
     fn exists(path: &str) -> bool {
+        panic!()
+    }
+
+    fn locked(path: &str) -> Result<bool> {
         panic!()
     }
 
@@ -62,6 +93,10 @@ impl MiscExt for PanicEngine {
     }
 
     fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>> {
+        panic!()
+    }
+
+    fn get_num_keys(&self) -> Result<u64> {
         panic!()
     }
 

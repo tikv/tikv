@@ -1,13 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::recorder::localstorage::{LocalStorage, STORAGE};
-use crate::recorder::SubRecorder;
-use crate::RawRecords;
-
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use collections::HashMap;
 use tikv_util::sys::thread::Pid;
+
+use crate::{
+    recorder::{
+        localstorage::{LocalStorage, STORAGE},
+        SubRecorder,
+    },
+    RawRecords,
+};
 
 /// Records how many keys have been read in the current context.
 pub fn record_read_keys(count: u32) {
@@ -31,8 +35,9 @@ pub fn record_write_keys(count: u32) {
 
 /// An implementation of [SubRecorder] for collecting summary data.
 ///
-/// `SummaryRecorder` uses some special methods ([record_read_keys]/[record_write_keys])
-/// to collect external statistical information.
+/// `SummaryRecorder` uses some special methods
+/// ([record_read_keys]/[record_write_keys]) to collect external statistical
+/// information.
 ///
 /// See [SubRecorder] for more relevant designs.
 ///
@@ -55,7 +60,8 @@ impl SubRecorder for SummaryRecorder {
             }
             // The request currently being polled has not yet been merged into the hashmap,
             // so it needs to be processed separately. (For example, a slow request that is
-            // blocking needs to reflect in real time how many keys have been read currently)
+            // blocking needs to reflect in real time how many keys have been read
+            // currently)
             if let Some(t) = ls.attached_tag.load_full() {
                 if t.extra_attachment.is_empty() {
                     return;

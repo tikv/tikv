@@ -1,13 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{Debug, Display};
-use std::io::{Error as IoError, ErrorKind};
-use std::{error, result};
-
-use protobuf::ProtobufError;
-use thiserror::Error;
+use std::{
+    error,
+    fmt::{Debug, Display},
+    io::{Error as IoError, ErrorKind},
+    result,
+};
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use protobuf::ProtobufError;
+use thiserror::Error;
 use tikv_util::stream::RetryError;
 
 pub type Result<T> = result::Result<T, Error>;

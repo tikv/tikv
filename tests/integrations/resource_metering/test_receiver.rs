@@ -1,12 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::test_suite::TestSuite;
-
-use std::thread::sleep;
-use std::time::Duration;
+use std::{thread::sleep, time::Duration};
 
 use test_util::alloc_port;
 use tikv_util::config::ReadableDuration;
+
+use super::test_suite::TestSuite;
 
 #[test]
 pub fn test_alter_receiver_address() {

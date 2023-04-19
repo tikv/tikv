@@ -1,61 +1,73 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::Write;
-use std::path::Path;
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    fmt::Write,
+    path::Path,
+    str::FromStr,
+    sync::{mpsc, Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
-use crate::Config;
 use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::config::BlobRunMode;
-use engine_rocks::raw::DB;
-use engine_rocks::{
-    get_env, CompactionListener, Compat, RocksCompactionJobInfo, RocksEngine, RocksSnapshot,
+use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_test::raft::RaftTestEngine;
+use engine_traits::{
+    CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
+    CF_DEFAULT, CF_RAFT,
 };
-use engine_traits::{Engines, Iterable, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::*;
-use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{
-    ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
-    TransferLeader,
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    metapb::{self, RegionEpoch},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType,
+        RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType, StatusRequest,
+    },
+    raft_serverpb::{
+        PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
+    },
+    tikvpb::TikvClient,
 };
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType, RaftCmdRequest,
-    RaftCmdResponse, Request, StatusCmdType, StatusRequest,
-};
-use kvproto::raft_serverpb::{
-    PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
-};
-use kvproto::tikvpb::TikvClient;
+use pd_client::PdClient;
+use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::fsm::RaftRouter;
-use raftstore::store::*;
-use raftstore::Result;
+use raftstore::{
+    store::{fsm::RaftRouter, *},
+    RaftRouterCompactedEventSender, Result,
+};
 use rand::RngCore;
+use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use tikv::config::*;
-use tikv::storage::point_key_range;
-use tikv_util::config::*;
-use tikv_util::time::ThreadReadId;
-use tikv_util::{escape, HandyRwLock};
+use test_pd_client::TestPdClient;
+use tikv::{
+    config::*,
+    server::KvEngineFactoryBuilder,
+    storage::{
+        kv::{SnapContext, SnapshotExt},
+        point_key_range, Engine, Snapshot,
+    },
+};
+pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
+use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
 
-use crate::{Cluster, ServerCluster, Simulator, TestPdClient};
-use pd_client::PdClient;
+use crate::{Cluster, Config, RawEngine, ServerCluster, Simulator};
 
-pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
-
-pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
+pub fn must_get<EK: KvEngine>(
+    engine: &impl RawEngine<EK>,
+    cf: &str,
+    key: &[u8],
+    value: Option<&[u8]>,
+) {
     for _ in 1..300 {
-        let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
+        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
             assert_eq!(value, &res[..]);
             return;
@@ -66,7 +78,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         thread::sleep(Duration::from_millis(20));
     }
     debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
-    let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
+    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {
@@ -79,33 +91,38 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     )
 }
 
-pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
+pub fn must_get_equal<EK: KvEngine>(engine: &impl RawEngine<EK>, key: &[u8], value: &[u8]) {
     must_get(engine, "default", key, Some(value));
 }
 
-pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
+pub fn must_get_none<EK: KvEngine>(engine: &impl RawEngine<EK>, key: &[u8]) {
     must_get(engine, "default", key, None);
 }
 
-pub fn must_get_cf_equal(engine: &Arc<DB>, cf: &str, key: &[u8], value: &[u8]) {
+pub fn must_get_cf_equal<EK: KvEngine>(
+    engine: &impl RawEngine<EK>,
+    cf: &str,
+    key: &[u8],
+    value: &[u8],
+) {
     must_get(engine, cf, key, Some(value));
 }
 
-pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
+pub fn must_get_cf_none<EK: KvEngine>(engine: &impl RawEngine<EK>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
     let start_key = keys::data_key(region.get_start_key());
     let end_key = keys::data_key(region.get_end_key());
-    for cf in ALL_CFS {
+    for cf in engine.kv.cf_names() {
         engine
             .kv
-            .scan_cf(cf, &start_key, &end_key, false, |k, v| {
+            .scan(cf, &start_key, &end_key, false, |k, v| {
                 panic!(
                     "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
                     id, k, v, cf
@@ -113,16 +130,13 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &
             })
             .unwrap();
     }
-    let log_min_key = keys::raft_log_key(id, 0);
-    let log_max_key = keys::raft_log_key(id, u64::MAX);
+
     engine
         .raft
-        .scan(&log_min_key, &log_max_key, false, |k, v| {
-            panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
-        })
+        .scan_entries(id, |_| panic!("[region {}] unexpected entry", id))
         .unwrap();
-    let state_key = keys::raft_state_key(id);
-    let state: Option<RaftLocalState> = engine.raft.get_msg(&state_key).unwrap();
+
+    let state: Option<RaftLocalState> = engine.raft.get_raft_state(id).unwrap();
     assert!(
         state.is_none(),
         "[region {}] raft state key should be removed: {:?}",
@@ -132,10 +146,10 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &
 }
 
 lazy_static! {
-    static ref TEST_CONFIG: TiKvConfig = {
+    pub static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TiKvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+        TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 manifest_dir.display(),
@@ -145,9 +159,16 @@ lazy_static! {
     };
 }
 
-pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
+pub fn new_tikv_config(cluster_id: u64) -> TikvConfig {
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
+    cfg
+}
+
+pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TikvConfig {
+    let mut cfg = TEST_CONFIG.clone();
+    cfg.server.cluster_id = cluster_id;
+    cfg.storage.set_api_version(api_ver);
     cfg
 }
 
@@ -297,7 +318,6 @@ pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     cmd
 }
 
-#[allow(dead_code)]
 pub fn new_prepare_merge(target_region: metapb::Region) -> AdminRequest {
     let mut cmd = AdminRequest::default();
     cmd.set_cmd_type(AdminCmdType::PrepareMerge);
@@ -325,59 +345,6 @@ pub fn sleep_until_election_triggered(cfg: &Config) {
 
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
-}
-
-pub fn new_pd_change_peer(
-    change_type: ConfChangeType,
-    peer: metapb::Peer,
-) -> RegionHeartbeatResponse {
-    let mut change_peer = ChangePeer::default();
-    change_peer.set_change_type(change_type);
-    change_peer.set_peer(peer);
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_change_peer(change_peer);
-    resp
-}
-
-pub fn new_pd_change_peer_v2(changes: Vec<ChangePeer>) -> RegionHeartbeatResponse {
-    let mut change_peer = ChangePeerV2::default();
-    change_peer.set_changes(changes.into());
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_change_peer_v2(change_peer);
-    resp
-}
-
-pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
-    let mut split_region = SplitRegion::default();
-    split_region.set_policy(policy);
-    split_region.set_keys(keys.into());
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_split_region(split_region);
-    resp
-}
-
-pub fn new_pd_transfer_leader(
-    peer: metapb::Peer,
-    peers: Vec<metapb::Peer>,
-) -> RegionHeartbeatResponse {
-    let mut transfer_leader = TransferLeader::default();
-    transfer_leader.set_peer(peer);
-    transfer_leader.set_peers(peers.into());
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_transfer_leader(transfer_leader);
-    resp
-}
-
-pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResponse {
-    let mut merge = Merge::default();
-    merge.set_target(target_region);
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_merge(merge);
-    resp
 }
 
 #[derive(Default)]
@@ -414,7 +381,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
     let (tx, rx) = mpsc::channel();
     let mut detector = CallbackLeakDetector::default();
     let cb = if is_read {
-        Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+        Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
             detector.called = true;
             // we don't care error actually.
             let _ = tx.send(resp.response);
@@ -479,7 +446,7 @@ pub fn async_read_on_peer<T: Simulator>(
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
     let (tx, rx) = mpsc::sync_channel(1);
-    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+    let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
     cluster.sim.wl().async_read(node_id, None, request, cb);
     rx
 }
@@ -502,7 +469,7 @@ pub fn batch_read_on_peer<T: Simulator>(
         );
         request.mut_header().set_peer(peer.clone());
         let t = tx.clone();
-        let cb = Callback::Read(Box::new(move |resp| {
+        let cb = Callback::read(Box::new(move |resp| {
             t.send((len, resp)).unwrap();
         }));
         cluster
@@ -556,7 +523,7 @@ pub fn async_read_index_on_peer<T: Simulator>(
     );
     request.mut_header().set_peer(peer);
     let (tx, rx) = mpsc::sync_channel(1);
-    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+    let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
     cluster.sim.wl().async_read(node_id, None, request, cb);
     rx
 }
@@ -616,83 +583,66 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
-fn dummpy_filter(_: &RocksCompactionJobInfo<'_>) -> bool {
-    true
-}
-
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<RocksEngine, RocksEngine>>,
-    limiter: Option<Arc<IORateLimiter>>,
+    router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
+    limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
 ) -> (
-    Engines<RocksEngine, RocksEngine>,
+    Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
+    LazyWorker<String>,
+    Arc<RocksStatistics>,
+    Option<Arc<RocksStatistics>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
+    let mut cfg = cfg.clone();
+    cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
+    cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
+    cfg.raft_engine.mut_config().dir = cfg.infer_raft_engine_path(None).unwrap();
     let key_manager =
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
+    let cache = cfg
+        .storage
+        .block_cache
+        .build_shared_cache(cfg.storage.engine);
+    let env = cfg
+        .build_shared_rocks_env(key_manager.clone(), limiter)
+        .unwrap();
 
-    let env = get_env(key_manager.clone(), limiter).unwrap();
-    let cache = cfg.storage.block_cache.build_shared_cache();
+    let sst_worker = LazyWorker::new("sst-recovery");
+    let scheduler = sst_worker.scheduler();
 
-    let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
-    let kv_path_str = kv_path.to_str().unwrap();
+    let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut kv_db_opt = cfg.rocksdb.build_opt();
-    kv_db_opt.set_env(env.clone());
-
+    let mut builder =
+        KvEngineFactoryBuilder::new(env, &cfg, cache).sst_recovery_sender(Some(scheduler));
     if let Some(router) = router {
-        let router = Mutex::new(router);
-        let compacted_handler = Box::new(move |event| {
-            router
-                .lock()
-                .unwrap()
-                .send_control(StoreMsg::CompactedEvent(event))
-                .unwrap();
-        });
-        kv_db_opt.add_event_listener(CompactionListener::new(
-            compacted_handler,
-            Some(dummpy_filter),
-        ));
+        builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
+            router: Mutex::new(router),
+        }));
     }
-
-    let kv_cfs_opt = cfg
-        .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.api_version());
-
-    let engine = Arc::new(
-        engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
-    );
-
-    let raft_path = dir.path().join("raft");
-    let raft_path_str = raft_path.to_str().unwrap();
-
-    let mut raft_db_opt = cfg.raftdb.build_opt();
-    raft_db_opt.set_env(env);
-
-    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
-    let raft_engine = Arc::new(
-        engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
-    );
-
-    let mut engine = RocksEngine::from_db(engine);
-    let mut raft_engine = RocksEngine::from_db(raft_engine);
-    let shared_block_cache = cache.is_some();
-    engine.set_shared_block_cache(shared_block_cache);
-    raft_engine.set_shared_block_cache(shared_block_cache);
+    let factory = builder.build();
+    let engine = factory.create_shared_db(dir.path()).unwrap();
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir)
+    (
+        engines,
+        key_manager,
+        dir,
+        sst_worker,
+        factory.rocks_statistics(),
+        raft_statistics,
+    )
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // We don't want to generate snapshots due to compact log.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
 pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -702,54 +652,54 @@ pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
 }
 
-pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_snapshot(config: &mut Config) {
     // Truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.merge_max_log_gap = 1;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    config.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    config.raft_store.raft_log_gc_count_limit = Some(2);
+    config.raft_store.merge_max_log_gap = 1;
+    config.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
 
-pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_merge(config: &mut Config) {
     // Avoid log compaction which will prevent merge.
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    config.raft_store.raft_log_gc_threshold = 1000;
+    config.raft_store.raft_log_gc_count_limit = Some(1000);
+    config.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     // Make merge check resume quickly.
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    config.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     // When isolated, follower relies on stale check tick to detect failure leader,
     // choose a smaller number to make it recover faster.
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 }
 
-pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.dev_assert = false;
-    cluster.pd_client.ignore_merge_target_integrity();
+pub fn ignore_merge_target_integrity(config: &mut Config, pd_client: &TestPdClient) {
+    config.raft_store.dev_assert = false;
+    pd_client.ignore_merge_target_integrity();
 }
 
-pub fn configure_for_lease_read<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn configure_for_lease_read(
+    cfg: &mut Config,
     base_tick_ms: Option<u64>,
     election_ticks: Option<usize>,
 ) -> Duration {
     if let Some(base_tick_ms) = base_tick_ms {
-        cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
+        cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
     }
-    let base_tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.0;
+    let base_tick_interval = cfg.raft_store.raft_base_tick_interval.0;
     if let Some(election_ticks) = election_ticks {
-        cluster.cfg.raft_store.raft_election_timeout_ticks = election_ticks;
+        cfg.raft_store.raft_election_timeout_ticks = election_ticks;
     }
-    let election_ticks = cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_ticks = cfg.raft_store.raft_election_timeout_ticks as u32;
     let election_timeout = base_tick_interval * election_ticks;
     // Adjust max leader lease.
-    cluster.cfg.raft_store.raft_store_max_leader_lease =
+    cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(election_timeout - base_tick_interval);
-    // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
-    // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
-    cluster.cfg.raft_store.abnormal_leader_missing_duration =
-        ReadableDuration(election_timeout * 4);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
+    // Use large peer check interval, abnormal and max leader missing duration to
+    // make a valid config, that is election timeout x 2 < peer stale state
+    // check < abnormal < max leader missing duration.
+    cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
+    cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration(election_timeout * 4);
+    cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
 }
@@ -782,6 +732,16 @@ pub fn configure_for_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
             path: master_key_file.to_str().unwrap().to_owned(),
         },
     }
+}
+
+pub fn configure_for_causal_ts<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    renew_interval: &str,
+    renew_batch_min_size: u32,
+) {
+    let cfg = &mut cluster.cfg.causal_ts;
+    cfg.renew_interval = ReadableDuration::from_str(renew_interval).unwrap();
+    cfg.renew_batch_min_size = renew_batch_min_size;
 }
 
 /// Keep putting random kvs until specified size limit is reached.
@@ -882,12 +842,60 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert_eq!(get_resp.take_value(), val);
 }
 
+pub fn write_and_read_key(
+    client: &TikvClient,
+    ctx: &Context,
+    ts: &mut u64,
+    k: Vec<u8>,
+    v: Vec<u8>,
+) {
+    // Prewrite
+    let prewrite_start_version = *ts + 1;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(
+        client,
+        ctx.clone(),
+        vec![mutation],
+        k.clone(),
+        prewrite_start_version,
+    );
+    // Commit
+    let commit_version = *ts + 2;
+    must_kv_commit(
+        client,
+        ctx.clone(),
+        vec![k.clone()],
+        prewrite_start_version,
+        commit_version,
+        commit_version,
+    );
+    // Get
+    *ts += 3;
+    must_kv_read_equal(client, ctx.clone(), k, v, *ts);
+}
+
 pub fn kv_read(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) -> GetResponse {
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx);
     get_req.set_key(key);
     get_req.set_version(ts);
     client.kv_get(&get_req).unwrap()
+}
+
+pub fn kv_batch_read(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+) -> BatchGetResponse {
+    let mut batch_get_req = BatchGetRequest::default();
+    batch_get_req.set_context(ctx);
+    batch_get_req.set_keys(RepeatedField::from(keys));
+    batch_get_req.set_version(ts);
+    client.kv_batch_get(&batch_get_req).unwrap()
 }
 
 pub fn must_kv_prewrite_with(
@@ -903,7 +911,7 @@ pub fn must_kv_prewrite_with(
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+        prewrite_req.pessimistic_actions = vec![DoPessimisticCheck; muts.len()];
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
@@ -926,7 +934,6 @@ pub fn must_kv_prewrite_with(
     );
 }
 
-// Disk full test interface.
 pub fn try_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
@@ -940,7 +947,7 @@ pub fn try_kv_prewrite_with(
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+        prewrite_req.pessimistic_actions = vec![DoPessimisticCheck; muts.len()];
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
@@ -1040,6 +1047,39 @@ pub fn kv_pessimistic_lock(
     kv_pessimistic_lock_with_ttl(client, ctx, keys, ts, for_update_ts, return_values, 20)
 }
 
+pub fn kv_pessimistic_lock_resumable(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+    for_update_ts: u64,
+    wait_timeout: Option<i64>,
+    return_values: bool,
+    check_existence: bool,
+) -> PessimisticLockResponse {
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx);
+    let primary = keys[0].clone();
+    let mut mutations = vec![];
+    for key in keys {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::PessimisticLock);
+        mutation.set_key(key);
+        mutations.push(mutation);
+    }
+    req.set_mutations(mutations.into());
+    req.primary_lock = primary;
+    req.start_version = ts;
+    req.for_update_ts = for_update_ts;
+    req.lock_ttl = 20;
+    req.is_first_lock = false;
+    req.wait_timeout = wait_timeout.unwrap_or(-1);
+    req.set_wake_up_mode(PessimisticLockWakeUpMode::WakeUpModeForceLock);
+    req.return_values = return_values;
+    req.check_existence = check_existence;
+    client.kv_pessimistic_lock(&req).unwrap()
+}
+
 pub fn kv_pessimistic_lock_with_ttl(
     client: &TikvClient,
     ctx: Context,
@@ -1075,12 +1115,18 @@ pub fn must_kv_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>,
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
-pub fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+pub fn must_kv_pessimistic_rollback(
+    client: &TikvClient,
+    ctx: Context,
+    key: Vec<u8>,
+    ts: u64,
+    for_update_ts: u64,
+) {
     let mut req = PessimisticRollbackRequest::default();
     req.set_context(ctx);
     req.set_keys(vec![key].into_iter().collect());
     req.start_version = ts;
-    req.for_update_ts = ts;
+    req.for_update_ts = for_update_ts;
     let resp = client.kv_pessimistic_rollback(&req).unwrap();
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
@@ -1107,84 +1153,56 @@ pub fn must_check_txn_status(
     resp
 }
 
-pub fn must_physical_scan_lock(
-    client: &TikvClient,
-    ctx: Context,
-    max_ts: u64,
-    start_key: &[u8],
-    limit: usize,
-) -> Vec<LockInfo> {
-    let mut req = PhysicalScanLockRequest::default();
-    req.set_context(ctx);
-    req.set_max_ts(max_ts);
-    req.set_start_key(start_key.to_owned());
-    req.set_limit(limit as _);
-    let mut resp = client.physical_scan_lock(&req).unwrap();
-    resp.take_locks().into()
-}
-
-pub fn register_lock_observer(client: &TikvClient, max_ts: u64) -> RegisterLockObserverResponse {
-    let mut req = RegisterLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.register_lock_observer(&req).unwrap()
-}
-
-pub fn must_register_lock_observer(client: &TikvClient, max_ts: u64) {
-    let resp = register_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-}
-
-pub fn check_lock_observer(client: &TikvClient, max_ts: u64) -> CheckLockObserverResponse {
-    let mut req = CheckLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.check_lock_observer(&req).unwrap()
-}
-
-pub fn must_check_lock_observer(client: &TikvClient, max_ts: u64, clean: bool) -> Vec<LockInfo> {
-    let mut resp = check_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-    assert_eq!(resp.get_is_clean(), clean);
-    resp.take_locks().into()
-}
-
-pub fn remove_lock_observer(client: &TikvClient, max_ts: u64) -> RemoveLockObserverResponse {
-    let mut req = RemoveLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.remove_lock_observer(&req).unwrap()
-}
-
-pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
-    let resp = remove_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-}
-
 pub fn get_tso(pd_client: &TestPdClient) -> u64 {
     block_on(pd_client.get_tso()).unwrap().into_inner()
 }
 
+pub fn get_raft_msg_or_default<M: protobuf::Message + Default>(
+    engines: &Engines<RocksEngine, RaftTestEngine>,
+    key: &[u8],
+) -> M {
+    engines
+        .kv
+        .get_msg_cf(CF_RAFT, key)
+        .unwrap()
+        .unwrap_or_default()
+}
+
 pub fn check_compacted(
-    all_engines: &HashMap<u64, Engines<RocksEngine, RocksEngine>>,
+    all_engines: &HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
+    must_compacted: bool,
 ) -> bool {
-    // Every peer must have compacted logs, so the truncate log state index/term must > than before.
+    // Every peer must have compacted logs, so the truncate log state index/term
+    // must > than before.
     let mut compacted_idx = HashMap::default();
 
     for (&id, engines) in all_engines {
-        let mut state: RaftApplyState = engines
-            .kv
-            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
-            .unwrap()
-            .unwrap_or_default();
+        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
         let idx = after_state.get_index();
         let term = after_state.get_term();
         if idx == before_state.get_index() || term == before_state.get_term() {
+            if must_compacted {
+                panic!(
+                    "Should be compacted, but Raft truncated state is not updated: {} state={:?}",
+                    id, before_state
+                );
+            }
             return false;
         }
         if idx - before_state.get_index() < compact_count {
+            if must_compacted {
+                panic!(
+                    "Should be compacted, but compact count is too small: {} {}<{}",
+                    id,
+                    idx - before_state.get_index(),
+                    compact_count
+                );
+            }
             return false;
         }
         assert!(term > before_state.get_term());
@@ -1192,18 +1210,101 @@ pub fn check_compacted(
     }
 
     // wait for actual deletion.
-    sleep_ms(100);
+    sleep_ms(250);
 
     for (id, engines) in all_engines {
         for i in 0..compacted_idx[id] {
-            let key = keys::raft_log_key(1, i);
-            if engines.raft.get_value(&key).unwrap().is_none() {
-                break;
+            if engines.raft.get_entry(1, i).unwrap().is_some() {
+                if must_compacted {
+                    panic!("Should be compacted, but found entry: {} {}", id, i);
+                }
+                return false;
             }
-            assert!(engines.raft.get_value(&key).unwrap().is_none());
         }
     }
     true
+}
+
+pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<u8>) {
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx);
+    put_req.key = key;
+    put_req.value = value;
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(
+        !put_resp.has_region_error(),
+        "{:?}",
+        put_resp.get_region_error()
+    );
+    assert!(
+        put_resp.get_error().is_empty(),
+        "{:?}",
+        put_resp.get_error()
+    );
+}
+
+pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<Vec<u8>> {
+    let mut get_req = RawGetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = key;
+    let get_resp = client.raw_get(&get_req).unwrap();
+    assert!(
+        !get_resp.has_region_error(),
+        "{:?}",
+        get_resp.get_region_error()
+    );
+    assert!(
+        get_resp.get_error().is_empty(),
+        "{:?}",
+        get_resp.get_error()
+    );
+    if get_resp.not_found {
+        None
+    } else {
+        Some(get_resp.value)
+    }
+}
+
+pub fn must_prepare_flashback(client: &TikvClient, ctx: Context, version: u64, start_ts: u64) {
+    let mut prepare_req = PrepareFlashbackToVersionRequest::default();
+    prepare_req.set_context(ctx);
+    prepare_req.set_start_ts(start_ts);
+    prepare_req.set_version(version);
+    prepare_req.set_start_key(b"a".to_vec());
+    prepare_req.set_end_key(b"z".to_vec());
+    client
+        .kv_prepare_flashback_to_version(&prepare_req)
+        .unwrap();
+}
+
+pub fn must_finish_flashback(
+    client: &TikvClient,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+    commit_ts: u64,
+) {
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx);
+    req.set_start_ts(start_ts);
+    req.set_commit_ts(commit_ts);
+    req.set_version(version);
+    req.set_start_key(b"a".to_vec());
+    req.set_end_key(b"z".to_vec());
+    let resp = client.kv_flashback_to_version(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_error().is_empty());
+}
+
+pub fn must_flashback_to_version(
+    client: &TikvClient,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+    commit_ts: u64,
+) {
+    must_prepare_flashback(client, ctx.clone(), version, start_ts);
+    must_finish_flashback(client, ctx, version, start_ts, commit_ts);
 }
 
 // A helpful wrapper to make the test logic clear
@@ -1287,7 +1388,7 @@ impl PeerClient {
     }
 
     pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
-        must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts)
+        must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts, ts)
     }
 }
 
@@ -1298,4 +1399,34 @@ pub fn peer_on_store(region: &metapb::Region, store_id: u64) -> metapb::Peer {
         .find(|p| p.get_store_id() == store_id)
         .unwrap()
         .clone()
+}
+
+pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, region_id: u64) {
+    let mut storage = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&node_id)
+        .unwrap()
+        .clone();
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(epoch);
+    let snap_ctx = SnapContext {
+        pb_ctx: &ctx,
+        ..Default::default()
+    };
+    let snapshot = storage.snapshot(snap_ctx).unwrap();
+    let txn_ext = snapshot.txn_ext.clone().unwrap();
+    for retry in 0..10 {
+        if txn_ext.is_max_ts_synced() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1 << retry));
+    }
+    assert!(snapshot.ext().is_max_ts_synced());
 }

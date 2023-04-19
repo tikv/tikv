@@ -20,7 +20,10 @@ impl Encoding for EncodingAscii {
     fn decode(data: BytesRef<'_>) -> Result<Bytes> {
         for x in data {
             if !x.is_ascii() {
-                return Err(Error::cannot_convert_string("ascii"));
+                return Err(Error::cannot_convert_string(
+                    format_invalid_char(data).as_str(),
+                    "ascii",
+                ));
             }
         }
         Ok(Bytes::from(data))

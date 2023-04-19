@@ -1,23 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    fmt,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
-use engine_traits::{EncryptionKeyManager, Iterable, KvEngine, SSTMetaInfo, SstReader};
+use engine_traits::{
+    iter_option, EncryptionKeyManager, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader,
+};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::ApiVersion;
+use keys::data_key;
+use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use crate::metrics::*;
-use crate::{Error, Result};
+use crate::{metrics::*, Error, Result};
 
 // `SyncableWrite` extends io::Write with sync
 trait SyncableWrite: io::Write + Send {
@@ -50,18 +53,25 @@ pub struct ImportPath {
 impl ImportPath {
     // move file from temp to save.
     pub fn save(mut self, key_manager: Option<&DataKeyManager>) -> Result<()> {
-        file_system::rename(&self.temp, &self.save)?;
         if let Some(key_manager) = key_manager {
             let temp_str = self
                 .temp
                 .to_str()
-                .ok_or_else(|| Error::InvalidSSTPath(self.temp.clone()))?;
+                .ok_or_else(|| Error::InvalidSstPath(self.temp.clone()))?;
             let save_str = self
                 .save
                 .to_str()
-                .ok_or_else(|| Error::InvalidSSTPath(self.save.clone()))?;
+                .ok_or_else(|| Error::InvalidSstPath(self.save.clone()))?;
             key_manager.link_file(temp_str, save_str)?;
-            key_manager.delete_file(temp_str)?;
+            let r = file_system::rename(&self.temp, &self.save);
+            let del_file = if r.is_ok() { temp_str } else { save_str };
+            if let Err(e) = key_manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during 'save'";
+                      "file" => ?self, "err" => ?e);
+            }
+            r?;
+        } else {
+            file_system::rename(&self.temp, &self.save)?;
         }
         // sync the directory after rename
         self.save.pop();
@@ -137,12 +147,19 @@ impl ImportFile {
                 "finalize SST write cache",
             ));
         }
-        file_system::rename(&self.path.temp, &self.path.save)?;
         if let Some(ref manager) = self.key_manager {
             let tmp_str = self.path.temp.to_str().unwrap();
             let save_str = self.path.save.to_str().unwrap();
             manager.link_file(tmp_str, save_str)?;
-            manager.delete_file(self.path.temp.to_str().unwrap())?;
+            let r = file_system::rename(&self.path.temp, &self.path.save);
+            let del_file = if r.is_ok() { tmp_str } else { save_str };
+            if let Err(e) = manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during finishing importing files.";
+                      "err" => ?e);
+            }
+            r?;
+        } else {
+            file_system::rename(&self.path.temp, &self.path.save)?;
         }
         Ok(())
     }
@@ -166,6 +183,10 @@ impl ImportFile {
             return Err(Error::FileCorrupted(self.path.temp.clone(), reason));
         }
         Ok(())
+    }
+
+    pub fn get_import_path(&self) -> &ImportPath {
+        &self.path
     }
 }
 
@@ -221,16 +242,25 @@ impl ImportDir {
         })
     }
 
-    pub fn join(&self, meta: &SstMeta) -> Result<ImportPath> {
-        let file_name = sst_meta_to_path(meta)?;
-        let save_path = self.root_dir.join(&file_name);
-        let temp_path = self.temp_dir.join(&file_name);
-        let clone_path = self.clone_dir.join(&file_name);
+    pub fn get_root_dir(&self) -> &PathBuf {
+        &self.root_dir
+    }
+
+    /// Make an import path base on the basic path and the file name.
+    pub fn get_import_path(&self, file_name: &str) -> Result<ImportPath> {
+        let save_path = self.root_dir.join(file_name);
+        let temp_path = self.temp_dir.join(file_name);
+        let clone_path = self.clone_dir.join(file_name);
         Ok(ImportPath {
             save: save_path,
             temp: temp_path,
             clone: clone_path,
         })
+    }
+
+    pub fn join(&self, meta: &SstMeta) -> Result<ImportPath> {
+        let file_name = sst_meta_to_path(meta)?;
+        self.get_import_path(file_name.to_str().unwrap())
     }
 
     pub fn create(
@@ -247,7 +277,7 @@ impl ImportDir {
 
     pub fn delete_file(&self, path: &Path, key_manager: Option<&DataKeyManager>) -> Result<()> {
         if path.exists() {
-            file_system::remove_file(&path)?;
+            file_system::remove_file(path)?;
             if let Some(manager) = key_manager {
                 manager.delete_file(path.to_str().unwrap())?;
             }
@@ -273,7 +303,7 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
-    ) -> Result<SSTMetaInfo> {
+    ) -> Result<SstMetaInfo> {
         let path = self.join(meta)?;
         let path_str = path.save.to_str().unwrap();
         let env = get_env(key_manager, get_io_rate_limiter())?;
@@ -293,7 +323,8 @@ impl ImportDir {
         for meta in metas {
             match (api_version, meta.api_version) {
                 (cur_version, meta_version) if cur_version == meta_version => continue,
-                // sometimes client do not know whether ttl is enabled, so a general V1 is accepted as V1ttl
+                // sometimes client do not know whether ttl is enabled, so a general V1 is accepted
+                // as V1ttl
                 (ApiVersion::V1ttl, ApiVersion::V1) => continue,
                 // import V1ttl as V1 will immediatly be rejected because it is never correct.
                 (ApiVersion::V1, ApiVersion::V1ttl) => return Ok(false),
@@ -306,18 +337,14 @@ impl ImportDir {
                     let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
 
                     for &(start, end) in TIDB_RANGES_COMPLEMENT {
-                        let mut unexpected_data_key = None;
-                        sst_reader.scan(start, end, false, |key, _| {
-                            unexpected_data_key = Some(key.to_vec());
-                            Ok(false)
-                        })?;
-
-                        if let Some(unexpected_data_key) = unexpected_data_key {
+                        let opt = iter_option(&data_key(start), &data_key(end), false);
+                        let mut iter = sst_reader.iter(opt)?;
+                        if iter.seek(start)? {
                             error!(
                                 "unable to import: switch api version with non-tidb key";
                                 "sst" => ?meta.api_version,
                                 "current" => ?api_version,
-                                "key" => ?log_wrappers::hex_encode_upper(&unexpected_data_key)
+                                "key" => ?log_wrappers::hex_encode_upper(iter.key())
                             );
                             return Ok(false);
                         }
@@ -331,7 +358,7 @@ impl ImportDir {
 
     pub fn ingest<E: KvEngine>(
         &self,
-        metas: &[SSTMetaInfo],
+        metas: &[SstMetaInfo],
         engine: &E,
         key_manager: Option<Arc<DataKeyManager>>,
         api_version: ApiVersion,
@@ -346,7 +373,7 @@ impl ImportDir {
             .check_api_version(&meta_vec, key_manager.clone(), api_version)
             .unwrap()
         {
-            panic!("cannot ingest because of imcompatible api version");
+            panic!("cannot ingest because of incompatible api version");
         }
 
         let mut paths = HashMap::new();
@@ -421,17 +448,17 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
-        None => return Err(Error::InvalidSSTPath(path.to_owned())),
+        None => return Err(Error::InvalidSstPath(path.to_owned())),
     };
 
     // A valid file name should be in the format:
     // "{uuid}_{region_id}_{region_epoch.conf_ver}_{region_epoch.version}_{cf}.sst"
     if !file_name.ends_with(SST_SUFFIX) {
-        return Err(Error::InvalidSSTPath(path.to_owned()));
+        return Err(Error::InvalidSstPath(path.to_owned()));
     }
     let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
     if elems.len() < 4 {
-        return Err(Error::InvalidSSTPath(path.to_owned()));
+        return Err(Error::InvalidSstPath(path.to_owned()));
     }
 
     let mut meta = SstMeta::default();
@@ -441,8 +468,9 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     meta.mut_region_epoch().set_conf_ver(elems[2].parse()?);
     meta.mut_region_epoch().set_version(elems[3].parse()?);
     if elems.len() > 4 {
-        // If we upgrade TiKV from 3.0.x to 4.0.x and higher version, we can not read cf_name from
-        // the file path, because TiKV 3.0.x does not encode cf_name to path.
+        // If we upgrade TiKV from 3.0.x to 4.0.x and higher version, we can not read
+        // cf_name from the file path, because TiKV 3.0.x does not encode
+        // cf_name to path.
         meta.set_cf_name(elems[4].to_owned());
     }
     Ok(meta)
@@ -450,8 +478,9 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use engine_traits::CF_DEFAULT;
+
+    use super::*;
 
     #[test]
     fn test_sst_meta_to_path() {
@@ -487,7 +516,7 @@ mod test {
             meta.get_region_epoch().get_version(),
             SST_SUFFIX,
         ));
-        let new_meta = path_to_sst_meta(&path).unwrap();
+        let new_meta = path_to_sst_meta(path).unwrap();
         assert_eq!(meta, new_meta);
     }
 }

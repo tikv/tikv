@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
 use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
+
+use crate::engine::PanicEngine;
 
 impl WriteBatchExt for PanicEngine {
     type WriteBatch = PanicWriteBatch;
@@ -19,7 +20,7 @@ impl WriteBatchExt for PanicEngine {
 pub struct PanicWriteBatch;
 
 impl WriteBatch for PanicWriteBatch {
-    fn write_opt(&self, _: &WriteOptions) -> Result<()> {
+    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         panic!()
     }
 
@@ -48,7 +49,7 @@ impl WriteBatch for PanicWriteBatch {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         panic!()
     }
-    fn merge(&mut self, src: Self) {
+    fn merge(&mut self, src: Self) -> Result<()> {
         panic!()
     }
 }

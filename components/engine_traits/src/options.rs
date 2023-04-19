@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::ops::Bound;
+
 use tikv_util::keybuilder::KeyBuilder;
 
 #[derive(Clone)]
@@ -33,6 +34,7 @@ impl Default for ReadOptions {
 pub struct WriteOptions {
     sync: bool,
     no_slowdown: bool,
+    disable_wal: bool,
 }
 
 impl WriteOptions {
@@ -40,6 +42,7 @@ impl WriteOptions {
         WriteOptions {
             sync: false,
             no_slowdown: false,
+            disable_wal: false,
         }
     }
 
@@ -57,6 +60,14 @@ impl WriteOptions {
 
     pub fn no_slowdown(&self) -> bool {
         self.no_slowdown
+    }
+
+    pub fn set_disable_wal(&mut self, disable_wal: bool) {
+        self.disable_wal = disable_wal;
+    }
+
+    pub fn disable_wal(&self) -> bool {
+        self.disable_wal
     }
 }
 
@@ -200,8 +211,8 @@ impl IterOptions {
         self.upper_bound = Some(builder);
     }
 
-    pub fn set_vec_upper_bound(&mut self, bound: Vec<u8>) {
-        self.upper_bound = Some(KeyBuilder::from_vec(bound, 0, 0));
+    pub fn set_vec_upper_bound(&mut self, bound: Vec<u8>, reserved_prefix_len: usize) {
+        self.upper_bound = Some(KeyBuilder::from_vec(bound, reserved_prefix_len, 0));
     }
 
     pub fn set_upper_bound_prefix(&mut self, prefix: &[u8]) {
@@ -256,8 +267,9 @@ impl Default for IterOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::ops::Bound;
+
+    use super::*;
 
     #[test]
     fn test_hint_ts() {

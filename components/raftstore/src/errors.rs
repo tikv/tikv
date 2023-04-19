@@ -1,20 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
-use std::io;
-use std::net;
-use std::result;
+use std::{error::Error as StdError, io, net, result};
 
 use crossbeam::channel::TrySendError;
-use kvproto::{errorpb, metapb};
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::{errorpb, metapb, raft_serverpb};
 use protobuf::ProtobufError;
 use thiserror::Error;
-
-use error_code::{self, ErrorCode, ErrorCodeExt};
 use tikv_util::{codec, deadline::DeadlineError};
 
-use super::coprocessor::Error as CopError;
-use super::store::SnapError;
+use super::{coprocessor::Error as CopError, store::SnapError};
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
@@ -59,6 +54,15 @@ pub enum Error {
 
     #[error("store ids {0:?}, errmsg {1}")]
     DiskFull(Vec<u64>, String),
+
+    #[error("region {0} is in the recovery progress")]
+    RecoveryInProgress(u64),
+
+    #[error("region {0} is in the flashback progress with start_ts {1}")]
+    FlashbackInProgress(u64, u64),
+
+    #[error("region {0} not prepared the flashback")]
+    FlashbackNotPrepared(u64),
 
     #[error(
         "key {} is not in region key range [{}, {}) for region {}",
@@ -130,6 +134,15 @@ pub enum Error {
 
     #[error("Prepare merge is pending due to unapplied proposals")]
     PendingPrepareMerge,
+
+    #[error("Region not exist but not tombstone, region: {}, local_state: {:?}", .region_id, .local_state)]
+    RegionNotRegistered {
+        region_id: u64,
+        local_state: raft_serverpb::RegionLocalState,
+    },
+
+    #[error("peer is a witness of region {0}")]
+    IsWitness(u64),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -238,6 +251,27 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_region_not_initialized(e);
             }
+            Error::RecoveryInProgress(region_id) => {
+                let mut e = errorpb::RecoveryInProgress::default();
+                e.set_region_id(region_id);
+                errorpb.set_recovery_in_progress(e);
+            }
+            Error::FlashbackInProgress(region_id, flashback_start_ts) => {
+                let mut e = errorpb::FlashbackInProgress::default();
+                e.set_region_id(region_id);
+                e.set_flashback_start_ts(flashback_start_ts);
+                errorpb.set_flashback_in_progress(e);
+            }
+            Error::FlashbackNotPrepared(region_id) => {
+                let mut e = errorpb::FlashbackNotPrepared::default();
+                e.set_region_id(region_id);
+                errorpb.set_flashback_not_prepared(e);
+            }
+            Error::IsWitness(region_id) => {
+                let mut e = errorpb::IsWitness::default();
+                e.set_region_id(region_id);
+                errorpb.set_is_witness(e);
+            }
             _ => {}
         };
 
@@ -271,6 +305,9 @@ impl ErrorCodeExt for Error {
             Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
             Error::NotLeader(..) => error_code::raftstore::NOT_LEADER,
             Error::DiskFull(..) => error_code::raftstore::DISK_FULL,
+            Error::RecoveryInProgress(..) => error_code::raftstore::RECOVERY_IN_PROGRESS,
+            Error::FlashbackInProgress(..) => error_code::raftstore::FLASHBACK_IN_PROGRESS,
+            Error::FlashbackNotPrepared(..) => error_code::raftstore::FLASHBACK_NOT_PREPARED,
             Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
             Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,
             Error::KeyNotInRegion(..) => error_code::raftstore::KEY_NOT_IN_REGION,
@@ -291,8 +328,9 @@ impl ErrorCodeExt for Error {
             Error::DataIsNotReady { .. } => error_code::raftstore::DATA_IS_NOT_READY,
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
             Error::PendingPrepareMerge => error_code::raftstore::PENDING_PREPARE_MERGE,
+            Error::IsWitness(..) => error_code::raftstore::IS_WITNESS,
 
-            Error::Other(_) => error_code::raftstore::UNKNOWN,
+            Error::Other(_) | Error::RegionNotRegistered { .. } => error_code::raftstore::UNKNOWN,
         }
     }
 }

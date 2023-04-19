@@ -1,5 +1,5 @@
 [package]
-name = "example_plugin"
+name = "example_coprocessor_plugin"
 version = "0.1.0"
 edition = "2018"
 publish = false
@@ -8,4 +8,4 @@ publish = false
 crate-type = ["dylib"]
 
 [dependencies]
-coprocessor_plugin_api = { path = "../../coprocessor_plugin_api" }
+coprocessor_plugin_api = { workspace = true }

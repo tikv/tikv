@@ -3,7 +3,6 @@
 mod util;
 
 use criterion::measurement::Measurement;
-
 use tidb_query_datatype::FieldTypeTp;
 use tipb::ExprType;
 use tipb_helper::ExprDefBuilder;

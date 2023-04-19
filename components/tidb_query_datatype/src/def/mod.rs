@@ -5,8 +5,10 @@
 mod eval_type;
 mod field_type;
 
-pub use self::eval_type::EvalType;
-pub use self::field_type::{Charset, Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+pub use self::{
+    eval_type::EvalType,
+    field_type::{Charset, Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp},
+};
 
 /// Length is unspecified, applicable to `FieldType`'s `flen` and `decimal`.
 pub const UNSPECIFIED_LENGTH: isize = -1;

@@ -3,8 +3,7 @@
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::cmp::Eq;
-use std::hash::Hash;
+use std::{cmp::Eq, hash::Hash};
 
 pub type HashMap<K, V> =
     std::collections::HashMap<K, V, std::hash::BuildHasherDefault<fxhash::FxHasher>>;

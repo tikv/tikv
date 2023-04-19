@@ -1,13 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::AggrFunction;
+use tidb_query_common::Result;
+use tidb_query_datatype::{codec::data_type::*, expr::EvalContext};
+use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
 use super::*;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_expr::RpnExpression;
 
 /// A trait for all bit operations
 pub trait BitOp: Clone + std::fmt::Debug + Send + Sync + 'static {
@@ -132,15 +131,14 @@ impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::AggrFunction;
-    use super::*;
-
-    use tidb_query_datatype::FieldTypeTp;
-    use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        EvalType, FieldTypeAccessor, FieldTypeTp,
+    };
     use tipb_helper::ExprDefBuilder;
 
+    use super::{super::AggrFunction, *};
     use crate::parser::AggrDefinitionParser;
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 
     #[test]
     fn test_bit_and() {

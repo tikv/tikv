@@ -1,15 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    fmt,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use collections::HashSet;
-use std::fmt;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct TimeStamp(u64);
 
-const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
+pub const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
 
 impl TimeStamp {
     /// Create a time stamp from physical and logical components.
@@ -32,6 +35,11 @@ impl TimeStamp {
     /// Extracts physical part of a timestamp, in milliseconds.
     pub fn physical(self) -> u64 {
         self.0 >> TSO_PHYSICAL_SHIFT_BITS
+    }
+
+    /// Extracts logical part of a timestamp.
+    pub fn logical(self) -> u64 {
+        self.0 & ((1 << TSO_PHYSICAL_SHIFT_BITS) - 1)
     }
 
     #[must_use]
@@ -114,10 +122,11 @@ const TS_SET_USE_VEC_LIMIT: usize = 8;
 pub enum TsSet {
     /// When the set is empty, avoid the useless cloning of Arc.
     Empty,
-    /// `Vec` is suitable when the set is small or the set is barely used, and it doesn't worth
-    /// converting a `Vec` into a `HashSet`.
+    /// `Vec` is suitable when the set is small or the set is barely used, and
+    /// it doesn't worth converting a `Vec` into a `HashSet`.
     Vec(Arc<[TimeStamp]>),
-    /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
+    /// `Set` is suitable when there are many timestamps **and** it will be
+    /// queried multiple times.
     Set(Arc<HashSet<TimeStamp>>),
 }
 
@@ -129,14 +138,15 @@ impl Default for TsSet {
 }
 
 impl TsSet {
-    /// Create a `TsSet` from the given vec of timestamps. It will select the proper internal
-    /// collection type according to the size.
+    /// Create a `TsSet` from the given vec of timestamps. It will select the
+    /// proper internal collection type according to the size.
     #[inline]
     pub fn new(ts: Vec<TimeStamp>) -> Self {
         if ts.is_empty() {
             TsSet::Empty
         } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
-            // If there are too few elements in `ts`, use Vec directly instead of making a Set.
+            // If there are too few elements in `ts`, use Vec directly instead of making a
+            // Set.
             TsSet::Vec(ts.into())
         } else {
             TsSet::Set(Arc::new(ts.into_iter().collect()))
@@ -153,10 +163,11 @@ impl TsSet {
         Self::vec(unsafe { tikv_util::memory::vec_transmute(ts) })
     }
 
-    /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
-    /// internal collection type. When it's sure that the set will be queried at most once, use this
-    /// is better than `TsSet::new`, since both the querying on `Vec` and the conversion from `Vec`
-    /// to `HashSet` is O(N).
+    /// Create a `TsSet` from the given vec of timestamps, but it will be forced
+    /// to use `Vec` as the internal collection type. When it's sure that the
+    /// set will be queried at most once, use this is better than `TsSet::new`,
+    /// since both the querying on `Vec` and the conversion from `Vec` to
+    /// `HashSet` is O(N).
     #[inline]
     pub fn vec(ts: Vec<TimeStamp>) -> Self {
         if ts.is_empty() {
@@ -191,13 +202,16 @@ mod tests {
 
         let extracted_physical = ts.physical();
         assert_eq!(extracted_physical, physical);
+
+        let extracted_logical = ts.logical();
+        assert_eq!(extracted_logical, logical);
     }
 
     #[test]
     fn test_split_ts() {
         let k = b"k";
         let ts = TimeStamp(123);
-        assert!(Key::split_on_ts_for(k).is_err());
+        Key::split_on_ts_for(k).unwrap_err();
         let enc = Key::from_encoded_slice(k).append_ts(ts);
         let res = Key::split_on_ts_for(enc.as_encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));

@@ -1,33 +1,30 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::resource_metering::test_suite::MockReceiverServer;
-
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
-use engine_rocks::PerfLevel;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::coprocessor;
-use kvproto::kvrpcpb::*;
-use kvproto::resource_usage_agent::ResourceUsageRecord;
-use kvproto::tikvpb::*;
+use kvproto::{coprocessor, kvrpcpb::*, resource_usage_agent::ResourceUsageRecord, tikvpb::*};
 use protobuf::Message;
 use resource_metering::ResourceTagFactory;
-use test_coprocessor::{DAGSelect, ProductTable, Store};
+use test_coprocessor::{DagSelect, ProductTable, Store};
 use test_raftstore::*;
 use test_util::alloc_port;
 use tidb_query_datatype::codec::Datum;
-use tikv::config::CoprReadPoolConfig;
-use tikv::coprocessor::{readpool_impl, Endpoint};
-use tikv::read_pool::ReadPool;
-use tikv::storage::{Engine, RocksEngine};
-use tikv_util::config::ReadableDuration;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::thread_group::GroupProperties;
-use tikv_util::HandyRwLock;
+use tikv::{
+    config::CoprReadPoolConfig,
+    coprocessor::{readpool_impl, Endpoint},
+    read_pool::ReadPool,
+    storage::{Engine, RocksEngine},
+};
+use tikv_util::{
+    config::ReadableDuration, quota_limiter::QuotaLimiter, thread_group::GroupProperties,
+    HandyRwLock,
+};
 use tipb::SelectResponse;
+
+use crate::resource_metering::test_suite::MockReceiverServer;
 
 #[test]
 #[ignore = "the case is unstable, ref #11765"]
@@ -53,31 +50,7 @@ pub fn test_read_keys() {
         let (k, v) = (n.clone(), n);
 
         // Prewrite.
-        ts += 1;
-        let prewrite_start_version = ts;
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::Put);
-        mutation.set_key(k.clone());
-        mutation.set_value(v.clone());
-        must_kv_prewrite(
-            &client,
-            ctx.clone(),
-            vec![mutation],
-            k.clone(),
-            prewrite_start_version,
-        );
-
-        // Commit.
-        ts += 1;
-        let commit_version = ts;
-        must_kv_commit(
-            &client,
-            ctx.clone(),
-            vec![k.clone()],
-            prewrite_start_version,
-            commit_version,
-            commit_version,
-        );
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
     }
 
     // PointGet
@@ -205,7 +178,7 @@ fn test_read_keys_coprocessor() {
         .unwrap();
 
     // Do DAG select to register runtime thread.
-    let mut req = DAGSelect::from(&product).build();
+    let mut req = DagSelect::from(&product).build();
     let mut ctx = Context::default();
     ctx.set_resource_group_tag("TEST-TAG".into());
     req.set_context(ctx);
@@ -254,7 +227,6 @@ fn init_coprocessor_with_data(
         &tikv::server::Config::default(),
         pool.handle(),
         cm,
-        PerfLevel::EnableCount,
         tag_factory,
         Arc::new(QuotaLimiter::default()),
     )

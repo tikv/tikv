@@ -2,7 +2,6 @@
 
 use rand::{thread_rng, RngCore};
 use test::Bencher;
-
 use tikv_util::keybuilder::KeyBuilder;
 
 #[inline]

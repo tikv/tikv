@@ -5,16 +5,24 @@ mod cgroup;
 pub mod cpu_time;
 pub mod disk;
 pub mod inspector;
+pub mod ioload;
 pub mod thread;
 
 // re-export some traits for ease of use
-use crate::config::{ReadableSize, KIB};
+use std::{
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_os = "linux")]
+use mnt::get_mount;
 use sysinfo::RefreshKind;
-pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
+pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
+
+use crate::config::ReadableSize;
 
 pub const HIGH_PRI: i32 = -1;
 const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
@@ -55,11 +63,10 @@ impl SysQuota {
     #[cfg(target_os = "linux")]
     pub fn memory_limit_in_bytes() -> u64 {
         let total_mem = Self::sysinfo_memory_limit_in_bytes();
-        let cgroup_memory_limit = SELF_CGROUP.memory_limit_in_bytes();
-        if cgroup_memory_limit <= 0 {
-            total_mem
+        if let Some(cgroup_memory_limit) = SELF_CGROUP.memory_limit_in_bytes() {
+            std::cmp::min(total_mem, cgroup_memory_limit)
         } else {
-            std::cmp::min(total_mem, cgroup_memory_limit as u64)
+            total_mem
         }
     }
 
@@ -86,12 +93,12 @@ impl SysQuota {
 
     fn sysinfo_memory_limit_in_bytes() -> u64 {
         let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
-        system.get_total_memory() * KIB
+        system.total_memory()
     }
 }
 
-/// Get the current global memory usage in bytes. Users need to call `record_global_memory_usage`
-/// to refresh it periodically.
+/// Get the current global memory usage in bytes. Users need to call
+/// `record_global_memory_usage` to refresh it periodically.
 pub fn get_global_memory_usage() -> u64 {
     GLOBAL_MEMORY_USAGE.load(Ordering::Acquire)
 }
@@ -109,7 +116,8 @@ pub fn record_global_memory_usage() {
     GLOBAL_MEMORY_USAGE.store(0, Ordering::Release);
 }
 
-/// Register the high water mark so that `memory_usage_reaches_high_water` is available.
+/// Register the high water mark so that `memory_usage_reaches_high_water` is
+/// available.
 pub fn register_memory_usage_high_water(mark: u64) {
     MEMORY_USAGE_HIGH_WATER.store(mark, Ordering::Release);
 }
@@ -152,4 +160,61 @@ pub fn cache_size(level: usize) -> Option<u64> {
 /// It will only return `Some` on Linux.
 pub fn cache_line_size(level: usize) -> Option<u64> {
     read_size_in_cache(level, "coherency_line_size")
+}
+
+#[cfg(target_os = "linux")]
+pub fn path_in_diff_mount_point(path1: impl AsRef<Path>, path2: impl AsRef<Path>) -> bool {
+    let (path1, path2) = (path1.as_ref(), path2.as_ref());
+    let empty_path = |p: &Path| p.to_str().map_or(false, |s| s.is_empty());
+    if empty_path(path1) || empty_path(path2) {
+        return false;
+    }
+    match (get_mount(path1), get_mount(path2)) {
+        (Err(e1), _) => {
+            warn!("Get mount point error for path {}, {}", path1.display(), e1);
+            false
+        }
+        (_, Err(e2)) => {
+            warn!("Get mount point error for path {}, {}", path2.display(), e2);
+            false
+        }
+        (Ok(None), _) => {
+            warn!("No mount point for {}", path1.display());
+            false
+        }
+        (_, Ok(None)) => {
+            warn!("No mount point for {}", path2.display());
+            false
+        }
+        (Ok(Some(mount1)), Ok(Some(mount2))) => mount1 != mount2,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn path_in_diff_mount_point(_path1: impl AsRef<Path>, _path2: impl AsRef<Path>) -> bool {
+    false
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_path_in_diff_mount_point() {
+        let (empty_path1, path2) = ("", "/");
+        let result = path_in_diff_mount_point(empty_path1, path2);
+        assert_eq!(result, false);
+
+        let (no_mount_point_path, path2) = ("no_mount_point_path_w943nn", "/");
+        let result = path_in_diff_mount_point(no_mount_point_path, path2);
+        assert_eq!(result, false);
+
+        let (not_existed_path, path2) = ("/non_existed_path_eu2yndh", "/");
+        let result = path_in_diff_mount_point(not_existed_path, path2);
+        assert_eq!(result, false);
+
+        let (normal_path1, normal_path2) = ("/", "/");
+        let result = path_in_diff_mount_point(normal_path1, normal_path2);
+        assert_eq!(result, false);
+    }
 }

@@ -58,4 +58,9 @@ lazy_static! {
         &["cf"],
     )
     .unwrap();
+    pub static ref BACKUP_RAW_EXPIRED_COUNT : IntCounter = register_int_counter!(
+        "tikv_backup_raw_expired_count",
+        "Total number of rawkv expired during scan",
+    )
+    .unwrap();
 }

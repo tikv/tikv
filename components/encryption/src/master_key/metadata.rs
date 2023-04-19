@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq)]
 pub enum MetadataKey {
     Method,
     Iv,
@@ -27,7 +27,7 @@ impl MetadataKey {
     }
 }
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq)]
 pub enum MetadataMethod {
     Plaintext,
     Aes256Gcm,

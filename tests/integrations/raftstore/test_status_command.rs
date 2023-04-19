@@ -1,10 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raftstore::store::msg::StoreMsg;
-use raftstore::store::util::LatencyInspector;
+use raftstore::store::{msg::StoreMsg, util::LatencyInspector};
 use test_raftstore::*;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv_util::{time::Instant, HandyRwLock};
 
 #[test]
 fn test_region_detail() {

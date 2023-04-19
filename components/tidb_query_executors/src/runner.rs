@@ -1,55 +1,61 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use protobuf::Message;
-use std::convert::TryFrom;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{convert::TryFrom, sync::Arc};
 
+use api_version::KvFormat;
 use fail::fail_point;
+use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::{deadline::Deadline, time::Instant};
-use tipb::StreamResponse;
-use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
-use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
-use yatp::task::future::reschedule;
+use protobuf::Message;
+use tidb_query_common::{
+    execute_stats::ExecSummary,
+    metrics::*,
+    storage::{IntervalRange, Storage},
+    Result,
+};
+use tidb_query_datatype::{
+    expr::{EvalConfig, EvalContext, EvalWarnings},
+    EvalType, FieldTypeAccessor,
+};
+use tikv_util::{
+    deadline::Deadline,
+    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    quota_limiter::QuotaLimiter,
+};
+use tipb::{
+    self, Chunk, DagRequest, EncodeType, ExecType, ExecutorExecutionSummary, FieldType,
+    SelectResponse, StreamResponse,
+};
 
-use super::interface::{BatchExecutor, ExecuteStats};
-use super::*;
-use tidb_query_common::execute_stats::ExecSummary;
-use tidb_query_common::metrics::*;
-use tidb_query_common::storage::{IntervalRange, Storage};
-use tidb_query_common::Result;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
-use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
-use tikv_util::quota_limiter::QuotaLimiter;
+use super::{
+    interface::{BatchExecIsDrain, BatchExecutor, ExecuteStats},
+    *,
+};
 
-// TODO: The value is chosen according to some very subjective experience, which is not tuned
-// carefully. We need to benchmark to find a best value. Also we may consider accepting this value
-// from TiDB side.
+// TODO: The value is chosen according to some very subjective experience, which
+// is not tuned carefully. We need to benchmark to find a best value. Also we
+// may consider accepting this value from TiDB side.
 const BATCH_INITIAL_SIZE: usize = 32;
 
-// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
+// TODO: This value is chosen based on MonetDB/X100's research without our own
+// benchmarks.
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
-/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
-/// can run without being yielded.
-pub const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
-
 pub struct BatchExecutorsRunner<SS> {
-    /// The deadline of this handler. For each check point (e.g. each iteration) we need to check
-    /// whether or not the deadline is exceeded and break the process if so.
+    /// The deadline of this handler. For each check point (e.g. each iteration)
+    /// we need to check whether or not the deadline is exceeded and break
+    /// the process if so.
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
 
     out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
 
-    /// The offset of the columns need to be outputted. For example, TiDB may only needs a subset
-    /// of the columns in the result so that unrelated columns don't need to be encoded and
-    /// returned back.
+    /// The offset of the columns need to be outputted. For example, TiDB may
+    /// only needs a subset of the columns in the result so that unrelated
+    /// columns don't need to be encoded and returned back.
     output_offsets: Vec<u32>,
 
     config: Arc<EvalConfig>,
@@ -68,16 +74,18 @@ pub struct BatchExecutorsRunner<SS> {
     /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
 
-    /// If it's a paging request, paging_size indicates to the required size for current page.
+    /// If it's a paging request, paging_size indicates to the required size for
+    /// current page.
     paging_size: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
 }
 
-// We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
+// We assign a dummy type `()` so that we can omit the type when calling
+// `check_supported`.
 impl BatchExecutorsRunner<()> {
-    /// Given a list of executor descriptors and checks whether all executor descriptors can
-    /// be used to build batch executors.
+    /// Given a list of executor descriptors and checks whether all executor
+    /// descriptors can be used to build batch executors.
     pub fn check_supported(exec_descriptors: &[tipb::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
@@ -143,6 +151,15 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypePartitionTableScan => {
                     other_err!("PartitionTableScan executor not implemented");
                 }
+                ExecType::TypeSort => {
+                    other_err!("Sort executor not implemented");
+                }
+                ExecType::TypeWindow => {
+                    other_err!("Window executor not implemented");
+                }
+                ExecType::TypeExpand => {
+                    other_err!("Expand executor not implemented");
+                }
             }
         }
 
@@ -158,7 +175,7 @@ fn is_arrow_encodable(schema: &[FieldType]) -> bool {
 }
 
 #[allow(clippy::explicit_counter_loop)]
-pub fn build_executors<S: Storage + 'static>(
+pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     executor_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
@@ -186,7 +203,7 @@ pub fn build_executors<S: Storage + 'static>(
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
             Box::new(
-                BatchTableScanExecutor::new(
+                BatchTableScanExecutor::<_, F>::new(
                     storage,
                     config.clone(),
                     columns_info,
@@ -206,7 +223,7 @@ pub fn build_executors<S: Storage + 'static>(
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids_len = descriptor.take_primary_column_ids().len();
             Box::new(
-                BatchIndexScanExecutor::new(
+                BatchIndexScanExecutor::<_, F>::new(
                     storage,
                     config.clone(),
                     columns_info,
@@ -312,14 +329,39 @@ pub fn build_executors<S: Storage + 'static>(
             ExecType::TypeLimit => {
                 EXECUTOR_COUNT_METRICS.batch_limit.inc();
 
-                Box::new(
-                    BatchLimitExecutor::new(
-                        executor,
-                        ed.get_limit().get_limit() as usize,
-                        is_src_scan_executor,
-                    )?
-                    .collect_summary(summary_slot_index),
-                )
+                let mut d = ed.take_limit();
+
+                // If there is partition_by field in Limit, we treat it as a
+                // partitionTopN without order_by.
+                // todo: refine those logics.
+                let partition_by = d
+                    .take_partition_by()
+                    .into_iter()
+                    .map(|mut item| item.take_expr())
+                    .collect_vec();
+
+                if partition_by.is_empty() {
+                    Box::new(
+                        BatchLimitExecutor::new(
+                            executor,
+                            d.get_limit() as usize,
+                            is_src_scan_executor,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                } else {
+                    Box::new(
+                        BatchPartitionTopNExecutor::new(
+                            config.clone(),
+                            executor,
+                            partition_by,
+                            vec![],
+                            vec![],
+                            d.get_limit() as usize,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                }
             }
             ExecType::TypeTopN => {
                 EXECUTOR_COUNT_METRICS.batch_top_n.inc();
@@ -332,17 +374,36 @@ pub fn build_executors<S: Storage + 'static>(
                     order_exprs_def.push(item.take_expr());
                     order_is_desc.push(item.get_desc());
                 }
+                let partition_by = d
+                    .take_partition_by()
+                    .into_iter()
+                    .map(|mut item| item.take_expr())
+                    .collect_vec();
 
-                Box::new(
-                    BatchTopNExecutor::new(
-                        config.clone(),
-                        executor,
-                        order_exprs_def,
-                        order_is_desc,
-                        d.get_limit() as usize,
-                    )?
-                    .collect_summary(summary_slot_index),
-                )
+                if partition_by.is_empty() {
+                    Box::new(
+                        BatchTopNExecutor::new(
+                            config.clone(),
+                            executor,
+                            order_exprs_def,
+                            order_is_desc,
+                            d.get_limit() as usize,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                } else {
+                    Box::new(
+                        BatchPartitionTopNExecutor::new(
+                            config.clone(),
+                            executor,
+                            partition_by,
+                            order_exprs_def,
+                            order_is_desc,
+                            d.get_limit() as usize,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                }
             }
             _ => {
                 return Err(other_err!(
@@ -358,7 +419,7 @@ pub fn build_executors<S: Storage + 'static>(
 }
 
 impl<SS: 'static> BatchExecutorsRunner<SS> {
-    pub fn from_request<S: Storage<Statistics = SS> + 'static>(
+    pub fn from_request<S: Storage<Statistics = SS> + 'static, F: KvFormat>(
         mut req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
@@ -370,14 +431,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
-        let config = Arc::new(EvalConfig::from_request(&req)?);
+        let mut config = EvalConfig::from_request(&req)?;
+        config.paging_size = paging_size;
+        let config = Arc::new(config);
 
-        let out_most_executor = build_executors(
+        let out_most_executor = build_executors::<_, F>(
             req.take_executors().into(),
             storage,
             ranges,
             config.clone(),
-            is_streaming || paging_size.is_some(), // For streaming and paging request, executors will continue scan from range end where last scan is finished
+            is_streaming || paging_size.is_some(), /* For streaming and paging request,
+                                                    * executors will continue scan from range
+                                                    * end where last scan is finished */
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
@@ -424,8 +489,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     /// handle_request returns the response of selection and an optional range,
     /// only paging request will return Some(IntervalRange),
     /// this should be used when calculating ranges of the next batch.
-    /// IntervalRange records whole range scanned though there are gaps in multi ranges.
-    /// e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4) with IntervalRange like (k1, k4).
+    /// IntervalRange records whole range scanned though there are gaps in multi
+    /// ranges. e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4)
+    /// with IntervalRange like (k1, k4).
     pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
@@ -433,29 +499,27 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
 
-        let mut time_slice_start = Instant::now();
         loop {
-            // Check whether we should yield from the execution
-            if need_reschedule(time_slice_start) {
-                reschedule().await;
-                time_slice_start = Instant::now();
+            let mut chunk = Chunk::default();
+            let mut sample = self.quota_limiter.new_sample(true);
+            let (drained, record_len) = {
+                let (cpu_time, res) = sample
+                    .observe_cpu_async(self.internal_handle_request(
+                        false,
+                        batch_size,
+                        &mut chunk,
+                        &mut warnings,
+                        &mut ctx,
+                    ))
+                    .await;
+                sample.add_cpu_time(cpu_time);
+                res?
+            };
+            if chunk.has_rows_data() {
+                sample.add_read_bytes(chunk.get_rows_data().len());
             }
 
-            let mut chunk = Chunk::default();
-
-            let mut sample = self.quota_limiter.new_sample();
-            let (drained, record_len) = {
-                let _guard = sample.observe_cpu();
-                self.internal_handle_request(
-                    false,
-                    batch_size,
-                    &mut chunk,
-                    &mut warnings,
-                    &mut ctx,
-                )?
-            };
-
-            let quota_delay = self.quota_limiter.async_consume(sample).await;
+            let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::dag)
@@ -467,13 +531,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 record_all += record_len;
             }
 
-            if drained || self.paging_size.map_or(false, |p| record_all >= p as usize) {
+            if drained.stop() || self.paging_size.map_or(false, |p| record_all >= p as usize) {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
-
-                let range = self
-                    .paging_size
-                    .map(|_| self.out_most_executor.take_scanned_range());
+                let range = if drained == BatchExecIsDrain::Drain {
+                    None
+                } else {
+                    // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
+                    self.paging_size
+                        .map(|_| self.out_most_executor.take_scanned_range())
+                };
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
@@ -514,7 +581,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
     }
 
-    pub fn handle_streaming_request(
+    pub async fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
         let mut warnings = self.config.new_eval_warnings();
@@ -528,18 +595,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
             // TODO: Streaming coprocessor on TiKV is just not enabled in TiDB now.
-            let (drained, len) = self.internal_handle_request(
-                true,
-                batch_size.min(self.stream_row_limit - record_len),
-                &mut current_chunk,
-                &mut warnings,
-                &mut ctx,
-            )?;
+            let (drained, len) = self
+                .internal_handle_request(
+                    true,
+                    batch_size.min(self.stream_row_limit - record_len),
+                    &mut current_chunk,
+                    &mut warnings,
+                    &mut ctx,
+                )
+                .await?;
             chunk
                 .mut_rows_data()
                 .extend_from_slice(current_chunk.get_rows_data());
             record_len += len;
-            is_drained = drained;
+            is_drained = drained.stop();
         }
 
         if !is_drained || record_len > 0 {
@@ -566,19 +635,19 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
     }
 
-    fn internal_handle_request(
+    async fn internal_handle_request(
         &mut self,
         is_streaming: bool,
         batch_size: usize,
         chunk: &mut Chunk,
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
-    ) -> Result<(bool, usize)> {
+    ) -> Result<(BatchExecIsDrain, usize)> {
         let mut record_len = 0;
 
         self.deadline.check()?;
 
-        let mut result = self.out_most_executor.next_batch(batch_size);
+        let mut result = self.out_most_executor.next_batch(batch_size).await;
 
         let is_drained = result.is_drained?;
 
@@ -669,10 +738,4 @@ fn grow_batch_size(batch_size: &mut usize) {
             *batch_size = BATCH_MAX_SIZE
         }
     }
-}
-
-#[inline]
-fn need_reschedule(time_slice_start: Instant) -> bool {
-    fail_point!("copr_reschedule", |_| true);
-    time_slice_start.saturating_elapsed() > MAX_TIME_SLICE
 }

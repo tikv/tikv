@@ -1,16 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::{btree_map, BTreeMap};
-use std::sync::Arc;
+use std::{
+    collections::{btree_map, BTreeMap},
+    sync::Arc,
+};
 
-use super::range::*;
-use super::Result;
+use super::{range::*, Result};
 
 type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
 
 type FixtureValue = std::result::Result<Vec<u8>, ErrorBuilder>;
 
-/// A `Storage` implementation that returns fixed source data (i.e. fixture). Useful in tests.
+/// A `Storage` implementation that returns fixed source data (i.e. fixture).
+/// Useful in tests.
 #[derive(Clone)]
 pub struct FixtureStorage {
     data: Arc<BTreeMap<Vec<u8>, FixtureValue>>,
@@ -68,8 +70,8 @@ impl super::Storage for FixtureStorage {
 
     fn scan_next(&mut self) -> Result<Option<super::OwnedKvPair>> {
         let value = if !self.is_backward_scan {
-            // During the call of this function, `data` must be valid and we are only returning
-            // data clones to outside, so this access is safe.
+            // During the call of this function, `data` must be valid and we are only
+            // returning data clones to outside, so this access is safe.
             self.data_view_unsafe.as_mut().unwrap().next()
         } else {
             self.data_view_unsafe.as_mut().unwrap().next_back()

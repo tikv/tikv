@@ -6,9 +6,11 @@
 //! is fatal, and it is compiled with panic=abort, so use of this crate in
 //! production is an error.
 
-use std::cell::RefCell;
-use std::panic::{self, AssertUnwindSafe, PanicInfo};
-use std::sync::Once;
+use std::{
+    cell::RefCell,
+    panic::{self, AssertUnwindSafe, PanicInfo},
+    sync::Once,
+};
 
 static INIT: Once = Once::new();
 // store the default panic hook defined in std.
@@ -53,7 +55,8 @@ fn track_hook(p: &PanicInfo<'_>) {
 
 /// Recover from closure which may panic.
 ///
-/// This function assumes the closure is able to be forced to implement `UnwindSafe`.
+/// This function assumes the closure is able to be forced to implement
+/// `UnwindSafe`.
 ///
 /// Also see [`AssertUnwindSafe`](https://doc.rust-lang.org/std/panic/struct.AssertUnwindSafe.html).
 pub fn recover_safe<F, R>(f: F) -> std::thread::Result<R>

@@ -8,17 +8,20 @@
 //! `tikv_receiver_addr` to check where the message should delievered to. If
 //! there is no such metadata, it will handle the message by itself.
 
-use crate::server::Config;
+use std::{
+    ffi::CString,
+    future::Future,
+    str,
+    sync::{Arc, Weak},
+    time::Duration,
+};
+
 use collections::HashMap;
 use grpcio::{CallOption, Channel, ChannelBuilder, Environment, MetadataBuilder, RpcContext};
 use kvproto::tikvpb::TikvClient;
 use security::SecurityManager;
 
-use std::ffi::CString;
-use std::future::Future;
-use std::str;
-use std::sync::{Arc, Weak};
-use std::time::Duration;
+use crate::server::Config;
 
 const FORWARD_METADATA_KEY: &str = "tikv-forwarded-host";
 

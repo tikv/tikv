@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::util;
 use engine_traits::{FlowControlFactorsExt, Result};
+
+use crate::{engine::RocksEngine, util};
 
 impl FlowControlFactorsExt for RocksEngine {
     fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {

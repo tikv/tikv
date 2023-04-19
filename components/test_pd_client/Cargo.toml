@@ -1,0 +1,22 @@
+[package]
+name = "test_pd_client"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+collections = { workspace = true }
+fail = "0.5"
+futures = "0.3"
+grpcio = { workspace = true }
+keys = { workspace = true }
+kvproto = { workspace = true }
+log_wrappers = { workspace = true }
+pd_client = { workspace = true }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+slog = { workspace = true }
+slog-global = { workspace = true }
+tikv_util = { workspace = true }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
+tokio-timer = { workspace = true }
+txn_types = { workspace = true }

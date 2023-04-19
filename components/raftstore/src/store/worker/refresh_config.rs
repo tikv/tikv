@@ -1,14 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::store::fsm::apply::{ApplyFsm, ControlFsm};
-use crate::store::fsm::store::StoreFsm;
-use crate::store::fsm::PeerFsm;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::Arc,
+    thread,
+};
+
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
-use file_system::{set_io_type, IOType};
-use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
-use std::thread;
-use tikv_util::worker::Runnable;
-use tikv_util::{debug, error, info, safe_panic, thd_name};
+use file_system::{set_io_type, IoType};
+use tikv_util::{
+    debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable,
+};
+
+use crate::store::{
+    async_io::write::{StoreWriters, StoreWritersContext},
+    fsm::{
+        apply::{ApplyFsm, ControlFsm},
+        store::{RaftRouter, StoreFsm},
+        PeerFsm,
+    },
+    transport::Transport,
+    PersistedNotifier,
+};
 
 pub struct PoolController<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub router: BatchRouter<N, C>,
@@ -34,9 +46,9 @@ where
 {
     pub fn decrease_by(&mut self, size: usize) {
         for _ in 0..size {
-            if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty) {
+            if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty, None) {
                 error!(
-                    "failed to decrese thread pool";
+                    "failed to decrease thread pool";
                     "decrease to" => size,
                     "err" => %e,
                 );
@@ -65,9 +77,9 @@ where
                     name_prefix,
                     i + self.state.id_base,
                 )))
-                .spawn(move || {
+                .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    set_io_type(IOType::ForegroundWrite);
+                    set_io_type(IoType::ForegroundWrite);
                     poller.poll();
                 })
                 .unwrap();
@@ -103,6 +115,38 @@ where
     }
 }
 
+struct WriterContoller<EK, ER, T, N>
+where
+    EK: engine_traits::KvEngine,
+    ER: engine_traits::RaftEngine,
+    T: Transport + 'static,
+    N: PersistedNotifier,
+{
+    writer_meta: StoreWritersContext<EK, ER, T, N>,
+    store_writers: StoreWriters<EK, ER>,
+    expected_writers_size: usize,
+}
+
+impl<EK, ER, T, N> WriterContoller<EK, ER, T, N>
+where
+    EK: engine_traits::KvEngine,
+    ER: engine_traits::RaftEngine,
+    T: Transport + 'static,
+    N: PersistedNotifier,
+{
+    pub fn new(
+        writer_meta: StoreWritersContext<EK, ER, T, N>,
+        store_writers: StoreWriters<EK, ER>,
+    ) -> Self {
+        let writers_size = store_writers.size();
+        Self {
+            writer_meta,
+            store_writers,
+            expected_writers_size: writers_size,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum BatchComponent {
     Store,
@@ -126,6 +170,7 @@ impl Display for BatchComponent {
 pub enum Task {
     ScalePool(BatchComponent, usize),
     ScaleBatchSize(BatchComponent, usize),
+    ScaleWriters(usize),
 }
 
 impl Display for Task {
@@ -137,38 +182,48 @@ impl Display for Task {
             Task::ScaleBatchSize(component, size) => {
                 write!(f, "Scale max_batch_size adjusts {}: {} ", component, size)
             }
+            Task::ScaleWriters(size) => {
+                write!(f, "Scale store_io_pool_size adjusts {} ", size)
+            }
         }
     }
 }
 
-pub struct Runner<EK, ER, AH, RH>
+pub struct Runner<EK, ER, AH, RH, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     AH: HandlerBuilder<ApplyFsm<EK>, ControlFsm>,
     RH: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>>,
+    T: Transport + 'static,
 {
+    writer_ctrl: WriterContoller<EK, ER, T, RaftRouter<EK, ER>>,
     apply_pool: PoolController<ApplyFsm<EK>, ControlFsm, AH>,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
 }
 
-impl<EK, ER, AH, RH> Runner<EK, ER, AH, RH>
+impl<EK, ER, AH, RH, T> Runner<EK, ER, AH, RH, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     AH: HandlerBuilder<ApplyFsm<EK>, ControlFsm>,
     RH: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>>,
+    T: Transport + 'static,
 {
     pub fn new(
+        writer_meta: StoreWritersContext<EK, ER, T, RaftRouter<EK, ER>>,
+        store_writers: StoreWriters<EK, ER>,
         apply_router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
         apply_pool_state: PoolState<ApplyFsm<EK>, ControlFsm, AH>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
     ) -> Self {
+        let writer_ctrl = WriterContoller::new(writer_meta, store_writers);
         let apply_pool = PoolController::new(apply_router, apply_pool_state);
         let raft_pool = PoolController::new(raft_router, raft_pool_state);
 
         Runner {
+            writer_ctrl,
             apply_pool,
             raft_pool,
         }
@@ -180,7 +235,7 @@ where
         match current_pool_size.cmp(&size) {
             std::cmp::Ordering::Greater => self.raft_pool.decrease_by(current_pool_size - size),
             std::cmp::Ordering::Less => self.raft_pool.increase_by(size - current_pool_size),
-            std::cmp::Ordering::Equal => (),
+            std::cmp::Ordering::Equal => return,
         }
         self.raft_pool.cleanup_poller_threads();
         info!(
@@ -196,7 +251,7 @@ where
         match current_pool_size.cmp(&size) {
             std::cmp::Ordering::Greater => self.apply_pool.decrease_by(current_pool_size - size),
             std::cmp::Ordering::Less => self.apply_pool.increase_by(size - current_pool_size),
-            std::cmp::Ordering::Equal => (),
+            std::cmp::Ordering::Equal => return,
         }
         self.apply_pool.cleanup_poller_threads();
         info!(
@@ -205,14 +260,47 @@ where
             "to" => self.apply_pool.state.expected_pool_size
         );
     }
+
+    /// Resizes the count of background threads in store_writers.
+    fn resize_store_writers(&mut self, size: usize) {
+        // The resizing of store writers will not directly update the local cached
+        // store writers in each poller. Each poller will timely correct its local
+        // cached in its next `poller.begin()` after the resize operation completed.
+        let current_size = self.writer_ctrl.expected_writers_size;
+        self.writer_ctrl.expected_writers_size = size;
+        match current_size.cmp(&size) {
+            std::cmp::Ordering::Greater => {
+                if let Err(e) = self.writer_ctrl.store_writers.decrease_to(size) {
+                    error!("failed to decrease store writers size"; "err_msg" => ?e);
+                }
+            }
+            std::cmp::Ordering::Less => {
+                let writer_meta = self.writer_ctrl.writer_meta.clone();
+                if let Err(e) = self
+                    .writer_ctrl
+                    .store_writers
+                    .increase_to(size, writer_meta)
+                {
+                    error!("failed to increase store writers size"; "err_msg" => ?e);
+                }
+            }
+            std::cmp::Ordering::Equal => return,
+        }
+        info!(
+            "resize store writers pool";
+            "from" => current_size,
+            "to" => size
+        );
+    }
 }
 
-impl<EK, ER, AH, RH> Runnable for Runner<EK, ER, AH, RH>
+impl<EK, ER, AH, RH, T> Runnable for Runner<EK, ER, AH, RH, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     AH: HandlerBuilder<ApplyFsm<EK>, ControlFsm> + std::marker::Send,
     RH: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>> + std::marker::Send,
+    T: Transport + 'static,
 {
     type Task = Task;
 
@@ -230,6 +318,7 @@ where
                     self.apply_pool.state.max_batch_size = size;
                 }
             },
+            Task::ScaleWriters(size) => self.resize_store_writers(size),
         }
     }
 }

@@ -1,15 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Error as IoError;
-use std::{error, result};
+use std::{error, io::Error as IoError, result};
 
 use engine_traits::Error as EngineTraitsError;
-use kvproto::cdcpb::Error as ErrorEvent;
-use kvproto::errorpb;
+use kvproto::{cdcpb::Error as ErrorEvent, errorpb};
 use thiserror::Error;
-use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv::storage::{
+    kv::{Error as KvError, ErrorInner as EngineErrorInner},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+};
 use txn_types::Error as TxnTypesError;
 
 use crate::channel::SendError;

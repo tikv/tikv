@@ -1,17 +1,25 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    mem,
+    sync::{
+        mpsc::{channel, sync_channel, Receiver, SyncSender},
+        Arc,
+    },
+    time::Duration,
+};
+
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::{
     BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+    RegionChangeReason,
 };
-use raftstore::store::util::{find_peer, new_peer};
-use std::mem;
-use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
-use std::sync::Arc;
-use std::time::Duration;
 use test_raftstore::{new_node_cluster, Cluster, NodeCluster};
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    store::{find_peer, new_peer},
+    HandyRwLock,
+};
 
 #[derive(Clone)]
 struct TestObserver {
@@ -71,7 +79,10 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     pd_client.must_add_peer(r1, new_peer(2, 10));
     let add_peer_event = receiver.recv().unwrap();
     receiver.try_recv().unwrap_err();
-    assert_eq!(add_peer_event.1, RegionChangeEvent::Update);
+    assert_eq!(
+        add_peer_event.1,
+        RegionChangeEvent::Update(RegionChangeReason::ChangePeer)
+    );
     assert_eq!(add_peer_event.0.get_id(), r1);
     assert_eq!(add_peer_event.0.get_peers().len(), 2);
     assert_ne!(
@@ -86,13 +97,17 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     cluster.must_split(&add_peer_event.0, b"k2");
     let mut split_update = receiver.recv().unwrap();
     let mut split_create = receiver.recv().unwrap();
-    // We should receive an `Update` and a `Create`. The order of them is not important.
-    if split_update.1 != RegionChangeEvent::Update {
+    // We should receive an `Update` and a `Create`. The order of them is not
+    // important.
+    if split_update.1 != RegionChangeEvent::Update(RegionChangeReason::Split) {
         mem::swap(&mut split_update, &mut split_create);
     }
     // No more events
     receiver.try_recv().unwrap_err();
-    assert_eq!(split_update.1, RegionChangeEvent::Update);
+    assert_eq!(
+        split_update.1,
+        RegionChangeEvent::Update(RegionChangeReason::Split)
+    );
     assert_eq!(split_update.0.get_id(), r1);
     assert_ne!(
         split_update.0.get_region_epoch(),
@@ -115,16 +130,23 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     // Merge
     pd_client.must_merge(split_update.0.get_id(), split_create.0.get_id());
     // An `Update` produced by PrepareMerge. Ignore it.
-    assert_eq!(receiver.recv().unwrap().1, RegionChangeEvent::Update);
+    assert_eq!(
+        receiver.recv().unwrap().1,
+        RegionChangeEvent::Update(RegionChangeReason::PrepareMerge)
+    );
     let mut merge_update = receiver.recv().unwrap();
     let mut merge_destroy = receiver.recv().unwrap();
-    // We should receive an `Update` and a `Destroy`. The order of them is not important.
-    if merge_update.1 != RegionChangeEvent::Update {
+    // We should receive an `Update` and a `Destroy`. The order of them is not
+    // important.
+    if merge_update.1 != RegionChangeEvent::Update(RegionChangeReason::CommitMerge) {
         mem::swap(&mut merge_update, &mut merge_destroy);
     }
     // No more events
     receiver.try_recv().unwrap_err();
-    assert_eq!(merge_update.1, RegionChangeEvent::Update);
+    assert_eq!(
+        merge_update.1,
+        RegionChangeEvent::Update(RegionChangeReason::CommitMerge)
+    );
     assert!(merge_update.0.get_start_key().is_empty());
     assert!(merge_update.0.get_end_key().is_empty());
     assert_eq!(merge_destroy.1, RegionChangeEvent::Destroy);
@@ -152,7 +174,10 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
 
     let remove_peer_update = receiver.recv().unwrap();
     // After being removed from the region's peers, an update is triggered at first.
-    assert_eq!(remove_peer_update.1, RegionChangeEvent::Update);
+    assert_eq!(
+        remove_peer_update.1,
+        RegionChangeEvent::Update(RegionChangeReason::ChangePeer)
+    );
     assert!(find_peer(&remove_peer_update.0, 1).is_none());
 
     let remove_peer_destroy = receiver.recv().unwrap();

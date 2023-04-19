@@ -1,27 +1,28 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
-use std::sync::atomic::*;
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
-use std::{mem, thread, time, usize};
+use std::{
+    marker::PhantomData,
+    mem,
+    sync::{atomic::*, mpsc::Sender, Arc, Mutex, RwLock},
+    thread, time,
+    time::Duration,
+    usize,
+};
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::MessageType;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter};
-use raftstore::store::{
-    Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand, SignificantMsg,
-    SignificantRouter, StoreMsg, StoreRouter, Transport,
+use raftstore::{
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
+        SignificantMsg, SignificantRouter, StoreMsg, StoreRouter, Transport,
+    },
+    DiscardReason, Error, Result as RaftStoreResult, Result,
 };
-use raftstore::Result as RaftStoreResult;
-use raftstore::{DiscardReason, Error, Result};
-use tikv_util::time::ThreadReadId;
-use tikv_util::{Either, HandyRwLock};
+use tikv_util::{time::ThreadReadId, Either, HandyRwLock};
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -161,7 +162,7 @@ impl<C> SimulateTransport<C> {
     }
 }
 
-fn filter_send<H>(
+pub fn filter_send<H>(
     filters: &Arc<RwLock<Vec<Box<dyn Filter>>>>,
     msg: RaftMessage,
     mut h: H,
@@ -250,7 +251,7 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
 
 impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateTransport<C> {
     fn read(
-        &self,
+        &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
@@ -258,7 +259,7 @@ impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateT
         self.ch.read(read_id, req, cb)
     }
 
-    fn release_snapshot_cache(&self) {
+    fn release_snapshot_cache(&mut self) {
         self.ch.release_snapshot_cache()
     }
 }
@@ -272,7 +273,7 @@ pub struct DefaultFilterFactory<F: Filter + Default>(PhantomData<F>);
 
 impl<F: Filter + Default + 'static> FilterFactory for DefaultFilterFactory<F> {
     fn generate(&self, _: u64) -> Vec<Box<dyn Filter>> {
-        vec![Box::new(F::default())]
+        vec![Box::<F>::default()]
     }
 }
 
@@ -313,9 +314,9 @@ impl FilterFactory for PartitionFilterFactory {
                 node_ids: self.s2.clone(),
             })];
         }
-        return vec![Box::new(PartitionFilter {
+        vec![Box::new(PartitionFilter {
             node_ids: self.s1.clone(),
-        })];
+        })]
     }
 }
 
@@ -506,10 +507,11 @@ impl Filter for SnapshotFilter {
     }
 }
 
-/// `CollectSnapshotFilter` is a simulation transport filter to simulate the simultaneous delivery
-/// of multiple snapshots from different peers. It collects the snapshots from different
-/// peers and drop the subsequent snapshots from the same peers. Currently, if there are
-/// more than 1 snapshots in this filter, all the snapshots will be dilivered at once.
+/// `CollectSnapshotFilter` is a simulation transport filter to simulate the
+/// simultaneous delivery of multiple snapshots from different peers. It
+/// collects the snapshots from different peers and drop the subsequent
+/// snapshots from the same peers. Currently, if there are more than 1 snapshots
+/// in this filter, all the snapshots will be delivered at once.
 pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
@@ -752,10 +754,11 @@ impl Filter for LeadingDuplicatedSnapshotFilter {
     }
 }
 
-/// `RandomLatencyFilter` is a transport filter to simulate randomized network latency.
-/// Based on a randomized rate, `RandomLatencyFilter` will decide whether to delay
-/// the sending of any message. It's could be used to simulate the message sending
-/// in a network with random latency, where messages could be delayed, disordered or lost.
+/// `RandomLatencyFilter` is a transport filter to simulate randomized network
+/// latency. Based on a randomized rate, `RandomLatencyFilter` will decide
+/// whether to delay the sending of any message. It's could be used to simulate
+/// the message sending in a network with random latency, where messages could
+/// be delayed, disordered or lost.
 pub struct RandomLatencyFilter {
     delay_rate: u32,
     delayed_msgs: Mutex<Vec<RaftMessage>>,

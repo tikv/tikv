@@ -1,13 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This module is a subset of rust-prometheus's process collector, without the fd collector
-//! to avoid memory fragmentation issues when open fd is large.
+//! This module is a subset of rust-prometheus's process collector, without the
+//! fd collector to avoid memory fragmentation issues when open fd is large.
 
 use std::io::{Error, ErrorKind, Result};
 
+use prometheus::{
+    core::{Collector, Desc},
+    proto, IntCounter, IntGauge, Opts,
+};
+
 use crate::sys::thread;
-use prometheus::core::{Collector, Desc};
-use prometheus::{proto, IntCounter, IntGauge, Opts};
 
 /// Monitors current process.
 pub fn monitor_process() -> Result<()> {

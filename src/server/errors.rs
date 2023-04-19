@@ -1,26 +1,20 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
-use std::io::Error as IoError;
-use std::net::AddrParseError;
-use std::result;
-
-use futures::channel::oneshot::Canceled;
-use grpcio::Error as GrpcError;
-use hyper::Error as HttpError;
-use openssl::error::ErrorStack as OpenSSLError;
-use protobuf::ProtobufError;
-use thiserror::Error;
+use std::{error::Error as StdError, io::Error as IoError, net::AddrParseError, result};
 
 use engine_traits::Error as EngineTraitError;
+use futures::channel::{mpsc::SendError, oneshot::Canceled};
+use grpcio::Error as GrpcError;
+use hyper::Error as HttpError;
+use openssl::error::ErrorStack as OpenSslError;
 use pd_client::Error as PdError;
+use protobuf::ProtobufError;
 use raftstore::Error as RaftServerError;
-use tikv_util::codec::Error as CodecError;
-use tikv_util::worker::ScheduleError;
+use thiserror::Error;
+use tikv_util::{codec::Error as CodecError, worker::ScheduleError};
 
 use super::snap::Task as SnapTask;
-use crate::storage::kv::Error as EngineError;
-use crate::storage::Error as StorageError;
+use crate::storage::{kv::Error as EngineError, Error as StorageError};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -71,7 +65,10 @@ pub enum Error {
     Http(#[from] HttpError),
 
     #[error("{0:?}")]
-    OpenSSL(#[from] OpenSSLError),
+    OpenSsl(#[from] OpenSslError),
+
+    #[error("{0:?}")]
+    StreamDisconnect(#[from] SendError),
 }
 
 pub type Result<T> = result::Result<T, Error>;

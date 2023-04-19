@@ -1,15 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::convert::TryFrom;
+use std::{cmp::Ordering, convert::TryFrom};
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::Collator;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::match_template_collator;
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeFlag};
+use tidb_query_datatype::{
+    codec::{collation::Collator, data_type::*},
+    expr::EvalContext,
+    match_template_collator, Collation, EvalType, FieldTypeAccessor, FieldTypeFlag,
+};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
@@ -243,9 +242,9 @@ where
 
     /// # Notes
     ///
-    /// For MAX(), MySQL currently compares ENUM and SET columns by their string value rather
-    /// than by the string's relative position in the set. This differs from how ORDER BY
-    /// compares them.
+    /// For MAX(), MySQL currently compares ENUM and SET columns by their string
+    /// value rather than by the string's relative position in the set. This
+    /// differs from how ORDER BY compares them.
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
@@ -332,9 +331,9 @@ where
 
     /// # Notes
     ///
-    /// For MAX(), MySQL currently compares ENUM and SET columns by their string value rather
-    /// than by the string's relative position in the set. This differs from how ORDER BY
-    /// compares them.
+    /// For MAX(), MySQL currently compares ENUM and SET columns by their string
+    /// value rather than by the string's relative position in the set. This
+    /// differs from how ORDER BY compares them.
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
@@ -515,10 +514,10 @@ where
                     self.extremum = value.copied()
                 }
             } else {
-                let v1 = self.extremum.map(|x| x as i64);
-                let v2 = value.map(|x| *x as i64);
+                let v1: Option<i64> = self.extremum;
+                let v2: Option<i64> = value.copied();
                 if v1.cmp(&v2) == E::ORD {
-                    self.extremum = value.copied()
+                    self.extremum = v2;
                 }
             }
         }
@@ -547,16 +546,15 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::EvalType;
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        EvalType, FieldTypeAccessor, FieldTypeTp,
+    };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
-    use crate::parser::AggrDefinitionParser;
-    use crate::AggrFunction;
-
     use super::*;
+    use crate::{parser::AggrDefinitionParser, AggrFunction};
 
     #[test]
     fn test_max() {
@@ -939,7 +937,7 @@ mod tests {
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
-        assert_eq!(aggr_result[0].to_int_vec(), &(*expected_res));
+        assert_eq!(aggr_result[0].to_int_vec(), expected_res);
     }
 
     #[test]

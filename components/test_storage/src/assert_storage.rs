@@ -1,13 +1,17 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
-
+use api_version::{ApiV1, KvFormat};
+use kvproto::{
+    kvrpcpb::{Context, KeyRange, LockInfo},
+    metapb,
+};
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{
-    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
+    self,
+    kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+    Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
 };
 use tikv_util::HandyRwLock;
 use txn_types::{self, Key, KvPair, Mutation, TimeStamp, Value};
@@ -15,52 +19,62 @@ use txn_types::{self, Key, KvPair, Mutation, TimeStamp, Value};
 use super::*;
 
 #[derive(Clone)]
-pub struct AssertionStorage<E: Engine> {
-    pub store: SyncTestStorage<E>,
+pub struct AssertionStorage<E: Engine, F: KvFormat> {
+    pub store: SyncTestStorage<E, F>,
     pub ctx: Context,
 }
 
-impl Default for AssertionStorage<RocksEngine> {
+pub type AssertionStorageApiV1<E> = AssertionStorage<E, ApiV1>;
+
+impl Default for AssertionStorage<RocksEngine, ApiV1> {
     fn default() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::default().build().unwrap(),
+            store: SyncTestStorageBuilder::default().build(0).unwrap(),
         }
     }
 }
 
-impl AssertionStorage<RocksEngine> {
-    pub fn new(api_version: ApiVersion) -> Self {
+impl<F: KvFormat> AssertionStorage<RocksEngine, F> {
+    pub fn new() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new(api_version).build().unwrap(),
+            store: SyncTestStorageBuilder::new().build(0).unwrap(),
         }
     }
 }
 
-impl AssertionStorage<SimulateEngine> {
+impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
     pub fn new_raft_storage_with_store_count(
         count: usize,
         key: &str,
     ) -> (Cluster<ServerCluster>, Self) {
-        let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
+        let (cluster, store, ctx) = new_raft_storage_with_store_count::<F>(count, key);
         let storage = Self { store, ctx };
         (cluster, storage)
     }
 
-    pub fn update_with_key_byte(&mut self, cluster: &mut Cluster<ServerCluster>, key: &[u8]) {
+    pub fn update_with_key_byte(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        key: &[u8],
+    ) -> metapb::Region {
         // ensure the leader of range which contains current key has been elected
         cluster.must_get(key);
         let region = cluster.get_region(key);
         let leader = cluster.leader_of_region(region.get_id()).unwrap();
         if leader.get_store_id() == self.ctx.get_peer().get_store_id() {
-            return;
+            return region;
         }
+        let store_id = leader.store_id;
         let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader);
-        self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+        self.store = SyncTestStorageBuilder::from_engine(engine)
+            .build(store_id)
+            .unwrap();
+        region
     }
 
     pub fn delete_ok_for_cluster(
@@ -170,7 +184,7 @@ impl AssertionStorage<SimulateEngine> {
                 break;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key)
+            self.update_with_key_byte(cluster, key);
         }
         assert!(success);
 
@@ -185,7 +199,7 @@ impl AssertionStorage<SimulateEngine> {
                 break;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key)
+            self.update_with_key_byte(cluster, key);
         }
         assert!(success);
     }
@@ -194,16 +208,17 @@ impl AssertionStorage<SimulateEngine> {
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         region_key: &[u8],
+        mut region: metapb::Region,
         safe_point: impl Into<TimeStamp>,
     ) {
         let safe_point = safe_point.into();
         for _ in 0..3 {
-            let ret = self.store.gc(self.ctx.clone(), safe_point);
+            let ret = self.store.gc(region, self.ctx.clone(), safe_point);
             if ret.is_ok() {
                 return;
             }
             self.expect_not_leader_or_stale_command(ret.unwrap_err());
-            self.update_with_key_byte(cluster, region_key);
+            region = self.update_with_key_byte(cluster, region_key);
         }
         panic!("failed with 3 retry!");
     }
@@ -221,12 +236,14 @@ impl AssertionStorage<SimulateEngine> {
 
         self.delete_ok_for_cluster(cluster, &key, 1000, 1050);
         self.get_none_from_cluster(cluster, &key, 2000);
-        self.gc_ok_for_cluster(cluster, &key, 2000);
+
+        let region = cluster.get_region(&key);
+        self.gc_ok_for_cluster(cluster, &key, region, 2000);
         self.get_none_from_cluster(cluster, &key, 3000);
     }
 }
 
-impl<E: Engine> AssertionStorage<E> {
+impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
     pub fn get_none(&self, key: &[u8], ts: impl Into<TimeStamp>) {
         let key = Key::from_raw(key);
         assert_eq!(
@@ -237,7 +254,9 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn get_err(&self, key: &[u8], ts: impl Into<TimeStamp>) {
         let key = Key::from_raw(key);
-        assert!(self.store.get(self.ctx.clone(), &key, ts.into()).is_err());
+        self.store
+            .get(self.ctx.clone(), &key, ts.into())
+            .unwrap_err();
     }
 
     pub fn get_ok(&self, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
@@ -268,11 +287,9 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn batch_get_err(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        assert!(
-            self.store
-                .batch_get(self.ctx.clone(), &keys, ts.into())
-                .is_err()
-        );
+        self.store
+            .batch_get(self.ctx.clone(), &keys, ts.into())
+            .unwrap_err();
     }
 
     pub fn batch_get_command_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
@@ -290,11 +307,9 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn batch_get_command_err(&self, keys: &[&[u8]], ts: u64) {
-        assert!(
-            self.store
-                .batch_get_command(self.ctx.clone(), keys, ts)
-                .is_err()
-        );
+        self.store
+            .batch_get_command(self.ctx.clone(), keys, ts)
+            .unwrap_err();
     }
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
@@ -329,7 +344,6 @@ impl<E: Engine> AssertionStorage<E> {
     ) where
         T: std::fmt::Debug,
     {
-        assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
             StorageError(box StorageErrorInner::Txn(TxnError(
@@ -381,16 +395,14 @@ impl<E: Engine> AssertionStorage<E> {
         _commit_ts: impl Into<TimeStamp>,
     ) {
         let start_ts = start_ts.into();
-        assert!(
-            self.store
-                .prewrite(
-                    self.ctx.clone(),
-                    vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
-                    key.to_vec(),
-                    start_ts,
-                )
-                .is_err()
-        );
+        self.store
+            .prewrite(
+                self.ctx.clone(),
+                vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
+                key.to_vec(),
+                start_ts,
+            )
+            .unwrap_err();
     }
 
     pub fn delete_ok(
@@ -680,16 +692,14 @@ impl<E: Engine> AssertionStorage<E> {
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
     ) {
-        assert!(
-            self.store
-                .cleanup(
-                    self.ctx.clone(),
-                    Key::from_raw(key),
-                    start_ts.into(),
-                    current_ts.into()
-                )
-                .is_err()
-        );
+        self.store
+            .cleanup(
+                self.ctx.clone(),
+                Key::from_raw(key),
+                start_ts.into(),
+                current_ts.into(),
+            )
+            .unwrap_err();
     }
 
     pub fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
@@ -701,11 +711,9 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        assert!(
-            self.store
-                .rollback(self.ctx.clone(), keys, start_ts.into())
-                .is_err()
-        );
+        self.store
+            .rollback(self.ctx.clone(), keys, start_ts.into())
+            .unwrap_err();
     }
 
     pub fn scan_locks_ok(
@@ -799,8 +807,10 @@ impl<E: Engine> AssertionStorage<E> {
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
 
-    pub fn gc_ok(&self, safe_point: impl Into<TimeStamp>) {
-        self.store.gc(self.ctx.clone(), safe_point.into()).unwrap();
+    pub fn gc_ok(&self, region: metapb::Region, safe_point: impl Into<TimeStamp>) {
+        self.store
+            .gc(region, self.ctx.clone(), safe_point.into())
+            .unwrap();
     }
 
     pub fn delete_range_ok(&self, start_key: &[u8], end_key: &[u8]) {
@@ -887,11 +897,9 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn raw_batch_get_command_err(&self, cf: String, keys: Vec<Vec<u8>>) {
-        assert!(
-            self.store
-                .raw_batch_get_command(self.ctx.clone(), cf, keys)
-                .is_err()
-        );
+        self.store
+            .raw_batch_get_command(self.ctx.clone(), cf, keys)
+            .unwrap_err();
     }
 
     pub fn raw_put_ok(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
@@ -1077,11 +1085,11 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
     }
 
-    pub fn test_txn_store_gc(&self, key: &str) {
+    pub fn test_txn_store_gc(&self, key: &str, region: metapb::Region) {
         let key_bytes = key.as_bytes();
         self.put_ok(key_bytes, b"v1", 5, 10);
         self.put_ok(key_bytes, b"v2", 15, 20);
-        self.gc_ok(30);
+        self.gc_ok(region, 30);
         self.get_none(key_bytes, 15);
         self.get_ok(key_bytes, 25, b"v2");
     }
@@ -1094,7 +1102,7 @@ impl<E: Engine> AssertionStorage<E> {
         }
         self.delete_ok(&key, 1000, 1050);
         self.get_none(&key, 2000);
-        self.gc_ok(2000);
+        self.gc_ok(metapb::Region::default(), 2000);
         self.get_none(&key, 3000);
     }
 }

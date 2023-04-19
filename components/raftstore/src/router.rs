@@ -1,23 +1,25 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// #[PerformanceCriticalPath]
-use std::cell::RefCell;
+use std::borrow::Cow;
 
+// #[PerformanceCriticalPath]
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::RaftMessage;
+use error_code::ErrorCodeExt;
+use kvproto::{metapb, raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::SnapshotStatus;
+use slog_global::warn;
 use tikv_util::time::ThreadReadId;
 
-use crate::store::fsm::RaftRouter;
-use crate::store::transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter};
-use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand, SignificantMsg,
-    StoreMsg,
+use crate::{
+    store::{
+        fsm::{ChangeObserver, RaftRouter},
+        transport::{CasualRouter, ProposalRouter, SignificantRouter},
+        Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
+        SignificantMsg, StoreMsg, StoreRouter,
+    },
+    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
-use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:
     StoreRouter<EK>
@@ -115,13 +117,13 @@ where
     EK: KvEngine,
 {
     fn read(
-        &self,
+        &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()>;
 
-    fn release_snapshot_cache(&self);
+    fn release_snapshot_cache(&mut self);
 }
 
 #[derive(Clone)]
@@ -167,12 +169,20 @@ where
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK: KvEngine, ER: RaftEngine> {
+pub struct ServerRaftStoreRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     router: RaftRouter<EK, ER>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK>>,
+    local_reader: LocalReader<EK, RaftRouter<EK, ER>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Clone for ServerRaftStoreRouter<EK, ER> {
+impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
             router: self.router.clone(),
@@ -185,9 +195,8 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<EK, ER>,
-        reader: LocalReader<RaftRouter<EK, ER>, EK>,
+        local_reader: LocalReader<EK, RaftRouter<EK, ER>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
-        let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
@@ -238,19 +247,17 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
 
 impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
     fn read(
-        &self,
+        &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read(read_id, req, cb);
+        self.local_reader.read(read_id, req, cb);
         Ok(())
     }
 
-    fn release_snapshot_cache(&self) {
-        let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.release_snapshot_cache();
+    fn release_snapshot_cache(&mut self) {
+        self.local_reader.release_snapshot_cache();
     }
 }
 
@@ -271,5 +278,174 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
 
     fn broadcast_normal(&self, msg_gen: impl FnMut() -> PeerMsg<EK>) {
         batch_system::Router::broadcast_normal(self, msg_gen)
+    }
+}
+
+// Because `CasualRouter` needs an generic while `RaftRotuer` doesn't. We have
+// to bridge two by manually implementations. Using functions to reduce
+// duplicated codes.
+
+impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRouter<EK, ER> {
+    fn update_approximate_size(&self, region_id: u64, size: u64) {
+        if let Err(e) = CasualRouter::send(
+            self,
+            region_id,
+            CasualMessage::RegionApproximateSize { size },
+        ) {
+            warn!(
+                "failed to send approximate region size";
+                "region_id" => region_id,
+                "err" => %e,
+                "error_code" => %e.error_code(),
+            );
+        }
+    }
+
+    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
+        if let Err(e) = CasualRouter::send(
+            self,
+            region_id,
+            CasualMessage::RegionApproximateKeys { keys },
+        ) {
+            warn!(
+                "failed to send approximate region keys";
+                "region_id" => region_id,
+                "err" => %e,
+                "error_code" => %e.error_code(),
+            );
+        }
+    }
+
+    fn ask_split(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: Cow<'static, str>,
+    ) {
+        if let Err(e) = CasualRouter::send(
+            self,
+            region_id,
+            CasualMessage::SplitRegion {
+                region_epoch,
+                split_keys,
+                callback: Callback::None,
+                source,
+            },
+        ) {
+            warn!(
+                "failed to send ask split";
+                "region_id" => region_id,
+                "err" => %e,
+            );
+        }
+    }
+
+    fn update_compute_hash_result(
+        &self,
+        region_id: u64,
+        index: u64,
+        context: Vec<u8>,
+        hash: Vec<u8>,
+    ) {
+        if let Err(e) = CasualRouter::send(
+            self,
+            region_id,
+            CasualMessage::ComputeHashResult {
+                index,
+                context,
+                hash,
+            },
+        ) {
+            warn!(
+                "failed to send hash compute result";
+                "region_id" => region_id,
+                "err" => %e,
+            );
+        }
+    }
+
+    fn refresh_region_buckets(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        buckets: Vec<crate::coprocessor::Bucket>,
+        bucket_ranges: Option<Vec<crate::store::BucketRange>>,
+    ) {
+        let _ = CasualRouter::send(
+            self,
+            region_id,
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch,
+                buckets,
+                bucket_ranges,
+                cb: Callback::None,
+            },
+        );
+    }
+}
+
+/// A handle for cdc and pitr to schedule some command back to raftstore.
+pub trait CdcHandle<EK>: Clone + Send
+where
+    EK: KvEngine,
+{
+    fn capture_change(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        change_observer: ChangeObserver,
+        callback: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()>;
+
+    fn check_leadership(
+        &self,
+        region_id: u64,
+        callback: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()>;
+}
+
+/// A wrapper of SignificantRouter that is specialized for implementing
+/// CdcHandle.
+#[derive(Clone)]
+pub struct CdcRaftRouter<T>(pub T);
+
+impl<T> std::ops::Deref for CdcRaftRouter<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<EK, T> CdcHandle<EK> for CdcRaftRouter<T>
+where
+    EK: KvEngine,
+    T: SignificantRouter<EK> + Send + Clone,
+{
+    fn capture_change(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        change_observer: ChangeObserver,
+        callback: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        self.0.significant_send(
+            region_id,
+            SignificantMsg::CaptureChange {
+                cmd: change_observer,
+                region_epoch,
+                callback,
+            },
+        )
+    }
+
+    fn check_leadership(
+        &self,
+        region_id: u64,
+        callback: Callback<EK::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        self.0
+            .significant_send(region_id, SignificantMsg::LeaderCallback(callback))
     }
 }
