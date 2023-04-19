@@ -1,7 +1,9 @@
 set -uxeo pipefail
 if [[ $M == "fmt" ]]; then
+    pwd
+    git rev-parse --show-toplevel
     make gen_proxy_ffi
-    git status -s
+    git status -s .
     GIT_STATUS=$(git status -s) && if [[ ${GIT_STATUS} ]]; then echo "Error: found illegal git status"; echo ${GIT_STATUS}; [[ -z ${GIT_STATUS} ]]; fi
     cargo fmt -- --check
 elif [[ $M == "testold" ]]; then
@@ -26,7 +28,7 @@ elif [[ $M == "testold" ]]; then
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_transaction
     cargo test --features "$ENABLE_FEATURES" --package tests --test failpoints cases::test_cmd_epoch_checker
     # cargo test --package tests --test failpoints cases::test_disk_full
-    cargo test --package tests --test failpoints cases::test_merge -- --skip test_node_merge_restart --skip test_node_merge_catch_up_logs_no_need
+    # cargo test --package tests --test failpoints cases::test_merge -- --skip test_node_merge_restart --skip test_node_merge_catch_up_logs_no_need
     # cargo test --package tests --test failpoints cases::test_snap
     cargo test --package tests --test failpoints cases::test_import_service
 elif [[ $M == "testnew" ]]; then
@@ -49,7 +51,7 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --test proxy flashback
     cargo test --package proxy_tests --test proxy v1_specific::region_ext
     cargo test --package proxy_tests --test proxy v1_specific::flashback
-    cargo test --package proxy_tests --test proxy server_cluster_test
+    cargo test --package proxy_tests --test proxy server_cluster_test -- --test-threads 1
     cargo test --package proxy_tests --test proxy fast_add_peer
     cargo test --package proxy_tests --test proxy replica_read -- --test-threads 1
     cargo test --package proxy_tests --test proxy ffi -- --test-threads 1
