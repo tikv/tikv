@@ -344,6 +344,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .peer_mut()
                     .on_redirect_catch_up_logs(self.store_ctx, c),
                 PeerMsg::CatchUpLogs(c) => self.fsm.peer_mut().on_catch_up_logs(self.store_ctx, c),
+                PeerMsg::CaptureChange(capture_change) => self.on_capture_change(capture_change),
+                PeerMsg::LeaderCallback(ch) => self.on_leader_callback(ch),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
             }

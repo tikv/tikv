@@ -3308,6 +3308,40 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             None,
         )
     }
+
+    pub fn build_for_resource_controller(
+        self,
+        resource_controller: Arc<ResourceController>,
+    ) -> Result<Storage<TxnTestEngine<E>, L, F>> {
+        let engine = TxnTestEngine {
+            engine: self.engine,
+            txn_ext: Arc::new(TxnExt::default()),
+        };
+        let read_pool = build_read_pool_for_test(
+            &crate::config::StorageReadPoolConfig::default_for_test(),
+            engine.clone(),
+        );
+
+        Storage::from_engine(
+            engine,
+            &self.config,
+            ReadPool::from(read_pool).handle(),
+            self.lock_mgr,
+            ConcurrencyManager::new(1.into()),
+            DynamicConfigs {
+                pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
+                in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
+                wake_up_delay_duration_ms: self.wake_up_delay_duration_ms,
+            },
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            DummyReporter,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
+            None,
+            Some(resource_controller),
+        )
+    }
 }
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
@@ -8320,6 +8354,7 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -9686,6 +9721,7 @@ mod tests {
                     Some(vec![b"e".to_vec()]),
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -9784,6 +9820,7 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -9834,6 +9871,7 @@ mod tests {
                     Some(vec![k2.to_vec()]),
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -10670,6 +10708,7 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -10728,6 +10767,7 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
+                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {
