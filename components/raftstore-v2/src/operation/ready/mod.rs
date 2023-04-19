@@ -59,7 +59,7 @@ use crate::{
     fsm::{PeerFsmDelegate, Store},
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
-    worker::tablet_gc,
+    worker::tablet,
 };
 
 const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
@@ -122,16 +122,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let region_id = self.region_id();
             let mailbox = store_ctx.router.mailbox(region_id).unwrap();
             let tablet_index = self.storage().tablet_index();
-            let _ = store_ctx
-                .schedulers
-                .tablet_gc
-                .schedule(tablet_gc::Task::trim(
-                    self.tablet().unwrap().clone(),
-                    self.region(),
-                    move || {
-                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
-                    },
-                ));
+            let _ = store_ctx.schedulers.tablet.schedule(tablet::Task::trim(
+                self.tablet().unwrap().clone(),
+                self.region(),
+                move || {
+                    let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                },
+            ));
         }
         let entry_storage = self.storage().entry_storage();
         let committed_index = entry_storage.commit_index();
@@ -222,15 +219,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
                         return;
                     }
-                    let _ =
-                        ctx.schedulers
-                            .tablet_flush
-                            .schedule(crate::TabletFlushTask::TabletFlush {
-                                region_id: self.region().get_id(),
-                                req: None,
-                                is_leader: false,
-                                ch: None,
-                            });
+                    let _ = ctx
+                        .schedulers
+                        .tablet
+                        .schedule(crate::worker::tablet::Task::Flush {
+                            region_id: self.region().get_id(),
+                            cb: None,
+                        });
                     return;
                 }
                 ExtraMessageType::MsgWantRollbackMerge => {
@@ -293,6 +288,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
+        let from_peer_id = from_peer.get_id();
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
             self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
@@ -318,6 +314,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let committed_index = self.raft_group().raft.raft_log.committed;
                 self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
             }
+        }
+
+        // There are two different cases to check peers can be bring back.
+        // 1. If the peer is pending, then only AppendResponse can bring it back to up.
+        // 2. If the peer is down, then HeartbeatResponse and AppendResponse can bring
+        // it back to up.
+        if self.any_new_peer_catch_up(from_peer_id) {
+            self.region_heartbeat_pd(ctx)
         }
 
         self.set_has_ready();
