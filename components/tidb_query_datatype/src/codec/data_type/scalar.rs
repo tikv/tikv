@@ -162,6 +162,14 @@ impl From<f64> for ScalarValue {
     }
 }
 
+impl From<&str> for ScalarValue {
+    #[inline]
+    fn from(s: &str) -> ScalarValue {
+        let bytes = Bytes::from(s);
+        ScalarValue::Bytes(Some(bytes))
+    }
+}
+
 impl From<ScalarValue> for Option<f64> {
     #[inline]
     fn from(s: ScalarValue) -> Option<f64> {

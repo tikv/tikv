@@ -30,7 +30,7 @@ use tipb::FieldType;
 use crate::{
     codec::{
         data_type::ScalarValue,
-        mysql::{decimal::DecimalEncoder, json::JsonEncoder},
+        mysql::{decimal::DecimalEncoder, json::JsonEncoder, Duration},
         Error, Result,
     },
     expr::EvalContext,
@@ -473,22 +473,42 @@ pub trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
 }
 impl<T: BufferWriter> ScalarValueEncoder for T {}
 
+// This is a helper function for test.
+pub fn prepare_cols_for_test() -> Vec<Column> {
+    vec![
+        Column::new_with_ft(1, FieldType::from(FieldTypeTp::Short), 1000),
+        Column::new_with_ft(12, FieldType::from(FieldTypeTp::Long), 2),
+        Column::new_with_ft(
+            335,
+            FieldType::from(FieldTypeTp::Short),
+            ScalarValue::Int(None),
+        ),
+        Column::new_with_ft(3, FieldType::from(FieldTypeTp::Float), 3.55),
+        Column::new_with_ft(8, FieldType::from(FieldTypeTp::VarChar), b"abc".to_vec()),
+        Column::new_with_ft(
+            17,
+            FieldType::from(FieldTypeTp::Duration),
+            Duration::from_millis(34, 2).unwrap(),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
     use codec::number::NumberDecoder;
-    use tipb::FieldType;
 
     use super::{Column, RowEncoder};
     use crate::{
         codec::{
             data_type::ScalarValue,
             mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
-            row::v2::encoder_for_test::{ChecksumHandler, Crc32RowChecksumHandler},
+            row::v2::encoder_for_test::{
+                prepare_cols_for_test, ChecksumHandler, Crc32RowChecksumHandler,
+            },
         },
         expr::EvalContext,
-        FieldTypeTp,
     };
 
     #[test]
@@ -579,22 +599,7 @@ mod tests {
             res.sort_by_key(|c| c.id);
             res
         };
-        let cols = vec![
-            Column::new_with_ft(1, FieldType::from(FieldTypeTp::Short), 1000),
-            Column::new_with_ft(12, FieldType::from(FieldTypeTp::Long), 2),
-            Column::new_with_ft(
-                335,
-                FieldType::from(FieldTypeTp::Short),
-                ScalarValue::Int(None),
-            ),
-            Column::new_with_ft(3, FieldType::from(FieldTypeTp::Float), 3.55),
-            Column::new_with_ft(8, FieldType::from(FieldTypeTp::VarChar), b"abc".to_vec()),
-            Column::new_with_ft(
-                17,
-                FieldType::from(FieldTypeTp::Duration),
-                Duration::from_millis(34, 2).unwrap(),
-            ),
-        ];
+        let cols = prepare_cols_for_test();
 
         let mut buf = vec![];
         let mut handler = Crc32RowChecksumHandler::new(false);

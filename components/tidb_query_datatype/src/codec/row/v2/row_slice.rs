@@ -199,11 +199,6 @@ impl RowSlice<'_> {
     }
 
     #[inline]
-    fn has_checksum(&self) -> bool {
-        self.get_checksum().is_some()
-    }
-
-    #[inline]
     pub fn values(&self) -> &[u8] {
         match self {
             RowSlice::Big { values, .. } => values.slice,
@@ -237,15 +232,13 @@ impl RowSlice<'_> {
                 offsets, values, ..
             } => {
                 let last_slice_idx = offsets.get(non_null_col_num - 1).unwrap() as usize;
-                let res = &values.slice[last_slice_idx..];
-                res
+                &values.slice[last_slice_idx..]
             }
             RowSlice::Small {
                 offsets, values, ..
             } => {
                 let last_slice_idx = offsets.get(non_null_col_num - 1).unwrap() as usize;
-                let res = &values.slice[last_slice_idx..];
-                res
+                &values.slice[last_slice_idx..]
             }
         }
     }
@@ -490,7 +483,6 @@ mod tests {
                 let data = encoded_data_with_checksum(extra_checksum, null_row_id);
                 let row = RowSlice::from_bytes(&data).unwrap();
                 assert_eq!(null_row_id > 255, row.is_big());
-                assert!(row.has_checksum());
                 assert_eq!(Some((0, 2)), row.search_in_non_null_ids(1).unwrap());
                 assert_eq!(Some((2, 10)), row.search_in_non_null_ids(3).unwrap());
                 assert_eq!(Some((10, 13)), row.search_in_non_null_ids(8).unwrap());
