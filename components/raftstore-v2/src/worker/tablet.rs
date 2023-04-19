@@ -352,7 +352,7 @@ impl<EK: KvEngine> Runner<EK> {
                     // to be removed after when it's stable
                     info!(
                         logger,
-                        "pre-flush memtable for leader";
+                        "flush memtable for leader";
                         "region_id" => region_id,
                         "duration" => ?elapsed,
                     );
@@ -364,7 +364,7 @@ impl<EK: KvEngine> Runner<EK> {
         } else {
             info!(
                 self.logger,
-                "pre-flush memtable for follower";
+                "flush memtable for follower";
                 "region_id" => region_id,
             );
 
