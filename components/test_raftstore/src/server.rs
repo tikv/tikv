@@ -326,6 +326,7 @@ impl ServerCluster {
             engines.kv.clone(),
             region_info_accessor.region_leaders(),
         );
+        let raft_engine_for_cop = raft_engine.clone();
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
         }
@@ -472,6 +473,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             res_tag_factory,
             quota_limiter,
+            raft_engine_for_cop,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;

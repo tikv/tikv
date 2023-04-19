@@ -290,6 +290,12 @@ impl ReadPoolHandle {
         &self,
         busy_threshold: Duration,
     ) -> Result<(), errorpb::ServerIsBusy> {
+        fail_point!("read_pool_busy_err", |_| {
+            let mut busy_err = errorpb::ServerIsBusy::default();
+            busy_err.set_reason("estimated wait time exceeds threshold".to_owned());
+            busy_err.estimated_wait_ms = 777;
+            Err(busy_err)
+        });
         if busy_threshold.is_zero() {
             return Ok(());
         }

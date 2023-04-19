@@ -1,8 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, time::Duration,
-};
+use std::{borrow::Cow, future::Future, iter::FromIterator, sync::Arc, time::Duration};
 
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
@@ -68,7 +66,8 @@ pub struct Endpoint<E: Engine> {
 
     slow_log_threshold: Duration,
 
-    _phantom: PhantomData<E>,
+    // TODO: Too many Arcs, would be slow when clone.
+    engine: E,
 
     quota_limiter: Arc<QuotaLimiter>,
 }
@@ -82,6 +81,7 @@ impl<E: Engine> Endpoint<E> {
         concurrency_manager: ConcurrencyManager,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
+        engine: E,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress
         // to avoid using too much memory. However, if there are a number of large
@@ -104,7 +104,7 @@ impl<E: Engine> Endpoint<E> {
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
-            _phantom: Default::default(),
+            engine,
             quota_limiter,
         }
     }
@@ -512,7 +512,7 @@ impl<E: Engine> Endpoint<E> {
     /// converted into a `Response` as the success result of the future.
     #[inline]
     pub fn parse_and_handle_unary_request(
-        &self,
+        &mut self,
         mut req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
@@ -521,9 +521,11 @@ impl<E: Engine> Endpoint<E> {
         if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
             req.get_context().get_busy_threshold_ms() as u64,
         )) {
-            let mut resp = coppb::Response::default();
-            resp.mut_region_error().set_server_is_busy(busy_err);
-            return Either::Left(async move { resp.into() });
+            let fut = self.process_busy_err(req, peer.clone(), busy_err);
+            return Either::Left(async move {
+                let res = fut.await;
+                res.into()
+            });
         }
 
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
@@ -560,6 +562,46 @@ impl<E: Engine> Endpoint<E> {
         Either::Right(fut)
     }
 
+    fn process_busy_err(
+        &mut self,
+        mut req: coppb::Request,
+        peer: Option<String>,
+        busy_err: errorpb::ServerIsBusy,
+    ) -> impl Future<Output = coppb::Response> {
+        let mut resp = coppb::Response::default();
+        resp.mut_region_error().set_server_is_busy(busy_err.clone());
+        let result_of_batch = self.process_batch_tasks_busy_err(&mut req, &peer, busy_err.clone());
+        let snap_fut = self
+            .parse_request_and_check_memory_locks(req, peer.clone(), false)
+            .map(|(_, req_ctx)| Self::async_snapshot(&mut self.engine, &req_ctx));
+        async move {
+            match snap_fut {
+                Ok(snap) => {
+                    let (handle_res, batch_res) = futures::join!(snap, result_of_batch);
+                    match handle_res {
+                        Ok(snap_res) => {
+                            resp.mut_region_error().mut_server_is_busy().applied_index = snap_res
+                                .ext()
+                                .get_data_version()
+                                .map_or(0, |applied_index| applied_index);
+                        }
+                        Err(e) => {
+                            resp = make_error_response(e);
+                        }
+                    }
+                    resp.set_batch_responses(batch_res.into());
+                }
+                Err(e) => {
+                    resp = make_error_response(e);
+                    resp.mut_region_error().set_server_is_busy(busy_err.clone());
+                    let batch_res = result_of_batch.await;
+                    resp.set_batch_responses(batch_res.into());
+                }
+            }
+            resp
+        }
+    }
+
     // process_batch_tasks process the input batched coprocessor tasks if any,
     // prepare all the requests and schedule them into the read pool, then
     // collect all the responses and convert them into the `StoreBatchResponse`
@@ -570,23 +612,7 @@ impl<E: Engine> Endpoint<E> {
         peer: &Option<String>,
     ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
-        let batch_reqs: Vec<(coppb::Request, u64)> = req
-            .take_tasks()
-            .iter_mut()
-            .map(|task| {
-                let mut new_req = req.clone();
-                // Disable the coprocessor cache path for the batched tasks, the
-                // coprocessor cache related fields are not passed in the "task" by now.
-                new_req.is_cache_enabled = false;
-                new_req.ranges = task.take_ranges();
-                let new_context = new_req.mut_context();
-                new_context.set_region_id(task.get_region_id());
-                new_context.set_region_epoch(task.take_region_epoch());
-                new_context.set_peer(task.take_peer());
-                (new_req, task.get_task_id())
-            })
-            .collect();
-        for (cur_req, task_id) in batch_reqs.into_iter() {
+        for (cur_req, task_id) in self.collect_batch_requests(req).into_iter() {
             let request_info = RequestInfo::new(
                 cur_req.get_context(),
                 RequestType::Unknown,
@@ -636,6 +662,66 @@ impl<E: Engine> Endpoint<E> {
             }
         }
         stream::FuturesOrdered::from_iter(batch_futs).collect()
+    }
+
+    fn process_batch_tasks_busy_err(
+        &mut self,
+        req: &mut coppb::Request,
+        peer: &Option<String>,
+        busy_err: errorpb::ServerIsBusy,
+    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
+        let mut batch_futs = Vec::with_capacity(req.tasks.len());
+        for (cur_req, task_id) in self.collect_batch_requests(req).into_iter() {
+            let err = busy_err.clone();
+            let mut response = coppb::StoreBatchTaskResponse::new();
+            response.set_task_id(task_id);
+            match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
+                Ok((_, req_ctx)) => {
+                    let snap = Self::async_snapshot(&mut self.engine, &req_ctx);
+                    let fut = async move {
+                        match snap.await {
+                            Ok(snap) => {
+                                response.mut_region_error().set_server_is_busy(err);
+                                if let Some(applied_index) = snap.ext().get_data_version() {
+                                    response
+                                        .mut_region_error()
+                                        .mut_server_is_busy()
+                                        .applied_index = applied_index;
+                                }
+                            }
+                            Err(e) => {
+                                make_error_batch_response(&mut response, e);
+                            }
+                        }
+                        response
+                    };
+                    batch_futs.push(future::Either::Left(fut));
+                }
+                Err(e) => batch_futs.push(future::Either::Right(async move {
+                    make_error_batch_response(&mut response, e);
+                    response
+                })),
+            }
+        }
+        stream::FuturesOrdered::from_iter(batch_futs).collect()
+    }
+
+    fn collect_batch_requests(&self, req: &mut coppb::Request) -> Vec<(coppb::Request, u64)> {
+        req.take_tasks()
+            .iter_mut()
+            .map(|task| {
+                let mut new_req = req.clone();
+                // Disable the coprocessor cache path for the batched tasks, the
+                // coprocessor cache related fields are not passed in the "task" by now.
+                new_req.is_cache_enabled = false;
+                new_req.ranges = task.take_ranges();
+                let new_context = new_req.mut_context();
+                new_context.set_region_id(task.get_region_id());
+                new_context.set_region_epoch(task.take_region_epoch());
+                new_context.set_peer(task.take_peer());
+                (new_req, task.get_task_id())
+            })
+            .collect()
     }
 
     /// The real implementation of handling a stream request.
@@ -1026,6 +1112,7 @@ mod tests {
     #[test]
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1037,6 +1124,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         // a normal request
@@ -1067,6 +1155,7 @@ mod tests {
     #[test]
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1078,6 +1167,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
         copr.recursion_limit = 100;
 
@@ -1105,17 +1195,19 @@ mod tests {
     #[test]
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let copr = Endpoint::<RocksEngine>::new(
+        let mut copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         let mut req = coppb::Request::default();
@@ -1128,17 +1220,19 @@ mod tests {
     #[test]
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let copr = Endpoint::<RocksEngine>::new(
+        let mut copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         let mut req = coppb::Request::default();
@@ -1158,6 +1252,7 @@ mod tests {
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
 
         let read_pool = ReadPool::from(
             CoprReadPoolConfig {
@@ -1187,6 +1282,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1227,6 +1323,7 @@ mod tests {
     #[test]
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1238,6 +1335,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         let handler_builder =
@@ -1252,6 +1350,7 @@ mod tests {
     #[test]
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1263,6 +1362,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         // Fail immediately
@@ -1305,6 +1405,7 @@ mod tests {
     #[test]
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1316,6 +1417,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1333,6 +1435,7 @@ mod tests {
     #[test]
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1344,6 +1447,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1429,6 +1533,7 @@ mod tests {
     #[test]
     fn test_channel_size() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1443,6 +1548,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1487,6 +1593,7 @@ mod tests {
         const PAYLOAD_LARGE: Duration = Duration::from_millis(6000);
 
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
 
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig {
@@ -1512,6 +1619,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1888,6 +1996,7 @@ mod tests {
     #[test]
     fn test_exceed_deadline() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1899,6 +2008,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
 
         {
@@ -1936,6 +2046,7 @@ mod tests {
     #[test]
     fn test_check_memory_locks() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let engine_for_cop = engine.clone();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1957,12 +2068,13 @@ mod tests {
         });
 
         let config = Config::default();
-        let copr = Endpoint::<RocksEngine>::new(
+        let mut copr = Endpoint::<RocksEngine>::new(
             &config,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            engine_for_cop,
         );
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);

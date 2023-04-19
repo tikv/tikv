@@ -655,6 +655,7 @@ where
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
                 Arc::clone(&self.quota_limiter),
+                engines.engine.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),

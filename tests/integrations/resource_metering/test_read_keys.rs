@@ -172,7 +172,7 @@ fn test_read_keys_coprocessor() {
         (5, Some("name:1"), 4),
     ];
     let product = ProductTable::new();
-    let endpoint = init_coprocessor_with_data(&product, &data, resource_tag_factory);
+    let mut endpoint = init_coprocessor_with_data(&product, &data, resource_tag_factory);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
@@ -182,13 +182,13 @@ fn test_read_keys_coprocessor() {
     let mut ctx = Context::default();
     ctx.set_resource_group_tag("TEST-TAG".into());
     req.set_context(ctx);
-    runtime.block_on(handle_select(&endpoint, req.clone()));
+    runtime.block_on(handle_select(&mut endpoint, req.clone()));
 
     // Clear current result.
     let _ = data_sink.wait_read_keys(Duration::from_secs(3));
 
     // Do DAG select again.
-    runtime.block_on(handle_select(&endpoint, req));
+    runtime.block_on(handle_select(&mut endpoint, req));
 
     // Wait & receive & assert.
     assert_eq!(
@@ -207,6 +207,7 @@ fn init_coprocessor_with_data(
     tag_factory: ResourceTagFactory,
 ) -> Endpoint<RocksEngine> {
     let mut store = Store::default();
+    let engine_for_cop = store.get_engine();
     store.begin();
     for &(id, name, count) in vals {
         store
@@ -229,10 +230,11 @@ fn init_coprocessor_with_data(
         cm,
         tag_factory,
         Arc::new(QuotaLimiter::default()),
+        engine_for_cop,
     )
 }
 
-async fn handle_select<E>(copr: &Endpoint<E>, req: coprocessor::Request) -> SelectResponse
+async fn handle_select<E>(copr: &mut Endpoint<E>, req: coprocessor::Request) -> SelectResponse
 where
     E: Engine,
 {
