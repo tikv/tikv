@@ -2022,12 +2022,7 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_trash(&path, |p| {
-            if let Some(m) = &key_manager {
-                m.remove_dir(p.as_os_str().to_str().unwrap())?;
-            }
-            Ok(())
-        })?;
+        file_system::clean_up_trash(&path)?;
         Ok(Self {
             base: path,
             key_manager,
@@ -2059,12 +2054,7 @@ impl TabletSnapManager {
                 format!("{} should be a directory", self.base.display()),
             ));
         }
-        file_system::clean_up_trash(&self.base, |p| {
-            if let Some(m) = &self.key_manager {
-                m.remove_dir(p.as_os_str().to_str().unwrap())?;
-            }
-            Ok(())
-        })
+        file_system::clean_up_trash(&self.base)
     }
 
     pub fn begin_snapshot(&self, key: TabletSnapKey, start: Instant, generate_duration_sec: u64) {
@@ -2119,21 +2109,37 @@ impl TabletSnapManager {
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
-        if path.exists() && let Err(e) = file_system::trash_dir_all(&path).and_then(|_| {
-            if let Some(m) = &self.key_manager {
-                m.remove_dir(path.as_os_str().to_str().unwrap())?
+        if path.exists() {
+            let keys = if let Some(m) = &self.key_manager {
+                match m.collect_keys_in_dir(&path) {
+                    Ok(keys) => keys,
+                    Err(e) => {
+                        error!(
+                            "collect keys failed";
+                            "path" => %path.display(),
+                            "err" => ?e,
+                        );
+                        return false;
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            if let Err(e) = file_system::trash_dir_all(&path, move || {
+                if let Some(m) = &self.key_manager {
+                    m.bulk_delete_file(keys)?;
+                }
+                Ok(())
+            }) {
+                error!(
+                    "delete snapshot failed";
+                    "path" => %path.display(),
+                    "err" => ?e,
+                );
+                return false;
             }
-            Ok(())
-        }) {
-            error!(
-                "delete snapshot failed";
-                "path" => %path.display(),
-                "err" => ?e,
-            );
-            false
-        } else {
-            true
         }
+        true
     }
 
     pub fn total_snap_size(&self) -> Result<u64> {

@@ -455,7 +455,10 @@ const TRASH_PREFIX: &str = "TRASH-";
 ///
 /// Rename it before actually removal.
 #[inline]
-pub fn trash_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
+pub fn trash_dir_all<F: FnOnce() -> io::Result<()>>(
+    path: impl AsRef<Path>,
+    after_rename: F,
+) -> io::Result<()> {
     let path = path.as_ref();
     let name = match path.file_name() {
         Some(n) => n,
@@ -467,6 +470,8 @@ pub fn trash_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
             return Ok(());
         }
         return Err(e);
+    } else {
+        after_rename()?;
     }
     remove_dir_all(trash_path)
 }
@@ -476,22 +481,12 @@ pub fn trash_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
 /// to resume all those removal in the given directory.
 /// `f` will be called for every newly trashed directories.
 #[inline]
-pub fn clean_up_trash<F: Fn(&Path) -> io::Result<()>>(
-    path: impl AsRef<Path>,
-    f: F,
-    // key_manager: Option<&DataKeyManager>,
-) -> io::Result<()> {
+pub fn clean_up_trash(path: impl AsRef<Path>) -> io::Result<()> {
     for e in read_dir(path)? {
         let e = e?;
         let fname = e.file_name().to_string_lossy().to_string();
         if fname.starts_with(TRASH_PREFIX) {
             remove_dir_all(e.path())?;
-            let original = e
-                .path()
-                .parent()
-                .unwrap()
-                .join(fname.strip_prefix(TRASH_PREFIX).unwrap());
-            f(&original)?;
         }
     }
     Ok(())
@@ -676,21 +671,21 @@ mod tests {
         create_dir_all(&sub_dir0).unwrap();
         assert!(sub_dir0.exists());
 
-        trash_dir_all(&sub_dir0).unwrap();
+        trash_dir_all(&sub_dir0, || Ok(())).unwrap();
         assert!(!sub_dir0.exists());
         assert!(!trash_sub_dir0.exists());
 
         create_dir_all(&sub_dir0).unwrap();
         create_dir_all(&trash_sub_dir0).unwrap();
-        trash_dir_all(&sub_dir0).unwrap();
+        trash_dir_all(&sub_dir0, || Ok(())).unwrap();
         assert!(!sub_dir0.exists());
         assert!(!trash_sub_dir0.exists());
 
-        clean_up_trash(data_path, |_| Ok(())).unwrap();
+        clean_up_trash(data_path).unwrap();
 
         create_dir_all(&trash_sub_dir0).unwrap();
         assert!(trash_sub_dir0.exists());
-        clean_up_trash(data_path, |_| Ok(())).unwrap();
+        clean_up_trash(data_path).unwrap();
         assert!(!trash_sub_dir0.exists());
     }
 }
