@@ -142,14 +142,17 @@ impl ResourceGroupManager {
 
     pub fn consume_penalty(&self, ctx: &ResourceControlContext) {
         for controller in self.registry.lock().unwrap().iter() {
-            controller.consume(
-                ctx.resource_group_name.as_bytes(),
-                ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
-            );
-            controller.consume(
-                ctx.resource_group_name.as_bytes(),
-                ResourceConsumeType::CpuTime(Duration::from_nanos((ctx.get_penalty().total_cpu_time_ms * 1_000_000.0) as u64)),
-            );
+            if controller.is_read {
+                controller.consume(
+                    ctx.resource_group_name.as_bytes(),
+                    ResourceConsumeType::CpuTime(Duration::from_nanos((ctx.get_penalty().total_cpu_time_ms * 1_000_000.0) as u64)),
+                );
+            } else {
+                controller.consume(
+                    ctx.resource_group_name.as_bytes(),
+                    ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
+                );
+            }
         }
     }
 }
