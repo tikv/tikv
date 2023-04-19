@@ -251,6 +251,8 @@ pub struct RunningState {
     background: Worker,
 }
 
+use encryption_export::data_key_manager_from_config;
+
 impl RunningState {
     fn new(
         pd_client: &Arc<RpcClient>,
@@ -262,8 +264,18 @@ impl RunningState {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, Self) {
+        // Enable encryption by default.
+        let encryption_cfg = test_util::new_file_security_config(path);
+        let key_manager = Some(Arc::new(
+            data_key_manager_from_config(&encryption_cfg, path.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        ));
+
+        let mut opts = engine_test::ctor::RaftDbOptions::default();
+        opts.set_key_manager(key_manager.clone());
         let raft_engine =
-            engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
+            engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), Some(opts))
                 .unwrap();
 
         let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
@@ -286,6 +298,7 @@ impl RunningState {
             raft_engine.clone(),
             router.clone(),
         )));
+        db_opt.set_key_manager(key_manager.clone());
         let factory = Box::new(TestTabletFactory::new(db_opt, cf_opts));
         let registry = TabletRegistry::new(factory, path.join("tablets")).unwrap();
         if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
@@ -302,15 +315,18 @@ impl RunningState {
 
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
-        let snap_mgr =
-            TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap(), None).unwrap();
+        let snap_mgr = TabletSnapManager::new(
+            path.join("tablets_snap").to_str().unwrap(),
+            key_manager.clone(),
+        )
+        .unwrap();
         let coprocessor_host =
             CoprocessorHost::new(router.store_router().clone(), cop_cfg.value().clone());
         let importer = Arc::new(
             SstImporter::new(
                 &Default::default(),
                 path.join("importer"),
-                None,
+                key_manager.clone(),
                 ApiVersion::V1,
             )
             .unwrap(),
@@ -337,7 +353,7 @@ impl RunningState {
                 background.clone(),
                 pd_worker,
                 importer,
-                None,
+                key_manager,
             )
             .unwrap();
 

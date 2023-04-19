@@ -20,7 +20,7 @@ fn test_encrypted_checkpoint() {
     let dir = tempdir();
     let root_path = dir.path();
 
-    let encryption_cfg = test_util::new_file_security_config(&dir);
+    let encryption_cfg = test_util::new_file_security_config(root_path);
     let key_manager = Arc::new(
         data_key_manager_from_config(&encryption_cfg, root_path.to_str().unwrap())
             .unwrap()

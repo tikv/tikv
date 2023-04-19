@@ -133,6 +133,9 @@ pub mod kv {
             let _ = std::fs::remove_dir_all(&tombstone_path);
             std::fs::rename(path, &tombstone_path)?;
             std::fs::remove_dir_all(tombstone_path)?;
+            if let Some(m) = &self.db_opt.key_manager {
+                m.remove_dir(path.as_os_str().to_str().unwrap())?;
+            }
             Ok(())
         }
 
