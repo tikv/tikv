@@ -39,7 +39,11 @@ pub use split::{
 use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
-use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
+use crate::{
+    batch::StoreContext,
+    raft::Peer,
+    router::{CmdResChannel, PeerMsg, RaftRequest},
+};
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
@@ -161,9 +165,44 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 self.logger,
                                 "Schedule flush tablet";
                             );
-                            if let Err(e) = ctx.schedulers.tablet_flush.schedule(
-                                crate::TabletFlushTask::TabletFlush { region_id, req, ch },
-                            ) {
+
+                            let mailbox = match ctx.router.mailbox(region_id) {
+                                Some(mailbox) => mailbox,
+                                None => {
+                                    // None means the node is shutdown concurrently and thus the
+                                    // mailboxes in router have been cleared
+                                    assert!(
+                                        ctx.router.is_shutdown(),
+                                        "{} router should have been closed",
+                                        SlogFormat(&self.logger)
+                                    );
+                                    return;
+                                }
+                            };
+
+                            let logger = self.logger.clone();
+                            let on_flush_finish = move || {
+                                req.mut_header()
+                                    .set_flags(WriteBatchFlags::SPLIT_SECOND_PHASE.bits());
+                                if let Err(e) = mailbox
+                                    .try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
+                                {
+                                    error!(
+                                        logger,
+                                        "send split request fail in the second phase";
+                                        "err" => ?e,
+                                    );
+                                }
+                            };
+
+                            if let Err(e) =
+                                ctx.schedulers
+                                    .tablet
+                                    .schedule(crate::TabletTask::TabletFlush {
+                                        region_id,
+                                        on_flush_finish: Some(Box::new(on_flush_finish)),
+                                    })
+                            {
                                 error!(
                                     self.logger,
                                     "Fail to schedule flush task";
@@ -200,6 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             self.logger,
                             "Propose split";
                         );
+
                         self.set_tablet_being_flushed(false);
                         self.propose_split(ctx, req)
                     }

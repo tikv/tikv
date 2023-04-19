@@ -13,6 +13,7 @@ use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
+    time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
@@ -38,13 +39,15 @@ pub enum Task<EK> {
         persisted_index: u64,
     },
     /// Sometimes we know for sure a tablet can be destroyed directly.
-    DirectDestroy {
-        tablet: Either<EK, PathBuf>,
-    },
+    DirectDestroy { tablet: Either<EK, PathBuf> },
     /// Cleanup ssts.
     CleanupImportSst(Box<[SstMeta]>),
+    /// Flush memtable before split
+    ///
+    /// split_req is some iff the task is sent from leader
     TabletFlush {
         region_id: u64,
+        on_flush_finish: Option<Box<dyn FnOnce() + Send>>,
     },
 }
 
@@ -82,8 +85,16 @@ impl<EK> Display for Task<EK> {
             Task::CleanupImportSst(ssts) => {
                 write!(f, "cleanup import ssts {:?}", ssts)
             }
-            Task::TabletFlush { region_id } => {
-                write!(f, "Table flush for region_id {}", region_id)
+            Task::TabletFlush {
+                region_id,
+                on_flush_finish,
+            } => {
+                write!(
+                    f,
+                    "Table flush for region_id {}, is leader {}",
+                    region_id,
+                    on_flush_finish.is_some()
+                )
             }
         }
     }
@@ -320,18 +331,41 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    // pre flush tablet for follower
-    fn pre_flush_tablet(&self, region_id: u64) {
+    fn pre_flush_tablet(&self, region_id: u64, on_flush_finish: Option<Box<dyn FnOnce() + Send>>) {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
             .map(|mut cache| cache.latest().cloned()) else {return};
-        info!(
-            self.logger,
-            "pre-flush memtable for follower";
-            "region_id" => region_id,
-        );
-        tablet.flush_cfs(DATA_CFS, false).unwrap();
+
+        if let Some(on_flush_finish) = on_flush_finish {
+            let logger = self.logger.clone();
+            self.background_pool
+                .spawn(async move {
+                    let now = Instant::now();
+                    // sync flush for leader to let the flush happend before later checkpoint.
+                    tablet.flush_cfs(DATA_CFS, true).unwrap();
+                    let elapsed = now.saturating_elapsed();
+                    // to be removed after when it's stable
+                    info!(
+                        logger,
+                        "pre-flush memtable for leader";
+                        "region_id" => region_id,
+                        "duration" => ?elapsed,
+                    );
+
+                    drop(tablet);
+                    on_flush_finish();
+                })
+                .unwrap();
+        } else {
+            info!(
+                self.logger,
+                "pre-flush memtable for follower";
+                "region_id" => region_id,
+            );
+
+            tablet.flush_cfs(DATA_CFS, false).unwrap();
+        }
     }
 }
 
@@ -360,7 +394,10 @@ where
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
-            Task::TabletFlush { region_id } => self.pre_flush_tablet(region_id),
+            Task::TabletFlush {
+                region_id,
+                on_flush_finish,
+            } => self.pre_flush_tablet(region_id, on_flush_finish),
         }
     }
 }

@@ -56,7 +56,7 @@ use crate::{
     fsm::{PeerFsmDelegate, Store},
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
-    worker::tablet_gc,
+    worker::tablet,
 };
 
 const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
@@ -120,8 +120,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let tablet_index = self.storage().tablet_index();
             let _ = store_ctx
                 .schedulers
-                .tablet_gc
-                .schedule(tablet_gc::Task::trim(
+                .tablet
+                .schedule(tablet::Task::trim(
                     self.tablet().unwrap().clone(),
                     self.region(),
                     move || {
@@ -218,9 +218,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
                         return;
                     }
-                    let _ = ctx.schedulers.tablet_gc.schedule(
-                        crate::worker::tablet_gc::Task::TabletFlush {
+                    let _ = ctx.schedulers.tablet.schedule(
+                        crate::worker::tablet::Task::TabletFlush {
                             region_id: self.region().get_id(),
+                            on_flush_finish: None,
                         },
                     );
                     return;

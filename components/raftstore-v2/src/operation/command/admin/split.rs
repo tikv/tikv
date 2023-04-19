@@ -62,7 +62,7 @@ use crate::{
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
-    worker::tablet_gc,
+    worker::tablet,
     Error,
 };
 
@@ -132,8 +132,8 @@ pub fn report_split_init_finish<EK, ER, T>(
 
     if let Err(e) = ctx
         .schedulers
-        .tablet_gc
-        .schedule(tablet_gc::Task::direct_destroy_path(temp_split_path(
+        .tablet
+        .schedule(tablet::Task::direct_destroy_path(temp_split_path(
             &ctx.tablet_registry,
             finish_region_id,
         )))
@@ -643,8 +643,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tablet_index = res.tablet_index;
         let _ = store_ctx
             .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::trim(
+            .tablet
+            .schedule(tablet::Task::trim(
                 self.tablet().unwrap().clone(),
                 derived,
                 move || {
@@ -773,8 +773,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Some(mailbox) = store_ctx.router.mailbox(region_id) {
                 let _ = store_ctx
                     .schedulers
-                    .tablet_gc
-                    .schedule(tablet_gc::Task::trim(
+                    .tablet
+                    .schedule(tablet::Task::trim(
                         self.tablet().unwrap().clone(),
                         self.region(),
                         move || {
