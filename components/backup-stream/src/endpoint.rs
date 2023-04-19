@@ -18,10 +18,8 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
-    store::RegionReadProgressRegistry,
 };
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
-use security::SecurityManager;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
@@ -115,10 +113,6 @@ where
         router: RT,
         pd_client: Arc<PDC>,
         concurrency_manager: ConcurrencyManager,
-        // Required by Leadership Resolver.
-        env: Arc<Environment>,
-        region_read_progress: RegionReadProgressRegistry,
-        security_mgr: Arc<SecurityManager>,
         resolver: BackupStreamResolver<RT, E>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
@@ -1313,7 +1307,9 @@ where
 #[cfg(test)]
 mod test {
     use engine_rocks::RocksEngine;
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use raftstore::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider, router::CdcRaftRouter,
+    };
     use test_raftstore::MockRaftStoreRouter;
     use tikv_util::worker::dummy_scheduler;
 
@@ -1329,7 +1325,15 @@ mod test {
         cli.insert_task_with_range(&task, &[]).await.unwrap();
 
         fail::cfg("failed_to_get_tasks", "1*return").unwrap();
-        Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockRaftStoreRouter, MockPdClient>::start_and_watch_tasks(cli, sched).await.unwrap();
+        Endpoint::<
+            _,
+            MockRegionInfoProvider,
+            RocksEngine,
+            CdcRaftRouter<MockRaftStoreRouter>,
+            MockPdClient,
+        >::start_and_watch_tasks(cli, sched)
+        .await
+        .unwrap();
         fail::remove("failed_to_get_tasks");
 
         let _t1 = rx.recv().unwrap();

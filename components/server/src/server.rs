@@ -815,9 +815,6 @@ where
                 CdcRaftRouter(self.router.clone()),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
-                Arc::clone(&self.env),
-                region_read_progress.clone(),
-                Arc::clone(&self.security_mgr),
                 BackupStreamResolver::V1(leadership_resolver),
             );
             backup_stream_worker.start(backup_stream_endpoint);

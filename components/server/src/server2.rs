@@ -667,16 +667,6 @@ where
                 self.router.clone().unwrap(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
-                Arc::clone(&self.env),
-                self.router
-                    .as_ref()
-                    .unwrap()
-                    .store_meta()
-                    .lock()
-                    .unwrap()
-                    .region_read_progress
-                    .clone(),
-                Arc::clone(&self.security_mgr),
                 BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
             );
             backup_stream_worker.start(backup_stream_endpoint);

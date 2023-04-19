@@ -340,6 +340,15 @@ impl Suite {
         let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
+        let resolver = LeadershipResolver::new(
+            Arc::clone(&self.env),
+            cluster.store_metas[&id]
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone(),
+            Arc::clone(&sim.security_mgr),
+        );
         let endpoint = Endpoint::new(
             id,
             self.meta_store.clone(),
@@ -350,13 +359,7 @@ impl Suite {
             raft_router,
             cluster.pd_client.clone(),
             cm,
-            Arc::clone(&self.env),
-            cluster.store_metas[&id]
-                .lock()
-                .unwrap()
-                .region_read_progress
-                .clone(),
-            Arc::clone(&sim.security_mgr),
+            BackupStreamResolver::V1(resolver),
         );
         worker.start(endpoint);
     }
