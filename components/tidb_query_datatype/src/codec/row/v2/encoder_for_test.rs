@@ -364,7 +364,7 @@ pub trait RowEncoder: NumberEncoder {
 
         // encode begins
         self.write_u8(super::CODEC_VERSION)?;
-        self.write_flag(is_big)?;
+        self.write_flag(is_big, checksum_handler.is_some())?;
         self.write_u16_le(non_null_ids.len() as u16)?;
         self.write_u16_le(null_ids.len() as u16)?;
 
@@ -394,11 +394,12 @@ pub trait RowEncoder: NumberEncoder {
     }
 
     #[inline]
-    fn write_flag(&mut self, is_big: bool) -> codec::Result<()> {
-        let flag = if is_big {
-            super::Flags::BIG
-        } else {
-            super::Flags::default()
+    fn write_flag(&mut self, is_big: bool, has_checksum: bool) -> codec::Result<()> {
+        let flag = match (is_big, has_checksum) {
+            (true, true) => super::Flags::BIG | super::Flags::WITH_CHECKSUM,
+            (true, false) => super::Flags::BIG,
+            (false, true) => super::Flags::WITH_CHECKSUM,
+            (false, false) => super::Flags::default(),
         };
         self.write_u8(flag.bits)
     }
