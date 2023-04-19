@@ -216,12 +216,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
                         return;
                     }
-                    let _ = ctx.schedulers.tablet.schedule(
-                        crate::worker::tablet::Task::Flush {
+                    let _ = ctx
+                        .schedulers
+                        .tablet
+                        .schedule(crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
                             on_flush_finish: None,
-                        },
-                    );
+                        });
                     return;
                 }
                 ExtraMessageType::MsgWantRollbackMerge => {
