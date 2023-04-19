@@ -26,6 +26,7 @@ use std::{cmp, time::Instant};
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{
+    metapb,
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
@@ -368,6 +369,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return None;
             }
         };
+        let is_learner = to_peer.get_role() == metapb::PeerRole::Learner;
 
         let mut raft_msg = self.prepare_raft_message();
 
@@ -394,7 +396,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // and Heartbeat message for the store of that peer to check whether to create a
         // new peer when receiving these messages, or just to wait for a pending region
         // split to perform later.
-        if self.storage().is_initialized() && is_initial_msg(&msg) {
+        if self.storage().is_initialized() && is_initial_msg(&msg) && is_learner {
             let region = self.region();
             raft_msg.set_start_key(region.get_start_key().to_vec());
             raft_msg.set_end_key(region.get_end_key().to_vec());
