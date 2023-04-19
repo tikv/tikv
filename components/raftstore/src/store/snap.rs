@@ -2001,7 +2001,7 @@ impl Drop for ReceivingGuard<'_> {
 pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
-    pub key_manager: Option<Arc<DataKeyManager>>,
+    key_manager: Option<Arc<DataKeyManager>>,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
     stats: Arc<Mutex<HashMap<TabletSnapKey, (Instant, SnapshotStat)>>>,
 }
@@ -2185,6 +2185,11 @@ impl TabletSnapManager {
             receiving: &self.receiving,
             key,
         })
+    }
+
+    #[inline]
+    pub fn key_manager(&self) -> &Option<Arc<DataKeyManager>> {
+        &self.key_manager
     }
 }
 

@@ -210,7 +210,7 @@ pub mod ctor {
 
     #[derive(Clone, Default)]
     pub struct DbOptions {
-        key_manager: Option<Arc<DataKeyManager>>,
+        pub(crate) key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
         state_storage: Option<Arc<dyn StateStorage>>,
         enable_multi_batch_write: bool,
