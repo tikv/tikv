@@ -44,10 +44,11 @@ pub enum Task<EK> {
     CleanupImportSst(Box<[SstMeta]>),
     /// Flush memtable before split
     ///
-    /// on_flush_finish is some iff the task is sent from leader
+    /// cb is some iff the task is sent from leader, it is used to real propose
+    /// split when flush finishes
     Flush {
         region_id: u64,
-        on_flush_finish: Option<Box<dyn FnOnce() + Send>>,
+        cb: Option<Box<dyn FnOnce() + Send>>,
     },
 }
 
@@ -87,11 +88,11 @@ impl<EK> Display for Task<EK> {
             }
             Task::Flush {
                 region_id,
-                on_flush_finish,
+                cb: on_flush_finish,
             } => {
                 write!(
                     f,
-                    "pre-flush tablet for region_id {}, is leader {}",
+                    "flush tablet for region_id {}, is leader {}",
                     region_id,
                     on_flush_finish.is_some()
                 )
@@ -331,16 +332,16 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    fn pre_flush_tablet(&self, region_id: u64, on_flush_finish: Option<Box<dyn FnOnce() + Send>>) {
+    fn flush_tablet(&self, region_id: u64, cb: Option<Box<dyn FnOnce() + Send>>) {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
             .map(|mut cache| cache.latest().cloned()) else {return};
 
-        // The callback `on_flush_finish` being some means it's the task sent from
+        // The callback `cb` being some means it's the task sent from
         // leader, we should sync flush memtables and call it after the flush complete
         // where the split will be proposed again with extra flag.
-        if let Some(on_flush_finish) = on_flush_finish {
+        if let Some(cb) = cb {
             let logger = self.logger.clone();
             self.background_pool
                 .spawn(async move {
@@ -357,7 +358,7 @@ impl<EK: KvEngine> Runner<EK> {
                     );
 
                     drop(tablet);
-                    on_flush_finish();
+                    cb();
                 })
                 .unwrap();
         } else {
@@ -397,10 +398,7 @@ where
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
-            Task::Flush {
-                region_id,
-                on_flush_finish,
-            } => self.pre_flush_tablet(region_id, on_flush_finish),
+            Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
         }
     }
 }
