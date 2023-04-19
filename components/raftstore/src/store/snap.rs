@@ -3258,7 +3258,7 @@ pub mod tests {
         snap_mgr.init().unwrap();
         let tablet_snap_key = TabletSnapKey::new(1, 2, 3, 4);
         snap_mgr
-            .gen_empty_snapshot_for_tablet_snapshot(&tablet_snap_key)
+            .gen_empty_snapshot_for_tablet_snapshot(&tablet_snap_key, false)
             .unwrap();
 
         let snap_key = SnapKey::new(1, 3, 4);
