@@ -118,16 +118,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let region_id = self.region_id();
             let mailbox = store_ctx.router.mailbox(region_id).unwrap();
             let tablet_index = self.storage().tablet_index();
-            let _ = store_ctx
-                .schedulers
-                .tablet
-                .schedule(tablet::Task::trim(
-                    self.tablet().unwrap().clone(),
-                    self.region(),
-                    move || {
-                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
-                    },
-                ));
+            let _ = store_ctx.schedulers.tablet.schedule(tablet::Task::trim(
+                self.tablet().unwrap().clone(),
+                self.region(),
+                move || {
+                    let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                },
+            ));
         }
         let entry_storage = self.storage().entry_storage();
         let committed_index = entry_storage.commit_index();
