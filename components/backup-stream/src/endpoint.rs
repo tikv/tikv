@@ -1,15 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet, fmt, future::Future, marker::PhantomData, path::PathBuf, pin::Pin,
-    sync::Arc, time::Duration,
+    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
-use grpcio::Environment;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,

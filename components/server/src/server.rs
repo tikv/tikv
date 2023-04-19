@@ -798,7 +798,7 @@ where
                 self.pd_client.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
-                region_read_progress.clone(),
+                region_read_progress,
                 Duration::from_secs(60),
             );
 
