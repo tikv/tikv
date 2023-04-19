@@ -8,17 +8,15 @@ use std::{
 use async_trait::async_trait;
 use azure_core::{
     auth::{TokenCredential, TokenResponse},
-    prelude::*,
+    new_http_client,
 };
-use azure_identity::token_credentials::{ClientSecretCredential, TokenCredentialOptions};
-use azure_storage::{
-    blob::prelude::*,
-    core::{prelude::*, ConnectionStringBuilder},
-};
-use chrono::{Duration as ChronoDuration, Utc};
+use azure_identity::{ClientSecretCredential, TokenCredentialOptions};
+use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
+use azure_storage_blobs::prelude::*;
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
+use futures::TryFutureExt;
 use futures_util::{
     io::{AsyncRead, AsyncReadExt},
     stream,
@@ -33,6 +31,7 @@ use tikv_util::{
     debug,
     stream::{retry, RetryError},
 };
+use time::OffsetDateTime;
 use tokio::{
     sync::Mutex,
     time::{timeout, Duration},
@@ -310,10 +309,9 @@ impl AzureUploader {
                 .get_client()
                 .await
                 .map_err(|e| e.to_string())?
-                .as_blob_client(&self.name)
+                .blob_client(&self.name)
                 .put_block_blob(data.to_vec())
                 .access_tier(self.storage_class)
-                .execute()
                 .await?;
             Ok(())
         })
@@ -414,13 +412,13 @@ impl ContainerBuilder for TokenCredContainerBuilder {
         {
             let token_response = self.token_cache.read().unwrap();
             if let Some(ref t) = *token_response {
-                let interval = t.0.expires_on - Utc::now();
+                let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
                 // keep token updated 5 minutes before it expires
-                if interval > ChronoDuration::minutes(TOKEN_UPDATE_LEFT_TIME_MINS) {
+                if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
                     return Ok(t.1.clone());
                 }
 
-                if interval > ChronoDuration::minutes(TOKEN_EXPIRE_LEFT_TIME_MINS) {
+                if interval > TOKEN_EXPIRE_LEFT_TIME_MINS {
                     // there still have time to use the token,
                     // and only need one thread to update token.
                     if let Ok(l) = self.modify_place.try_lock() {
@@ -443,9 +441,9 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             {
                 let token_response = self.token_cache.read().unwrap();
                 if let Some(ref t) = *token_response {
-                    let interval = t.0.expires_on - Utc::now();
+                    let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
                     // token is already updated
-                    if interval > ChronoDuration::minutes(TOKEN_UPDATE_LEFT_TIME_MINS) {
+                    if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
                         return Ok(t.1.clone());
                     }
                 }
@@ -457,14 +455,12 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 .get_token(&self.token_resource)
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
-            let http_client = new_http_client();
-            let storage_client = StorageAccountClient::new_bearer_token(
-                http_client,
+            let blob_service = BlobServiceClient::new(
                 self.account_name.clone(),
-                token.token.secret(),
-            )
-            .as_storage_client()
-            .as_container_client(self.container_name.clone());
+                StorageCredentials::BearerToken(token.token.secret().into()),
+            );
+            let storage_client =
+                Arc::new(blob_service.container_client(self.container_name.clone()));
 
             {
                 let mut token_response = self.token_cache.write().unwrap();
@@ -501,14 +497,14 @@ impl AzureStorage {
         // priority: explicit shared key > env Azure AD > env shared key
         if let Some(connection_string) = config.parse_plaintext_account_url() {
             let bucket = (*config.bucket.bucket).to_owned();
-            let http_client = new_http_client();
-            let container_client = StorageAccountClient::new_connection_string(
-                http_client.clone(),
-                connection_string.as_str(),
-            )
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
-            .as_storage_client()
-            .as_container_client(bucket);
+            let account_name = config.get_account_name()?;
+            let storage_credentials = ConnectionString::new(&connection_string)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?
+                .storage_credentials()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?;
+            let container_client = Arc::new(
+                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+            );
 
             let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
             Ok(AzureStorage {
@@ -520,6 +516,7 @@ impl AzureStorage {
             let account_name = config.get_account_name()?;
             let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
             let cred = ClientSecretCredential::new(
+                new_http_client(),
                 credential_info.tenant_id.clone(),
                 credential_info.client_id.to_string(),
                 credential_info.client_secret.secret().clone(),
@@ -539,14 +536,14 @@ impl AzureStorage {
             })
         } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
             let bucket = (*config.bucket.bucket).to_owned();
-            let http_client = new_http_client();
-            let container_client = StorageAccountClient::new_connection_string(
-                http_client.clone(),
-                connection_string.as_str(),
-            )
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
-            .as_storage_client()
-            .as_container_client(bucket);
+            let account_name = config.get_account_name()?;
+            let storage_credentials = ConnectionString::new(&connection_string)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?
+                .storage_credentials()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?;
+            let container_client = Arc::new(
+                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+            );
 
             let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
             Ok(AzureStorage {
@@ -576,7 +573,7 @@ impl AzureStorage {
         let name = self.maybe_prefix_key(name);
         debug!("read file from Azure storage"; "key" => %name);
         let t = async move {
-            let blob_client = self.client_builder.get_client().await?.as_blob_client(name);
+            let blob_client = self.client_builder.get_client().await?.blob_client(name);
 
             let builder = if let Some(r) = range {
                 blob_client.get().range(r)
@@ -584,14 +581,19 @@ impl AzureStorage {
                 blob_client.get()
             };
 
-            builder
-                .execute()
-                .await
-                .map(|res| res.data)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))
+            let mut chunk: Vec<u8> = vec![];
+            let mut stream = builder.into_stream();
+            while let Some(value) = stream.next().await {
+                let value = value?.data.collect().await?;
+                chunk.extend(&value);
+            }
+            azure_core::Result::Ok(chunk)
         };
-        let k = stream::once(t);
-        let t = k.boxed().into_async_read();
+        let k = stream::once(
+            t.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e))),
+        )
+        .boxed();
+        let t = k.into_async_read();
         Box::new(t)
     }
 }
