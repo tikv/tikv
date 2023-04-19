@@ -21,20 +21,22 @@ use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         fsm::ApplyMetrics,
+        metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
         TabletSnapManager, WriteTask,
     },
 };
-use slog::{info, Logger};
-use tikv_util::slog_panic;
+use slog::{debug, info, Logger};
+use tikv_util::{slog_panic, time::duration_to_sec};
 
 use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress, GcPeerContext,
-        MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
+        AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
+        GcPeerContext, MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
+        TxnContext,
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -116,6 +118,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_messages: Vec<RaftMessage>,
 
     gc_peer_context: GcPeerContext,
+
+    abnormal_peer_context: AbnormalPeerContext,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -203,6 +207,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
+            abnormal_peer_context: AbnormalPeerContext::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -565,8 +570,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         )
     }
 
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
+    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
         let mut down_peers = Vec::new();
+        let mut down_peer_ids = Vec::new();
         let now = Instant::now();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer_id() {
@@ -579,9 +585,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(elapsed.as_secs());
                     down_peers.push(stats);
+                    down_peer_ids.push(p.get_id());
                 }
             }
         }
+        *self.abnormal_peer_context_mut().down_peers_mut() = down_peer_ids;
         // TODO: `refill_disk_full_peers`
         down_peers
     }
@@ -876,5 +884,55 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Ok(t) => t,
             Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
         }
+    }
+
+    #[inline]
+    pub fn abnormal_peer_context_mut(&mut self) -> &mut AbnormalPeerContext {
+        &mut self.abnormal_peer_context
+    }
+
+    #[inline]
+    pub fn abnormal_peer_context(&self) -> &AbnormalPeerContext {
+        &self.abnormal_peer_context
+    }
+
+    pub fn any_new_peer_catch_up(&mut self, from_peer_id: u64) -> bool {
+        // no pending or down peers
+        if self.abnormal_peer_context.is_empty() {
+            return false;
+        }
+        if !self.is_leader() {
+            self.abnormal_peer_context.reset();
+            return false;
+        }
+
+        if self
+            .abnormal_peer_context
+            .down_peers()
+            .contains(&from_peer_id)
+        {
+            return true;
+        }
+
+        let logger = self.logger.clone();
+        self.abnormal_peer_context
+            .retain_pending_peers(|(peer_id, pending_after)| {
+                // TODO check wait data peers here
+                let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
+                if let Some(progress) = self.raft_group.raft.prs().get(*peer_id) {
+                    if progress.matched >= truncated_idx {
+                        let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                        RAFT_PEER_PENDING_DURATION.observe(elapsed);
+                        debug!(
+                            logger,
+                            "peer has caught up logs";
+                            "from_peer_id" => %from_peer_id,
+                            "takes" => %elapsed,
+                        );
+                        return false;
+                    }
+                }
+                true
+            })
     }
 }

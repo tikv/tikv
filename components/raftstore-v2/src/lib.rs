@@ -44,5 +44,5 @@ pub use operation::{write_initial_states, SimpleWriteBinary, SimpleWriteEncoder,
 pub use raftstore::{store::Config, Error, Result};
 pub use worker::{
     pd::{PdReporter, Task as PdTask},
-    tablet_flush::Task as TabletFlushTask,
+    tablet::Task as TabletTask,
 };

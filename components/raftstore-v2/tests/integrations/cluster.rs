@@ -251,8 +251,6 @@ pub struct RunningState {
     background: Worker,
 }
 
-use encryption_export::data_key_manager_from_config;
-
 impl RunningState {
     fn new(
         pd_client: &Arc<RpcClient>,

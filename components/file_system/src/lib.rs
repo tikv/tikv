@@ -484,17 +484,25 @@ pub fn trash_dir_all<F: FnOnce(&Path) -> io::Result<()>>(
 pub fn clean_up_trash<F: Fn(&Path, &Path) -> io::Result<()>>(
     path: impl AsRef<Path>,
     f: F,
-    // key_manager: Option<&DataKeyManager>,
+) -> io::Result<()> {
+    clean_up_dir(path, TRASH_PREFIX, f)
+}
+
+#[inline]
+pub fn clean_up_dir<F: Fn(&Path, &Path) -> io::Result<()>>(
+    path: impl AsRef<Path>,
+    prefix: &str,
+    f: F,
 ) -> io::Result<()> {
     for e in read_dir(path)? {
         let e = e?;
         let fname = e.file_name().to_string_lossy().to_string();
-        if fname.starts_with(TRASH_PREFIX) {
+        if fname.starts_with(prefix) {
             let original = e
                 .path()
                 .parent()
                 .unwrap()
-                .join(fname.strip_prefix(TRASH_PREFIX).unwrap());
+                .join(fname.strip_prefix(prefix).unwrap());
             f(&original, &e.path())?;
             remove_dir_all(e.path())?;
         }
@@ -697,5 +705,10 @@ mod tests {
         assert!(trash_sub_dir0.exists());
         clean_up_trash(data_path, |_, _| Ok(())).unwrap();
         assert!(!trash_sub_dir0.exists());
+
+        create_dir_all(&sub_dir0).unwrap();
+        assert!(sub_dir0.exists());
+        clean_up_dir(data_path, "sub", |_, _| Ok(())).unwrap();
+        assert!(!sub_dir0.exists());
     }
 }

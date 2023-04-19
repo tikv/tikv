@@ -14,7 +14,7 @@ pub use command::{
     SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl,
     MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
 };
-pub use life::{DestroyProgress, GcPeerContext};
+pub use life::{AbnormalPeerContext, DestroyProgress, GcPeerContext};
 pub use ready::{
     write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, SnapState, StateStorage,
 };
