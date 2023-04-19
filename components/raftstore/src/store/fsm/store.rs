@@ -28,6 +28,7 @@ use engine_traits::{
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
+use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -1547,6 +1548,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             let raft_clone = engines.raft.clone();
             let router_clone = self.router();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(regions) => {
                         for region_id in regions {

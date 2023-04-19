@@ -2819,14 +2819,13 @@ where
             ExtraMessageType::MsgVoterReplicatedIndexResponse => {
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
-            // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerRequest => {
                 // To make tiflash proxy compatiable with raftstore v2, it needs
                 // to response GcPeerResponse.
                 self.on_tiflash_engine_gc_peer_request(msg);
             }
-            ExtraMessageType::MsgGcPeerResponse => (),
-            ExtraMessageType::MsgFlushMemtable => (),
+            // It's v2 only message and ignore does no harm.
+            ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
         }
     }
 

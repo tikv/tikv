@@ -18,7 +18,7 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use file_system::{set_io_type, IoType};
+use file_system::{set_io_type, IoType, WithIoType};
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::{StateRole, INVALID_ID};
@@ -584,6 +584,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let logger = self.logger.clone();
             let router = router.clone();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(regions) => {
                         for r in regions {
