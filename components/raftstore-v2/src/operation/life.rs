@@ -38,10 +38,14 @@ use kvproto::{
 };
 use raftstore::store::{
     fsm::life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
+    metrics::RAFT_PEER_PENDING_DURATION,
     util, Transport, WriteTask,
 };
 use slog::{debug, error, info, warn};
-use tikv_util::store::find_peer;
+use tikv_util::{
+    store::find_peer,
+    time::{duration_to_sec, Instant},
+};
 
 use super::command::SplitInit;
 use crate::{
@@ -107,6 +111,64 @@ impl DestroyProgress {
             }
             _ => panic!("must be destroying to finish"),
         }
+    }
+}
+
+#[derive(Default)]
+pub struct AbnormalPeerContext {
+    /// Record the instants of peers being added into the configuration.
+    /// Remove them after they are not pending any more.
+    /// (u64, Instant) represents (peer id, time when peer starts pending)
+    pending_peers: Vec<(u64, Instant)>,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peers: Vec<u64>,
+}
+
+impl AbnormalPeerContext {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.pending_peers.is_empty() && self.down_peers.is_empty()
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.pending_peers.clear();
+        self.down_peers.clear();
+    }
+
+    #[inline]
+    pub fn down_peers(&self) -> &[u64] {
+        &self.down_peers
+    }
+
+    #[inline]
+    pub fn down_peers_mut(&mut self) -> &mut Vec<u64> {
+        &mut self.down_peers
+    }
+
+    #[inline]
+    pub fn pending_peers(&self) -> &[(u64, Instant)] {
+        &self.pending_peers
+    }
+
+    #[inline]
+    pub fn pending_peers_mut(&mut self) -> &mut Vec<(u64, Instant)> {
+        &mut self.pending_peers
+    }
+
+    #[inline]
+    pub fn retain_pending_peers(&mut self, f: impl FnMut(&mut (u64, Instant)) -> bool) -> bool {
+        let len = self.pending_peers.len();
+        self.pending_peers.retain_mut(f);
+        len != self.pending_peers.len()
+    }
+
+    #[inline]
+    pub fn flush_metrics(&self) {
+        let _ = self.pending_peers.iter().map(|(_, pending_after)| {
+            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+            RAFT_PEER_PENDING_DURATION.observe(elapsed);
+        });
     }
 }
 

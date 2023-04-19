@@ -1225,3 +1225,37 @@ fn test_gen_split_check_bucket_ranges() {
     // the bucket_ranges should be None to refresh the bucket
     cluster.send_half_split_region_message(&region, None);
 }
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_catch_up_peers_after_split() {
+    let mut cluster = new_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let left_key = b"k1";
+    let right_key = b"k3";
+    let split_key = b"k2";
+    cluster.must_put(left_key, b"v1");
+    cluster.must_put(right_key, b"v3");
+
+    // Left and right key must be in same region before split.
+    let region = pd_client.get_region(left_key).unwrap();
+    let region2 = pd_client.get_region(right_key).unwrap();
+    assert_eq!(region.get_id(), region2.get_id());
+
+    // Split with split_key, so left_key must in left, and right_key in right.
+    cluster.must_split(&region, split_key);
+
+    // Get new split region by right_key because default right_derive is false.
+    let right_region = pd_client.get_region(right_key).unwrap();
+
+    let pending_peers = pd_client.get_pending_peers();
+
+    // Ensure new split region has no pending peers.
+    for p in right_region.get_peers() {
+        assert!(!pending_peers.contains_key(&p.id))
+    }
+}
