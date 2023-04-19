@@ -472,6 +472,7 @@ pub fn clean_up_trash(path: impl AsRef<Path>) -> io::Result<()> {
     clean_up_dir(path, TRASH_PREFIX)
 }
 
+/// clean up all files starts with the given prefix in the given directory.
 pub fn clean_up_dir(path: impl AsRef<Path>, prefix: &str) -> io::Result<()> {
     for e in read_dir(path)? {
         let e = e?;

@@ -1408,11 +1408,6 @@ impl SnapManager {
     }
 
     pub fn init(&self) -> io::Result<()> {
-        self.init_core()?;
-        Ok(())
-    }
-
-    fn init_core(&self) -> io::Result<()> {
         let enc_enabled = self.core.encryption_key_manager.is_some();
         info!(
             "Initializing SnapManager, encryption is enabled: {}",
@@ -2076,8 +2071,8 @@ impl TabletSnapManager {
         PathBuf::from(&self.base).join(prefix)
     }
 
-    pub fn delete_snapshot(&self, key: TabletSnapKey) -> bool {
-        let path = self.tablet_gen_path(&key);
+    pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
+        let path = self.tablet_gen_path(key);
         if path.exists() && let Err(e) = file_system::trash_dir_all(&path) {
             error!(
                 "delete snapshot failed";
@@ -3143,7 +3138,7 @@ pub mod tests {
         let path = mgr.tablet_gen_path(&key);
         std::fs::create_dir_all(&path).unwrap();
         assert!(path.exists());
-        mgr.delete_snapshot(key);
+        mgr.delete_snapshot(&key);
         assert_eq!(mgr.stats().stats.len(), 0);
         assert!(!path.exists());
     }

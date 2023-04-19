@@ -642,7 +642,7 @@ pub fn send_snap(
         let (mgr, key) = (mgr.clone(), key.clone());
         DeferContext::new(move || {
             mgr.finish_snapshot(key.clone(), timer);
-            mgr.delete_snapshot(key.clone());
+            mgr.delete_snapshot(&key);
         })
     };
 
@@ -814,7 +814,7 @@ where
                         msg.get_to_peer().get_id(),
                         msg.get_message().get_snapshot(),
                     );
-                    self.snap_mgr.delete_snapshot(key);
+                    self.snap_mgr.delete_snapshot(&key);
                     warn!(
                         "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg
