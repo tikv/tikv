@@ -914,7 +914,7 @@ fn test_v1_apply_snap_from_v2() {
         tablet_snap_paths: Arc::default(),
     };
     let observer_clone = observer.clone();
-    cluster_v1.observer_register(
+    cluster_v1.register_hook(
         1,
         Box::new(move |host: &mut CoprocessorHost<_>| {
             host.registry.register_apply_snapshot_observer(
@@ -964,19 +964,7 @@ fn test_v1_apply_snap_from_v2() {
     let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
     let path_str = path.as_path().to_str().unwrap();
 
-    // wait applying snapshot
-    std::thread::sleep(Duration::from_secs(1));
-
-    let pair = observer
-        .tablet_snap_paths
-        .as_ref()
-        .lock()
-        .unwrap()
-        .get(&region_id)
-        .unwrap()
-        .clone();
-    assert!(pair.0);
-    assert_eq!(&pair.1, path_str);
+    check_observer(&observer, region_id, path_str);
 
     let region = cluster_v2.get_region(b"k0011");
     let region_id = region.get_id();
@@ -999,17 +987,24 @@ fn test_v1_apply_snap_from_v2() {
     let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
     let path_str = path.as_path().to_str().unwrap();
 
-    // wait applying snapshot
-    std::thread::sleep(Duration::from_secs(1));
+    check_observer(&observer, region_id, path_str);
+}
 
-    let pair = observer
-        .tablet_snap_paths
-        .as_ref()
-        .lock()
-        .unwrap()
-        .get(&region_id)
-        .unwrap()
-        .clone();
-    assert!(pair.0);
-    assert_eq!(&pair.1, path_str);
+fn check_observer(observer: &MockApplySnapshotObserver, region_id: u64, snap_path: &str) {
+    for _ in 0..10 {
+        if let Some(pair) = observer
+            .tablet_snap_paths
+            .as_ref()
+            .lock()
+            .unwrap()
+            .get(&region_id)
+        {
+            if pair.0 && pair.1 == snap_path {
+                return;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    panic!("cannot find {:?} in observer", snap_path);
 }

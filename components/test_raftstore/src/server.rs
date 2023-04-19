@@ -814,7 +814,7 @@ impl Cluster<ServerCluster> {
         self.sim.rl().get_addr(node_id)
     }
 
-    pub fn observer_register(
+    pub fn register_hook(
         &self,
         node_id: u64,
         register: Box<dyn Fn(&mut CoprocessorHost<RocksEngine>)>,
