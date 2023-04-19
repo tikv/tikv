@@ -210,6 +210,13 @@ fn main() {
         process::exit(0);
     }
 
+    // engine config needs to be validated
+    // so that it can adjust the engine type before too late
+    if let Err(e) = config.storage.validate_engine_type() {
+        println!("invalid storage.engine configuration: {}", e);
+        process::exit(1)
+    }
+
     match config.storage.engine {
         EngineType::RaftKv => server::server::run_tikv(config),
         EngineType::RaftKv2 => server::server2::run_tikv(config),
