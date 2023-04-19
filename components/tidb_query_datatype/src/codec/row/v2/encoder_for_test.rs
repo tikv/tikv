@@ -99,6 +99,9 @@ impl Column {
     }
 
     // The encode rule follows https://github.com/pingcap/tidb/pull/43141.
+    // It's different from the other encoding rules and used for verification
+    // test cases in tikv, the actual checksum encoding would be done on the
+    // tidb side with row value generation.
     pub fn encode_for_checksum(&self, buf: &mut Vec<u8>) -> Result<()> {
         match self.ft.as_accessor().tp() {
             FieldTypeTp::Tiny
@@ -204,7 +207,8 @@ impl Column {
                 buf.write_u64_le(res)?;
             }
             FieldTypeTp::Bit => {
-                // TODO: it's not supported yet.
+                // TODO: it's not supported yet. In current test only `INT` and `Varchar`
+                // types would be used.
                 buf.write_u64_le(u64::MAX)?;
             }
             FieldTypeTp::Json => {

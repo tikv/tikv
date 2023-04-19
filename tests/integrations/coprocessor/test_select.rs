@@ -2068,7 +2068,7 @@ fn test_select_v2_format_with_checksum() {
     let product = ProductTable::new();
     for extra_checksum in [None, Some(132423)] {
         // The row value encoded with checksum bytes should have no impact on cop task
-        // processing.
+        // processing and related result chunk filling.
         let (_, endpoint) =
             init_data_with_commit_v2_checksum(&product, &data, true, extra_checksum);
         let req = DagSelect::from(&product).build();
