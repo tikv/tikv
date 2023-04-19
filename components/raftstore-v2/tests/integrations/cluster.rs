@@ -264,13 +264,14 @@ impl RunningState {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, Self) {
-        // Enable encryption by default.
-        let encryption_cfg = test_util::new_file_security_config(path);
-        let key_manager = Some(Arc::new(
-            data_key_manager_from_config(&encryption_cfg, path.to_str().unwrap())
-                .unwrap()
-                .unwrap(),
-        ));
+        // TODO(tabokie): Enable encryption by default. (after snapshot encryption)
+        // let encryption_cfg = test_util::new_file_security_config(path);
+        // let key_manager = Some(Arc::new(
+        //     data_key_manager_from_config(&encryption_cfg, path.to_str().unwrap())
+        //         .unwrap()
+        //         .unwrap(),
+        // ));
+        let key_manager = None;
 
         let mut opts = engine_test::ctor::RaftDbOptions::default();
         opts.set_key_manager(key_manager.clone());
