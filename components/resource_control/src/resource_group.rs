@@ -4,7 +4,7 @@ use std::{
     cell::Cell,
     cmp::{max, min},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -169,6 +169,8 @@ pub struct ResourceController {
     last_min_vt: AtomicU64,
     // the last time min vt is overflow
     last_rest_vt_time: Cell<Instant>,
+    // whether the settings is customized by user
+    customized: AtomicBool,
 }
 
 // we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
@@ -185,6 +187,7 @@ impl ResourceController {
             last_min_vt: AtomicU64::new(0),
             max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
+            customized: AtomicBool::new(false),
         };
         // add the "default" resource group
         controller.add_resource_group(
@@ -244,6 +247,16 @@ impl ResourceController {
 
         // maybe update existed group
         self.resource_consumptions.write().insert(name, group);
+        self.check_customized();
+    }
+
+    fn check_customized(&self) {
+        let groups = self.resource_consumptions.read();
+        if groups.len() == 1 && groups.get(DEFAULT_RESOURCE_GROUP_NAME.as_bytes()).is_some() {
+            self.customized.store(false, Ordering::Release);
+            return;
+        }
+        self.customized.store(true, Ordering::Release);
     }
 
     // we calculate the weight of each resource group based on the currently maximum
@@ -268,9 +281,15 @@ impl ResourceController {
                 0,
                 MEDIUM_PRIORITY,
             );
+            self.check_customized();
             return;
         }
         self.resource_consumptions.write().remove(name);
+        self.check_customized();
+    }
+
+    pub fn is_customized(&self) -> bool {
+        self.customized.load(Ordering::Acquire)
     }
 
     #[inline]
@@ -625,7 +644,8 @@ pub(crate) mod tests {
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
-
+        assert_eq!(resource_ctl.is_customized(), false);
+        assert_eq!(resource_ctl_write.is_customized(), false);
         let group1 = new_resource_group_ru("test1".into(), 5000, 0);
         resource_manager.add_resource_group(group1);
         assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 20);
@@ -633,6 +653,8 @@ pub(crate) mod tests {
             resource_ctl_write.resource_group("test1".as_bytes()).weight,
             20
         );
+        assert_eq!(resource_ctl.is_customized(), true);
+        assert_eq!(resource_ctl_write.is_customized(), true);
 
         // add a resource group with big ru
         let group1 = new_resource_group_ru("test2".into(), 50000, 0);
