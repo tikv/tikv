@@ -1389,7 +1389,7 @@ pub struct SnapManager {
     max_total_size: Arc<AtomicU64>,
 
     // only used to receive snapshot from v2
-    tablet_snap_manager: Option<TabletSnapManager>,
+    tablet_snap_manager: TabletSnapManager,
 }
 
 impl Clone for SnapManager {
@@ -1631,10 +1631,7 @@ impl SnapManager {
     /// NOTE: don't call it in raftstore thread.
     pub fn get_total_snap_size(&self) -> Result<u64> {
         let size_v1 = self.core.get_total_snap_size()?;
-        let size_v2 = self
-            .tablet_snap_manager
-            .as_ref()
-            .map_or(0, |mgr| mgr.total_snap_size().unwrap_or(0));
+        let size_v2 = self.tablet_snap_manager.total_snap_size().unwrap_or(0);
         Ok(size_v1 + size_v2)
     }
 
@@ -1772,7 +1769,7 @@ impl SnapManager {
     }
 
     pub fn tablet_snap_manager(&self) -> &TabletSnapManager {
-        &self.tablet_snap_manager.as_ref().unwrap()
+        &self.tablet_snap_manager
     }
 
     pub fn limiter(&self) -> &Limiter {
@@ -1920,17 +1917,11 @@ impl SnapManagerBuilder {
             u64::MAX
         };
         let path = path.into();
-
-        let mut tablet_snap_mgr = None;
-        if !path.is_empty() {
-            let mut path_v2 = path.clone();
-            path_v2.push_str("_v2");
-            tablet_snap_mgr = Some(TabletSnapManager::new(&path_v2).unwrap());
-        }
+        assert!(!path.is_empty());
         let mut path_v2 = path.clone();
-        // the path for tablet snap manager, it will be empty if the cluster is not
-        // to receive snapshot from cluster of raftstore-v2
         path_v2.push_str("_v2");
+        let tablet_snap_mgr = TabletSnapManager::new(&path_v2).unwrap();
+
         let mut snapshot = SnapManager {
             core: SnapManagerCore {
                 base: path,
