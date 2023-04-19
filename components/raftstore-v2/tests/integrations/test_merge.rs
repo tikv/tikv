@@ -81,25 +81,24 @@ fn test_merge() {
         );
     }
 
-    let region_2 = merge_region(router, region_1.clone(), peer_1, region_2, true);
+    let region_2 = merge_region(&cluster, 0, region_1.clone(), peer_1, region_2, true);
     {
-        let snapshot = router.stale_snapshot(region_2.get_id());
+        let snapshot = cluster.routers[0].stale_snapshot(region_2.get_id());
         let key = format!("k{}1", region_1.get_id());
         assert!(snapshot.get_value(key.as_bytes()).unwrap().is_some());
     }
-    let region_5 = merge_region(router, region_6.clone(), peer_6, region_5, true);
+    let region_5 = merge_region(&cluster, 0, region_6.clone(), peer_6, region_5, true);
     {
-        let snapshot = router.stale_snapshot(region_5.get_id());
+        let snapshot = cluster.routers[0].stale_snapshot(region_5.get_id());
         let key = format!("k{}5", region_6.get_id());
         assert!(snapshot.get_value(key.as_bytes()).unwrap().is_some());
     }
-    let region_3 = merge_region(router, region_2, peer_2, region_3, true);
-    let region_4 = merge_region(router, region_3, peer_3, region_4, true);
-    let region_5 = merge_region(router, region_4, peer_4, region_5, true);
+    let region_3 = merge_region(&cluster, 0, region_2, peer_2, region_3, true);
+    let region_4 = merge_region(&cluster, 0, region_3, peer_3, region_4, true);
+    let region_5 = merge_region(&cluster, 0, region_4, peer_4, region_5, true);
 
     cluster.restart(0);
-    let router = &mut cluster.routers[0];
-    let snapshot = router.stale_snapshot(region_5.get_id());
+    let snapshot = cluster.routers[0].stale_snapshot(region_5.get_id());
     for (i, v) in [1, 2, 3, 4, 5, 5].iter().enumerate() {
         let rid = region_1.get_id() + i as u64;
         let key = format!("k{rid}{v}");

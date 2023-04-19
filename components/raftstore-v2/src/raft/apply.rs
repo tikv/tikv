@@ -7,9 +7,12 @@ use engine_traits::{
 };
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
-use raftstore::store::{
-    fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
-    Config, ReadTask,
+use raftstore::{
+    coprocessor::{Cmd, CmdObserveInfo, CoprocessorHost, ObserveLevel},
+    store::{
+        fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
+        Config, ReadTask,
+    },
 };
 use slog::Logger;
 use sst_importer::SstImporter;
@@ -19,6 +22,12 @@ use crate::{
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::CmdResChannel,
 };
+
+pub(crate) struct Observe {
+    pub info: CmdObserveInfo,
+    pub level: ObserveLevel,
+    pub cmds: Vec<Cmd>,
+}
 
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
@@ -59,6 +68,9 @@ pub struct Apply<EK: KvEngine, R> {
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
     sst_importer: Arc<SstImporter>,
+    observe: Observe,
+    coprocessor_host: CoprocessorHost<EK>,
+
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -78,6 +90,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         applied_term: u64,
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
+        coprocessor_host: CoprocessorHost<EK>,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -110,6 +123,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
+            observe: Observe {
+                info: CmdObserveInfo::default(),
+                level: ObserveLevel::None,
+                cmds: vec![],
+            },
+            coprocessor_host,
             logger,
         }
     }
@@ -268,5 +287,25 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn sst_importer(&self) -> &SstImporter {
         &self.sst_importer
+    }
+
+    #[inline]
+    pub(crate) fn observe(&mut self) -> &Observe {
+        &self.observe
+    }
+
+    #[inline]
+    pub(crate) fn observe_mut(&mut self) -> &mut Observe {
+        &mut self.observe
+    }
+
+    #[inline]
+    pub fn term(&self) -> u64 {
+        self.applied_term
+    }
+
+    #[inline]
+    pub fn coprocessor_host(&self) -> &CoprocessorHost<EK> {
+        &self.coprocessor_host
     }
 }

@@ -153,6 +153,7 @@ where
                 tried_cnt,
                 term,
             } => {
+                let _guard = WithIoType::new(IoType::Replication);
                 let mut ents =
                     Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
                 let res = self.raft_engine.fetch_entries_to(
