@@ -1389,7 +1389,7 @@ pub struct SnapManager {
     max_total_size: Arc<AtomicU64>,
 
     // only used to receive snapshot from v2
-    tablet_snap_manager: TabletSnapManager,
+    tablet_snap_manager: Option<TabletSnapManager>,
 }
 
 impl Clone for SnapManager {
@@ -1409,7 +1409,6 @@ impl SnapManager {
 
     pub fn init(&self) -> io::Result<()> {
         self.init_core()?;
-        self.tablet_snap_manager.init()?;
         Ok(())
     }
 
@@ -1632,7 +1631,10 @@ impl SnapManager {
     /// NOTE: don't call it in raftstore thread.
     pub fn get_total_snap_size(&self) -> Result<u64> {
         let size_v1 = self.core.get_total_snap_size()?;
-        let size_v2 = self.tablet_snap_manager.total_snap_size()?;
+        let size_v2 = self
+            .tablet_snap_manager
+            .as_ref()
+            .map_or(0, |mgr| mgr.total_snap_size().unwrap_or(0));
         Ok(size_v1 + size_v2)
     }
 
@@ -1770,7 +1772,7 @@ impl SnapManager {
     }
 
     pub fn tablet_snap_manager(&self) -> &TabletSnapManager {
-        &self.tablet_snap_manager
+        &self.tablet_snap_manager.as_ref().unwrap()
     }
 
     pub fn limiter(&self) -> &Limiter {
@@ -1918,6 +1920,13 @@ impl SnapManagerBuilder {
             u64::MAX
         };
         let path = path.into();
+
+        let mut tablet_snap_mgr = None;
+        if !path.is_empty() {
+            let mut path_v2 = path.clone();
+            path_v2.push_str("_v2");
+            tablet_snap_mgr = Some(TabletSnapManager::new(&path_v2).unwrap());
+        }
         let mut path_v2 = path.clone();
         // the path for tablet snap manager, it will be empty if the cluster is not
         // to receive snapshot from cluster of raftstore-v2
@@ -1936,7 +1945,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
-            tablet_snap_manager: TabletSnapManager::new_without_init(&path_v2),
+            tablet_snap_manager: tablet_snap_mgr,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
@@ -2007,38 +2016,23 @@ pub struct TabletSnapManager {
 
 impl TabletSnapManager {
     pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
-        let mgr = Self {
-            base: path.into(),
-            receiving: Arc::default(),
-            stats: Arc::default(),
-        };
-        mgr.init()?;
-        Ok(mgr)
-    }
-
-    pub fn new_without_init<T: Into<PathBuf>>(path: T) -> Self {
-        Self {
-            base: path.into(),
-            receiving: Arc::default(),
-            stats: Arc::default(),
+        let path = path.into();
+        if !path.exists() {
+            file_system::create_dir_all(&path)?;
         }
-    }
-
-    // The function `init` should be called again that created new_without_init.
-    pub fn init(&self) -> io::Result<()> {
-        // Initialize the directory if it doesn't exist.
-        if !self.base.exists() {
-            file_system::create_dir_all(&self.base)?;
-        }
-        if !self.base.is_dir() {
+        if !path.is_dir() {
             return Err(io::Error::new(
                 ErrorKind::Other,
-                format!("{} should be a directory", self.base.display()),
+                format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_dir(&self.base, SNAP_GEN_PREFIX)?;
-        file_system::clean_up_trash(&self.base)?;
-        Ok(())
+        file_system::clean_up_dir(&path, SNAP_GEN_PREFIX)?;
+        file_system::clean_up_trash(&path)?;
+        Ok(Self {
+            base: path,
+            receiving: Arc::default(),
+            stats: Arc::default(),
+        })
     }
 
     pub fn begin_snapshot(&self, key: TabletSnapKey, start: Instant, generate_duration_sec: u64) {
