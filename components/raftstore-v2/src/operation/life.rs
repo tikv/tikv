@@ -114,7 +114,8 @@ impl DestroyProgress {
 pub struct AbnormalPeerContext {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
-    peers_start_pending_time: Vec<(u64, Instant)>,
+    /// (u64, Instant) represents the peer id and the time when peer start pending.
+    pending_peers: Vec<(u64, Instant)>,
     /// A inaccurate cache about which peer is marked as down.
     down_peers: Vec<u64>,
 }
@@ -122,46 +123,46 @@ pub struct AbnormalPeerContext {
 impl AbnormalPeerContext {
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.peers_start_pending_time.is_empty() && self.down_peers.is_empty()
+        self.pending_peers.is_empty() && self.down_peers.is_empty()
     }
 
     #[inline]
     pub fn reset(&mut self) {
-        self.peers_start_pending_time.clear();
+        self.pending_peers.clear();
         self.down_peers.clear();
     }
 
     #[inline]
-    pub fn is_peer_down(&self, peer_id: u64) -> bool {
-        self.down_peers.contains(&peer_id)
+    pub fn down_peers(&self) -> &[u64] {
+        &self.down_peers
     }
 
     #[inline]
-    pub fn is_peer_pending(&self, peer_id: u64) -> bool {
-        self.peers_start_pending_time.iter().any(|p| p.0 == peer_id)
+    pub fn down_peers_mut(&mut self) -> &mut Vec<u64> {
+        &mut self.down_peers
     }
 
     #[inline]
-    pub fn collect_down_peers(&mut self, peer_ids: Vec<u64>) {
-        self.down_peers = peer_ids;
+    pub fn pending_peers(&self) -> &[(u64, Instant)] {
+        &self.pending_peers
     }
 
     #[inline]
-    pub fn append_pending_peers(&mut self, mut peers: Vec<(u64, Instant)>) {
-        self.peers_start_pending_time.append(&mut peers);
+    pub fn pending_peers_mut(&mut self) -> &mut Vec<(u64, Instant)> {
+        &mut self.pending_peers
     }
 
     #[inline]
     pub fn retain_pending_peers(&mut self, f: impl FnMut(&mut (u64, Instant)) -> bool) -> bool {
-        let len = self.peers_start_pending_time.len();
-        self.peers_start_pending_time.retain_mut(f);
-        len != self.peers_start_pending_time.len()
+        let len = self.pending_peers.len();
+        self.pending_peers.retain_mut(f);
+        len != self.pending_peers.len()
     }
 
     #[inline]
     pub fn flush_metrics(&self) {
         let _ = self
-            .peers_start_pending_time
+            .pending_peers
             .iter()
             .map(|(_, pending_after)| {
                 let elapsed = duration_to_sec(pending_after.saturating_elapsed());

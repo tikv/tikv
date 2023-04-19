@@ -157,7 +157,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.peer_from_cache(id) {
                     pending_peers.push(p);
-                    if !self.abnormal_peer_context().is_peer_pending(id) {
+                    if !self.abnormal_peer_context().pending_peers().iter().any(|p| p.0 == id) {
                         let now = Instant::now();
                         peers_start_pending_time.push((id, now));
                         debug!(
@@ -184,7 +184,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         self.abnormal_peer_context_mut()
-            .append_pending_peers(peers_start_pending_time);
+            .pending_peers_mut().append(&mut peers_start_pending_time);
         pending_peers
     }
 

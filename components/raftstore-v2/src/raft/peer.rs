@@ -585,8 +585,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        self.abnormal_peer_context_mut()
-            .collect_down_peers(down_peer_ids);
+        *self.abnormal_peer_context_mut()
+            .down_peers() = down_peer_ids;
         // TODO: `refill_disk_full_peers`
         down_peers
     }
@@ -903,7 +903,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
 
-        if self.abnormal_peer_context.is_peer_down(from_peer_id) {
+        if self.abnormal_peer_context.down_peers().contains(&from_peer_id) {
             return true;
         }
 
