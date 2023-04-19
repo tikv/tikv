@@ -98,6 +98,7 @@ impl Column {
         self
     }
 
+    // The encode rule follows https://github.com/pingcap/tidb/pull/43141.
     pub fn encode_for_checksum(&self, buf: &mut Vec<u8>) -> Result<()> {
         match self.ft.as_accessor().tp() {
             FieldTypeTp::Tiny
@@ -206,7 +207,18 @@ impl Column {
                 // TODO: it's not supported yet.
                 buf.write_u64_le(u64::MAX)?;
             }
-            FieldTypeTp::Json => {}
+            FieldTypeTp::Json => {
+                let res = self
+                    .value
+                    .as_json()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_string();
+                buf.write_u32_le(res.len() as u32)?;
+                buf.write_bytes(res.as_bytes())?;
+            }
             FieldTypeTp::Null | FieldTypeTp::Geometry => {}
             _ => {
                 return Err(Error::Other(box_err!(
