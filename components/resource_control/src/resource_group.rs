@@ -54,7 +54,7 @@ pub enum ResourceConsumeType {
 #[derive(Default)]
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
-    registry: Mutex<Vec<Arc<ResourceController>>>,
+    registry: RwLock<Vec<Arc<ResourceController>>>,
 }
 
 impl ResourceGroupManager {
@@ -85,7 +85,7 @@ impl ResourceGroupManager {
 
     pub fn add_resource_group(&self, rg: ResourceGroup) {
         let group_name = rg.get_name().to_ascii_lowercase();
-        self.registry.lock().unwrap().iter().for_each(|controller| {
+        self.registry.read().iter().for_each(|controller| {
             let ru_quota = Self::get_ru_setting(&rg, controller.is_read);
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
@@ -95,7 +95,7 @@ impl ResourceGroupManager {
 
     pub fn remove_resource_group(&self, name: &str) {
         let group_name = name.to_ascii_lowercase();
-        self.registry.lock().unwrap().iter().for_each(|controller| {
+        self.registry.read().iter().for_each(|controller| {
             controller.remove_resource_group(group_name.as_bytes());
         });
         info!("remove resource group"; "name"=> name);
@@ -112,7 +112,7 @@ impl ResourceGroupManager {
             ret
         });
         if !removed_names.is_empty() {
-            self.registry.lock().unwrap().iter().for_each(|controller| {
+            self.registry.read().iter().for_each(|controller| {
                 for name in &removed_names {
                     controller.remove_resource_group(name.as_bytes());
                 }
@@ -130,7 +130,7 @@ impl ResourceGroupManager {
 
     pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
         let controller = Arc::new(ResourceController::new(name, is_read));
-        self.registry.lock().unwrap().push(controller.clone());
+        self.registry.write().push(controller.clone());
         for g in &self.resource_groups {
             let ru_quota = Self::get_ru_setting(g.value(), controller.is_read);
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.priority);
@@ -139,13 +139,13 @@ impl ResourceGroupManager {
     }
 
     pub fn advance_min_virtual_time(&self) {
-        for controller in self.registry.lock().unwrap().iter() {
+        for controller in self.registry.read().iter() {
             controller.update_min_virtual_time();
         }
     }
 
     pub fn consume_penalty(&self, ctx: &ResourceControlContext) {
-        for controller in self.registry.lock().unwrap().iter() {
+        for controller in self.registry.read().iter() {
             // FIXME: Should consume CPU time for read controller and write bytes for write
             // controller, once CPU process time of scheduler worker is tracked. Currently,
             // we consume write bytes for read controller as the
