@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{DebugInfo, IsolationLevel};
+use kvproto::kvrpcpb::{IsolationLevel, TidbSource};
 use txn_types::{Key, KvPair, Lock, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 use super::{Error, ErrorInner, Result};
@@ -45,7 +45,7 @@ pub trait Store: Send {
         check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
-        debug_info: DebugInfo,
+        tidb_source: TidbSource,
     ) -> Result<Self::Scanner>;
 }
 
@@ -375,7 +375,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
-        debug_info: DebugInfo,
+        tidb_source: TidbSource,
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
@@ -388,7 +388,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
             .check_has_newer_ts_data(check_has_newer_ts_data)
-            .debug_info(debug_info)
+            .tidb_source(tidb_source)
             .build()?;
 
         Ok(scanner)
@@ -578,7 +578,7 @@ impl Store for FixtureStore {
         _: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
-        _: DebugInfo,
+        _: TidbSource,
     ) -> Result<FixtureStoreScanner> {
         use std::ops::Bound;
 
@@ -1545,7 +1545,7 @@ mod benches {
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
-                    test::black_box(DebugInfo::default()),
+                    test::black_box(TidbSource::default()),
                 )
                 .unwrap();
             test::black_box(scanner);
@@ -1569,7 +1569,7 @@ mod benches {
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
-                    test::black_box(DebugInfo::default()),
+                    test::black_box(TidbSource::default()),
                 )
                 .unwrap();
             for _ in 0..1000 {
@@ -1596,7 +1596,7 @@ mod benches {
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
-                    test::black_box(DebugInfo::default()),
+                    test::black_box(TidbSource::default()),
                 )
                 .unwrap();
             test::black_box(scanner.scan(1000, 0).unwrap());

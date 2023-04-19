@@ -2,7 +2,7 @@
 
 use api_version::{keyspace::KvPair, KvFormat};
 use async_trait::async_trait;
-use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
+use kvproto::{coprocessor::KeyRange, kvrpcpb::TidbSource};
 use tidb_query_common::{
     storage::{
         scanner::{RangesScanner, RangesScannerOptions},
@@ -63,7 +63,7 @@ pub struct ScanExecutorOptions<S, I> {
     pub is_key_only: bool,
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
-    pub debug_info: DebugInfo,
+    pub tidb_source: TidbSource,
 }
 
 impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
@@ -76,7 +76,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
             is_key_only,
             accept_point_range,
             is_scanned_range_aware,
-            debug_info,
+            tidb_source,
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
@@ -94,7 +94,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
                 scan_backward_in_range: is_backward,
                 is_key_only,
                 is_scanned_range_aware,
-                debug_info,
+                tidb_source,
             }),
             is_ended: false,
         })

@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::DebugInfo;
+use kvproto::kvrpcpb::TidbSource;
 
 pub use self::range::*;
 
@@ -25,7 +25,7 @@ pub trait Storage: Send {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
-        debug_info: DebugInfo,
+        tidb_source: TidbSource,
     ) -> Result<()>;
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>>;
@@ -36,7 +36,7 @@ pub trait Storage: Send {
         &mut self,
         is_key_only: bool,
         range: PointRange,
-        debug_info: DebugInfo,
+        tidb_source: TidbSource,
     ) -> Result<Option<OwnedKvPair>>;
 
     fn met_uncacheable_data(&self) -> Option<bool>;
@@ -52,9 +52,9 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
-        debug_info: DebugInfo,
+        tidb_source: TidbSource,
     ) -> Result<()> {
-        (**self).begin_scan(is_backward_scan, is_key_only, range, debug_info)
+        (**self).begin_scan(is_backward_scan, is_key_only, range, tidb_source)
     }
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
@@ -65,9 +65,9 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         &mut self,
         is_key_only: bool,
         range: PointRange,
-        debug_info: DebugInfo,
+        tidb_source: TidbSource,
     ) -> Result<Option<OwnedKvPair>> {
-        (**self).get(is_key_only, range, debug_info)
+        (**self).get(is_key_only, range, tidb_source)
     }
 
     fn met_uncacheable_data(&self) -> Option<bool> {

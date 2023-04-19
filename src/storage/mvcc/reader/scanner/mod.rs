@@ -3,7 +3,7 @@
 use std::ops::Bound;
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::{DebugInfo, ExtraOp, IsolationLevel};
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, TidbSource};
 use txn_types::{
     Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, Write, WriteRef, WriteType,
 };
@@ -147,8 +147,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
     }
 
     #[inline]
-    pub fn debug_info(mut self, debug_info: DebugInfo) -> Self {
-        self.0.debug_info = debug_info;
+    pub fn tidb_source(mut self, tidb_source: TidbSource) -> Self {
+        self.0.tidb_source = tidb_source;
         self
     }
 
@@ -230,9 +230,9 @@ pub enum Scanner<S: Snapshot> {
 impl<S: Snapshot> StoreScanner for Scanner<S> {
     fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
         fail_point!("scanner_next");
-        let (res, debug_info) = match self {
-            Scanner::Forward(scanner) => (Ok(scanner.read_next()?), scanner.debug_info()),
-            Scanner::Backward(scanner) => (Ok(scanner.read_next()?), scanner.debug_info()),
+        let (res, tidb_source) = match self {
+            Scanner::Forward(scanner) => (Ok(scanner.read_next()?), scanner.tidb_source()),
+            Scanner::Backward(scanner) => (Ok(scanner.read_next()?), scanner.tidb_source()),
         };
 
         if let Ok(Some((key, value))) = res.as_ref().map(|opt| {
@@ -240,15 +240,15 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
                 .map(|(k, v)| (log_wrappers::Value::key(k.as_encoded()), v))
         }) {
             corr_debug!("scanner next result";
-                "start_ts" => debug_info.start_ts,
-                "connection id" => debug_info.connection_id,
+                "start_ts" => tidb_source.start_ts,
+                "connection id" => tidb_source.connection_id,
                 "key" => key,
                 "value" => ?value,
             );
         } else {
             corr_debug!("scanner next result";
-                "start_ts" => debug_info.start_ts,
-                "connection id" => debug_info.connection_id,
+                "start_ts" => tidb_source.start_ts,
+                "connection id" => tidb_source.connection_id,
                 "result" => ?res,
             );
         }
@@ -299,7 +299,7 @@ pub struct ScannerConfig<S: Snapshot> {
 
     check_has_newer_ts_data: bool,
 
-    debug_info: DebugInfo,
+    tidb_source: TidbSource,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -318,7 +318,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
-            debug_info: Default::default(),
+            tidb_source: Default::default(),
         }
     }
 

@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use kvproto::kvrpcpb::DebugInfo;
+use kvproto::kvrpcpb::TidbSource;
 
 use super::{range::*, Result};
 
@@ -59,7 +59,7 @@ impl super::Storage for FixtureStorage {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
-        _: DebugInfo,
+        _: TidbSource,
     ) -> Result<()> {
         let data_view = self
             .data
@@ -96,7 +96,7 @@ impl super::Storage for FixtureStorage {
         &mut self,
         is_key_only: bool,
         range: PointRange,
-        _: DebugInfo,
+        _: TidbSource,
     ) -> Result<Option<super::OwnedKvPair>> {
         let r = self.data.get(&range.0);
         match r {

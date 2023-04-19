@@ -3,7 +3,7 @@
 use std::{fmt::Debug, i64, mem, sync::Arc, u64};
 
 use bitflags::bitflags;
-use kvproto::kvrpcpb::DebugInfo;
+use kvproto::kvrpcpb::TidbSource;
 use tipb::DagRequest;
 
 use super::{Error, Result};
@@ -208,7 +208,7 @@ impl EvalWarnings {
 pub struct EvalContext {
     pub cfg: Arc<EvalConfig>,
     pub warnings: EvalWarnings,
-    pub debug_info: DebugInfo,
+    pub tidb_source: TidbSource,
 }
 
 impl Default for EvalContext {
@@ -218,7 +218,7 @@ impl Default for EvalContext {
         EvalContext {
             cfg,
             warnings,
-            debug_info: Default::default(),
+            tidb_source: Default::default(),
         }
     }
 }
@@ -229,7 +229,7 @@ impl EvalContext {
         EvalContext {
             cfg,
             warnings,
-            debug_info: Default::default(),
+            tidb_source: Default::default(),
         }
     }
 

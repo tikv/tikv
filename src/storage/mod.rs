@@ -1241,7 +1241,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         false,
                         start_key,
                         end_key,
-                        ctx.take_debug_info(),
+                        ctx.take_tidb_source(),
                     )?;
                     let res = scanner.scan(limit, sample_step);
 

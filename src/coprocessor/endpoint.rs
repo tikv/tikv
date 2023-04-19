@@ -223,7 +223,7 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
-                    req.get_context().get_debug_info().clone(),
+                    req.get_context().get_tidb_source().clone(),
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorDag;
@@ -259,7 +259,7 @@ impl<E: Engine> Endpoint<E> {
                         req.get_is_cache_enabled(),
                         paging_size,
                         quota_limiter,
-                        req_ctx.debug_info.clone(),
+                        req_ctx.tidb_source.clone(),
                     )
                     .data_version(data_version)
                     .build()
@@ -288,7 +288,7 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
-                    req.get_context().get_debug_info().clone(),
+                    req.get_context().get_tidb_source().clone(),
                 );
                 with_tls_tracker(|tracker| {
                     tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
@@ -334,7 +334,7 @@ impl<E: Engine> Endpoint<E> {
                     start_ts.into(),
                     cache_match_version,
                     self.perf_level,
-                    req.get_context().get_debug_info().clone(),
+                    req.get_context().get_tidb_source().clone(),
                 );
                 // Checksum is allowed during the flashback period to make sure the tool such
                 // like BR can work.
@@ -447,10 +447,10 @@ impl<E: Engine> Endpoint<E> {
         };
         let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
-        if tracker.req_ctx.debug_info.connection_id > 0 {
+        if tracker.req_ctx.tidb_source.connection_id > 0 {
             corr_debug!("unary coprocessor request";
-                "connection id" => tracker.req_ctx.debug_info.connection_id,
-                "start_ts" => tracker.req_ctx.debug_info.start_ts,
+                "connection id" => tracker.req_ctx.tidb_source.connection_id,
+                "start_ts" => tracker.req_ctx.tidb_source.start_ts,
                 "ranges" => ?tracker.req_ctx.ranges,
                 "result" => ?result,
             );
@@ -1073,7 +1073,7 @@ mod tests {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
-            DebugInfo::default(),
+            TidbSource::default(),
         );
         block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).unwrap_err();
     }

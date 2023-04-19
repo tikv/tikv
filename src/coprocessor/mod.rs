@@ -26,7 +26,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 pub use checksum::checksum_crc64_xor;
 use engine_traits::PerfLevel;
-use kvproto::{coprocessor as coppb, kvrpcpb, kvrpcpb::DebugInfo};
+use kvproto::{coprocessor as coppb, kvrpcpb, kvrpcpb::TidbSource};
 use lazy_static::lazy_static;
 use metrics::ReqTag;
 use rand::prelude::*;
@@ -146,7 +146,7 @@ pub struct ReqContext {
     /// Whether the request is allowed in the flashback state.
     pub allowed_in_flashback: bool,
 
-    pub debug_info: DebugInfo,
+    pub tidb_source: TidbSource,
 }
 
 impl ReqContext {
@@ -160,7 +160,7 @@ impl ReqContext {
         txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
         perf_level: PerfLevel,
-        debug_info: DebugInfo,
+        tidb_source: TidbSource,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
@@ -188,7 +188,7 @@ impl ReqContext {
             upper_bound,
             perf_level,
             allowed_in_flashback: false,
-            debug_info,
+            tidb_source,
         }
     }
 
@@ -204,7 +204,7 @@ impl ReqContext {
             TimeStamp::max(),
             None,
             PerfLevel::EnableCount,
-            DebugInfo::default(),
+            TidbSource::default(),
         )
     }
 

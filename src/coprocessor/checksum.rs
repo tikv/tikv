@@ -48,7 +48,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
-            debug_info: Default::default(),
+            tidb_source: Default::default(),
         });
         Ok(Self { req, scanner })
     }

@@ -4,7 +4,7 @@ use std::{marker::PhantomData, sync::Arc};
 
 use api_version::ApiV1;
 use criterion::{black_box, measurement::Measurement};
-use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
+use kvproto::{coprocessor::KeyRange, kvrpcpb::TidbSource};
 use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
 use tikv::{
@@ -78,7 +78,7 @@ where
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(false),
-                black_box(DebugInfo::default()),
+                black_box(TidbSource::default()),
             )
             .unwrap()
         })

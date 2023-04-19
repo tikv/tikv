@@ -231,7 +231,7 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
                     scan_backward_in_range: false,
                     is_key_only: true,
                     is_scanned_range_aware: false,
-                    debug_info: Default::default(),
+                    tidb_source: Default::default(),
                 });
                 let res = AnalyzeContext::handle_index(
                     req,

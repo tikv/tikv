@@ -4,7 +4,7 @@ use std::{marker::PhantomData, sync::Arc};
 
 use api_version::ApiV1;
 use criterion::{black_box, measurement::Measurement};
-use kvproto::{coprocessor::KeyRange, kvrpcpb::DebugInfo};
+use kvproto::{coprocessor::KeyRange, kvrpcpb::TidbSource};
 use test_coprocessor::*;
 use tikv::{
     coprocessor::RequestHandler,
@@ -52,7 +52,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
         false,
         None,
         Arc::new(QuotaLimiter::default()),
-        DebugInfo::default(),
+        TidbSource::default(),
     )
     .build()
     .unwrap()
