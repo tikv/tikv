@@ -22,8 +22,8 @@ use engine_rocks::{
     FlowInfo, RocksEngine, RocksStatistics,
 };
 use engine_traits::{
-    CachedTablet, CfOptionsExt, FlowControlFactorsExt, KvEngine, RaftEngine, StatisticsReporter,
-    TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    data_cf_offset, CachedTablet, CfOptionsExt, FlowControlFactorsExt, KvEngine, RaftEngine,
+    StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
@@ -504,25 +504,24 @@ impl EnginesResourceInfo {
         _now: Instant,
         cached_latest_tablets: &mut HashMap<u64, CachedTablet<RocksEngine>>,
     ) {
-        let mut normalized_pending_bytes = 0;
+        let mut compaction_pending_bytes = [0; DATA_CFS.len()];
+        let mut soft_pending_compaction_bytes_limit = [0; DATA_CFS.len()];
 
-        fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
+        let mut fetch_engine_cf = |engine: &RocksEngine, cf: &str| {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
                 if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
-                    if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
-                        *normalized_pending_bytes = std::cmp::max(
-                            *normalized_pending_bytes,
-                            (b * EnginesResourceInfo::SCALE_FACTOR
-                                / cf_opts.get_soft_pending_compaction_bytes_limit())
-                                as u32,
-                        );
-                    }
+                    let offset = data_cf_offset(cf);
+                    compaction_pending_bytes[offset] += b;
+                    soft_pending_compaction_bytes_limit[offset] = cmp::max(
+                        cf_opts.get_soft_pending_compaction_bytes_limit(),
+                        soft_pending_compaction_bytes_limit[offset],
+                    );
                 }
             }
-        }
+        };
 
         if let Some(raft_engine) = &self.raft_engine {
-            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
+            fetch_engine_cf(raft_engine, CF_DEFAULT);
         }
 
         self.tablet_registry
@@ -543,12 +542,25 @@ impl EnginesResourceInfo {
         for (_, cache) in cached_latest_tablets.iter_mut() {
             let Some(tablet) = cache.latest() else { continue };
             for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-                fetch_engine_cf(tablet, cf, &mut normalized_pending_bytes);
+                fetch_engine_cf(tablet, cf);
             }
         }
 
         // Clear ensures that these tablets are not hold forever.
         cached_latest_tablets.clear();
+
+        let mut normalized_pending_bytes = 0;
+        for (pending, limit) in compaction_pending_bytes
+            .iter()
+            .zip(soft_pending_compaction_bytes_limit)
+        {
+            if limit > 0 {
+                normalized_pending_bytes = cmp::max(
+                    normalized_pending_bytes,
+                    (*pending * EnginesResourceInfo::SCALE_FACTOR / limit) as u32,
+                )
+            }
+        }
 
         let (_, avg) = self
             .normalized_pending_bytes_collector
