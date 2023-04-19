@@ -216,7 +216,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         return;
                     }
                     let _ = ctx.schedulers.tablet.schedule(
-                        crate::worker::tablet::Task::TabletPreFlush {
+                        crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
                             on_flush_finish: None,
                         },

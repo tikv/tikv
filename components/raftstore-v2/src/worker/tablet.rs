@@ -44,8 +44,8 @@ pub enum Task<EK> {
     CleanupImportSst(Box<[SstMeta]>),
     /// Flush memtable before split
     ///
-    /// split_req is some iff the task is sent from leader
-    TabletPreFlush {
+    /// on_flush_finish is some iff the task is sent from leader
+    Flush {
         region_id: u64,
         on_flush_finish: Option<Box<dyn FnOnce() + Send>>,
     },
@@ -85,7 +85,7 @@ impl<EK> Display for Task<EK> {
             Task::CleanupImportSst(ssts) => {
                 write!(f, "cleanup import ssts {:?}", ssts)
             }
-            Task::TabletPreFlush {
+            Task::Flush {
                 region_id,
                 on_flush_finish,
             } => {
@@ -397,7 +397,7 @@ where
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
-            Task::TabletPreFlush {
+            Task::Flush {
                 region_id,
                 on_flush_finish,
             } => self.pre_flush_tablet(region_id, on_flush_finish),
