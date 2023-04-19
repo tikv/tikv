@@ -13,7 +13,9 @@ use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
-use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager, contain_tiflash_engine_label};
+use raftstore::store::{
+    contain_tiflash_engine_label, CheckLeaderTask, SnapManager, TabletSnapManager,
+};
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -179,9 +181,7 @@ where
         let trans = ServerTransport::new(raft_client);
         health_service.set_serving_status("", ServingStatus::NotServing);
 
-        let is_tiflash_engine = contain_tiflash_engine_label(&cfg
-            .value()
-            .labels);
+        let is_tiflash_engine = contain_tiflash_engine_label(&cfg.value().labels);
 
         let svr = Server {
             env: Arc::clone(&env),
