@@ -83,14 +83,14 @@ use futures::{future::Either, prelude::*};
 use kvproto::{
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
-        LockInfo, RawGetRequest, ResourceControlContext,
+        LockInfo, RawGetRequest,
     },
     pdpb::QueryKind,
 };
 use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
-use resource_control::ResourceGroupManager;
+use resource_control::ResourceController;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
@@ -212,9 +212,6 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
     quota_limiter: Arc<QuotaLimiter>,
 
-    // Used for resource control
-    resource_manager: Option<Arc<ResourceGroupManager>>,
-
     _phantom: PhantomData<F>,
 }
 
@@ -238,7 +235,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
             causal_ts_provider: self.causal_ts_provider.clone(),
             resource_tag_factory: self.resource_tag_factory.clone(),
             quota_limiter: self.quota_limiter.clone(),
-            resource_manager: self.resource_manager.clone(),
             _phantom: PhantomData,
         }
     }
@@ -276,7 +272,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
-        resource_manager: Option<Arc<ResourceGroupManager>>,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -292,9 +288,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             resource_tag_factory.clone(),
             Arc::clone(&quota_limiter),
             feature_gate,
-            resource_manager
-                .as_ref()
-                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            resource_ctl,
         );
 
         info!("Storage started.");
@@ -310,7 +304,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             causal_ts_provider,
             resource_tag_factory,
             quota_limiter,
-            resource_manager,
             _phantom: PhantomData,
         })
     }
@@ -1457,9 +1450,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         };
 
         let cmd: Command = cmd.into();
-        if let Some(resource_manager) = self.resource_manager.as_ref() {
-            resource_manager.consume_penalty(cmd.resource_control_ctx());
-        }
 
         match &cmd {
             Command::Prewrite(Prewrite { mutations, .. }) => {
@@ -1520,15 +1510,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     // The entry point of the raw atomic command scheduler.
     pub fn sched_raw_atomic_command<T: StorageCallbackType>(
-        resource_manager: Option<Arc<ResourceGroupManager>>,
         sched: TxnScheduler<E, L>,
         cmd: TypedCommand<T>,
         callback: Callback<T>,
     ) {
         let cmd: Command = cmd.into();
-        if let Some(resource_manager) = resource_manager.as_ref() {
-            resource_manager.consume_penalty(cmd.resource_control_ctx());
-        }
         cmd.incr_cmd_metric();
         sched.run_cmd(cmd, T::callback(callback));
     }
@@ -1537,7 +1523,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     // TODO: separate the txn and raw commands if needed in the future.
     fn sched_raw_command<T>(
         &self,
-        resource_control_ctx: ResourceControlContext,
+        group_name: &str,
         pri: CommandPri,
         tag: CommandKind,
         future: T,
@@ -1546,10 +1532,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         T: Future<Output = ()> + Send + 'static,
     {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
-        let group_name = resource_control_ctx.get_resource_group_name();
-        if let Some(resource_manager) = self.resource_manager.as_ref() {
-            resource_manager.consume_penalty(&resource_control_ctx);
-        }
         self.sched
             .get_sched_pool()
             .spawn(group_name, pri, future)
@@ -1993,8 +1975,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
 
         let priority = ctx.get_priority();
-        let resource_control_ctx = ctx.get_resource_control_context().clone();
-        self.sched_raw_command(resource_control_ctx, priority, CMD, async move {
+        let group_name = ctx
+            .get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2105,8 +2090,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let resource_control_ctx = ctx.get_resource_control_context().clone();
-        self.sched_raw_command(resource_control_ctx, priority, CMD, async move {
+        let group_name = ctx
+            .get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2170,8 +2158,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let resource_control_ctx = ctx.get_resource_control_context().clone();
-        self.sched_raw_command(resource_control_ctx, priority, CMD, async move {
+        let group_name = ctx
+            .get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2231,8 +2222,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let resource_control_ctx = ctx.get_resource_control_context().clone();
-        self.sched_raw_command(resource_control_ctx, priority, CMD, async move {
+        let group_name = ctx
+            .get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2279,8 +2273,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let resource_control_ctx = ctx.get_resource_control_context().clone();
-        self.sched_raw_command(resource_control_ctx, priority, CMD, async move {
+        let group_name = ctx
+            .get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
@@ -2723,13 +2720,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let resource_manager = self.resource_manager.clone();
-        let resource_control_ctx = ctx.get_resource_control_context().clone();
-        self.sched_raw_command(resource_control_ctx, priority, CMD, async move {
+        let group_name = ctx
+            .get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
             Self::sched_raw_atomic_command(
-                resource_manager,
                 sched,
                 cmd,
                 Box::new(|res| callback(res.map_err(Error::from))),
@@ -2758,13 +2756,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let resource_manager = self.resource_manager.clone();
-        let resource_control_ctx = ctx.get_resource_control_context().clone();
-        self.sched_raw_command(resource_control_ctx, priority, CMD, async move {
+        let group_name = ctx
+            .get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
             Self::sched_raw_atomic_command(
-                resource_manager,
                 sched,
                 cmd,
                 Box::new(|res| callback(res.map_err(Error::from))),
@@ -2785,9 +2784,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let resource_manager = self.resource_manager.clone();
-        let resource_control_ctx = ctx.get_resource_control_context().clone();
-        self.sched_raw_command(resource_control_ctx, priority, CMD, async move {
+        let group_name = ctx
+            .get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned();
+        self.sched_raw_command(&group_name, priority, CMD, async move {
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys
                 .into_iter()
@@ -2795,7 +2796,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .collect();
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
             Self::sched_raw_atomic_command(
-                resource_manager,
                 sched,
                 cmd,
                 Box::new(|res| callback(res.map_err(Error::from))),
@@ -3305,13 +3305,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             None,
-            None,
+            Some(Arc::new(ResourceController::new("test".to_owned(), false))),
         )
     }
 
     pub fn build_for_resource_controller(
         self,
-        resource_manager: Arc<ResourceGroupManager>,
+        resource_controller: Arc<ResourceController>,
     ) -> Result<Storage<TxnTestEngine<E>, L, F>> {
         let engine = TxnTestEngine {
             engine: self.engine,
@@ -3339,7 +3339,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             None,
-            Some(resource_manager),
+            Some(resource_controller),
         )
     }
 }

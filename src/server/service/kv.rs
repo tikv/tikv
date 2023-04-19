@@ -11,7 +11,6 @@ use futures::{
     sink::SinkExt,
     stream::{StreamExt, TryStreamExt},
 };
-use resource_control::ResourceGroupManager;
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
@@ -27,6 +26,7 @@ use raftstore::{
     },
     Error as RaftStoreError, Result as RaftStoreResult,
 };
+use resource_control::ResourceGroupManager;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{RaftExtension, StageLatencyStats};
 use tikv_util::{
@@ -499,6 +499,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
         let source = req.mut_context().take_request_source();
+        let resource_control_ctx = req.get_context().get_resource_control_context();
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_penalty(&resource_control_ctx);
+        }
         let begin_instant = Instant::now();
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
@@ -580,6 +584,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut sink: ServerStreamingSink<Response>,
     ) {
         let begin_instant = Instant::now();
+        let resource_control_ctx = req.get_context().get_resource_control_context();
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_penalty(&resource_control_ctx);
+        }
 
         let mut stream = self
             .copr

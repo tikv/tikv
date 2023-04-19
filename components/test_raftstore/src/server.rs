@@ -417,7 +417,9 @@ impl ServerCluster {
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
             self.get_causal_ts_provider(node_id),
-            resource_manager.clone(),
+            resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
         )?;
         self.storages.insert(node_id, raft_engine);
 

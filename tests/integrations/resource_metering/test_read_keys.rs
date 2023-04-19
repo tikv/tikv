@@ -229,7 +229,6 @@ fn init_coprocessor_with_data(
         cm,
         tag_factory,
         Arc::new(QuotaLimiter::default()),
-        None,
     )
 }
 

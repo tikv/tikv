@@ -7,13 +7,14 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use resource_control::ResourceGroupManager;
+
 use api_version::KvFormat;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager, ENGINE, TIFLASH};
+use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -568,7 +569,6 @@ mod tests {
             storage.get_concurrency_manager(),
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
-            None,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
@@ -600,6 +600,7 @@ mod tests {
             None,
             debug_thread_pool,
             HealthService::default(),
+            None,
         )
         .unwrap();
 
