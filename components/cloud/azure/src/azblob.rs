@@ -589,12 +589,12 @@ impl AzureStorage {
             }
             azure_core::Result::Ok(chunk)
         };
-        let k = stream::once(
+        let stream = stream::once(
             t.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e))),
         )
-        .boxed();
-        let t = k.into_async_read();
-        Box::new(t)
+        .boxed()
+        .into_async_read();
+        Box::new(stream)
     }
 }
 
