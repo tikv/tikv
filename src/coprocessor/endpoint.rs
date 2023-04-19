@@ -497,7 +497,7 @@ impl<E: Engine> Endpoint<E> {
             .as_bytes()
             .to_owned();
         if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_delta(&resource_control_ctx);
+            resource_manager.consume_penalty(&resource_control_ctx);
         }
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
@@ -739,7 +739,7 @@ impl<E: Engine> Endpoint<E> {
             .as_bytes()
             .to_owned();
         if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_delta(&resource_control_ctx);
+            resource_manager.consume_penalty(&resource_control_ctx);
         }
 
         let key_ranges = req_ctx

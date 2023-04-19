@@ -140,15 +140,15 @@ impl ResourceGroupManager {
         }
     }
 
-    pub fn consume_delta(&self, delta: &ResourceControlContext) {
+    pub fn consume_penalty(&self, ctx: &ResourceControlContext) {
         for controller in self.registry.lock().unwrap().iter() {
             controller.consume(
-                delta.resource_group_name.as_bytes(),
-                ResourceConsumeType::IoBytes(delta.write_bytes_delta),
+                ctx.resource_group_name.as_bytes(),
+                ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
             );
             controller.consume(
-                delta.resource_group_name.as_bytes(),
-                ResourceConsumeType::CpuTime(Duration::from_nanos(delta.cpu_duration_ns_delta)),
+                ctx.resource_group_name.as_bytes(),
+                ResourceConsumeType::CpuTime(Duration::from_nanos((ctx.get_penalty().total_cpu_time_ms * 1_000_000.0) as u64)),
             );
         }
     }

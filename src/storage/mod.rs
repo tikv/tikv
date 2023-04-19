@@ -1458,7 +1458,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let cmd: Command = cmd.into();
         if let Some(resource_manager) = self.resource_manager.as_ref() {
-            resource_manager.consume_delta(cmd.resource_control_ctx());
+            resource_manager.consume_penalty(cmd.resource_control_ctx());
         }
 
         match &cmd {
@@ -1527,7 +1527,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) {
         let cmd: Command = cmd.into();
         if let Some(resource_manager) = resource_manager.as_ref() {
-            resource_manager.consume_delta(cmd.resource_control_ctx());
+            resource_manager.consume_penalty(cmd.resource_control_ctx());
         }
         cmd.incr_cmd_metric();
         sched.run_cmd(cmd, T::callback(callback));
@@ -1548,7 +1548,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         let group_name = resource_control_ctx.get_resource_group_name();
         if let Some(resource_manager) = self.resource_manager.as_ref() {
-            resource_manager.consume_delta(&resource_control_ctx);
+            resource_manager.consume_penalty(&resource_control_ctx);
         }
         self.sched
             .get_sched_pool()
