@@ -1049,6 +1049,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         // a normal request
@@ -1090,6 +1091,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
         copr.recursion_limit = 100;
 
@@ -1128,6 +1130,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let mut req = coppb::Request::default();
@@ -1151,6 +1154,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let mut req = coppb::Request::default();
@@ -1199,6 +1203,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1250,6 +1255,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let handler_builder =
@@ -1275,6 +1281,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         // Fail immediately
@@ -1328,6 +1335,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1356,6 +1364,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1455,6 +1464,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1524,6 +1534,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1911,6 +1922,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         {
@@ -1975,6 +1987,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);

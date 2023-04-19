@@ -3311,7 +3311,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 
     pub fn build_for_resource_controller(
         self,
-        resource_controller: Arc<ResourceController>,
+        resource_manager: Arc<ResourceGroupManager>,
     ) -> Result<Storage<TxnTestEngine<E>, L, F>> {
         let engine = TxnTestEngine {
             engine: self.engine,
@@ -3339,7 +3339,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             None,
-            Some(resource_controller),
+            Some(resource_manager),
         )
     }
 }
