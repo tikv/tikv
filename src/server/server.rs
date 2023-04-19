@@ -579,6 +579,7 @@ mod tests {
         );
         let addr = Arc::new(Mutex::new(None));
         let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
+        let path = tempfile::TempDir::new().unwrap();
         let mut server = Server::new(
             mock_store_id,
             &cfg,
@@ -590,7 +591,7 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            Either::Left(SnapManager::new("")),
+            Either::Left(SnapManager::new(path.path().to_str().unwrap())),
             gc_worker,
             check_leader_scheduler,
             env,
