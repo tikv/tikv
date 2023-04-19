@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::LockInfo;
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use crate::storage::{kv::Modify, mvcc::PessimisticLockNotFoundReason};
+use crate::storage::kv::Modify;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -246,7 +246,7 @@ pub(crate) fn make_txn_error(
 ) -> crate::storage::mvcc::ErrorInner {
     use kvproto::kvrpcpb::WriteConflictReason;
 
-    use crate::storage::mvcc::ErrorInner;
+    use crate::storage::mvcc::{ErrorInner, PessimisticLockNotFoundReason};
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {
