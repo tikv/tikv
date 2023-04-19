@@ -34,8 +34,10 @@ use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVA
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
-        needs_evict_entry_cache, util, worker_metrics::SNAP_COUNTER, FetchedLogs, ReadProgress,
-        Transport, WriteCallback, WriteTask,
+        needs_evict_entry_cache,
+        util::{self, is_initial_msg},
+        worker_metrics::SNAP_COUNTER,
+        FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
 use slog::{debug, error, info, trace, warn};
@@ -379,6 +381,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "to" => msg.get_to(),
             );
         }
+
+        // Filling start and end key is only needed for being compatible with
+        // raftstore v1 tiflash engine.
+        //
+        // There could be two cases:
+        // - Target peer already exists but has not established communication with
+        //   leader yet
+        // - Target peer is added newly due to member change or region split, but it's
+        //   not created yet
+        // For both cases the region start key and end key are attached in RequestVote
+        // and Heartbeat message for the store of that peer to check whether to create a
+        // new peer when receiving these messages, or just to wait for a pending region
+        // split to perform later.
+        if self.storage().is_initialized() && is_initial_msg(&msg) {
+            let region = self.region();
+            raft_msg.set_start_key(region.get_start_key().to_vec());
+            raft_msg.set_end_key(region.get_end_key().to_vec());
+        }
+
         raft_msg.set_message(msg);
         Some(raft_msg)
     }
