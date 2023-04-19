@@ -179,7 +179,7 @@ impl<EK: KvEngine> Runner<EK> {
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
             background_pool: YatpPoolBuilder::new(DefaultTicker::default())
-                .name_prefix("tablet-gc-bg")
+                .name_prefix("tablet-bg")
                 .thread_count(
                     0,
                     DEFAULT_BACKGROUND_POOL_SIZE,

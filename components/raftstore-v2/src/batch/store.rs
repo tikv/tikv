@@ -494,7 +494,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read: Worker,
     pd: LazyWorker<pd::Task>,
-    tablet_gc: Worker,
+    tablet: Worker,
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
 
@@ -507,7 +507,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
-            tablet_gc: Worker::new("tablet-gc-worker"),
+            tablet: Worker::new("tablet-worker"),
             async_write: StoreWriters::new(None),
             purge,
             background,
@@ -518,7 +518,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         self.async_write.shutdown();
         self.async_read.stop();
         self.pd.stop();
-        self.tablet_gc.stop();
+        self.tablet.stop();
         if let Some(w) = self.purge {
             w.stop();
         }
@@ -628,7 +628,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let tablet_gc_scheduler = workers.tablet_gc.start_with_timer(
+        let tablet_gc_scheduler = workers.tablet.start_with_timer(
             "tablet-worker",
             tablet::Runner::new(
                 tablet_registry.clone(),

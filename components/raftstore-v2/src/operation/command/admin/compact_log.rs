@@ -44,7 +44,7 @@ pub struct CompactLogContext {
     last_applying_index: u64,
     /// Tombstone tablets can only be destroyed when the tablet that replaces it
     /// is persisted. This is a list of tablet index that awaits to be
-    /// persisted. When persisted_apply is advanced, we need to notify tablet_gc
+    /// persisted. When persisted_apply is advanced, we need to notify tablet
     /// worker to destroy them.
     tombstone_tablets_wait_index: Vec<u64>,
 }
