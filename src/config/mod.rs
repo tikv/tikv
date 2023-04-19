@@ -1207,7 +1207,6 @@ pub struct DbConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub write_buffer_flush_oldest_first: bool,
-    pub write_buffer_flush_deadline: Option<ReadableDuration>,
     // Dangerous option only for programming use.
     #[online_config(skip)]
     #[serde(skip)]
@@ -1276,7 +1275,6 @@ impl Default for DbConfig {
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: false,
-            write_buffer_flush_deadline: None,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1348,9 +1346,6 @@ impl DbConfig {
                     limit.0 as usize,
                     self.write_buffer_stall_ratio,
                     self.write_buffer_flush_oldest_first,
-                    self.write_buffer_flush_deadline
-                        .map(|d| d.0)
-                        .unwrap_or(std::time::Duration::from_secs(u64::MAX)),
                 ))
             }),
         }
@@ -1951,14 +1946,6 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .next()
         {
             self.db.set_flush_oldest_first(f.1.into())?;
-        }
-
-        if let Some(deadline) = change
-            .drain_filter(|(name, _)| name == "write_buffer_flush_deadline")
-            .next()
-        {
-            let deadline: ReadableDuration = deadline.1.into();
-            self.db.set_flush_deadline(deadline.0)?;
         }
 
         if let Some(background_jobs_config) = change

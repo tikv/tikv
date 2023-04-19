@@ -109,15 +109,6 @@ impl DbOptions for RocksDbOptions {
         Ok(())
     }
 
-    fn set_flush_deadline(&mut self, f: std::time::Duration) -> Result<()> {
-        if let Some(m) = self.0.get_write_buffer_manager() {
-            m.set_flush_deadline(f);
-        } else {
-            return Err(box_err!("write buffer manager not found"));
-        }
-        Ok(())
-    }
-
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         self.0.set_titandb_options(opts.as_raw())
     }

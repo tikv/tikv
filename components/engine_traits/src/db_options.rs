@@ -22,7 +22,6 @@ pub trait DbOptions {
     fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()>;
     fn set_flush_size(&mut self, f: usize) -> Result<()>;
     fn set_flush_oldest_first(&mut self, f: bool) -> Result<()>;
-    fn set_flush_deadline(&mut self, f: std::time::Duration) -> Result<()>;
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions);
 }
 

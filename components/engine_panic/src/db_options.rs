@@ -52,10 +52,6 @@ impl DbOptions for PanicDbOptions {
         panic!()
     }
 
-    fn set_flush_deadline(&mut self, f: std::time::Duration) -> Result<()> {
-        panic!()
-    }
-
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         panic!()
     }

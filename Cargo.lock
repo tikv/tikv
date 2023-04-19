@@ -2940,13 +2940,13 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-<<<<<<< HEAD
 source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#da1c6ba757dcc026dc51242d97e39e904fd7d547"
-||||||| parent of 1631ed4aed (dynamic)
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#6880a73680eee349a4e63d205c0dc7ee789cfc0e"
-=======
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#313b2e485b23fae55854c322b78c062e7eaf89b4"
 dependencies = [
+ "bzip2-sys",
+ "cc",
+ "cmake",
+ "libc 0.2.139",
+ "libz-sys",
  "lz4-sys",
  "snappy-sys",
  "zstd-sys",
@@ -4866,13 +4866,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-<<<<<<< HEAD
 source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#da1c6ba757dcc026dc51242d97e39e904fd7d547"
-||||||| parent of 1631ed4aed (dynamic)
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#6880a73680eee349a4e63d205c0dc7ee789cfc0e"
-=======
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=memtable-dynamic#313b2e485b23fae55854c322b78c062e7eaf89b4"
->>>>>>> 1631ed4aed (dynamic)
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

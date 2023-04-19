@@ -16,7 +16,6 @@ pub trait ConfigurableDb {
     fn set_rate_limiter_auto_tuned(&self, auto_tuned: bool) -> ConfigRes;
     fn set_flush_size(&self, f: usize) -> ConfigRes;
     fn set_flush_oldest_first(&self, f: bool) -> ConfigRes;
-    fn set_flush_deadline(&self, f: std::time::Duration) -> ConfigRes;
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes;
 }
 
@@ -60,11 +59,6 @@ impl ConfigurableDb for RocksEngine {
     fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
         let mut opt = self.get_db_options();
         opt.set_flush_oldest_first(f).map_err(Box::from)
-    }
-
-    fn set_flush_deadline(&self, f: std::time::Duration) -> ConfigRes {
-        let mut opt = self.get_db_options();
-        opt.set_flush_deadline(f).map_err(Box::from)
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes {
@@ -165,17 +159,6 @@ impl ConfigurableDb for TabletRegistry<RocksEngine> {
         loop_registry(self, |cache| {
             if let Some(latest) = cache.latest() {
                 latest.set_flush_oldest_first(f)?;
-                Ok(false)
-            } else {
-                Ok(true)
-            }
-        })
-    }
-
-    fn set_flush_deadline(&self, f: std::time::Duration) -> ConfigRes {
-        loop_registry(self, |cache| {
-            if let Some(latest) = cache.latest() {
-                latest.set_flush_deadline(f)?;
                 Ok(false)
             } else {
                 Ok(true)
