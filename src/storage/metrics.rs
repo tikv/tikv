@@ -531,12 +531,6 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 21).unwrap()
     )
     .unwrap();
-    pub static ref KV_COMMAND_DELTA_HISTOGRAM_VEC: Histogram = register_histogram!(
-        "tikv_scheduler_kv_command_delta",
-        "Bucketed histogram of delta of a kv command",
-        linear_buckets(0.0, 1.0, 21).unwrap()
-    )
-    .unwrap();
     pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_STATIC: KReadVec =
         auto_flush_from!(KV_COMMAND_KEYREAD_HISTOGRAM_VEC, KReadVec);
     pub static ref KV_COMMAND_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(

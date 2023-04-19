@@ -29,7 +29,6 @@ pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
     command_keyread_histogram_vec: LocalHistogramVec,
     local_write_stats: WriteStats,
-    delta_vec: LocalHistogram,
 }
 
 thread_local! {
@@ -38,7 +37,6 @@ thread_local! {
             local_scan_details: HashMap::default(),
             command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_write_stats:WriteStats::default(),
-            delta_vec: KV_COMMAND_DELTA_HISTOGRAM_VEC.local(),
         }
     );
 
@@ -286,7 +284,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
             }
         }
         m.command_keyread_histogram_vec.flush();
-        m.delta_vec.flush();
 
         // Report PD metrics
         if !m.local_write_stats.is_empty() {
