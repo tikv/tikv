@@ -14,7 +14,6 @@ use engine_traits::PerfLevel;
 use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
-use resource_control::ResourceGroupManager;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
@@ -71,8 +70,6 @@ pub struct Endpoint<E: Engine> {
 
     quota_limiter: Arc<QuotaLimiter>,
 
-    resource_manager: Option<Arc<ResourceGroupManager>>,
-
     _phantom: PhantomData<E>,
 }
 
@@ -85,7 +82,6 @@ impl<E: Engine> Endpoint<E> {
         concurrency_manager: ConcurrencyManager,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
-        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress
         // to avoid using too much memory. However, if there are a number of large
@@ -109,7 +105,6 @@ impl<E: Engine> Endpoint<E> {
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             quota_limiter,
-            resource_manager,
             _phantom: Default::default(),
         }
     }
@@ -496,9 +491,7 @@ impl<E: Engine> Endpoint<E> {
             .get_resource_group_name()
             .as_bytes()
             .to_owned();
-        if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_penalty(&resource_control_ctx);
-        }
+      
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -738,10 +731,7 @@ impl<E: Engine> Endpoint<E> {
             .get_resource_group_name()
             .as_bytes()
             .to_owned();
-        if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_penalty(&resource_control_ctx);
-        }
-
+     
         let key_ranges = req_ctx
             .ranges
             .iter()

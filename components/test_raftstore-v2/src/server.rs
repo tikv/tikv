@@ -504,7 +504,6 @@ impl<EK: KvEngine> ServerCluster<EK> {
             concurrency_manager.clone(),
             res_tag_factory,
             quota_limiter,
-            resource_manager.clone(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
@@ -544,6 +543,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 None,
                 debug_thread_pool.clone(),
                 health_service.clone(),
+                resource_manager.clone(),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));

@@ -11,6 +11,7 @@ use futures::{
     sink::SinkExt,
     stream::{StreamExt, TryStreamExt},
 };
+use resource_control::ResourceGroupManager;
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
@@ -86,6 +87,8 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
 
     // Go `server::Config` to get more details.
     reject_messages_on_memory_ratio: f64,
+
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -108,6 +111,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             grpc_thread_load: self.grpc_thread_load.clone(),
             proxy: self.proxy.clone(),
             reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
+            resource_manager: self.resource_manager.clone(),
         }
     }
 }
@@ -126,6 +130,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         enable_req_batch: bool,
         proxy: Proxy,
         reject_messages_on_memory_ratio: f64,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
         Service {
             store_id,
@@ -139,6 +144,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             grpc_thread_load,
             proxy,
             reject_messages_on_memory_ratio,
+            resource_manager,
         }
     }
 
@@ -177,9 +183,12 @@ macro_rules! handle_request {
             let begin_instant = Instant::now();
 
             let source = req.mut_context().take_request_source();
-            let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
+            let resource_control_ctx = req.get_context().get_resource_control_context();
+            if let Some(resource_manager) = &self.resource_manager {
+                resource_manager.consume_penalty(&resource_control_ctx);
+            }
             GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_group_name])
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
                     .inc();
             let resp = $future_name(&self.storage, req);
             let task = async move {
@@ -456,6 +465,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.mut_context().take_request_source();
+        let resource_control_ctx = req.get_context().get_resource_control_context();
+        if let Some(resource_manager) = &self.resource_manager {
+            resource_manager.consume_penalty(&resource_control_ctx);
+        }
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {

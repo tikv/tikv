@@ -110,7 +110,6 @@ pub fn init_data_with_details<E: Engine>(
         cm,
         ResourceTagFactory::new_for_test(),
         limiter.clone(),
-        None,
     );
     (store, copr, limiter)
 }
