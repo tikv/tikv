@@ -77,7 +77,7 @@ use crate::{
         config::Config,
         fsm::{
             create_apply_batch_system,
-            life::{build_peer_destroyed_report, handle_tombstone_message_on_tiflash_proxy},
+            life::handle_tombstone_message_on_tiflash_proxy,
             metrics::*,
             peer::{
                 maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,

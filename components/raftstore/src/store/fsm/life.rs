@@ -4,11 +4,7 @@
 //! are shared with raftstore and raftstore v2.
 
 use engine_traits::{KvEngine, CF_RAFT};
-use kvproto::{
-    metapb,
-    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
-};
-use tikv_util::store::find_peer;
+use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 
 use crate::store::util::is_epoch_stale;
 
@@ -69,7 +65,6 @@ pub fn handle_tombstone_message_on_tiflash_proxy<EK: KvEngine>(
     mut msg: RaftMessage,
 ) -> Option<RaftMessage> {
     let region_id = msg.get_region_id();
-    let to_peer = msg.get_to_peer();
     let region_state_key = keys::region_state_key(region_id);
     let local_state: RegionLocalState = match engine.get_msg_cf(CF_RAFT, &region_state_key) {
         Ok(Some(s)) => s,
@@ -85,14 +80,11 @@ pub fn handle_tombstone_message_on_tiflash_proxy<EK: KvEngine>(
         return None;
     }
 
-    // In v2, we rely on leader to confirm destroy actively, so here
-    // skip handling gc for simplicity.
+    // In v2, we rely on leader to confirm destroy actively.
     let local_epoch = local_state.get_region().get_region_epoch();
     // The region in this peer is already destroyed
-    if is_epoch_stale(msg.get_region_epoch(), local_epoch) {
-        return build_peer_destroyed_report(&mut msg);
-    }
-    if let Some(local_peer) = find_peer(local_state.get_region(), store_id) && to_peer.id <= local_peer.get_id() {
+    if msg.get_region_epoch() == local_epoch || is_epoch_stale(msg.get_region_epoch(), local_epoch)
+    {
         return build_peer_destroyed_report(&mut msg);
     }
 
