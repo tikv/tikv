@@ -131,14 +131,9 @@ pub mod kv {
         fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
             let tombstone_path = path.with_extension(TOMBSTONE_SUFFIX);
             let _ = std::fs::remove_dir_all(&tombstone_path);
-            let keys = if let Some(m) = &self.db_opt.key_manager {
-                m.collect_keys_in_dir(path)?
-            } else {
-                Vec::new()
-            };
             std::fs::rename(path, &tombstone_path)?;
             if let Some(m) = &self.db_opt.key_manager {
-                m.bulk_delete_file(keys)?;
+                m.remove_dir(path, Some(&tombstone_path))?;
             }
             std::fs::remove_dir_all(tombstone_path)?;
             Ok(())

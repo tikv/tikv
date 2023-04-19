@@ -125,14 +125,9 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         if checkpointer_path.exists() {
             // TODO: make `delete_snapshot` return error so we can use it here.
             // Remove the old checkpoint directly.
-            let keys = if let Some(m) = &self.snap_mgr().key_manager() {
-                m.collect_keys_in_dir(&checkpointer_path)?
-            } else {
-                Vec::new()
-            };
-            file_system::trash_dir_all(&checkpointer_path, move || {
+            file_system::trash_dir_all(&checkpointer_path, |renamed| {
                 if let Some(m) = &self.snap_mgr().key_manager() {
-                    m.bulk_delete_file(keys)?;
+                    m.remove_dir(&checkpointer_path, Some(renamed))?;
                 }
                 Ok(())
             })?;

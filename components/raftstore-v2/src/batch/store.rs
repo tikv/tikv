@@ -394,15 +394,11 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         Ok(regions)
     }
 
+    #[inline]
     fn remove_dir(&self, p: &Path) -> Result<()> {
-        let keys = if let Some(m) = &self.key_manager {
-            m.collect_keys_in_dir(p)?
-        } else {
-            Vec::new()
-        };
         file_system::remove_dir_all(p)?;
         if let Some(m) = &self.key_manager {
-            m.bulk_delete_file(keys)?;
+            m.remove_dir(p, None)?;
         }
         Ok(())
     }

@@ -770,20 +770,17 @@ impl DataKeyManager {
         Ok(Some(encrypted_file))
     }
 
-    /// Used in combo with `bulk_delete_file` to clean up a directory. User
-    /// first collect keys under the directory, then delete the directory from
-    /// file system, finally bulk delete the keys.
-    /// Another way to atomically delete a directory is to rename it first. In
-    /// this case user should delete keys right after the renaming. If we do it
-    /// after deleting the directory and the deletion panics, we won't be able
-    /// to collect keys with the original path again.
-    pub fn collect_keys_in_dir(&self, p: &Path) -> IoResult<Vec<String>> {
-        debug_assert!(p.is_dir());
-        if !p.exists() {
-            return Ok(Vec::new());
+    /// Removes data keys under the directory `logical`. If `physical` is
+    /// present, if means the `logical` directory is already physically renamed
+    /// to `physical`.
+    pub fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
+        let scan = physical.unwrap_or(logical);
+        debug_assert!(scan.is_dir());
+        if !scan.exists() {
+            return Ok(());
         }
-        let mut r = Vec::with_capacity(16);
-        for e in walkdir::WalkDir::new(p).into_iter() {
+        let mut iter = walkdir::WalkDir::new(scan).into_iter().peekable();
+        while let Some(e) = iter.next() {
             let e = e?;
             if e.path_is_symlink() {
                 return Err(io::Error::new(
@@ -791,18 +788,18 @@ impl DataKeyManager {
                     format!("unexpected symbolic link: {}", e.path().display()),
                 ));
             }
-            if e.path().is_dir() {
-                continue;
+            let fname = e.path().as_os_str().to_str().unwrap();
+            let sync = iter.peek().is_none();
+            if let Some(p) = physical {
+                let sub = fname
+                    .strip_prefix(p.as_os_str().to_str().unwrap())
+                    .unwrap()
+                    .trim_start_matches('/');
+                self.dicts
+                    .delete_file(logical.join(sub).as_os_str().to_str().unwrap(), sync)?;
+            } else {
+                self.dicts.delete_file(fname, sync)?;
             }
-            r.push(e.path().as_os_str().to_str().unwrap().to_owned());
-        }
-        Ok(r)
-    }
-
-    pub fn bulk_delete_file(&self, files: Vec<String>) -> IoResult<()> {
-        let mut iter = files.into_iter().peekable();
-        while let Some(fname) = iter.next() {
-            self.dicts.delete_file(&fname, iter.peek().is_none())?;
         }
         Ok(())
     }
