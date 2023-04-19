@@ -343,9 +343,9 @@ impl<EK: KvEngine> Runner<EK> {
         // where the split will be proposed again with extra flag.
         if let Some(cb) = cb {
             let logger = self.logger.clone();
+            let now = Instant::now();
             self.background_pool
                 .spawn(async move {
-                    let now = Instant::now();
                     // sync flush for leader to let the flush happend before later checkpoint.
                     tablet.flush_cfs(DATA_CFS, true).unwrap();
                     let elapsed = now.saturating_elapsed();
