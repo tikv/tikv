@@ -1312,10 +1312,9 @@ impl DbConfig {
                 self.writecf.disable_write_stall = true;
                 self.lockcf.disable_write_stall = true;
                 self.raftcf.disable_write_stall = true;
-                // Effectively disable flush by size.
-                self.defaultcf.write_buffer_size = ReadableSize::gb(1024);
-                self.writecf.write_buffer_size = ReadableSize::gb(1024);
-                self.lockcf.write_buffer_size = ReadableSize::gb(1024);
+                // Make it faster to reach write-buffer-limit.
+                self.defaultcf.write_buffer_size = ReadableSize::mb(512);
+                self.writecf.write_buffer_size = ReadableSize::mb(512);
                 // To keep raft logs size small and avoid frequent raft-engine rewrite.
                 // This setting will produce more L0 table files and hurt read performance (20%
                 // in avg seek latency). But it improves write performance more. And once write
