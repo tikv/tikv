@@ -151,9 +151,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // the follower so that they can flush memtalbes in advance too.
                         //
                         // 2. When the task finishes, it will propose a batch split with
-                        // `SPLIT_SECOND_PHASE` flag.
+                        // `PRE_FLUSH_FINISHED` flag.
                         if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
-                            .contains(WriteBatchFlags::SPLIT_SECOND_PHASE)
+                            .contains(WriteBatchFlags::PRE_FLUSH_FINISHED)
                         {
                             if self.tablet_being_flushed() {
                                 return;
@@ -183,13 +183,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             let logger = self.logger.clone();
                             let on_flush_finish = move || {
                                 req.mut_header()
-                                    .set_flags(WriteBatchFlags::SPLIT_SECOND_PHASE.bits());
+                                    .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
                                 if let Err(e) = mailbox
                                     .try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
                                 {
                                     error!(
                                         logger,
-                                        "send split request fail in the second phase";
+                                        "send split request fail after pre-flush finished";
                                         "err" => ?e,
                                     );
                                 }
@@ -210,6 +210,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 )
                             }
 
+                            // Notify followers to flush their relevant memtables
                             let peers = self.region().get_peers().to_vec();
                             for p in peers {
                                 if p == *self.peer()
@@ -239,7 +240,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             self.logger,
                             "Propose split";
                         );
-
                         self.set_tablet_being_flushed(false);
                         self.propose_split(ctx, req)
                     }

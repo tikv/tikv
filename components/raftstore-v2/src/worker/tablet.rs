@@ -337,6 +337,9 @@ impl<EK: KvEngine> Runner<EK> {
             .get(region_id)
             .map(|mut cache| cache.latest().cloned()) else {return};
 
+        // The callback `on_flush_finish` being some means it's the task sent from
+        // leader, we should sync flush memtables and call it after the flush complete
+        // where the split will be proposed again with extra flag.
         if let Some(on_flush_finish) = on_flush_finish {
             let logger = self.logger.clone();
             self.background_pool
