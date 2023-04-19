@@ -49,7 +49,7 @@ use crate::{
     operation::{command::temp_split_path, SharedReadTablet},
     raft::{Apply, Peer, Storage},
     router::ApplyTask,
-    worker::tablet_gc,
+    worker::tablet,
     Result, StoreContext,
 };
 
@@ -282,8 +282,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if self.remove_tombstone_tablets(snapshot_index) {
                 let _ = ctx
                     .schedulers
-                    .tablet_gc
-                    .schedule(tablet_gc::Task::destroy(region_id, snapshot_index));
+                    .tablet
+                    .schedule(tablet::Task::destroy(region_id, snapshot_index));
             }
         }
     }

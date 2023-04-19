@@ -1387,6 +1387,9 @@ struct SnapManagerCore {
 pub struct SnapManager {
     core: SnapManagerCore,
     max_total_size: Arc<AtomicU64>,
+
+    // only used to receive snapshot from v2
+    tablet_snap_manager: TabletSnapManager,
 }
 
 impl Clone for SnapManager {
@@ -1394,6 +1397,7 @@ impl Clone for SnapManager {
         SnapManager {
             core: self.core.clone(),
             max_total_size: self.max_total_size.clone(),
+            tablet_snap_manager: self.tablet_snap_manager.clone(),
         }
     }
 }
@@ -1433,6 +1437,7 @@ impl SnapManager {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -1620,7 +1625,9 @@ impl SnapManager {
     ///
     /// NOTE: don't call it in raftstore thread.
     pub fn get_total_snap_size(&self) -> Result<u64> {
-        self.core.get_total_snap_size()
+        let size_v1 = self.core.get_total_snap_size()?;
+        let size_v2 = self.tablet_snap_manager.total_snap_size().unwrap_or(0);
+        Ok(size_v1 + size_v2)
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
@@ -1754,6 +1761,14 @@ impl SnapManager {
 
     pub fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
         self.core.delete_snapshot(key, snap, check_entry)
+    }
+
+    pub fn tablet_snap_manager(&self) -> &TabletSnapManager {
+        &self.tablet_snap_manager
+    }
+
+    pub fn limiter(&self) -> &Limiter {
+        &self.core.limiter
     }
 }
 
@@ -1896,9 +1911,15 @@ impl SnapManagerBuilder {
         } else {
             u64::MAX
         };
+        let path = path.into();
+        assert!(!path.is_empty());
+        let mut path_v2 = path.clone();
+        path_v2.push_str("_v2");
+        let tablet_snap_mgr = TabletSnapManager::new(&path_v2).unwrap();
+
         let mut snapshot = SnapManager {
             core: SnapManagerCore {
-                base: path.into(),
+                base: path,
                 registry: Default::default(),
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
@@ -1910,6 +1931,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
+            tablet_snap_manager: tablet_snap_mgr,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
@@ -1980,7 +2002,6 @@ pub struct TabletSnapManager {
 
 impl TabletSnapManager {
     pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
-        // Initialize the directory if it doesn't exist.
         let path = path.into();
         if !path.exists() {
             file_system::create_dir_all(&path)?;
@@ -1991,6 +2012,7 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
+        file_system::clean_up_dir(&path, SNAP_GEN_PREFIX)?;
         file_system::clean_up_trash(&path)?;
         Ok(Self {
             base: path,
@@ -2118,7 +2140,7 @@ impl TabletSnapManager {
 #[cfg(test)]
 pub mod tests {
     use std::{
-        cmp,
+        cmp, fs,
         io::{self, Read, Seek, SeekFrom, Write},
         path::{Path, PathBuf},
         sync::{
@@ -3015,6 +3037,7 @@ pub mod tests {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build::<_>(snapfiles_path.path().to_str().unwrap());
+        snap_mgr.init().unwrap();
         let snapshot = engine.kv.snapshot();
 
         // Add an oldest snapshot for receiving.
@@ -3112,9 +3135,12 @@ pub mod tests {
         assert!(mgr.stats().stats.is_empty());
 
         // filter out the total duration seconds less than one sencond.
-        mgr.begin_snapshot(key.clone(), start, 1);
-        mgr.finish_snapshot(key, start);
+        let path = mgr.tablet_gen_path(&key);
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(path.exists());
+        mgr.delete_snapshot(&key);
         assert_eq!(mgr.stats().stats.len(), 0);
+        assert!(!path.exists());
     }
 
     #[test]
@@ -3150,5 +3176,47 @@ pub mod tests {
                 .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
+    }
+
+    #[test]
+    fn test_init() {
+        let builder = SnapManagerBuilder::default();
+        let snap_dir = Builder::new()
+            .prefix("test_snap_path_does_not_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path().join("snap");
+        let snap_mgr = builder.build(path.as_path().to_str().unwrap());
+        snap_mgr.init().unwrap();
+
+        assert!(path.exists());
+        let mut path = path.as_path().to_str().unwrap().to_string();
+        path.push_str("_v2");
+        assert!(Path::new(&path).exists());
+
+        let builder = SnapManagerBuilder::default();
+        let snap_dir = Builder::new()
+            .prefix("test_snap_path_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path();
+        let snap_mgr = builder.build(path.to_str().unwrap());
+        snap_mgr.init().unwrap();
+
+        let mut path = path.to_str().unwrap().to_string();
+        path.push_str("_v2");
+        assert!(Path::new(&path).exists());
+
+        let builder = SnapManagerBuilder::default();
+        let snap_dir = Builder::new()
+            .prefix("test_tablet_snap_path_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path().join("snap/v2");
+        fs::create_dir_all(path).unwrap();
+        let path = snap_dir.path().join("snap");
+        let snap_mgr = builder.build(path.to_str().unwrap());
+        snap_mgr.init().unwrap();
+        assert!(path.exists());
     }
 }

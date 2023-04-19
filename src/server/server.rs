@@ -13,7 +13,7 @@ use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
-use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
+use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager, ENGINE, TIFLASH};
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -70,6 +70,7 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     // For sending/receiving snapshots.
     snap_mgr: Either<SnapManager, TabletSnapManager>,
     snap_worker: LazyWorker<SnapTask>,
+    tiflash_engine: bool,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
@@ -178,6 +179,12 @@ where
         let trans = ServerTransport::new(raft_client);
         health_service.set_serving_status("", ServingStatus::NotServing);
 
+        let tiflash_engine = cfg
+            .value()
+            .labels
+            .iter()
+            .any(|entry| entry.0 == ENGINE && entry.1 == TIFLASH);
+
         let svr = Server {
             env: Arc::clone(&env),
             builder_or_server: Some(builder),
@@ -193,6 +200,7 @@ where
             debug_thread_pool,
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
+            tiflash_engine,
         };
 
         Ok(svr)
@@ -262,6 +270,7 @@ where
                     self.raft_router.clone(),
                     security_mgr,
                     cfg,
+                    self.tiflash_engine,
                 );
                 self.snap_worker.start(snap_runner);
             }
@@ -570,6 +579,7 @@ mod tests {
         );
         let addr = Arc::new(Mutex::new(None));
         let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
+        let path = tempfile::TempDir::new().unwrap();
         let mut server = Server::new(
             mock_store_id,
             &cfg,
@@ -581,7 +591,7 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            Either::Left(SnapManager::new("")),
+            Either::Left(SnapManager::new(path.path().to_str().unwrap())),
             gc_worker,
             check_leader_scheduler,
             env,
