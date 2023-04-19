@@ -813,7 +813,7 @@ mod tests {
         let mut encoder = SimpleWriteEncoder::with_capacity(512);
         encoder.ingest(vec![SstMeta::default(); 5]);
         let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
-            header.clone(),
+            header,
             encoder.encode(),
             512,
             false,

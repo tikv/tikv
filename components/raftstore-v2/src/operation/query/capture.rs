@@ -344,40 +344,41 @@ mod test {
         // put (k1, v1);
         // capture_apply;
         // put (k2, v2);
-        let mut apply_tasks = Vec::new();
-        apply_tasks.push(ApplyTask::CommittedEntries(CommittedEntries {
-            entry_and_proposals: vec![(
-                new_put_entry(
-                    region.id,
-                    region.get_region_epoch().clone(),
-                    b"k1",
-                    b"v1",
-                    5,
-                    6,
-                ),
-                vec![],
-            )],
-            committed_time: Instant::now(),
-        }));
-        apply_tasks.push(ApplyTask::CaptureApply(CaptureChange {
-            observer: ChangeObserver::from_cdc(region.id, ObserveHandle::new()),
-            region_epoch: region.get_region_epoch().clone(),
-            snap_cb,
-        }));
-        apply_tasks.push(ApplyTask::CommittedEntries(CommittedEntries {
-            entry_and_proposals: vec![(
-                new_put_entry(
-                    region.id,
-                    region.get_region_epoch().clone(),
-                    b"k2",
-                    b"v2",
-                    5,
-                    7,
-                ),
-                vec![],
-            )],
-            committed_time: Instant::now(),
-        }));
+        let apply_tasks = vec![
+            ApplyTask::CommittedEntries(CommittedEntries {
+                entry_and_proposals: vec![(
+                    new_put_entry(
+                        region.id,
+                        region.get_region_epoch().clone(),
+                        b"k1",
+                        b"v1",
+                        5,
+                        6,
+                    ),
+                    vec![],
+                )],
+                committed_time: Instant::now(),
+            }),
+            ApplyTask::CaptureApply(CaptureChange {
+                observer: ChangeObserver::from_cdc(region.id, ObserveHandle::new()),
+                region_epoch: region.get_region_epoch().clone(),
+                snap_cb,
+            }),
+            ApplyTask::CommittedEntries(CommittedEntries {
+                entry_and_proposals: vec![(
+                    new_put_entry(
+                        region.id,
+                        region.get_region_epoch().clone(),
+                        b"k2",
+                        b"v2",
+                        5,
+                        7,
+                    ),
+                    vec![],
+                )],
+                committed_time: Instant::now(),
+            }),
+        ];
 
         for task in apply_tasks {
             match task {
