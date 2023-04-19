@@ -585,7 +585,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
-        *self.abnormal_peer_context_mut().down_peers() = down_peer_ids;
+        *self.abnormal_peer_context_mut().down_peers_mut() = down_peer_ids;
         // TODO: `refill_disk_full_peers`
         down_peers
     }
