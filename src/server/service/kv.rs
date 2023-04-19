@@ -469,6 +469,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(&resource_control_ctx);
         }
+        GRPC_RESOURCE_GROUP_COUNTER_VEC
+            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .inc();
+
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
@@ -503,6 +507,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(&resource_control_ctx);
         }
+        GRPC_RESOURCE_GROUP_COUNTER_VEC
+            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .inc();
+
         let begin_instant = Instant::now();
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
@@ -588,6 +596,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(&resource_control_ctx);
         }
+        GRPC_RESOURCE_GROUP_COUNTER_VEC
+            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .inc();
 
         let mut stream = self
             .copr
@@ -841,8 +852,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut sink: DuplexSink<BatchCommandsResponse>,
     ) {
         forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
-        let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
 
+        let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
         let ctx = Arc::new(ctx);
         let peer = ctx.peer();
         let storage = self.storage.clone();
@@ -850,6 +861,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
+        let resource_manager = self.resource_manager.clone();
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -866,6 +878,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     id,
                     req,
                     &tx,
+                    &resource_manager,
                 );
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
@@ -1075,6 +1088,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     id: u64,
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
+    resource_manager: &Option<Arc<ResourceGroupManager>>,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1096,10 +1110,13 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default());
                 },
                 Some(batch_commands_request::request::Cmd::Get(mut req)) => {
-                    let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
+                    let resource_control_ctx = req.get_context().get_resource_control_context();
+                    if let Some(resource_manager) = resource_manager {
+                        resource_manager.consume_penalty(&resource_control_ctx);
+                    }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                            .with_label_values(&[resource_group_name])
-                            .inc();
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
@@ -1114,10 +1131,13 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
-                    let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
+                    let resource_control_ctx = req.get_context().get_resource_control_context();
+                    if let Some(resource_manager) = resource_manager {
+                        resource_manager.consume_penalty(&resource_control_ctx);
+                    }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                            .with_label_values(&[resource_group_name])
-                            .inc();
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
@@ -1132,10 +1152,13 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
-                    let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
+                    let resource_control_ctx = req.get_context().get_resource_control_context();
+                    if let Some(resource_manager) = resource_manager {
+                        resource_manager.consume_penalty(&resource_control_ctx);
+                    }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                            .with_label_values(&[resource_group_name])
-                            .inc();
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
@@ -1163,10 +1186,13 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
-                    let resource_group_name = req.get_context().get_resource_control_context().get_resource_group_name();
+                    let resource_control_ctx = req.get_context().get_resource_control_context();
+                    if let Some(resource_manager) = resource_manager {
+                        resource_manager.consume_penalty(&resource_control_ctx);
+                    }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                            .with_label_values(&[resource_group_name])
-                            .inc();
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = $future_fn($($arg,)* req)
