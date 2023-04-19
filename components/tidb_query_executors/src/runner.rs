@@ -21,8 +21,8 @@ use tidb_query_datatype::{
 // benchmarks.
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 use tikv_util::{
+    corr_debug,
     deadline::Deadline,
-    debug,
     metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
     quota_limiter::QuotaLimiter,
 };
@@ -657,7 +657,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.deadline.check()?;
 
         let mut result = self.out_most_executor.next_batch(batch_size).await;
-        debug!("internal handle cop request";
+        corr_debug!("internal handle cop request";
             "start_ts" => ctx.debug_info.start_ts,
             "connection id" => ctx.debug_info.connection_id,
         );

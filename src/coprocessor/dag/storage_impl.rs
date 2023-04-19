@@ -93,7 +93,7 @@ impl<S: Store> Storage for TikvStorage<S> {
 
         let key_cloned = key.clone();
         let res = Ok(value.map(move |v| (key, v)));
-        debug!("storage get";
+        corr_debug!("storage get";
             "start_ts" => debug_info.start_ts,
             "connection id" => debug_info.connection_id,
             "key" => log_wrappers::Value::key(&key_cloned),

@@ -11,7 +11,7 @@ use tidb_query_common::{
     Result,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
-use tikv_util::debug;
+use tikv_util::corr_debug;
 use tipb::{ColumnInfo, FieldType};
 
 use crate::interface::*;
@@ -205,7 +205,7 @@ impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecuto
             Ok(false) => Ok(BatchExecIsDrain::Remain),
         };
 
-        debug!("ScanExecutor next_batch";
+        corr_debug!("ScanExecutor next_batch";
             "logical_rows" => ?logical_rows,
             "is_drained" => ?is_drained,
             "warnings" => ?self.imp.mut_context().take_warnings()

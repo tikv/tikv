@@ -230,10 +230,6 @@ pub enum Scanner<S: Snapshot> {
 impl<S: Snapshot> StoreScanner for Scanner<S> {
     fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
         fail_point!("scanner_next");
-
-        debug!("scanner next";
-
-        );
         let (res, debug_info) = match self {
             Scanner::Forward(scanner) => (Ok(scanner.read_next()?), scanner.debug_info()),
             Scanner::Backward(scanner) => (Ok(scanner.read_next()?), scanner.debug_info()),
@@ -243,14 +239,14 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
             opt.as_ref()
                 .map(|(k, v)| (log_wrappers::Value::key(k.as_encoded()), v))
         }) {
-            debug!("scanner next result";
+            corr_debug!("scanner next result";
                 "start_ts" => debug_info.start_ts,
                 "connection id" => debug_info.connection_id,
                 "key" => key,
                 "value" => ?value,
             );
         } else {
-            debug!("scanner next result";
+            corr_debug!("scanner next result";
                 "start_ts" => debug_info.start_ts,
                 "connection id" => debug_info.connection_id,
                 "result" => ?res,

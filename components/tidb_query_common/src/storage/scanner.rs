@@ -4,7 +4,7 @@ use std::{marker::PhantomData, time::Duration};
 
 use api_version::KvFormat;
 use kvproto::kvrpcpb::DebugInfo;
-use tikv_util::{debug, time::Instant};
+use tikv_util::{corr_debug, time::Instant};
 use yatp::task::future::reschedule;
 
 use super::{range::*, ranges_iter::*, OwnedKvPair, Storage};
@@ -158,7 +158,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     if self.is_scanned_range_aware {
                         self.update_working_range_end_key();
                     }
-                    debug!("scanner next_opt drained";
+                    corr_debug!("scanner next_opt drained";
                         "start_ts" => self.debug_info.start_ts,
                         "connection id" => self.debug_info.connection_id,
                         "range" => ?range,
@@ -166,7 +166,7 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
                     return Ok(None); // drained
                 }
             };
-            debug!("scanner next_opt";
+            corr_debug!("scanner next_opt";
                 "start_ts" => self.debug_info.start_ts,
                 "connection id" => self.debug_info.connection_id,
                 "range" => ?range,

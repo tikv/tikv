@@ -448,7 +448,7 @@ impl<E: Engine> Endpoint<E> {
         let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
         if tracker.req_ctx.debug_info.connection_id > 0 {
-            debug!("unary coprocessor request";
+            corr_debug!("unary coprocessor request";
                 "connection id" => tracker.req_ctx.debug_info.connection_id,
                 "start_ts" => tracker.req_ctx.debug_info.start_ts,
                 "ranges" => ?tracker.req_ctx.ranges,
