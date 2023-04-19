@@ -346,13 +346,15 @@ impl Suite {
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let resolver = LeadershipResolver::new(
             id,
+            cluster.pd_client.clone(),
             Arc::clone(&self.env),
+            Arc::clone(&sim.security_mgr),
             cluster.store_metas[&id]
                 .lock()
                 .unwrap()
                 .region_read_progress
                 .clone(),
-            Arc::clone(&sim.security_mgr),
+            Duration::from_secs(60),
         );
         let endpoint = Endpoint::new(
             id,
