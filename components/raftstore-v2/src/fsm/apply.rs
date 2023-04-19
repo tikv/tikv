@@ -11,7 +11,10 @@ use engine_traits::{FlushState, KvEngine, TabletRegistry};
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
-use raftstore::store::{Config, ReadTask};
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{Config, ReadTask},
+};
 use slog::Logger;
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -79,6 +82,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         applied_term: u64,
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
+        coprocessor_host: CoprocessorHost<EK>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
@@ -94,6 +98,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             applied_term,
             buckets,
             sst_importer,
+            coprocessor_host,
             logger,
         );
         (

@@ -872,7 +872,10 @@ mod test {
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
         raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raftstore::store::{cmd_resp::new_error, Config};
+    use raftstore::{
+        coprocessor::CoprocessorHost,
+        store::{cmd_resp::new_error, Config},
+    };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
@@ -1020,6 +1023,7 @@ mod test {
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let (_tmp_dir, importer) = create_tmp_importer();
+        let host = CoprocessorHost::<KvTestEngine>::default();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -1037,6 +1041,7 @@ mod test {
             5,
             None,
             importer,
+            host,
             logger.clone(),
         );
 
