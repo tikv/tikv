@@ -142,17 +142,20 @@ impl ResourceGroupManager {
 
     pub fn consume_penalty(&self, ctx: &ResourceControlContext) {
         for controller in self.registry.lock().unwrap().iter() {
-            if controller.is_read {
-                controller.consume(
-                    ctx.resource_group_name.as_bytes(),
-                    ResourceConsumeType::CpuTime(Duration::from_nanos((ctx.get_penalty().total_cpu_time_ms * 1_000_000.0) as u64)),
-                );
-            } else {
-                controller.consume(
-                    ctx.resource_group_name.as_bytes(),
-                    ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
-                );
-            }
+            // FIXME: Should consume CPU time for read controller and write bytes for write
+            // controller, once CPU process time of scheduler worker is tracked. Currently,
+            // we consume write bytes for read controller as the
+            // order of magnitude of CPU time and write bytes is similar.
+            controller.consume(
+                ctx.resource_group_name.as_bytes(),
+                ResourceConsumeType::CpuTime(Duration::from_nanos(
+                    (ctx.get_penalty().total_cpu_time_ms * 1_000_000.0) as u64,
+                )),
+            );
+            controller.consume(
+                ctx.resource_group_name.as_bytes(),
+                ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
+            );
         }
     }
 }
