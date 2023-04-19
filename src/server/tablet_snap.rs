@@ -389,7 +389,6 @@ pub(crate) async fn recv_snap_files<'a>(
     mut stream: impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin,
     sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
     limiter: Limiter,
-    snap_mgr_v1: Option<SnapManager>,
 ) -> Result<RecvTabletSnapContext<'a>> {
     let head = stream
         .next()
@@ -428,13 +427,6 @@ pub(crate) async fn recv_snap_files<'a>(
     let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;
 
-    // some means we are in raftstore-v1 config and received a tablet snapshot from
-    // raftstore-v2. Now, it can only happen in tiflash node within a raftstore-v2
-    // cluster.
-    if let Some(snap_mgr_v1) = snap_mgr_v1 {
-        snap_mgr_v1.gen_empty_snapshot_for_tablet_snapshot(&context.key)?;
-    }
-
     Ok(context)
 }
 
@@ -449,16 +441,20 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
 ) -> Result<()> {
     let stream = stream.map_err(Error::from);
     let mut sink = sink;
-    let res = recv_snap_files(
-        &snap_mgr,
-        cache_builder,
-        stream,
-        &mut sink,
-        limiter,
-        snap_mgr_v1,
-    )
-    .await
-    .and_then(|context| context.finish(raft_router));
+    let res = recv_snap_files(&snap_mgr, cache_builder, stream, &mut sink, limiter)
+        .await
+        .and_then(|context| {
+            // some means we are in raftstore-v1 config and received a tablet snapshot from
+            // raftstore-v2. Now, it can only happen in tiflash node within a raftstore-v2
+            // cluster.
+            if let Some(snap_mgr_v1) = snap_mgr_v1 {
+                snap_mgr_v1.gen_empty_snapshot_for_tablet_snapshot(
+                    &context.key,
+                    context.io_type == IoType::LoadBalance,
+                )?;
+            }
+            context.finish(raft_router)
+        });
     match res {
         Ok(()) => sink.close().await.map_err(Error::from),
         Err(e) => {
