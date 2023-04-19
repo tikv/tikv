@@ -25,6 +25,7 @@ use std::{
 use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{
     config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
+    BackupStreamResolver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
@@ -68,6 +69,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
+use resolved_ts::LeadershipResolver;
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
@@ -785,6 +787,21 @@ where
                 )),
             );
 
+            let region_read_progress = engines
+                .store_meta
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone();
+            let leadership_resolver = LeadershipResolver::new(
+                node.id(),
+                self.pd_client.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+                region_read_progress.clone(),
+                Duration::from_secs(60),
+            );
+
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -799,13 +816,9 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 Arc::clone(&self.env),
-                engines
-                    .store_meta
-                    .lock()
-                    .unwrap()
-                    .region_read_progress
-                    .clone(),
+                region_read_progress.clone(),
                 Arc::clone(&self.security_mgr),
+                BackupStreamResolver::V1(leadership_resolver),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);

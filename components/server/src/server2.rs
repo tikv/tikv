@@ -14,6 +14,7 @@
 use std::{
     cmp,
     collections::HashMap,
+    marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{atomic::AtomicU64, mpsc, Arc},
@@ -24,6 +25,7 @@ use std::{
 use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{
     config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
+    BackupStreamResolver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
@@ -675,6 +677,7 @@ where
                     .region_read_progress
                     .clone(),
                 Arc::clone(&self.security_mgr),
+                BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);

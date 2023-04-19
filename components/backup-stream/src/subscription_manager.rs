@@ -21,7 +21,6 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::ChangeObserver,
 };
-use resolved_ts::LeadershipResolver;
 use tikv::storage::Statistics;
 use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -30,7 +29,7 @@ use yatp::task::callback::Handle as YatpHandle;
 
 use crate::{
     annotate,
-    endpoint::ObserveOp,
+    endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, Result},
     event_loader::InitialDataLoader,
     future,
@@ -376,7 +375,7 @@ where
         meta_cli: MetadataClient<S>,
         pd_client: Arc<PDC>,
         scan_pool_size: usize,
-        leader_checker: LeadershipResolver,
+        resolver: BackupStreamResolver<RT, E>,
     ) -> (Self, future![()])
     where
         E: KvEngine,
@@ -396,7 +395,7 @@ where
             scan_pool_handle: Arc::new(scan_pool_handle),
             scans: CallbackWaitGroup::new(),
         };
-        let fut = op.clone().region_operator_loop(rx, leader_checker);
+        let fut = op.clone().region_operator_loop(rx, resolver);
         (op, fut)
     }
 
@@ -416,11 +415,14 @@ where
     }
 
     /// the handler loop.
-    async fn region_operator_loop(
+    async fn region_operator_loop<E, RT>(
         self,
         mut message_box: Receiver<ObserveOp>,
-        mut leader_checker: LeadershipResolver,
-    ) {
+        mut resolver: BackupStreamResolver<RT, E>,
+    ) where
+        E: KvEngine,
+        RT: CdcHandle<E> + 'static,
+    {
         while let Some(op) = message_box.recv().await {
             // Skip some trivial resolve commands.
             if !matches!(op, ObserveOp::ResolveRegions { .. }) {
@@ -487,9 +489,7 @@ where
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-                    let regions = leader_checker
-                        .resolve(self.subs.current_regions(), min_ts)
-                        .await;
+                    let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts

@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
+    collections::HashSet, fmt, future::Future, marker::PhantomData, path::PathBuf, pin::Pin,
+    sync::Arc, time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -19,7 +20,7 @@ use raftstore::{
     router::CdcHandle,
     store::RegionReadProgressRegistry,
 };
-use resolved_ts::LeadershipResolver;
+use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use security::SecurityManager;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
@@ -118,6 +119,7 @@ where
         env: Arc<Environment>,
         region_read_progress: RegionReadProgressRegistry,
         security_mgr: Arc<SecurityManager>,
+        resolver: BackupStreamResolver<RT, E>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
@@ -154,14 +156,7 @@ where
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer::default();
-        let leadership_resolver = LeadershipResolver::new(
-            store_id,
-            Arc::clone(&pd_client) as _,
-            env,
-            security_mgr,
-            region_read_progress,
-            Duration::from_secs(60),
-        );
+
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
                 router.clone(),
@@ -177,7 +172,7 @@ where
             meta_client.clone(),
             pd_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
-            leadership_resolver,
+            resolver,
         );
         pool.spawn(op_loop);
         let mut checkpoint_mgr = CheckpointManager::default();
@@ -1047,6 +1042,29 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
             tikv_alloc::remove_thread_memory_accessor();
         })
         .build()
+}
+
+pub enum BackupStreamResolver<RT, EK> {
+    // for raftstore-v1, we use LeadershipResolver to check leadership of a region.
+    V1(LeadershipResolver),
+    // for raftstore-v2, it has less regions. we use CDCHandler to check leadership of a region.
+    V2(RT, PhantomData<EK>),
+}
+
+impl<RT, EK> BackupStreamResolver<RT, EK>
+where
+    RT: CdcHandle<EK> + 'static,
+    EK: KvEngine,
+{
+    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+        match self {
+            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts).await,
+            BackupStreamResolver::V2(x, _) => {
+                let x = x.clone();
+                resolve_by_raft(regions, min_ts, x).await
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
