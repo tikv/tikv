@@ -114,7 +114,7 @@ impl DestroyProgress {
 pub struct AbnormalPeerContext {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
-    /// (u64, Instant) represents the peer id and the time when peer start pending.
+    /// (u64, Instant) represents (peer id, time when peer starts pending)
     pending_peers: Vec<(u64, Instant)>,
     /// A inaccurate cache about which peer is marked as down.
     down_peers: Vec<u64>,
@@ -161,13 +161,10 @@ impl AbnormalPeerContext {
 
     #[inline]
     pub fn flush_metrics(&self) {
-        let _ = self
-            .pending_peers
-            .iter()
-            .map(|(_, pending_after)| {
-                let elapsed = duration_to_sec(pending_after.saturating_elapsed());
-                RAFT_PEER_PENDING_DURATION.observe(elapsed);
-            });
+        let _ = self.pending_peers.iter().map(|(_, pending_after)| {
+            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+            RAFT_PEER_PENDING_DURATION.observe(elapsed);
+        });
     }
 }
 
