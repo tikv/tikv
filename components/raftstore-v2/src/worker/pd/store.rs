@@ -15,7 +15,9 @@ use pd_client::{
 };
 use prometheus::local::LocalHistogram;
 use slog::{error, warn};
-use tikv_util::{metrics::RecordPairVec, store::QueryStats, time::UnixSecs, topn::TopN};
+use tikv_util::{
+    config::from_same_dev, metrics::RecordPairVec, store::QueryStats, time::UnixSecs, topn::TopN,
+};
 
 use super::Runner;
 
@@ -295,17 +297,25 @@ where
             }
             true
         });
+        // We only care about rocksdb SST file size, so we should check disk available.
         let snap_size = self.snap_mgr.total_snap_size().unwrap();
-        let used_size = snap_size
-            + kv_size
-            + self
-                .raft_engine
-                .get_engine_size()
-                .expect("raft engine used size");
-        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-        // We only care about rocksdb SST file size, so we should check disk available
-        // here.
-        available = cmp::min(available, disk_stats.available_space());
+        let used_size = snap_size + kv_size;
+
+        let available = {
+            let engine_size = self.raft_engine.get_engine_size().unwrap_or(0);
+            let raft_engine_path = std::path::Path::new(self.raft_engine.get_engine_path());
+            let kv_path = self.tablet_registry.tablet_root();
+            let same_dev = from_same_dev(raft_engine_path, kv_path).unwrap_or(true);
+            let mut disk_available = disk_stats.available_space();
+            // if raft_engine and kv_engine are on the same device, we should ignore the
+            // raft_engine size. Because the raft engine will recycle the space
+            // when it is not used, so the disk space is inaccuracy.
+            if same_dev {
+                disk_available += engine_size;
+            }
+            let available = capacity.checked_sub(used_size).unwrap_or_default();
+            cmp::min(available, disk_available)
+        };
         Some((capacity, used_size, available))
     }
 }
