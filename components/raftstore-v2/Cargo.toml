@@ -66,6 +66,7 @@ txn_types = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
+engine_rocks = { workspace = true }
 engine_test = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
