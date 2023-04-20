@@ -357,7 +357,6 @@ mod test {
                     ),
                     vec![],
                 )],
-                committed_time: Instant::now(),
             }),
             ApplyTask::CaptureApply(CaptureChange {
                 observer: ChangeObserver::from_cdc(region.id, ObserveHandle::new()),
@@ -376,7 +375,6 @@ mod test {
                     ),
                     vec![],
                 )],
-                committed_time: Instant::now(),
             }),
         ];
 
