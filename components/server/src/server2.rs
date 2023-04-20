@@ -704,7 +704,7 @@ where
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
-                Arc::clone(&self.quota_limiter),
+                self.quota_limiter.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
@@ -715,6 +715,7 @@ where
             unified_read_pool,
             debug_thread_pool,
             health_service,
+            self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -1297,6 +1298,8 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
 
         let mut engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+        // Set txn extra scheduler immediately to make sure every clone has the
+        // scheduler.
         engine.set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
         self.engines = Some(TikvEngines {
