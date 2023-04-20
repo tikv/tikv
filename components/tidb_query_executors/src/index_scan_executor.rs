@@ -444,11 +444,12 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    // Process index values that are in old collation,
-    // when `new_collations_enabled_on_first_bootstrap` = true also will access this function.
-    // NOTE: We should extract the index columns from the key first, and extract the
-    // handles from value if there is no handle in the key. Otherwise, extract the
-    // handles from the key.
+    // Process index values that are in old collation, when
+    // `new_collations_enabled_on_first_bootstrap` = true also will access this
+    // function.
+    // NOTE: We should extract the index columns from the key first,
+    // and extract the handles from value if there is no handle in the key.
+    // Otherwise, extract the handles from the key.
     fn process_old_collation_kv(
         &mut self,
         mut key_payload: &[u8],
