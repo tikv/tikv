@@ -3192,8 +3192,8 @@ pub mod tests {
     }
 
     #[test]
-    fn test_init() {
-        let builder = SnapManagerBuilder::default();
+    fn test_init_enable_receive_tablet_snapshot() {
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
         let snap_dir = Builder::new()
             .prefix("test_snap_path_does_not_exist")
             .tempdir()
@@ -3207,7 +3207,7 @@ pub mod tests {
         path.push_str("_v2");
         assert!(Path::new(&path).exists());
 
-        let builder = SnapManagerBuilder::default();
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
         let snap_dir = Builder::new()
             .prefix("test_snap_path_exist")
             .tempdir()
@@ -3220,7 +3220,7 @@ pub mod tests {
         path.push_str("_v2");
         assert!(Path::new(&path).exists());
 
-        let builder = SnapManagerBuilder::default();
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
         let snap_dir = Builder::new()
             .prefix("test_tablet_snap_path_exist")
             .tempdir()
