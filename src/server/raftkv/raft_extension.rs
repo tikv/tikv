@@ -5,7 +5,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use futures::{channel::oneshot, future::BoxFuture};
+use futures::future::BoxFuture;
 use kvproto::{
     metapb::{Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
@@ -15,9 +15,8 @@ use raft::SnapshotStatus;
 use raftstore::{
     router::RaftStoreRouter,
     store::{
-        msg::StoreSpecifiedMessageObserver,
         region_meta::{RaftStateRole, RegionMeta},
-        CasualMessage, StoreMsg,
+        CasualMessage,
     },
 };
 use tikv_util::future::paired_future_callback;
@@ -60,18 +59,6 @@ where
     S: RaftStoreRouter<E> + 'static,
     E: engine_traits::KvEngine,
 {
-    fn store_specified_message_observer(
-        &self,
-        store_id: u64,
-    ) -> BoxFuture<'static, StoreSpecifiedMessageObserver> {
-        let (tx, rx) = oneshot::channel();
-        let cb = Box::new(move |ob| tx.send(ob).unwrap());
-        self.router
-            .send_store_msg(StoreMsg::GetStoreSpecifiedMessageObserver { store_id, cb })
-            .unwrap();
-        Box::pin(async move { rx.await.unwrap() })
-    }
-
     #[inline]
     fn feed(&self, msg: RaftMessage, key_message: bool) {
         let region_id = msg.get_region_id();

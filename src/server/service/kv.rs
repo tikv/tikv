@@ -21,8 +21,7 @@ use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
-        metrics::RAFT_ENTRIES_CACHES_GAUGE,
-        msg::StoreSpecifiedMessageObserver,
+        metrics::{MESSAGE_RECV_BY_STORE, RAFT_ENTRIES_CACHES_GAUGE},
         CheckLeaderTask,
     },
     Error as RaftStoreError, Result as RaftStoreResult,
@@ -652,6 +651,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         sink: ClientStreamingSink<Done>,
     ) {
         let source_store_id = Self::get_store_id_from_metadata(&ctx);
+        let message_received =
+            source_store_id.map(|x| MESSAGE_RECV_BY_STORE.with_label_values(&[&format!("{}", x)]));
         info!(
             "raft RPC is called, new gRPC stream established";
             "source_store_id" => ?source_store_id,
@@ -662,13 +663,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
-            let ob = if let Some(source_store_id) = source_store_id {
-                let x = ch.store_specified_message_observer(source_store_id);
-                { x }.await
-            } else {
-                StoreSpecifiedMessageObserver::default()
-            };
-
             let mut stream = stream.map_err(Error::from);
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
@@ -680,7 +674,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     // `StoreNotMatch` to let tikv to resolve a correct address from PD
                     return Err(Error::from(err));
                 }
-                ob.post_received(1);
+                if let Some(ref counter) = message_received {
+                    counter.inc();
+                }
             }
             Ok::<(), Error>(())
         };
@@ -708,6 +704,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         sink: ClientStreamingSink<Done>,
     ) {
         let source_store_id = Self::get_store_id_from_metadata(&ctx);
+        let message_received =
+            source_store_id.map(|x| MESSAGE_RECV_BY_STORE.with_label_values(&[&format!("{}", x)]));
         info!(
             "batch_raft RPC is called, new gRPC stream established";
             "source_store_id" => ?source_store_id,
@@ -718,13 +716,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
-            let ob = if let Some(source_store_id) = source_store_id {
-                let x = ch.store_specified_message_observer(source_store_id);
-                { x }.await
-            } else {
-                StoreSpecifiedMessageObserver::default()
-            };
-
             let mut stream = stream.map_err(Error::from);
             while let Some(mut batch_msg) = stream.try_next().await? {
                 let len = batch_msg.get_msgs().len();
@@ -740,7 +731,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                         return Err(Error::from(err));
                     }
                 }
-                ob.post_received(len);
+                if let Some(ref counter) = message_received {
+                    counter.inc_by(len as u64);
+                }
             }
             Ok::<(), Error>(())
         };
