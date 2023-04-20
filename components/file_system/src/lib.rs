@@ -43,7 +43,7 @@ use openssl::{
 };
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter,
-    IoRateLimiterStatistics,
+    IoRateLimiterStatistics, DEFAULT_REFILL_PERIOD,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};

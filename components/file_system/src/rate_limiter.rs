@@ -20,7 +20,7 @@ use super::{
     IoOp, IoPriority, IoType,
 };
 
-const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
+pub const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
 const DEFAULT_REFILLS_PER_SEC: usize = (1.0 / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
 const MAX_WAIT_DURATION_PER_REQUEST: Duration = Duration::from_millis(500);
 

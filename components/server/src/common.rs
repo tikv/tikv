@@ -506,7 +506,8 @@ impl EnginesResourceInfo {
     /// Allowing minimum throughput, if it's usize::MAX, then 50% of total
     /// budget is chosen.
     pub fn set_min_throughput(&mut self, min_throughput: usize) {
-        self.min_throughput = min_throughput;
+        self.min_throughput =
+            (min_throughput as f64 / file_system::DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
     }
 
     /// When optimize for read, pending bytes presure are prioritized.
@@ -594,20 +595,20 @@ impl EnginesResourceInfo {
 
 impl IoBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
-        let mut score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f64
+        let score0 = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f64
             / Self::SCALE_FACTOR as f64;
-        if self.optimize_for_read {
-            score = score.sqrt();
+        let score1 = if self.optimize_for_read {
+            score0.sqrt()
         } else {
-            score *= score;
-        }
+            score0 * score0
+        };
         let based = if self.min_throughput >= total_budgets {
             0.5
         } else {
             self.min_throughput as f64 / total_budgets as f64
         };
-        let score = based + score * (1.0 - based);
-        (total_budgets as f64 * score) as usize
+        let score2 = based + score1 * (1.0 - based);
+        (total_budgets as f64 * score2) as usize
     }
 }
 
