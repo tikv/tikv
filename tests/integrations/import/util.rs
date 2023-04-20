@@ -81,7 +81,7 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
     ImportSstClient,
 ) {
     let tmp_dir = tempfile::TempDir::new().unwrap();
-    let encryption_cfg = test_util::new_file_security_config(&tmp_dir);
+    let encryption_cfg = test_util::new_file_security_config(tmp_dir.path());
     let mut security = test_util::new_security_cfg(None);
     security.encryption = encryption_cfg;
     let mut config = TikvConfig::default();

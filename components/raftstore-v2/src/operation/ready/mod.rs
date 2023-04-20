@@ -1021,8 +1021,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             if let Err(e) = self.apply_snapshot(
                 ready.snapshot(),
                 write_task,
-                ctx.snap_mgr.clone(),
-                ctx.tablet_registry.clone(),
+                &ctx.snap_mgr,
+                &ctx.tablet_registry,
+                ctx.key_manager.as_ref(),
             ) {
                 SNAP_COUNTER.apply.fail.inc();
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)
