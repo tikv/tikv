@@ -5718,31 +5718,43 @@ mod tests {
         cfg.raft_engine.mut_config().memory_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
         cfg.rocksdb.write_buffer_limit = None;
+        //
         cfg.rocksdb.defaultcf.enable_compaction_guard = None;
-        cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = None;
-        cfg.rocksdb.defaultcf.level0_stop_writes_trigger = None;
-        cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = None;
-        cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = None;
         cfg.rocksdb.writecf.enable_compaction_guard = None;
-        cfg.rocksdb.writecf.level0_slowdown_writes_trigger = None;
-        cfg.rocksdb.writecf.level0_stop_writes_trigger = None;
-        cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit = None;
-        cfg.rocksdb.writecf.hard_pending_compaction_bytes_limit = None;
         cfg.rocksdb.lockcf.enable_compaction_guard = None;
-        cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = None;
-        cfg.rocksdb.lockcf.level0_stop_writes_trigger = None;
-        cfg.rocksdb.lockcf.soft_pending_compaction_bytes_limit = None;
-        cfg.rocksdb.lockcf.hard_pending_compaction_bytes_limit = None;
         cfg.rocksdb.raftcf.enable_compaction_guard = None;
-        cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = None;
-        cfg.rocksdb.raftcf.level0_stop_writes_trigger = None;
-        cfg.rocksdb.raftcf.soft_pending_compaction_bytes_limit = None;
-        cfg.rocksdb.raftcf.hard_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.enable_compaction_guard = None;
+        //
+        cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.writecf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = None;
         cfg.raftdb.defaultcf.level0_slowdown_writes_trigger = None;
+        //
+        cfg.rocksdb.defaultcf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.writecf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.lockcf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.raftcf.level0_stop_writes_trigger = None;
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
+        //
+        cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.lockcf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.raftcf.soft_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;
+        //
+        cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.writecf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.lockcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.raftcf.hard_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        //
+        cfg.rocksdb.defaultcf.ribbon_filter_above_level = None;
+        cfg.rocksdb.writecf.ribbon_filter_above_level = None;
+        cfg.rocksdb.lockcf.ribbon_filter_above_level = None;
+        cfg.rocksdb.raftcf.ribbon_filter_above_level = None;
+        cfg.raftdb.defaultcf.ribbon_filter_above_level = None;
+
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
 
