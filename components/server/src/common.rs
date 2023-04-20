@@ -595,20 +595,20 @@ impl EnginesResourceInfo {
 
 impl IoBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
-        let score0 = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f64
+        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f64
             / Self::SCALE_FACTOR as f64;
-        let score1 = if self.optimize_for_read {
-            score0.sqrt()
+        let score = if self.optimize_for_read {
+            score.sqrt()
         } else {
-            score0 * score0
+            score * score
         };
         let based = if self.min_throughput >= total_budgets {
             0.5
         } else {
             self.min_throughput as f64 / total_budgets as f64
         };
-        let score2 = based + score1 * (1.0 - based);
-        (total_budgets as f64 * score2) as usize
+        let score = based + score * (1.0 - based);
+        (total_budgets as f64 * score) as usize
     }
 }
 
