@@ -22,6 +22,7 @@ use raftstore::{
     store::{
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::RAFT_ENTRIES_CACHES_GAUGE,
+        msg::StoreSpecifiedMessageObserver,
         CheckLeaderTask,
     },
     Error as RaftStoreError, Result as RaftStoreResult,
@@ -45,7 +46,7 @@ use crate::{
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
     server::{
         gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
-        Error, Proxy, Result as ServerResult,
+        Error, MetadataSourceStoreId, Proxy, Result as ServerResult,
     },
     storage::{
         self,
@@ -168,8 +169,22 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             ch.report_reject_message(id, peer_id);
             return Ok(());
         }
+
+        fail_point!("receive_raft_message_from_outside");
         ch.feed(msg, false);
         Ok(())
+    }
+
+    fn get_store_id_from_metadata(ctx: &RpcContext<'_>) -> Option<u64> {
+        let metadata = ctx.request_headers();
+        for i in 0..metadata.len() {
+            let (key, value) = metadata.get(i).unwrap();
+            if key == MetadataSourceStoreId::KEY {
+                let store_id = MetadataSourceStoreId::parse(value);
+                return Some(store_id);
+            }
+        }
+        None
     }
 }
 
@@ -636,11 +651,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         stream: RequestStream<RaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        let source_store_id = Self::get_store_id_from_metadata(&ctx);
+        info!(
+            "raft RPC is called, new gRPC stream established";
+            "source_store_id" => ?source_store_id,
+        );
+
         let store_id = self.store_id;
         let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
+            let ob = if let Some(source_store_id) = source_store_id {
+                let x = ch.store_specified_message_observer(source_store_id);
+                { x }.await
+            } else {
+                StoreSpecifiedMessageObserver::default()
+            };
+
             let mut stream = stream.map_err(Error::from);
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
@@ -652,6 +680,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     // `StoreNotMatch` to let tikv to resolve a correct address from PD
                     return Err(Error::from(err));
                 }
+                ob.post_received(1);
             }
             Ok::<(), Error>(())
         };
@@ -678,12 +707,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
-        info!("batch_raft RPC is called, new gRPC stream established");
+        let source_store_id = Self::get_store_id_from_metadata(&ctx);
+        info!(
+            "batch_raft RPC is called, new gRPC stream established";
+            "source_store_id" => ?source_store_id,
+        );
+
         let store_id = self.store_id;
         let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
+            let ob = if let Some(source_store_id) = source_store_id {
+                let x = ch.store_specified_message_observer(source_store_id);
+                { x }.await
+            } else {
+                StoreSpecifiedMessageObserver::default()
+            };
+
             let mut stream = stream.map_err(Error::from);
             while let Some(mut batch_msg) = stream.try_next().await? {
                 let len = batch_msg.get_msgs().len();
@@ -699,6 +740,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                         return Err(Error::from(err));
                     }
                 }
+                ob.post_received(len);
             }
             Ok::<(), Error>(())
         };

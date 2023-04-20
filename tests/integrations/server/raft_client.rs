@@ -73,7 +73,7 @@ where
         worker.scheduler(),
         loads,
     );
-    RaftClient::new(builder)
+    RaftClient::new(0, builder)
 }
 
 fn get_raft_client_by_port(port: u16) -> RaftClient<StaticResolver, FakeExtension> {
