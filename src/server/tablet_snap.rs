@@ -25,10 +25,7 @@ use std::{
     fs::{self, File},
     io::{BorrowedBuf, Read, Seek, SeekFrom, Write},
     path::Path,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
