@@ -52,7 +52,7 @@ pub fn new_test_key_manager(
             rotation_period: Duration::from_secs(60),
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 2,
-            dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
+            dict_path: tmp_dir.path().to_str().unwrap().to_string(),
         },
     )
 }

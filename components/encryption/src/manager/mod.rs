@@ -788,15 +788,15 @@ impl DataKeyManager {
                     format!("unexpected symbolic link: {}", e.path().display()),
                 ));
             }
-            let fname = e.path().as_os_str().to_str().unwrap();
+            let fname = e.path().to_str().unwrap();
             let sync = iter.peek().is_none();
             if let Some(p) = physical {
                 let sub = fname
-                    .strip_prefix(p.as_os_str().to_str().unwrap())
+                    .strip_prefix(p.to_str().unwrap())
                     .unwrap()
                     .trim_start_matches('/');
                 self.dicts
-                    .delete_file(logical.join(sub).as_os_str().to_str().unwrap(), sync)?;
+                    .delete_file(logical.join(sub).to_str().unwrap(), sync)?;
             } else {
                 self.dicts.delete_file(fname, sync)?;
             }
@@ -863,10 +863,8 @@ impl EncryptionKeyManager for DataKeyManager {
         if path.is_dir() {
             let mut iter = walkdir::WalkDir::new(path).into_iter().peekable();
             while let Some(e) = iter.next() {
-                self.dicts.delete_file(
-                    e?.path().as_os_str().to_str().unwrap(),
-                    iter.peek().is_none(),
-                )?;
+                self.dicts
+                    .delete_file(e?.path().to_str().unwrap(), iter.peek().is_none())?;
             }
         } else {
             self.dicts.delete_file(fname, true)?;
@@ -892,9 +890,9 @@ impl EncryptionKeyManager for DataKeyManager {
                     ));
                 }
                 let sub_path = e.path().strip_prefix(src_path).unwrap();
-                let src = e.path().as_os_str().to_str().unwrap();
+                let src = e.path().to_str().unwrap();
                 let dst_path = dst_path.join(sub_path);
-                let dst = dst_path.as_os_str().to_str().unwrap();
+                let dst = dst_path.to_str().unwrap();
                 self.dicts.link_file(src, dst, iter.peek().is_none())?;
             }
         } else {
@@ -1068,7 +1066,7 @@ mod tests {
             rotation_period: Duration::from_secs(60),
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 2,
-            dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
+            dict_path: tmp_dir.path().to_str().unwrap().to_string(),
         }
     }
 
@@ -1686,47 +1684,42 @@ mod tests {
         let subdir = tmp_dir.path().join("foo");
         std::fs::create_dir(&subdir).unwrap();
         let file_a = manager
-            .new_file(subdir.join("a").as_os_str().to_str().unwrap())
+            .new_file(subdir.join("a").to_str().unwrap())
             .unwrap();
         File::create(subdir.join("a")).unwrap();
         let file_b = manager
-            .new_file(subdir.join("b").as_os_str().to_str().unwrap())
+            .new_file(subdir.join("b").to_str().unwrap())
             .unwrap();
         File::create(subdir.join("b")).unwrap();
 
         let dstdir = tmp_dir.path().join("bar");
         manager
-            .link_file(
-                subdir.as_os_str().to_str().unwrap(),
-                dstdir.as_os_str().to_str().unwrap(),
-            )
+            .link_file(subdir.to_str().unwrap(), dstdir.to_str().unwrap())
             .unwrap();
-        manager
-            .delete_file(subdir.as_os_str().to_str().unwrap())
-            .unwrap();
+        manager.delete_file(subdir.to_str().unwrap()).unwrap();
 
         assert_eq!(
             manager
-                .get_file(dstdir.join("a").as_os_str().to_str().unwrap())
+                .get_file(dstdir.join("a").to_str().unwrap())
                 .unwrap(),
             file_a
         );
         assert_eq!(
             manager
-                .get_file_exists(subdir.join("a").as_os_str().to_str().unwrap())
+                .get_file_exists(subdir.join("a").to_str().unwrap())
                 .unwrap(),
             None
         );
 
         assert_eq!(
             manager
-                .get_file(dstdir.join("b").as_os_str().to_str().unwrap())
+                .get_file(dstdir.join("b").to_str().unwrap())
                 .unwrap(),
             file_b
         );
         assert_eq!(
             manager
-                .get_file_exists(subdir.join("b").as_os_str().to_str().unwrap())
+                .get_file_exists(subdir.join("b").to_str().unwrap())
                 .unwrap(),
             None
         );

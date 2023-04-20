@@ -157,16 +157,12 @@ pub fn install_tablet<EK: KvEngine>(
         target_path.display()
     );
     if let Some(m) = &key_manager {
-        m.link_file(
-            source.as_os_str().to_str().unwrap(),
-            target_path.as_os_str().to_str().unwrap(),
-        )
-        .unwrap();
+        m.link_file(source.to_str().unwrap(), target_path.to_str().unwrap())
+            .unwrap();
     }
     if let Err(e) = fs::rename(source, &target_path) {
         if let Some(m) = &key_manager {
-            m.delete_file(target_path.as_os_str().to_str().unwrap())
-                .unwrap();
+            m.delete_file(target_path.to_str().unwrap()).unwrap();
         }
         panic!(
             "failed to rename tablet {} => {}: {:?}",
@@ -176,7 +172,7 @@ pub fn install_tablet<EK: KvEngine>(
         );
     }
     if let Some(m) = &key_manager {
-        m.delete_file(source.as_os_str().to_str().unwrap()).unwrap();
+        m.delete_file(source.to_str().unwrap()).unwrap();
     }
     true
 }

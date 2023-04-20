@@ -82,7 +82,7 @@ pub fn clean_up_dir(
 ) -> std::io::Result<()> {
     for e in file_system::read_dir(path)? {
         let e = e?;
-        let fname = e.file_name().to_string_lossy().to_string();
+        let fname = e.file_name().to_str().unwrap().to_owned();
         if fname.starts_with(prefix) {
             let original = e
                 .path()
