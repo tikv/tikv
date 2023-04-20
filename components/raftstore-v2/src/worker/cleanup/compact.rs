@@ -134,6 +134,7 @@ where
 }
 
 fn need_compact(
+    num_rows: u64,
     num_entires: u64,
     num_versions: u64,
     tombstones_num_threshold: u64,
@@ -146,8 +147,9 @@ fn need_compact(
     // When the number of tombstones exceed threshold and ratio, this range need
     // compacting.
     let estimate_num_del = num_entires - num_versions;
-    estimate_num_del >= tombstones_num_threshold
-        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
+    (estimate_num_del >= tombstones_num_threshold
+        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires)
+        || (num_versions - num_rows) >= tombstones_num_threshold
 }
 
 fn collect_regions_to_compact<E: KvEngine>(
@@ -182,6 +184,7 @@ fn collect_regions_to_compact<E: KvEngine>(
                 "region_id" => id,
             );
             if need_compact(
+                num_rows,
                 num_ent,
                 num_ver,
                 tombstones_num_threshold,
