@@ -773,6 +773,16 @@ impl DataKeyManager {
     /// Removes data keys under the directory `logical`. If `physical` is
     /// present, if means the `logical` directory is already physically renamed
     /// to `physical`.
+    /// There're two uses of this function:
+    ///
+    /// (1) without `physical`: `remove_dir` is called before
+    /// `fs::remove_dir_all`. User must guarantee that this directory won't be
+    /// read again even if the removal fails or panics.
+    ///
+    /// (2) with `physical`: Use `fs::rename` to rename the directory to trash.
+    /// Then `remove_dir` with `physical` set to the trash directory name.
+    /// Finally remove the trash directory. This is the safest way to delete a
+    /// directory.
     pub fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
         let scan = physical.unwrap_or(logical);
         debug_assert!(scan.is_dir());
