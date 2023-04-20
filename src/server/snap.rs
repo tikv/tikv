@@ -481,7 +481,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                     return;
                 }
 
-                SNAP_TASK_COUNTER_STATIC.recv.inc();
+                SNAP_TASK_COUNTER_STATIC.recv_v2.inc();
 
                 let snap_mgr = self.snap_mgr.tablet_snap_manager().clone();
                 let raft_router = self.raft_router.clone();

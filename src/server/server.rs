@@ -70,7 +70,7 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     // For sending/receiving snapshots.
     snap_mgr: Either<SnapManager, TabletSnapManager>,
     snap_worker: LazyWorker<SnapTask>,
-    tiflash_engine: bool,
+    v2_compatible_learner: bool,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
@@ -200,7 +200,7 @@ where
             debug_thread_pool,
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
-            tiflash_engine,
+            v2_compatible_learner: tiflash_engine,
         };
 
         Ok(svr)
@@ -270,7 +270,7 @@ where
                     self.raft_router.clone(),
                     security_mgr,
                     cfg,
-                    self.tiflash_engine,
+                    self.v2_compatible_learner,
                 );
                 self.snap_worker.start(snap_runner);
             }

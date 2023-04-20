@@ -1014,6 +1014,7 @@ impl Snapshot {
         }
     }
 
+    // This is only used for v2 compatibility.
     fn new_for_tablet_snapshot<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
