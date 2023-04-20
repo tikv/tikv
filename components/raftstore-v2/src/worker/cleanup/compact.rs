@@ -140,16 +140,16 @@ fn need_compact(
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
 ) -> bool {
-    if num_entires <= num_versions {
+    if num_entires < num_versions {
         return false;
     }
 
     // When the number of tombstones exceed threshold and ratio, this range need
     // compacting.
     let estimate_num_del = num_entires - num_versions;
-    (estimate_num_del >= tombstones_num_threshold
-        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires)
-        || (num_versions - num_rows) >= tombstones_num_threshold
+    (num_versions - num_rows) >= tombstones_num_threshold
+        || (estimate_num_del >= tombstones_num_threshold
+            && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires)
 }
 
 fn collect_regions_to_compact<E: KvEngine>(
