@@ -438,7 +438,7 @@ impl CmdObserveInfo {
     /// PiTR: Observer supports the `backup-log` function.
     /// RTS: Observer supports the `resolved-ts` advancing (and follower read,
     /// etc.).
-    fn observe_level(&self) -> ObserveLevel {
+    pub fn observe_level(&self) -> ObserveLevel {
         let cdc = if self.cdc_id.is_observing() {
             // `cdc` observe all data
             ObserveLevel::All
@@ -510,6 +510,19 @@ impl CmdBatch {
         assert_eq!(observe_info.rts_id.id, self.rts_id);
         assert_eq!(observe_info.pitr_id.id, self.pitr_id);
         self.cmds.push(cmd)
+    }
+
+    pub fn extend<I: IntoIterator<Item = Cmd>>(
+        &mut self,
+        observe_info: &CmdObserveInfo,
+        region_id: u64,
+        cmds: I,
+    ) {
+        assert_eq!(region_id, self.region_id);
+        assert_eq!(observe_info.cdc_id.id, self.cdc_id);
+        assert_eq!(observe_info.rts_id.id, self.rts_id);
+        assert_eq!(observe_info.pitr_id.id, self.pitr_id);
+        self.cmds.extend(cmds)
     }
 
     pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {

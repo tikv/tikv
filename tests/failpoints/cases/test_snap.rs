@@ -900,3 +900,36 @@ fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
 }
+
+#[test]
+fn test_snapshot_complete_recover_raft_tick() {
+    // https://github.com/tikv/tikv/issues/14548 gives the description of what the following tests.
+    let mut cluster = test_raftstore_v2::new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+
+    cluster.run();
+
+    let region = cluster.get_region(b"k");
+    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+    for i in 0..200 {
+        let k = format!("k{:04}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+
+    cluster.stop_node(2);
+    for i in 200..300 {
+        let k = format!("k{:04}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+
+    fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
+    fail::cfg("RESET_APPLY_INDEX_WHEN_RESTART", "return").unwrap();
+    cluster.run_node(2).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    fail::remove("APPLY_COMMITTED_ENTRIES");
+    cluster.stop_node(1);
+
+    cluster.must_put(b"k0500", b"val");
+    assert_eq!(cluster.must_get(b"k0500").unwrap(), b"val".to_vec());
+}

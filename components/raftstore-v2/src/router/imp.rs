@@ -5,17 +5,24 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crossbeam::channel::TrySendError;
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
+    kvrpcpb::ExtraOp,
+    metapb::RegionEpoch,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{AsyncReadNotifier, FetchedLogs, GenSnapRes, RegionSnapshot};
+use raftstore::{
+    router::CdcHandle,
+    store::{
+        fsm::ChangeObserver, AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
+    },
+};
 use slog::warn;
 
-use super::PeerMsg;
+use super::{build_any_channel, message::CaptureChange, PeerMsg, QueryResChannel, QueryResult};
 use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
@@ -167,5 +174,78 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
             router: router.clone(),
             local_reader: LocalReader::new(store_meta, router, logger),
         }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> CdcHandle<EK> for RaftRouter<EK, ER> {
+    fn capture_change(
+        &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        observer: ChangeObserver,
+        callback: Callback<EK::Snapshot>,
+    ) -> crate::Result<()> {
+        let (snap_cb, _) = build_any_channel(Box::new(move |args| {
+            let (resp, snap) = (&args.0, args.1.take());
+            if let Some(snap) = snap {
+                let snapshot: RegionSnapshot<EK::Snapshot> = match snap.downcast() {
+                    Ok(s) => *s,
+                    Err(t) => unreachable!("snapshot type should be the same: {:?}", t),
+                };
+                callback.invoke_read(raftstore::store::ReadResponse {
+                    response: Default::default(),
+                    snapshot: Some(snapshot),
+                    txn_extra_op: ExtraOp::Noop,
+                })
+            } else {
+                callback.invoke_read(raftstore::store::ReadResponse {
+                    response: resp.clone(),
+                    snapshot: None,
+                    txn_extra_op: ExtraOp::Noop,
+                });
+            }
+        }));
+        if let Err(SendError(msg)) = self.router.force_send(
+            region_id,
+            PeerMsg::CaptureChange(CaptureChange {
+                observer,
+                region_epoch,
+                snap_cb,
+            }),
+        ) {
+            warn!(self.router.logger(), "failed to send capture change msg"; "msg" => ?msg);
+            return Err(crate::Error::RegionNotFound(region_id));
+        }
+        Ok(())
+    }
+
+    fn check_leadership(
+        &self,
+        region_id: u64,
+        callback: Callback<EK::Snapshot>,
+    ) -> crate::Result<()> {
+        let (ch, _) = QueryResChannel::with_callback(Box::new(|res| {
+            let resp = match res {
+                QueryResult::Read(_) => raftstore::store::ReadResponse {
+                    response: Default::default(),
+                    snapshot: None,
+                    txn_extra_op: ExtraOp::Noop,
+                },
+                QueryResult::Response(resp) => raftstore::store::ReadResponse {
+                    response: resp.clone(),
+                    snapshot: None,
+                    txn_extra_op: ExtraOp::Noop,
+                },
+            };
+            callback.invoke_read(resp);
+        }));
+        if let Err(SendError(msg)) = self
+            .router
+            .force_send(region_id, PeerMsg::LeaderCallback(ch))
+        {
+            warn!(self.router.logger(), "failed to send capture change msg"; "msg" => ?msg);
+            return Err(crate::Error::RegionNotFound(region_id));
+        }
+        Ok(())
     }
 }

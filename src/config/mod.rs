@@ -89,6 +89,7 @@ use crate::{
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
+pub const DEFAULT_TABLET_SUB_DIR: &str = "tablets";
 
 /// By default, block cache size will be set to 45% of system memory.
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
@@ -2819,7 +2820,7 @@ impl Default for CdcConfig {
 }
 
 impl CdcConfig {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self, raftstore_v2: bool) -> Result<(), Box<dyn Error>> {
         let default_cfg = CdcConfig::default();
         if self.min_ts_interval.is_zero() {
             warn!(
@@ -2853,6 +2854,13 @@ impl CdcConfig {
             );
             self.incremental_scan_ts_filter_ratio = default_cfg.incremental_scan_ts_filter_ratio;
         }
+        if raftstore_v2 && self.hibernate_regions_compatible {
+            warn!(
+                "cdc.hibernate_regions_compatible is overwritten to false for partitioned-raft-kv"
+            );
+            self.hibernate_regions_compatible = false;
+        }
+
         Ok(())
     }
 }
@@ -3314,7 +3322,9 @@ impl TikvConfig {
         let kv_data_exists = if self.storage.engine == EngineType::RaftKv {
             RocksEngine::exists(&kv_db_path)
         } else {
-            Path::new(&self.storage.data_dir).join("tablets").exists()
+            Path::new(&self.storage.data_dir)
+                .join(DEFAULT_TABLET_SUB_DIR)
+                .exists()
         };
 
         RaftDataStateMachine::new(
@@ -3390,7 +3400,8 @@ impl TikvConfig {
         self.import.validate()?;
         self.backup.validate()?;
         self.log_backup.validate()?;
-        self.cdc.validate()?;
+        self.cdc
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         self.resolved_ts.validate()?;
@@ -5846,6 +5857,16 @@ mod tests {
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
+
+        let content = r#"
+            [storage]
+            engine = "partitioned-raft-kv"
+            [cdc]
+            hibernate-regions-compatible = true
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert!(!cfg.cdc.hibernate_regions_compatible);
     }
 
     #[test]

@@ -34,11 +34,14 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb::{self, Region},
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
-    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage},
+    raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage},
 };
-use raftstore::store::{util, Transport, WriteTask};
+use raftstore::store::{metrics::RAFT_PEER_PENDING_DURATION, util, Transport, WriteTask};
 use slog::{debug, error, info, warn};
-use tikv_util::store::find_peer;
+use tikv_util::{
+    store::find_peer,
+    time::{duration_to_sec, Instant},
+};
 
 use super::command::SplitInit;
 use crate::{
@@ -104,6 +107,64 @@ impl DestroyProgress {
             }
             _ => panic!("must be destroying to finish"),
         }
+    }
+}
+
+#[derive(Default)]
+pub struct AbnormalPeerContext {
+    /// Record the instants of peers being added into the configuration.
+    /// Remove them after they are not pending any more.
+    /// (u64, Instant) represents (peer id, time when peer starts pending)
+    pending_peers: Vec<(u64, Instant)>,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peers: Vec<u64>,
+}
+
+impl AbnormalPeerContext {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.pending_peers.is_empty() && self.down_peers.is_empty()
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.pending_peers.clear();
+        self.down_peers.clear();
+    }
+
+    #[inline]
+    pub fn down_peers(&self) -> &[u64] {
+        &self.down_peers
+    }
+
+    #[inline]
+    pub fn down_peers_mut(&mut self) -> &mut Vec<u64> {
+        &mut self.down_peers
+    }
+
+    #[inline]
+    pub fn pending_peers(&self) -> &[(u64, Instant)] {
+        &self.pending_peers
+    }
+
+    #[inline]
+    pub fn pending_peers_mut(&mut self) -> &mut Vec<(u64, Instant)> {
+        &mut self.pending_peers
+    }
+
+    #[inline]
+    pub fn retain_pending_peers(&mut self, f: impl FnMut(&mut (u64, Instant)) -> bool) -> bool {
+        let len = self.pending_peers.len();
+        self.pending_peers.retain_mut(f);
+        len != self.pending_peers.len()
+    }
+
+    #[inline]
+    pub fn flush_metrics(&self) {
+        let _ = self.pending_peers.iter().map(|(_, pending_after)| {
+            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+            RAFT_PEER_PENDING_DURATION.observe(elapsed);
+        });
     }
 }
 
@@ -422,6 +483,35 @@ where
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_availability_request<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        from_region_id: u64,
+        from_peer: &metapb::Peer,
+    ) {
+        let mut msg = RaftMessage::default();
+        msg.set_region_id(from_region_id);
+        msg.set_from_peer(self.peer().clone());
+        msg.set_to_peer(from_peer.clone());
+        msg.mut_extra_msg()
+            .set_type(ExtraMessageType::MsgAvailabilityResponse);
+        let report = msg.mut_extra_msg().mut_availability_context();
+        report.set_from_region_id(self.region_id());
+        report.set_from_region_epoch(self.region().get_region_epoch().clone());
+        report.set_trimmed(!self.storage().has_dirty_data());
+        let _ = ctx.trans.send(msg);
+    }
+
+    #[inline]
+    pub fn on_availability_response<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        from_peer: u64,
+        resp: &ExtraMessage,
+    ) {
+        self.merge_on_availability_response(ctx, from_peer, resp);
+    }
+
     pub fn maybe_schedule_gc_peer_tick(&mut self) {
         let region_state = self.storage().region_state();
         if !region_state.get_removed_records().is_empty()
@@ -441,7 +531,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             let tombstone_msg = self.tombstone_message_for_same_region(peer.clone());
             self.add_message(tombstone_msg);
-            self.set_has_ready();
             true
         } else {
             false
@@ -464,7 +553,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             cmp::Ordering::Less => {
                 if let Some(msg) = build_peer_destroyed_report(msg) {
                     self.add_message(msg);
-                    self.set_has_ready();
                 }
             }
             // No matter it's greater or equal, the current peer must be destroyed.
