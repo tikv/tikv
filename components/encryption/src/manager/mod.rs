@@ -878,17 +878,18 @@ impl EncryptionKeyManager for DataKeyManager {
         let src_path = Path::new(src_fname);
         let dst_path = Path::new(dst_fname);
         if src_path.is_dir() {
-            let mut iter = walkdir::WalkDir::new(src_path).into_iter().peekable();
+            let mut iter = walkdir::WalkDir::new(src_path)
+                .into_iter()
+                .filter(|e| e.as_ref().map_or(true, |e| !e.path().is_dir()))
+                .peekable();
             while let Some(e) = iter.next() {
                 let e = e?;
+                assert!(e.path().is_dir());
                 if e.path_is_symlink() {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
                         format!("unexpected symbolic link: {}", e.path().display()),
                     ));
-                }
-                if e.path().is_dir() {
-                    continue;
                 }
                 let sub_path = e.path().strip_prefix(src_path).unwrap();
                 let src = e.path().as_os_str().to_str().unwrap();
