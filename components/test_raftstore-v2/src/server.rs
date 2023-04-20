@@ -328,7 +328,10 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let (snap_mgr, snap_mgs_path) = if !self.snap_mgrs.contains_key(&node_id) {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_path = tmp.path().to_str().unwrap().to_owned();
-            (TabletSnapManager::new(snap_path)?, Some(tmp))
+            (
+                TabletSnapManager::new(snap_path, key_manager.clone())?,
+                Some(tmp),
+            )
         } else {
             (self.snap_mgrs[&node_id].clone(), None)
         };
@@ -475,7 +478,13 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let importer = {
             let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
-                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
+                SstImporter::new(
+                    &cfg.import,
+                    dir,
+                    key_manager.clone(),
+                    cfg.storage.api_version(),
+                )
+                .unwrap(),
             )
         };
         let import_service = ImportSstService::new(
@@ -545,6 +554,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 None,
                 debug_thread_pool.clone(),
                 health_service.clone(),
+                resource_manager.clone(),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
@@ -597,6 +607,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             Arc::new(VersionTrack::new(raft_store)),
             &state,
             importer,
+            key_manager,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
