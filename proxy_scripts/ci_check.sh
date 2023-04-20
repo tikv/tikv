@@ -4,7 +4,7 @@ if [[ $M == "fmt" ]]; then
     git rev-parse --show-toplevel
     make gen_proxy_ffi
     git status -s .
-    GIT_STATUS=$(git status -s) && if [[ ${GIT_STATUS} ]]; then echo "Error: found illegal git status"; echo ${GIT_STATUS}; [[ -z ${GIT_STATUS} ]]; fi
+    GIT_STATUS=$(git status -s .) && if [[ ${GIT_STATUS} ]]; then echo "Error: found illegal git status"; echo ${GIT_STATUS}; [[ -z ${GIT_STATUS} ]]; fi
     cargo fmt -- --check
 elif [[ $M == "testold" ]]; then
     export ENGINE_LABEL_VALUE=tiflash
@@ -49,6 +49,7 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --test proxy store
     cargo test --package proxy_tests --test proxy region
     cargo test --package proxy_tests --test proxy flashback
+    cargo test --package proxy_tests --test proxy tablet_snapshot
     cargo test --package proxy_tests --test proxy v1_specific::region_ext
     cargo test --package proxy_tests --test proxy v1_specific::flashback
     cargo test --package proxy_tests --test proxy server_cluster_test -- --test-threads 1

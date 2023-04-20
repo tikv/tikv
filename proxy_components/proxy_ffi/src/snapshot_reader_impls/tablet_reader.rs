@@ -3,7 +3,7 @@ use std::{cell::RefCell, sync::Arc};
 
 use encryption::DataKeyManager;
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
-use engine_traits::{Iterable, Iterator, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{Iterable, Iterator};
 
 use crate::{
     cf_to_name,
@@ -26,19 +26,16 @@ impl TabletReader {
         _key_manager: Option<Arc<DataKeyManager>>,
     ) -> SSTReaderPtr {
         let db_opts = RocksDbOptions::default();
-        let defaultcf = RocksCfOptions::default();
-        let lockcf = RocksCfOptions::default();
-        let writecf = RocksCfOptions::default();
-        let cf_opts = vec![
-            (CF_DEFAULT, defaultcf),
-            (CF_LOCK, lockcf),
-            (CF_WRITE, writecf),
-        ];
-        let kv_engine = engine_rocks::util::new_engine_opt(path, db_opts, cf_opts);
-        if let Err(e) = &kv_engine {
-            tikv_util::error!("failed to read tablet snapshot"; "path" => path, "err" => ?e);
-        }
-        let kv_engine = kv_engine.unwrap();
+        let cfopt = RocksCfOptions::default();
+
+        let cf_opts = vec![(cf_to_name(cf), cfopt)];
+        let cfds: Vec<_> = cf_opts
+            .into_iter()
+            .map(|(name, opt)| (name, opt.into_raw()))
+            .collect();
+        let db = rocksdb::DB::open_cf_for_read_only(db_opts.into_raw(), path, cfds, false).unwrap();
+        let kv_engine = engine_rocks::RocksEngine::new(db);
+
         let tr = Box::new(TabletReader {
             kv_engine,
             iter: RefCell::new(None),
@@ -102,7 +99,23 @@ impl TabletReader {
         *self.remained.borrow_mut() = iter.next().unwrap();
     }
 
-    pub fn ffi_seek(&self, _: ColumnFamilyType, _: EngineIteratorSeekType, _: BaseBuffView) {
-        todo!()
+    pub fn ffi_seek(&self, _: ColumnFamilyType, et: EngineIteratorSeekType, bf: BaseBuffView) {
+        if self.iter.borrow().is_none() {
+            self.create_iter();
+        }
+        let mut b = self.iter.borrow_mut();
+        let iter = b.as_mut().unwrap();
+        match et {
+            EngineIteratorSeekType::First => {
+                let _ = iter.seek_to_first();
+            }
+            EngineIteratorSeekType::Last => {
+                let _ = iter.seek_to_last();
+            }
+            EngineIteratorSeekType::Key => {
+                let dk = keys::data_key(bf.to_slice());
+                let _ = iter.seek(&dk);
+            }
+        };
     }
 }

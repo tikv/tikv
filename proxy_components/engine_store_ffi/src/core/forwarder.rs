@@ -92,6 +92,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             .max_thread_count(packed_envs.snap_handle_pool_size)
             .build_future_pool();
 
+        info!("created tiflash forwarder"; "store_id" => store_id);
         ProxyForwarder {
             store_id,
             engine_store_server_helper,

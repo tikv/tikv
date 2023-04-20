@@ -1,10 +1,15 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{RocksCfOptions, RocksDbOptions};
-use engine_traits::{Checkpointer, KvEngine, SyncMutable, LARGE_CFS};
+use engine_traits::{Checkpointer, KvEngine, SyncMutable};
 use grpcio::Environment;
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData};
-use mock_engine_store::mock_cluster::v1::server::new_server_cluster;
+use mock_engine_store::{
+    interfaces_ffi::BaseBuffView, mock_cluster::v1::server::new_server_cluster,
+};
+use proxy_ffi::{
+    interfaces_ffi::{ColumnFamilyType, EngineIteratorSeekType},
+    snapshot_reader_impls::{tablet_reader::TabletReader, *},
+};
 use raft::eraftpb::Snapshot;
 use raftstore::store::{snap::TABLET_SNAPSHOT_VERSION, TabletSnapKey, TabletSnapManager};
 use rand::Rng;
@@ -62,16 +67,14 @@ fn generate_snap<EK: KvEngine>(
 
 #[test]
 fn test_parse_tablet_snapshot() {
-    let test_receive_snap = |key_num| {
+    let test_parse_snap = |key_num| {
         let mut cluster_v1 = new_server_cluster(1, 1);
         let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
-
         cluster_v1
             .cfg
             .server
             .labels
             .insert(String::from("engine"), String::from("tiflash"));
-
         cluster_v1.run();
         cluster_v2.run();
 
@@ -84,6 +87,12 @@ fn test_parse_tablet_snapshot() {
         for i in 0..key_num {
             let k = format!("zk{:04}", i);
             tablet.put(k.as_bytes(), &random_long_vec(1024)).unwrap();
+            tablet
+                .put_cf(CF_LOCK, k.as_bytes(), &random_long_vec(1024))
+                .unwrap();
+            tablet
+                .put_cf(CF_WRITE, k.as_bytes(), &random_long_vec(1024))
+                .unwrap();
         }
 
         let snap_mgr = cluster_v2.get_snap_mgr(1);
@@ -101,30 +110,41 @@ fn test_parse_tablet_snapshot() {
         // The snapshot has been received by cluster v1, so check it's completeness
         let snap_mgr = cluster_v1.get_snap_mgr(1);
         let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
-        let rocksdb = engine_rocks::util::new_engine_opt(
-            path.as_path().to_str().unwrap(),
-            RocksDbOptions::default(),
-            LARGE_CFS
-                .iter()
-                .map(|&cf| (cf, RocksCfOptions::default()))
-                .collect(),
-        )
-        .unwrap();
 
-        for i in 0..key_num {
-            let k = format!("zk{:04}", i);
-            assert!(
-                rocksdb
-                    .get_value_cf("default", k.as_bytes())
-                    .unwrap()
-                    .is_some()
-            );
-        }
+        let validate = |cf: ColumnFamilyType| unsafe {
+            let reader =
+                TabletReader::ffi_get_cf_file_reader(path.as_path().to_str().unwrap(), cf, None);
+
+            // SSTReaderPtr is not aware of the data prefix 'z'.
+            let k = format!("k{:04}", 5);
+            let bf = BaseBuffView {
+                data: k.as_ptr() as *const _,
+                len: k.len() as u64,
+            };
+            ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Key, bf);
+            for i in 5..key_num {
+                let k = format!("k{:04}", i);
+                assert_eq!(ffi_sst_reader_remained(reader.clone(), cf), 1);
+                let kbf = ffi_sst_reader_key(reader.clone(), cf);
+                assert_eq!(kbf.to_slice(), k.as_bytes());
+                ffi_sst_reader_next(reader.clone(), cf);
+            }
+            assert_eq!(ffi_sst_reader_remained(reader.clone(), cf), 0);
+
+            // If the sst is "empty" to this region. Will not panic, and remained should be
+            // false.
+            let k = format!("k{:04}", key_num + 10);
+            let bf = BaseBuffView {
+                data: k.as_ptr() as *const _,
+                len: k.len() as u64,
+            };
+            ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Key, bf);
+            assert_eq!(ffi_sst_reader_remained(reader.clone(), cf), 0);
+        };
+        validate(ColumnFamilyType::Default);
+        validate(ColumnFamilyType::Write);
+        validate(ColumnFamilyType::Lock);
     };
 
-    // test small snapshot
-    test_receive_snap(20);
-
-    // test large snapshot
-    test_receive_snap(5000);
+    test_parse_snap(20);
 }

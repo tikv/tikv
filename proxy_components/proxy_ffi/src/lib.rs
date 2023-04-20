@@ -28,14 +28,3 @@ pub use self::{
     basic_ffi_impls::*, domain_impls::*, encryption_impls::*, engine_store_helper_impls::*,
     interfaces::root::DB as interfaces_ffi, raftstore_proxy::*, raftstore_proxy_helper_impls::*,
 };
-
-#[allow(clippy::wrong_self_convention)]
-pub trait UnwrapExternCFunc<T> {
-    unsafe fn into_inner(&self) -> &T;
-}
-
-impl<T> UnwrapExternCFunc<T> for std::option::Option<T> {
-    unsafe fn into_inner(&self) -> &T {
-        std::mem::transmute::<&Self, &T>(self)
-    }
-}

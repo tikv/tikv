@@ -53,6 +53,8 @@ impl SSTReaderPtr {
 
     // TiKV don't make guarantee that a v1 sst file ends with ".sst".
     // So instead we mark v2's tablet format with prefix "!".
+    // This encoding should exist only in memory.
+    // TODO Work together for a uniformed name.
     pub fn encode_v2(s: &str) -> String {
         "!".to_owned() + s
     }

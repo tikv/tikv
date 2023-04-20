@@ -71,6 +71,7 @@ online_config = { workspace = true }
 paste = "1.0"
 pd_client = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
+proxy_ffi = { workspace = true, default-features = false }
 proxy_server = { workspace = true, default-features = false }
 proxy_test_raftstore_v2 = { workspace = true }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
