@@ -14,6 +14,7 @@
 use std::{
     cmp,
     collections::HashMap,
+    marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{atomic::AtomicU64, mpsc, Arc},
@@ -22,6 +23,10 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
+use backup_stream::{
+    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
+    BackupStreamResolver,
+};
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
@@ -34,9 +39,12 @@ use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
     diagnosticspb::create_diagnostics, import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion,
-    resource_usage_agent::create_resource_metering_pub_sub,
+    logbackuppb::create_log_backup, resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{PdClient, RpcClient};
+use pd_client::{
+    meta_storage::{Checked, Sourced},
+    PdClient, RpcClient,
+};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -191,6 +199,7 @@ struct TikvServer<ER: RaftEngine> {
     cdc_worker: Option<Box<LazyWorker<cdc::Task>>>,
     cdc_scheduler: Option<Scheduler<cdc::Task>>,
     cdc_memory_quota: Option<MemoryQuota>,
+    backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
@@ -328,6 +337,7 @@ where
             cdc_worker: None,
             cdc_scheduler: None,
             cdc_memory_quota: None,
+            backup_stream_scheduler: None,
             sst_worker: None,
             quota_limiter,
             resource_manager,
@@ -626,6 +636,46 @@ where
             self.core.to_stop.push(rts_worker);
         }
 
+        // Start backup stream
+        self.backup_stream_scheduler = if self.core.config.log_backup.enable {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register backup-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::BackupStream,
+                Box::new(BackupStreamConfigManager::new(
+                    backup_stream_worker.scheduler(),
+                    self.core.config.log_backup.clone(),
+                )),
+            );
+
+            let backup_stream_endpoint = backup_stream::Endpoint::new(
+                self.node.as_ref().unwrap().id(),
+                PdStore::new(Checked::new(Sourced::new(
+                    Arc::clone(&self.pd_client),
+                    pd_client::meta_storage::Source::LogBackup,
+                ))),
+                self.core.config.log_backup.clone(),
+                backup_stream_scheduler.clone(),
+                backup_stream_ob,
+                self.region_info_accessor.as_ref().unwrap().clone(),
+                self.router.clone().unwrap(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
+            self.core.to_stop.push(backup_stream_worker);
+            Some(backup_stream_scheduler)
+        } else {
+            None
+        };
+
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
         self.core
@@ -836,6 +886,17 @@ where
             .is_some()
         {
             fatal!("failed to register import service");
+        }
+
+        if let Some(sched) = self.backup_stream_scheduler.take() {
+            let pitr_service = backup_stream::Service::new(sched);
+            if servers
+                .server
+                .register_service(create_log_backup(pitr_service))
+                .is_some()
+            {
+                fatal!("failed to register log backup service");
+            }
         }
 
         self.cfg_controller
