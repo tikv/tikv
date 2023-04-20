@@ -14,6 +14,7 @@ use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, S
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager, ENGINE, TIFLASH};
+use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -103,6 +104,7 @@ where
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
         health_service: HealthService,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -139,6 +141,7 @@ where
             cfg.value().enable_request_batch,
             proxy,
             cfg.value().reject_messages_on_memory_ratio,
+            resource_manager,
         );
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
@@ -579,6 +582,7 @@ mod tests {
         );
         let addr = Arc::new(Mutex::new(None));
         let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
+        let path = tempfile::TempDir::new().unwrap();
         let mut server = Server::new(
             mock_store_id,
             &cfg,
@@ -590,13 +594,14 @@ mod tests {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            Either::Left(SnapManager::new("")),
+            Either::Left(SnapManager::new(path.path().to_str().unwrap())),
             gc_worker,
             check_leader_scheduler,
             env,
             None,
             debug_thread_pool,
             HealthService::default(),
+            None,
         )
         .unwrap();
 

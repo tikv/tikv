@@ -72,6 +72,7 @@ pub enum IoType {
     Gc = 8,
     Import = 9,
     Export = 10,
+    RewriteLog = 11,
 }
 
 impl IoType {
@@ -88,6 +89,7 @@ impl IoType {
             IoType::Gc => "gc",
             IoType::Import => "import",
             IoType::Export => "export",
+            IoType::RewriteLog => "log_rewrite",
         }
     }
 }
@@ -145,8 +147,13 @@ impl IoPriority {
         }
     }
 
-    fn unsafe_from_u32(i: u32) -> Self {
-        unsafe { std::mem::transmute(i) }
+    fn from_u32(i: u32) -> Self {
+        match i {
+            0 => IoPriority::Low,
+            1 => IoPriority::Medium,
+            2 => IoPriority::High,
+            _ => panic!("unknown io priority {}", i),
+        }
     }
 }
 
@@ -469,9 +476,14 @@ pub fn trash_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
 /// to resume all those removal in the given directory.
 #[inline]
 pub fn clean_up_trash(path: impl AsRef<Path>) -> io::Result<()> {
+    clean_up_dir(path, TRASH_PREFIX)
+}
+
+/// clean up all files starts with the given prefix in the given directory.
+pub fn clean_up_dir(path: impl AsRef<Path>, prefix: &str) -> io::Result<()> {
     for e in read_dir(path)? {
         let e = e?;
-        if e.file_name().to_string_lossy().starts_with(TRASH_PREFIX) {
+        if e.file_name().to_string_lossy().starts_with(prefix) {
             remove_dir_all(e.path())?;
         }
     }
@@ -673,5 +685,10 @@ mod tests {
         assert!(trash_sub_dir0.exists());
         clean_up_trash(data_path).unwrap();
         assert!(!trash_sub_dir0.exists());
+
+        create_dir_all(&sub_dir0).unwrap();
+        assert!(sub_dir0.exists());
+        clean_up_dir(data_path, "sub").unwrap();
+        assert!(!sub_dir0.exists());
     }
 }

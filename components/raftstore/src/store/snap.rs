@@ -1429,12 +1429,6 @@ impl SnapManager {
     }
 
     pub fn init(&self) -> io::Result<()> {
-        self.init_core()?;
-        self.tablet_snap_manager.init()?;
-        Ok(())
-    }
-
-    fn init_core(&self) -> io::Result<()> {
         let enc_enabled = self.core.encryption_key_manager.is_some();
         info!(
             "Initializing SnapManager, encryption is enabled: {}",
@@ -1681,7 +1675,7 @@ impl SnapManager {
     /// NOTE: don't call it in raftstore thread.
     pub fn get_total_snap_size(&self) -> Result<u64> {
         let size_v1 = self.core.get_total_snap_size()?;
-        let size_v2 = self.tablet_snap_manager.total_snap_size()?;
+        let size_v2 = self.tablet_snap_manager.total_snap_size().unwrap_or(0);
         Ok(size_v1 + size_v2)
     }
 
@@ -1967,10 +1961,11 @@ impl SnapManagerBuilder {
             u64::MAX
         };
         let path = path.into();
+        assert!(!path.is_empty());
         let mut path_v2 = path.clone();
-        // the path for tablet snap manager, it will be empty if the cluster is not
-        // to receive snapshot from cluster of raftstore-v2
         path_v2.push_str("_v2");
+        let tablet_snap_mgr = TabletSnapManager::new(&path_v2).unwrap();
+
         let mut snapshot = SnapManager {
             core: SnapManagerCore {
                 base: path,
@@ -1985,7 +1980,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
-            tablet_snap_manager: TabletSnapManager::new_without_init(&path_v2),
+            tablet_snap_manager: tablet_snap_mgr,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
@@ -2056,7 +2051,6 @@ pub struct TabletSnapManager {
 
 impl TabletSnapManager {
     pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
-        // Initialize the directory if it doesn't exist.
         let path = path.into();
         if !path.exists() {
             file_system::create_dir_all(&path)?;
@@ -2067,35 +2061,13 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
+        file_system::clean_up_dir(&path, SNAP_GEN_PREFIX)?;
         file_system::clean_up_trash(&path)?;
         Ok(Self {
             base: path,
             receiving: Arc::default(),
             stats: Arc::default(),
         })
-    }
-
-    pub fn new_without_init<T: Into<PathBuf>>(path: T) -> Self {
-        let path = path.into();
-        Self {
-            base: path,
-            receiving: Arc::default(),
-            stats: Arc::default(),
-        }
-    }
-
-    pub fn init(&self) -> io::Result<()> {
-        if !self.base.exists() {
-            file_system::create_dir_all(&self.base)?;
-        }
-        if !self.base.is_dir() {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                format!("{} should be a directory", self.base.display()),
-            ));
-        }
-        file_system::clean_up_trash(&self.base)?;
-        Ok(())
     }
 
     pub fn begin_snapshot(&self, key: TabletSnapKey, start: Instant, generate_duration_sec: u64) {
@@ -3212,9 +3184,12 @@ pub mod tests {
         assert!(mgr.stats().stats.is_empty());
 
         // filter out the total duration seconds less than one sencond.
-        mgr.begin_snapshot(key.clone(), start, 1);
-        mgr.finish_snapshot(key, start);
+        let path = mgr.tablet_gen_path(&key);
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(path.exists());
+        mgr.delete_snapshot(&key);
         assert_eq!(mgr.stats().stats.len(), 0);
+        assert!(!path.exists());
     }
 
     #[test]
