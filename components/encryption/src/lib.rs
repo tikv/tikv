@@ -65,15 +65,30 @@ pub fn trash_dir_all(
 /// When using `trash_dir_all`, it's possible the directory is marked as trash
 /// but not being actually deleted after a restart. This function can be used
 /// to resume all those removal in the given directory.
-/// `f` will be called for every found trashed directory, before deleting it.
 #[inline]
 pub fn clean_up_trash(
     path: impl AsRef<Path>,
     key_manager: Option<&DataKeyManager>,
 ) -> std::io::Result<()> {
-    clean_up_dir(path, TRASH_PREFIX, key_manager)
+    for e in file_system::read_dir(path)? {
+        let e = e?;
+        let fname = e.file_name().to_str().unwrap().to_owned();
+        if fname.starts_with(TRASH_PREFIX) {
+            let original = e
+                .path()
+                .parent()
+                .unwrap()
+                .join(fname.strip_prefix(TRASH_PREFIX).unwrap());
+            if let Some(m) = &key_manager {
+                m.remove_dir(&original, Some(&e.path()))?;
+            }
+            file_system::remove_dir_all(e.path())?;
+        }
+    }
+    Ok(())
 }
 
+/// Removes all directories with the given prefix.
 #[inline]
 pub fn clean_up_dir(
     path: impl AsRef<Path>,
@@ -84,15 +99,10 @@ pub fn clean_up_dir(
         let e = e?;
         let fname = e.file_name().to_str().unwrap().to_owned();
         if fname.starts_with(prefix) {
-            let original = e
-                .path()
-                .parent()
-                .unwrap()
-                .join(fname.strip_prefix(prefix).unwrap());
-            if let Some(m) = &key_manager {
-                m.remove_dir(&original, Some(&e.path()))?;
-            }
             file_system::remove_dir_all(e.path())?;
+            if let Some(m) = &key_manager {
+                m.remove_dir(&e.path(), None)?;
+            }
         }
     }
     Ok(())
