@@ -882,7 +882,6 @@ impl EncryptionKeyManager for DataKeyManager {
                 .peekable();
             while let Some(e) = iter.next() {
                 let e = e?;
-                assert!(e.path().is_dir());
                 if e.path_is_symlink() {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
