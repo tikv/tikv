@@ -676,8 +676,8 @@ fn test_sending_fail_with_net_error() {
     // need to wait receiver handle the snapshot request
     sleep_ms(100);
 
-    // peer2 will not become learner so not have k1 key and receiving count will
-    // zero
+    // peer2 can't receive any snapshot, so it doesn't have any key valuse.
+    // but the receiving_count should be zero if receiving snapshot is failed.
     let engine2 = cluster.get_engine(2);
     must_get_none(&engine2, b"k1");
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
