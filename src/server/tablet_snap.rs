@@ -351,6 +351,9 @@ pub(crate) async fn accept_missing(
     }
     // Now receive other files.
     loop {
+        fail_point!("receiving_snapshot_net_error", |_| {
+            Err(box_err!("failed to receive snapshot"))
+        });
         let chunk = match stream.next().await {
             Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
             Some(Ok(req)) if req.has_end() => {
