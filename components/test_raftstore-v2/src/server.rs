@@ -545,6 +545,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 None,
                 debug_thread_pool.clone(),
                 health_service.clone(),
+                resource_manager.clone(),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
