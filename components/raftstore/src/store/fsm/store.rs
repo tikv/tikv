@@ -10,10 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -91,7 +88,6 @@ use crate::{
         local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
-        msg::StoreSpecifiedMessageObserver,
         peer_storage,
         transport::Transport,
         util,
@@ -686,15 +682,15 @@ struct Store {
 }
 
 struct StoreReachability {
-    received: Arc<AtomicUsize>,
-    last_unreachable_broadcast: (Instant, usize),
+    last_broadcast: Instant,
+    messages: u64,
 }
 
 impl StoreReachability {
     fn new(init: Instant) -> Self {
         StoreReachability {
-            received: Arc::new(AtomicUsize::new(0)),
-            last_unreachable_broadcast: (init, 0),
+            last_broadcast: init,
+            messages: 0,
         }
     }
 }
@@ -807,9 +803,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
                 StoreMsg::StoreUnreachable { store_id } => {
                     self.on_store_unreachable(store_id);
-                }
-                StoreMsg::GetStoreSpecifiedMessageObserver { store_id, cb } => {
-                    self.get_store_specified_message_observer(store_id, cb);
                 }
                 StoreMsg::Start { store } => self.start(store),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -2902,43 +2895,26 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             HashMapEntry::Vacant(x) => x.insert(StoreReachability::new(now - unreachable_backoff)),
         };
 
-        let (ins, count) = ob.last_unreachable_broadcast;
-        if now.saturating_duration_since(ins) < unreachable_backoff {
-            return;
-        }
-        let new_count = ob.received.load(Ordering::Acquire);
-        if new_count <= count {
+        if now.saturating_duration_since(ob.last_broadcast) < unreachable_backoff {
             return;
         }
 
-        ob.last_unreachable_broadcast = (now, new_count);
-        info!(
-            "broadcasting unreachable";
-            "store_id" => self.fsm.store.id,
-            "unreachable_store_id" => store_id,
-        );
-        // It's possible to acquire the lock and only send notification to
-        // involved regions. However loop over all the regions can take a
-        // lot of time, which may block other operations.
-        self.ctx.router.report_unreachable(store_id);
-    }
-
-    fn get_store_specified_message_observer(
-        &mut self,
-        store_id: u64,
-        cb: Box<dyn FnOnce(StoreSpecifiedMessageObserver) + Send>,
-    ) {
-        let ob = match self.fsm.store.store_reachability.entry(store_id) {
-            HashMapEntry::Occupied(x) => x.into_mut(),
-            HashMapEntry::Vacant(x) => {
-                let now = Instant::now();
-                let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
-                x.insert(StoreReachability::new(now - unreachable_backoff))
-            }
-        };
-        cb(StoreSpecifiedMessageObserver {
-            received_messages: Arc::clone(&ob.received),
-        });
+        let new_messages = MESSAGE_RECV_BY_STORE
+            .with_label_values(&[&format!("{}", store_id)])
+            .get();
+        if new_messages > ob.messages {
+            ob.last_broadcast = now;
+            ob.messages = new_messages;
+            info!(
+                "broadcasting unreachable";
+                "store_id" => self.fsm.store.id,
+                "unreachable_store_id" => store_id,
+            );
+            // It's possible to acquire the lock and only send notification to
+            // involved regions. However loop over all the regions can take a
+            // lot of time, which may block other operations.
+            self.ctx.router.report_unreachable(store_id);
+        }
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
