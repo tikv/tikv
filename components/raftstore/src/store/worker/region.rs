@@ -59,7 +59,7 @@ const CLEANUP_MAX_REGION_COUNT: usize = 64;
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";
 
-pub fn is_tiflash_engine(store: &metapb::Store) -> bool {
+fn is_tiflash_engine(store: &metapb::Store) -> bool {
     store.get_labels().iter().any(|label| {
         label.get_key().to_lowercase() == ENGINE && label.get_value().to_lowercase() == TIFLASH
     })

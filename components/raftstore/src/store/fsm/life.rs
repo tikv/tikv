@@ -59,7 +59,7 @@ pub fn forward_destroy_to_source_peer<T: FnOnce(RaftMessage)>(msg: &RaftMessage,
     forward(tombstone_msg);
 }
 
-pub fn handle_tombstone_message_on_tiflash_proxy<EK: KvEngine>(
+pub fn handle_tombstone_message_on_learner<EK: KvEngine>(
     engine: &EK,
     store_id: u64,
     mut msg: RaftMessage,

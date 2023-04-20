@@ -94,7 +94,7 @@ use crate::{
         util,
         util::{KeysInfoFormatter, LeaseState},
         worker::{
-            is_tiflash_engine, new_change_peer_v2_request, Bucket, BucketRange, CleanupTask,
+            new_change_peer_v2_request, Bucket, BucketRange, CleanupTask,
             ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress,
             RegionTask, SplitCheckTask,
         },
@@ -2742,13 +2742,10 @@ where
         }
     }
 
-    // In v1, gc_peer_request is handled only when it's tiflash engine.
+    // In v1, gc_peer_request is handled to be compatible with v2.
     // Note: it needs to be consistent with Peer::on_gc_peer_request in v2.
-    fn on_tiflash_engine_gc_peer_request(&mut self, msg: RaftMessage) {
+    fn on_gc_peer_request(&mut self, msg: RaftMessage) {
         let extra_msg = msg.get_extra_msg();
-        if !is_tiflash_engine(&self.ctx.store) {
-            return;
-        }
 
         if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
             // Corrupted message.
@@ -2820,9 +2817,11 @@ where
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
             ExtraMessageType::MsgGcPeerRequest => {
-                // To make tiflash proxy compatiable with raftstore v2, it needs
-                // to response GcPeerResponse.
-                self.on_tiflash_engine_gc_peer_request(msg);
+                // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
+                // it needs to response GcPeerResponse.
+                if self.ctx.cfg.enable_v2_compatible_learner {
+                    self.on_gc_peer_request(msg);
+                }
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),

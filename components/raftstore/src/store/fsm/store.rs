@@ -78,7 +78,7 @@ use crate::{
         config::Config,
         fsm::{
             create_apply_batch_system,
-            life::handle_tombstone_message_on_tiflash_proxy,
+            life::handle_tombstone_message_on_learner,
             metrics::*,
             peer::{
                 maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -94,7 +94,7 @@ use crate::{
         util,
         util::{is_initial_msg, RegionReadProgressRegistry},
         worker::{
-            is_tiflash_engine, AutoSplitController, CleanupRunner, CleanupSstRunner,
+            AutoSplitController, CleanupRunner, CleanupSstRunner,
             CleanupSstTask, CleanupTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
             ConsistencyCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner,
             RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner,
@@ -2069,10 +2069,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             return Ok(());
         }
 
-        // To make tiflash proxy compatiable with raftstore v2, it needs to
-        // response GcPeerResponse.
-        if msg.get_is_tombstone() && is_tiflash_engine(&self.ctx.store) {
-            if let Some(msg) = handle_tombstone_message_on_tiflash_proxy(
+        // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
+        // it needs to response GcPeerResponse.
+        if msg.get_is_tombstone() && self.ctx.cfg.enable_v2_compatible_learner {
+            if let Some(msg) = handle_tombstone_message_on_learner(
                 &self.ctx.engines.kv,
                 self.fsm.store.id,
                 msg,

@@ -40,7 +40,7 @@ pub use self::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,
         Task as RefreshConfigTask,
     },
-    region::{is_tiflash_engine, Runner as RegionRunner, Task as RegionTask},
+    region::{Runner as RegionRunner, Task as RegionTask},
     split_check::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },
