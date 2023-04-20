@@ -11,12 +11,19 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raft::SnapshotStatus;
-use raftstore::store::region_meta::RegionMeta;
+use raftstore::store::{msg::StoreSpecifiedMessageObserver, region_meta::RegionMeta};
 
 use crate::Result;
 
 /// An interface to provide direct access to raftstore layer.
 pub trait RaftExtension: Clone + Send {
+    fn store_specified_message_observer(
+        &self,
+        _store_id: u64,
+    ) -> BoxFuture<'static, StoreSpecifiedMessageObserver> {
+        Box::pin(async move { StoreSpecifiedMessageObserver::default() })
+    }
+
     /// Feed the message to the raft group.
     ///
     /// If it's a `key_message` is true, it will log a warning if the message

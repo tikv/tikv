@@ -154,7 +154,8 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, SnapManager>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<AddressMap, FakeExtension>,
+    raft_clients: HashMap<u64, RaftClient<AddressMap, FakeExtension>>,
+    conn_builder: ConnectionBuilder<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
@@ -182,7 +183,6 @@ impl ServerCluster {
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
-        let raft_client = RaftClient::new(conn_builder);
         ServerCluster {
             metas: HashMap::default(),
             addrs: map,
@@ -196,7 +196,8 @@ impl ServerCluster {
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
             health_services: HashMap::default(),
-            raft_client,
+            raft_clients: HashMap::default(),
+            conn_builder,
             concurrency_managers: HashMap::default(),
             env,
             txn_extra_schedulers: HashMap::default(),
@@ -643,6 +644,8 @@ impl ServerCluster {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
+        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }
 }
@@ -696,6 +699,7 @@ impl Simulator for ServerCluster {
             }
             (meta.rsmeter_cleanup)();
         }
+        let _ = self.raft_clients.remove(&node_id);
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {
@@ -737,8 +741,12 @@ impl Simulator for ServerCluster {
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
-        self.raft_client.send(raft_msg).unwrap();
-        self.raft_client.flush();
+        let from_store = raft_msg.get_from_peer().store_id;
+        assert_ne!(from_store, 0);
+        if let Some(client) = self.raft_clients.get_mut(&from_store) {
+            client.send(raft_msg).unwrap();
+            client.flush();
+        }
         Ok(())
     }
 

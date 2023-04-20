@@ -1,9 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-#[cfg(any(test, feature = "testexport"))]
-use std::sync::Arc;
-use std::{borrow::Cow, fmt};
+use std::{
+    borrow::Cow,
+    fmt,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -833,8 +838,13 @@ where
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+
     StoreUnreachable {
         store_id: u64,
+    },
+    GetStoreSpecifiedMessageObserver {
+        store_id: u64,
+        cb: Box<dyn FnOnce(StoreSpecifiedMessageObserver) + Send>,
     },
 
     // Compaction finished event
@@ -882,6 +892,9 @@ where
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
+            StoreMsg::GetStoreSpecifiedMessageObserver { .. } => {
+                write!(fmt, "GetStoreSpecifiedMessageObserver")
+            }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
             StoreMsg::ValidateSstResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
@@ -905,5 +918,25 @@ where
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
         }
+    }
+}
+
+/// StoreSpecifiedMessageObserver is to help check whether a store is reachable
+/// or not.
+#[derive(Default)]
+pub struct StoreSpecifiedMessageObserver {
+    pub(crate) received_messages: Arc<AtomicUsize>,
+}
+
+impl StoreSpecifiedMessageObserver {
+    pub fn post_received(&self, messages: usize) {
+        self.received_messages
+            .fetch_add(messages, Ordering::Release);
+    }
+}
+
+impl fmt::Debug for StoreSpecifiedMessageObserver {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "StoreSpecifiedMessageObserver")
     }
 }

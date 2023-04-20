@@ -10,7 +10,10 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
     u64,
 };
@@ -88,6 +91,7 @@ use crate::{
         local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
+        msg::StoreSpecifiedMessageObserver,
         peer_storage,
         transport::Transport,
         util,
@@ -678,7 +682,21 @@ struct Store {
     stopped: bool,
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
-    last_unreachable_report: HashMap<u64, Instant>,
+    store_reachability: HashMap<u64, StoreReachability>,
+}
+
+struct StoreReachability {
+    received: Arc<AtomicUsize>,
+    last_unreachable_broadcast: (Instant, usize),
+}
+
+impl StoreReachability {
+    fn new(init: Instant) -> Self {
+        StoreReachability {
+            received: Arc::new(AtomicUsize::new(0)),
+            last_unreachable_broadcast: (init, 0),
+        }
+    }
 }
 
 pub struct StoreFsm<EK>
@@ -702,7 +720,7 @@ where
                 stopped: false,
                 start_time: None,
                 consistency_check_time: HashMap::default(),
-                last_unreachable_report: HashMap::default(),
+                store_reachability: HashMap::default(),
             },
             receiver: rx,
         });
@@ -789,6 +807,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
                 StoreMsg::StoreUnreachable { store_id } => {
                     self.on_store_unreachable(store_id);
+                }
+                StoreMsg::GetStoreSpecifiedMessageObserver { store_id, cb } => {
+                    self.get_store_specified_message_observer(store_id, cb);
                 }
                 StoreMsg::Start { store } => self.start(store),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -2876,26 +2897,48 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_store_unreachable(&mut self, store_id: u64) {
         let now = Instant::now();
         let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
-        if self
-            .fsm
-            .store
-            .last_unreachable_report
-            .get(&store_id)
-            .map_or(unreachable_backoff, |t| now.saturating_duration_since(*t))
-            < unreachable_backoff
-        {
+        let ob = match self.fsm.store.store_reachability.entry(store_id) {
+            HashMapEntry::Occupied(x) => x.into_mut(),
+            HashMapEntry::Vacant(x) => x.insert(StoreReachability::new(now - unreachable_backoff)),
+        };
+
+        let (ins, count) = ob.last_unreachable_broadcast;
+        if now.saturating_duration_since(ins) < unreachable_backoff {
             return;
         }
+        let new_count = ob.received.load(Ordering::Acquire);
+        if new_count <= count {
+            return;
+        }
+
+        ob.last_unreachable_broadcast = (now, new_count);
         info!(
             "broadcasting unreachable";
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        self.fsm.store.last_unreachable_report.insert(store_id, now);
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
         self.ctx.router.report_unreachable(store_id);
+    }
+
+    fn get_store_specified_message_observer(
+        &mut self,
+        store_id: u64,
+        cb: Box<dyn FnOnce(StoreSpecifiedMessageObserver) + Send>,
+    ) {
+        let ob = match self.fsm.store.store_reachability.entry(store_id) {
+            HashMapEntry::Occupied(x) => x.into_mut(),
+            HashMapEntry::Vacant(x) => {
+                let now = Instant::now();
+                let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
+                x.insert(StoreReachability::new(now - unreachable_backoff))
+            }
+        };
+        cb(StoreSpecifiedMessageObserver {
+            received_messages: Arc::clone(&ob.received),
+        });
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
