@@ -981,12 +981,12 @@ impl<'a> DataKeyImporter<'a> {
 
     pub fn commit(mut self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
-        if !self.file_additions.is_empty() {
-            self.manager.dicts.file_dict_file.lock().unwrap().sync()?;
-        }
         if !self.key_additions.is_empty() {
             self.manager.rotate_tx.send(RotateTask::Save(tx)).unwrap();
             rx.blocking_recv().unwrap();
+        }
+        if !self.file_additions.is_empty() {
+            self.manager.dicts.file_dict_file.lock().unwrap().sync()?;
         }
         self.committed = true;
         Ok(())
