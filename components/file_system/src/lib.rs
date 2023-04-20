@@ -449,67 +449,6 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
     }
 }
 
-const TRASH_PREFIX: &str = "TRASH-";
-
-/// Remove a directory.
-///
-/// Rename it before actually removal.
-#[inline]
-pub fn trash_dir_all<F: FnOnce(&Path) -> io::Result<()>>(
-    path: impl AsRef<Path>,
-    after_rename: F,
-) -> io::Result<()> {
-    let path = path.as_ref();
-    let name = match path.file_name() {
-        Some(n) => n,
-        None => return Err(io::Error::new(ErrorKind::InvalidInput, "path is invalid")),
-    };
-    let trash_path = path.with_file_name(format!("{}{}", TRASH_PREFIX, name.to_string_lossy()));
-    if let Err(e) = rename(path, &trash_path) {
-        if e.kind() == ErrorKind::NotFound {
-            return Ok(());
-        }
-        return Err(e);
-    } else {
-        after_rename(&trash_path)?;
-    }
-    remove_dir_all(trash_path)
-}
-
-/// When using `trash_dir_all`, it's possible the directory is marked as trash
-/// but not being actually deleted after a restart. This function can be used
-/// to resume all those removal in the given directory.
-/// `f` will be called for every found trashed directory, before deleting it.
-#[inline]
-pub fn clean_up_trash<F: Fn(&Path, &Path) -> io::Result<()>>(
-    path: impl AsRef<Path>,
-    f: F,
-) -> io::Result<()> {
-    clean_up_dir(path, TRASH_PREFIX, f)
-}
-
-#[inline]
-pub fn clean_up_dir<F: Fn(&Path, &Path) -> io::Result<()>>(
-    path: impl AsRef<Path>,
-    prefix: &str,
-    f: F,
-) -> io::Result<()> {
-    for e in read_dir(path)? {
-        let e = e?;
-        let fname = e.file_name().to_string_lossy().to_string();
-        if fname.starts_with(prefix) {
-            let original = e
-                .path()
-                .parent()
-                .unwrap()
-                .join(fname.strip_prefix(prefix).unwrap());
-            f(&original, &e.path())?;
-            remove_dir_all(e.path())?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::{io::Write, iter};
@@ -675,40 +614,5 @@ mod tests {
         assert_eq!(meta.len(), reserve_size);
         reserve_space_for_recover(data_path, 0).unwrap();
         assert!(!file.exists());
-    }
-
-    #[test]
-    fn test_trash_dir_all() {
-        let tmp_dir = Builder::new()
-            .prefix("test_reserve_space_for_recover")
-            .tempdir()
-            .unwrap();
-        let data_path = tmp_dir.path();
-        let sub_dir0 = data_path.join("sub_dir0");
-        let trash_sub_dir0 = data_path.join(format!("{}sub_dir0", TRASH_PREFIX));
-        create_dir_all(&sub_dir0).unwrap();
-        assert!(sub_dir0.exists());
-
-        trash_dir_all(&sub_dir0, |_| Ok(())).unwrap();
-        assert!(!sub_dir0.exists());
-        assert!(!trash_sub_dir0.exists());
-
-        create_dir_all(&sub_dir0).unwrap();
-        create_dir_all(&trash_sub_dir0).unwrap();
-        trash_dir_all(&sub_dir0, |_| Ok(())).unwrap();
-        assert!(!sub_dir0.exists());
-        assert!(!trash_sub_dir0.exists());
-
-        clean_up_trash(data_path, |_, _| Ok(())).unwrap();
-
-        create_dir_all(&trash_sub_dir0).unwrap();
-        assert!(trash_sub_dir0.exists());
-        clean_up_trash(data_path, |_, _| Ok(())).unwrap();
-        assert!(!trash_sub_dir0.exists());
-
-        create_dir_all(&sub_dir0).unwrap();
-        assert!(sub_dir0.exists());
-        clean_up_dir(data_path, "sub", |_, _| Ok(())).unwrap();
-        assert!(!sub_dir0.exists());
     }
 }

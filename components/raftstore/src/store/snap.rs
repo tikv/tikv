@@ -2016,18 +2016,8 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_dir(&path, SNAP_GEN_PREFIX, |a, b| {
-            if let Some(m) = &key_manager {
-                m.remove_dir(a, Some(b))?;
-            }
-            Ok(())
-        })?;
-        file_system::clean_up_trash(&path, |a, b| {
-            if let Some(m) = &key_manager {
-                m.remove_dir(a, Some(b))?;
-            }
-            Ok(())
-        })?;
+        encryption::clean_up_dir(&path, SNAP_GEN_PREFIX, key_manager.as_deref())?;
+        encryption::clean_up_trash(&path, key_manager.as_deref())?;
         Ok(Self {
             base: path,
             key_manager,
@@ -2089,12 +2079,7 @@ impl TabletSnapManager {
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
         if path.exists() {
-            if let Err(e) = file_system::trash_dir_all(&path, |renamed| {
-                if let Some(m) = &self.key_manager {
-                    m.remove_dir(&path, Some(renamed))?;
-                }
-                Ok(())
-            }) {
+            if let Err(e) = encryption::trash_dir_all(&path, self.key_manager.as_deref()) {
                 error!(
                     "delete snapshot failed";
                     "path" => %path.display(),

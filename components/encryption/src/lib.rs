@@ -10,6 +10,8 @@ mod manager;
 mod master_key;
 mod metrics;
 
+use std::{io::ErrorKind, path::Path};
+
 pub use self::{
     config::*,
     crypter::{
@@ -27,3 +29,113 @@ pub use self::{
         Backend, DataKeyPair, EncryptedKey, FileBackend, KmsBackend, KmsProvider, PlaintextBackend,
     },
 };
+
+const TRASH_PREFIX: &str = "TRASH-";
+
+/// Remove a directory.
+///
+/// Rename it before actually removal.
+#[inline]
+pub fn trash_dir_all(
+    path: impl AsRef<Path>,
+    key_manager: Option<&DataKeyManager>,
+) -> std::io::Result<()> {
+    let path = path.as_ref();
+    let name = match path.file_name() {
+        Some(n) => n,
+        None => {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "path is invalid",
+            ));
+        }
+    };
+    let trash_path = path.with_file_name(format!("{}{}", TRASH_PREFIX, name.to_string_lossy()));
+    if let Err(e) = file_system::rename(path, &trash_path) {
+        if e.kind() == ErrorKind::NotFound {
+            return Ok(());
+        }
+        return Err(e);
+    } else if let Some(m) = key_manager {
+        m.remove_dir(path, Some(&trash_path))?;
+    }
+    file_system::remove_dir_all(trash_path)
+}
+
+/// When using `trash_dir_all`, it's possible the directory is marked as trash
+/// but not being actually deleted after a restart. This function can be used
+/// to resume all those removal in the given directory.
+/// `f` will be called for every found trashed directory, before deleting it.
+#[inline]
+pub fn clean_up_trash(
+    path: impl AsRef<Path>,
+    key_manager: Option<&DataKeyManager>,
+) -> std::io::Result<()> {
+    clean_up_dir(path, TRASH_PREFIX, key_manager)
+}
+
+#[inline]
+pub fn clean_up_dir(
+    path: impl AsRef<Path>,
+    prefix: &str,
+    key_manager: Option<&DataKeyManager>,
+) -> std::io::Result<()> {
+    for e in file_system::read_dir(path)? {
+        let e = e?;
+        let fname = e.file_name().to_string_lossy().to_string();
+        if fname.starts_with(prefix) {
+            let original = e
+                .path()
+                .parent()
+                .unwrap()
+                .join(fname.strip_prefix(prefix).unwrap());
+            if let Some(m) = &key_manager {
+                m.remove_dir(&original, Some(&e.path()))?;
+            }
+            file_system::remove_dir_all(e.path())?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::Builder;
+
+    use super::*;
+
+    #[test]
+    fn test_trash_dir_all() {
+        let tmp_dir = Builder::new()
+            .prefix("test_reserve_space_for_recover")
+            .tempdir()
+            .unwrap();
+        let data_path = tmp_dir.path();
+        let sub_dir0 = data_path.join("sub_dir0");
+        let trash_sub_dir0 = data_path.join(format!("{}sub_dir0", TRASH_PREFIX));
+        file_system::create_dir_all(&sub_dir0).unwrap();
+        assert!(sub_dir0.exists());
+
+        trash_dir_all(&sub_dir0, None).unwrap();
+        assert!(!sub_dir0.exists());
+        assert!(!trash_sub_dir0.exists());
+
+        file_system::create_dir_all(&sub_dir0).unwrap();
+        file_system::create_dir_all(&trash_sub_dir0).unwrap();
+        trash_dir_all(&sub_dir0, None).unwrap();
+        assert!(!sub_dir0.exists());
+        assert!(!trash_sub_dir0.exists());
+
+        clean_up_trash(data_path, None).unwrap();
+
+        file_system::create_dir_all(&trash_sub_dir0).unwrap();
+        assert!(trash_sub_dir0.exists());
+        clean_up_trash(data_path, None).unwrap();
+        assert!(!trash_sub_dir0.exists());
+
+        file_system::create_dir_all(&sub_dir0).unwrap();
+        assert!(sub_dir0.exists());
+        clean_up_dir(data_path, "sub", None).unwrap();
+        assert!(!sub_dir0.exists());
+    }
+}

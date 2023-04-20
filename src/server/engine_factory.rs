@@ -242,12 +242,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         //   kv_cfs_opts,
         // )?;
         // TODO: use RocksDB::DestroyDB.
-        let _ = file_system::trash_dir_all(path, move |renamed| {
-            if let Some(m) = &self.inner.encryption_key_manager {
-                m.remove_dir(path, Some(renamed))?;
-            }
-            Ok(())
-        });
+        let _ =
+            encryption_export::trash_dir_all(path, self.inner.encryption_key_manager.as_deref());
         if let Some(listener) = &self.inner.flow_listener {
             listener.clone_with(ctx.id).on_destroyed();
         }

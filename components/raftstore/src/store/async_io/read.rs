@@ -125,12 +125,10 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         if checkpointer_path.exists() {
             // TODO: make `delete_snapshot` return error so we can use it here.
             // Remove the old checkpoint directly.
-            file_system::trash_dir_all(&checkpointer_path, |renamed| {
-                if let Some(m) = &self.snap_mgr().key_manager() {
-                    m.remove_dir(&checkpointer_path, Some(renamed))?;
-                }
-                Ok(())
-            })?;
+            encryption::trash_dir_all(
+                &checkpointer_path,
+                self.snap_mgr().key_manager().as_deref(),
+            )?;
         }
         // Here not checkpoint to a temporary directory first, the temporary directory
         // logic already implemented in rocksdb.
