@@ -494,9 +494,25 @@ impl AzureStorage {
     }
 
     pub fn new(config: Config) -> io::Result<AzureStorage> {
+        let bucket = (*config.bucket.bucket).to_owned();
         // priority: explicit shared key > env Azure AD > env shared key
         if let Some(connection_string) = config.parse_plaintext_account_url() {
-            let bucket = (*config.bucket.bucket).to_owned();
+            #[cfg(test)]
+            #[cfg(feature = "azurite")]
+            {
+                debug_assert!(!connection_string.is_empty());
+                return Ok(AzureStorage {
+                    config,
+                    client_builder: Arc::new(SharedKeyContainerBuilder {
+                        container_client: Arc::new(
+                            ClientBuilder::emulator()
+                                .blob_service_client()
+                                .container_client(bucket)
+                                .clone(),
+                        ),
+                    }),
+                });
+            }
             let account_name = config.get_account_name()?;
             let storage_credentials = ConnectionString::new(&connection_string)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?
@@ -512,7 +528,6 @@ impl AzureStorage {
                 client_builder,
             })
         } else if let Some(credential_info) = config.credential_info.as_ref() {
-            let bucket = (*config.bucket.bucket).to_owned();
             let account_name = config.get_account_name()?;
             let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
             let cred = ClientSecretCredential::new(
@@ -535,7 +550,6 @@ impl AzureStorage {
                 client_builder,
             })
         } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
-            let bucket = (*config.bucket.bucket).to_owned();
             let account_name = config.get_account_name()?;
             let storage_credentials = ConnectionString::new(&connection_string)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?
