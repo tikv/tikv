@@ -30,7 +30,7 @@ use engine_rocks::{
     properties::MvccPropertiesCollectorFactory,
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, ConcurrentTaskLimiter,
-        DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env,
+        DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env, IndexType,
         PrepopulateBlockCache, RateLimiter, WriteBufferManager,
     },
     util::{
@@ -375,6 +375,7 @@ macro_rules! cf_config {
             pub checksum: ChecksumType,
             #[online_config(skip)]
             pub max_compactions: u32,
+            pub enable_partition_filter: Option<bool>,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -538,12 +539,16 @@ macro_rules! build_cf_opt {
         $cf_name:ident,
         $cache:expr,
         $compaction_limiter:expr,
-        $region_info_provider:ident
+        $region_info_provider:ident,
     ) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
         block_base_opts.set_block_cache($cache);
+        if let Some(enable_partition_filter) = $opt.enable_partition_filter && enable_partition_filter {
+            block_base_opts.set_partition_filters(true);
+            block_base_opts.set_index_type(IndexType::TwoLevelIndexSearch);
+        }
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
@@ -695,6 +700,7 @@ impl Default for DefaultCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            enable_partition_filter: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -714,7 +720,7 @@ impl DefaultCfConfig {
             CF_DEFAULT,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_DEFAULT),
-            region_info_accessor
+            region_info_accessor,
         );
         cf_opts.set_memtable_prefix_bloom_size_ratio(bloom_filter_ratio(for_engine));
         let f = RangePropertiesCollectorFactory {
@@ -859,6 +865,7 @@ impl Default for WriteCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            enable_partition_filter: None,
             titan,
         }
     }
@@ -877,7 +884,7 @@ impl WriteCfConfig {
             CF_WRITE,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_WRITE),
-            region_info_accessor
+            region_info_accessor,
         );
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts
@@ -977,6 +984,7 @@ impl Default for LockCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            enable_partition_filter: None,
             titan,
         }
     }
@@ -995,7 +1003,7 @@ impl LockCfConfig {
             CF_LOCK,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_LOCK),
-            no_region_info_accessor
+            no_region_info_accessor,
         );
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
@@ -1070,6 +1078,7 @@ impl Default for RaftCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            enable_partition_filter: None,
             titan,
         }
     }
@@ -1083,7 +1092,7 @@ impl RaftCfConfig {
             CF_RAFT,
             &shared.cache,
             shared.compaction_thread_limiters.get(CF_RAFT),
-            no_region_info_accessor
+            no_region_info_accessor,
         );
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
@@ -1589,6 +1598,7 @@ impl Default for RaftDefaultCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            enable_partition_filter: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -1607,7 +1617,7 @@ impl RaftDefaultCfConfig {
             CF_DEFAULT,
             cache,
             limiter.as_ref(),
-            no_region_info_accessor
+            no_region_info_accessor,
         );
         let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
         cf_opts
@@ -5698,16 +5708,19 @@ mod tests {
         cfg.rocksdb.writecf.level0_stop_writes_trigger = None;
         cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit = None;
         cfg.rocksdb.writecf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.writecf.enable_partition_filter = None;
         cfg.rocksdb.lockcf.enable_compaction_guard = None;
         cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = None;
         cfg.rocksdb.lockcf.level0_stop_writes_trigger = None;
         cfg.rocksdb.lockcf.soft_pending_compaction_bytes_limit = None;
         cfg.rocksdb.lockcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.lockcf.enable_partition_filter = None;
         cfg.rocksdb.raftcf.enable_compaction_guard = None;
         cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = None;
         cfg.rocksdb.raftcf.level0_stop_writes_trigger = None;
         cfg.rocksdb.raftcf.soft_pending_compaction_bytes_limit = None;
         cfg.rocksdb.raftcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.raftcf.enable_partition_filter = None;
         cfg.raftdb.defaultcf.enable_compaction_guard = None;
         cfg.raftdb.defaultcf.level0_slowdown_writes_trigger = None;
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
@@ -6065,5 +6078,24 @@ mod tests {
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(1))
         );
+    }
+
+    #[test]
+    fn test_partition_filter_config() {
+        let content = r#"
+            [rocksdb.defaultcf]
+            enable-partition-filter = true
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.rocksdb.defaultcf.enable_partition_filter, Some(true));
+
+        let content = r#"
+            [rocksdb.writecf]
+            enable-partition-filter = false
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.rocksdb.writecf.enable_partition_filter, Some(false));
     }
 }

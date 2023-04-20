@@ -333,6 +333,7 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 max-compactions = 3
+enable-partition-filter = true
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -396,6 +397,7 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 max-compactions = 3
+enable-partition-filter = true
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -446,6 +448,7 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 max-compactions = 3
+enable-partition-filter = false
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -496,6 +499,7 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 max-compactions = 3
+enable-partition-filter = false
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
