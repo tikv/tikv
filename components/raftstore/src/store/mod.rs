@@ -78,12 +78,12 @@ pub use self::{
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
-        contain_tiflash_engine_label, metrics as worker_metrics, AutoSplitController, Bucket,
-        BucketRange, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask, FlowStatistics,
-        FlowStatsReporter, KeyEntry, LocalReadContext, LocalReader, LocalReaderCore,
-        PdStatsMonitor, PdTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
-        ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
-        SplitConfigManager, SplitInfo, StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
+        metrics as worker_metrics, AutoSplitController, Bucket, BucketRange, CachedReadDelegate,
+        CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry,
+        LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate,
+        ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
+        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
+        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
         NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     },
 };

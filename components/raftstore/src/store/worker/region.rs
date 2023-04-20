@@ -65,12 +65,6 @@ pub fn is_tiflash_engine(store: &metapb::Store) -> bool {
     })
 }
 
-pub fn contain_tiflash_engine_label(labels: &HashMap<String, String>) -> bool {
-    labels
-        .iter()
-        .any(|label| label.0.to_lowercase() == ENGINE && label.1.to_lowercase() == TIFLASH)
-}
-
 /// Region related task
 #[derive(Debug)]
 pub enum Task<S> {

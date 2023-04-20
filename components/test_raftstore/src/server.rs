@@ -458,6 +458,7 @@ impl ServerCluster {
             .encryption_key_manager(key_manager)
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
+            .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -536,6 +537,7 @@ impl ServerCluster {
                 None,
                 debug_thread_pool.clone(),
                 health_service.clone(),
+                resource_manager.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
