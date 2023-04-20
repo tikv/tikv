@@ -784,11 +784,7 @@ fn test_v1_receive_snap_from_v2() {
         let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
         let mut cluster_v1_tikv = test_raftstore::new_server_cluster(1, 1);
 
-        cluster_v1
-            .cfg
-            .server
-            .labels
-            .insert(String::from("engine"), String::from("tiflash"));
+        cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
 
         cluster_v1.run();
         cluster_v2.run();
