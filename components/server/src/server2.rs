@@ -654,7 +654,7 @@ where
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
-                Arc::clone(&self.quota_limiter),
+                self.quota_limiter.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
@@ -665,6 +665,7 @@ where
             unified_read_pool,
             debug_thread_pool,
             health_service,
+            self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
