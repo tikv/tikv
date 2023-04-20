@@ -84,7 +84,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::VersionTrack,
+    config::{ReadableSize, VersionTrack},
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
@@ -1218,11 +1218,14 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         self.tablet_registry = Some(registry.clone());
         raft_engine.register_config(cfg_controller);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(
+        let mut engines_info = EnginesResourceInfo::new(
             registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
-        ));
+        );
+        engines_info.set_min_throughput(ReadableSize::mb(20).0 as usize);
+        engines_info.set_optimize_for_read(false);
+        let engines_info = Arc::new(engines_info);
 
         let router = RaftRouter::new(node.id(), router);
         let mut coprocessor_host: CoprocessorHost<RocksEngine> = CoprocessorHost::new(

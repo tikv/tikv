@@ -481,6 +481,8 @@ pub struct EnginesResourceInfo {
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
+    min_throughput: usize,
+    optimize_for_read: bool,
 }
 
 impl EnginesResourceInfo {
@@ -496,7 +498,20 @@ impl EnginesResourceInfo {
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
+            min_throughput: usize::MAX,
+            optimize_for_read: true,
         }
+    }
+
+    /// Allowing minimum throughput, if it's usize::MAX, then 50% of total
+    /// budget is chosen.
+    pub fn set_min_throughput(&mut self, min_throughput: usize) {
+        self.min_throughput = min_throughput;
+    }
+
+    /// When optimize for read, pending bytes presure are prioritized.
+    pub fn set_optimize_for_read(&mut self, optimize_for_read: bool) {
+        self.optimize_for_read = optimize_for_read;
     }
 
     pub fn update(
@@ -579,19 +594,20 @@ impl EnginesResourceInfo {
 
 impl IoBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
-        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
-            / Self::SCALE_FACTOR as f32;
-        // Two reasons for adding `sqrt` on top:
-        // 1) In theory the convergence point is independent of the value of pending
-        //    bytes (as long as backlog generating rate equals consuming rate, which is
-        //    determined by compaction budgets), a convex helps reach that point while
-        //    maintaining low level of pending bytes.
-        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
-        //    with decreasing derivative can help balance such trend.
-        let score = score.sqrt();
-        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
-        let score = 0.5 + score / 2.0;
-        (total_budgets as f32 * score) as usize
+        let mut score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f64
+            / Self::SCALE_FACTOR as f64;
+        if self.optimize_for_read {
+            score = score.sqrt();
+        } else {
+            score *= score;
+        }
+        let based = if self.min_throughput >= total_budgets {
+            0.5
+        } else {
+            self.min_throughput as f64 / total_budgets as f64
+        };
+        let score = based + score * (1.0 - based);
+        (total_budgets as f64 * score) as usize
     }
 }
 
