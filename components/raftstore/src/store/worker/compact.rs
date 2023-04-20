@@ -206,7 +206,7 @@ fn collect_ranges_need_compact(
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to
         // be compacted.
-        if let Some((num_ent, num_ver)) =
+        if let Some((num_ent, num_ver, _)) =
             box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1]))
         {
             if need_compact(

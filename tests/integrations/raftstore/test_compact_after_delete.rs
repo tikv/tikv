@@ -102,10 +102,25 @@ fn test_node_compact_after_delete_v2() {
     let (split_key, _) = gen_mvcc_put_kv(b"k100", b"", 1.into(), 2.into());
     cluster.must_split(&region, &split_key);
 
-    for i in 0..200 {
+    for i in 0..1000 {
         let (k, v) = (format!("k{:03}", i), format!("value{}", i));
         let (k, v) = gen_mvcc_put_kv(k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         cluster.must_put_cf(CF_WRITE, &k, &v);
+
+        let (k, v) = (format!("k{:03}", i), format!("value-2{}", i));
+        let (k, v) = gen_mvcc_put_kv(k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
+        cluster.must_put_cf(CF_WRITE, &k, &v);
+
+        if i % 100 == 0 {
+            for (registry, _) in &cluster.engines {
+                registry.for_each_opened_tablet(|_, db: &mut CachedTablet<_>| {
+                    if let Some(db) = db.latest() {
+                        db.flush_cf(CF_WRITE, true).unwrap();
+                    }
+                    true
+                })
+            }
+        }
     }
     for (registry, _) in &cluster.engines {
         registry.for_each_opened_tablet(|_, db: &mut CachedTablet<_>| {

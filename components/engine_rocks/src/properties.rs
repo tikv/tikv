@@ -431,6 +431,12 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             }
         };
 
+        // println!(
+        //     "mvcc key collection, key {:?}, ts {}",
+        //     String::from_utf8(k.to_vec()),
+        //     ts
+        // );
+
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
         if entry_type == DBEntryType::Delete {
@@ -535,7 +541,7 @@ pub fn get_range_entries_and_versions(
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)> {
+) -> Option<(u64, u64, u64)> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -558,7 +564,7 @@ pub fn get_range_entries_and_versions(
         props.add(&mvcc);
     }
 
-    Some((num_entries, props.num_versions))
+    Some((num_entries, props.num_versions, props.num_rows))
 }
 
 #[cfg(test)]

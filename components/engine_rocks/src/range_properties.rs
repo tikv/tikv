@@ -27,7 +27,7 @@ impl RangePropertiesExt for RocksEngine {
 
         let start = &range.start_key;
         let end = &range.end_key;
-        let (_, keys) =
+        let (_, keys, _) =
             get_range_entries_and_versions(self, CF_WRITE, start, end).unwrap_or_default();
         Ok(keys)
     }

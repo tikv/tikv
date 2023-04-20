@@ -105,7 +105,7 @@ impl MiscExt for PanicEngine {
         cf: &str,
         start: &[u8],
         end: &[u8],
-    ) -> Result<Option<(u64, u64)>> {
+    ) -> Result<Option<(u64, u64, u64)>> {
         panic!()
     }
 

@@ -94,6 +94,7 @@ where
                         let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {continue};
                         let Some(tablet) = tablet_cache.latest() else {continue};
                         for cf in &cf_names {
+                            // to be removed
                             let approximate_size = tablet
                                 .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
                                 .unwrap_or_default();
@@ -165,14 +166,19 @@ fn collect_regions_to_compact<E: KvEngine>(
     for id in region_ids {
         let Some(mut tablet_cache) = reg.get(id) else {continue};
         let Some(tablet) = tablet_cache.latest() else {continue};
-        if let Some((num_ent, num_ver)) =
+        if let Some((num_ent, num_ver, num_rows)) =
             box_try!(tablet.get_range_entries_and_versions(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
         {
+            // println!(
+            //     "num of rows {}, num of ver {}, num_ents {}",
+            //     num_rows, num_ver, num_ent
+            // );
             info!(
                 logger,
                 "get range entries and versions";
                 "num_entries" => num_ent,
                 "num_versions" => num_ver,
+                "num_rows" => num_rows,
                 "region_id" => id,
             );
             if need_compact(
