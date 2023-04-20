@@ -688,8 +688,6 @@ pub struct TabletRunner<B, R: RaftExtension + 'static> {
     raft_router: R,
     cfg_tracker: Tracker<Config>,
     cfg: Config,
-    sending_count: Arc<AtomicUsize>,
-    recving_count: Arc<AtomicUsize>,
     cache_builder: B,
     limiter: Limiter,
 }
@@ -727,8 +725,6 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
             security_mgr,
             cfg_tracker,
             cfg: config,
-            sending_count: Arc::new(AtomicUsize::new(0)),
-            recving_count: Arc::new(AtomicUsize::new(0)),
             cache_builder,
             limiter,
         };
@@ -773,7 +769,8 @@ where
                 self.pool.spawn(sink.fail(status).map(|_| ()));
             }
             Task::RecvTablet { stream, sink } => {
-                let task_num = self.recving_count.load(Ordering::SeqCst);
+                let recving_count = self.snap_mgr.recving_count().clone();
+                let task_num = recving_count.load(Ordering::SeqCst);
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
                     let status = RpcStatus::with_message(
@@ -790,7 +787,6 @@ where
 
                 let snap_mgr = self.snap_mgr.clone();
                 let raft_router = self.raft_router.clone();
-                let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.limiter.clone();
                 let cache_builder = self.cache_builder.clone();
@@ -807,8 +803,8 @@ where
             }
             Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
-                if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
-                {
+                let sending_count = self.snap_mgr.sending_count().clone();
+                if sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit {
                     let key = TabletSnapKey::from_region_snap(
                         msg.get_region_id(),
                         msg.get_to_peer().get_id(),
@@ -827,7 +823,6 @@ where
                 let env = Arc::clone(&self.env);
                 let mgr = self.snap_mgr.clone();
                 let security_mgr = Arc::clone(&self.security_mgr);
-                let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.limiter.clone();
                 let send_task = send_snap(
