@@ -14,6 +14,7 @@ use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, S
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager, ENGINE, TIFLASH};
+use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -103,6 +104,7 @@ where
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
         health_service: HealthService,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -139,6 +141,7 @@ where
             cfg.value().enable_request_batch,
             proxy,
             cfg.value().reject_messages_on_memory_ratio,
+            resource_manager,
         );
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
@@ -598,6 +601,7 @@ mod tests {
             None,
             debug_thread_pool,
             HealthService::default(),
+            None,
         )
         .unwrap();
 
