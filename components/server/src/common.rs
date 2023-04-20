@@ -507,7 +507,7 @@ impl EnginesResourceInfo {
     /// budget is chosen.
     pub fn set_min_throughput(&mut self, min_throughput: usize) {
         self.min_throughput =
-            (min_throughput as f64 / file_system::DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
+            ((min_throughput as f64) * file_system::DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
     }
 
     /// When optimize for read, pending bytes presure are prioritized.
