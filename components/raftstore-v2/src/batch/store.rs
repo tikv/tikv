@@ -396,10 +396,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
 
     #[inline]
     fn remove_dir(&self, p: &Path) -> Result<()> {
-        file_system::remove_dir_all(p)?;
         if let Some(m) = &self.key_manager {
             m.remove_dir(p, None)?;
         }
+        file_system::remove_dir_all(p)?;
         Ok(())
     }
 

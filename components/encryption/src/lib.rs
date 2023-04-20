@@ -72,13 +72,10 @@ pub fn clean_up_trash(
 ) -> std::io::Result<()> {
     for e in file_system::read_dir(path)? {
         let e = e?;
-        let fname = e.file_name().to_str().unwrap().to_owned();
-        if fname.starts_with(TRASH_PREFIX) {
-            let original = e
-                .path()
-                .parent()
-                .unwrap()
-                .join(fname.strip_prefix(TRASH_PREFIX).unwrap());
+        let os_fname = e.file_name();
+        let fname = os_fname.to_str().unwrap();
+        if let Some(original) = fname.strip_prefix(TRASH_PREFIX) {
+            let original = e.path().with_file_name(original);
             if let Some(m) = &key_manager {
                 m.remove_dir(&original, Some(&e.path()))?;
             }
@@ -99,10 +96,10 @@ pub fn clean_up_dir(
         let e = e?;
         let fname = e.file_name().to_str().unwrap().to_owned();
         if fname.starts_with(prefix) {
-            file_system::remove_dir_all(e.path())?;
             if let Some(m) = &key_manager {
                 m.remove_dir(&e.path(), None)?;
             }
+            file_system::remove_dir_all(e.path())?;
         }
     }
     Ok(())
