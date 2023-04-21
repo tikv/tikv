@@ -1555,7 +1555,7 @@ mod tests {
 
     #[test]
     fn test_downstream_filter_cdc_write_entires() {
-        let mut txn_source = TxnSource::new();
+        let mut txn_source = TxnSource::default();
         txn_source.set_cdc_write_source(1);
 
         test_downstream_txn_source_filter(txn_source, true);
@@ -1563,20 +1563,20 @@ mod tests {
 
     #[test]
     fn test_downstream_filter_lossy_ddl_entires() {
-        let mut txn_source = TxnSource::new();
+        let mut txn_source = TxnSource::default();
         txn_source.set_lossy_ddl_reorg_source(1);
         test_downstream_txn_source_filter(txn_source, false);
 
         // With cdr write source and filter loop is false, we should still ignore lossy
         // ddl changes.
-        let mut txn_source = TxnSource::new();
+        let mut txn_source = TxnSource::default();
         txn_source.set_cdc_write_source(1);
         txn_source.set_lossy_ddl_reorg_source(1);
         test_downstream_txn_source_filter(txn_source, false);
 
         // With cdr write source and filter loop is true, we should still ignore some
         // events.
-        let mut txn_source = TxnSource::new();
+        let mut txn_source = TxnSource::default();
         txn_source.set_cdc_write_source(1);
         txn_source.set_lossy_ddl_reorg_source(1);
         test_downstream_txn_source_filter(txn_source, true);

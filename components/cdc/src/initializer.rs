@@ -834,27 +834,27 @@ mod tests {
 
     #[test]
     fn test_initializer_cdc_write_filter() {
-        let mut txn_source = TxnSource::new();
+        let mut txn_source = TxnSource::default();
         txn_source.set_cdc_write_source(1);
         test_initializer_txn_source_filter(txn_source, true);
     }
 
     #[test]
     fn test_initializer_lossy_ddl_filter() {
-        let mut txn_source = TxnSource::new();
+        let mut txn_source = TxnSource::default();
         txn_source.set_lossy_ddl_reorg_source(1);
         test_initializer_txn_source_filter(txn_source, false);
 
         // With cdr write source and filter loop is false, we should still ignore lossy
         // ddl changes.
-        let mut txn_source = TxnSource::new();
+        let mut txn_source = TxnSource::default();
         txn_source.set_cdc_write_source(1);
         txn_source.set_lossy_ddl_reorg_source(1);
         test_initializer_txn_source_filter(txn_source, false);
 
         // With cdr write source and filter loop is true, we should still ignore all
         // events.
-        let mut txn_source = TxnSource::new();
+        let mut txn_source = TxnSource::default();
         txn_source.set_cdc_write_source(1);
         txn_source.set_lossy_ddl_reorg_source(1);
         test_initializer_txn_source_filter(txn_source, true);
