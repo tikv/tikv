@@ -39,6 +39,7 @@ use crate::{
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::ConnId,
+    txn_source::TxnSource,
     Error, Result,
 };
 
@@ -550,8 +551,10 @@ impl Delegate {
                     row_size = 0;
                 }
             }
-            // if the `txn_source` is not 0 and we should filter it out, skip this event.
-            if row.txn_source != 0 && filter_loop {
+            let lossy_ddl_filter = TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source);
+            let cdc_write_filter =
+                TxnSource::is_cdc_write_source_set(row.txn_source) && filter_loop;
+            if lossy_ddl_filter || cdc_write_filter {
                 continue;
             }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
@@ -648,6 +651,14 @@ impl Delegate {
             return Ok(());
         }
 
+        // Filter the entries which are lossy DDL events.
+        // We don't need to send them to downstream.
+        let entries = entries
+            .iter()
+            .filter(|x| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source))
+            .cloned()
+            .collect::<Vec<EventRow>>();
+
         let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
@@ -655,15 +666,15 @@ impl Delegate {
             self.region_id
         );
 
-        // collect the change event cause by user write, which is `txn_source` = 0.
-        // for changefeed which only need the user write, send the `filtered`, or else,
-        // send them all.
+        // Collect the change event cause by user write, which cdc write source is not
+        // set. For changefeed which only need the user write,
+        // send the `filtered_entries`, or else, send them all.
         let mut filtered_entries = None;
         for downstream in downstreams {
             if downstream.filter_loop {
                 let filtered = entries
                     .iter()
-                    .filter(|x| x.txn_source == 0)
+                    .filter(|x| !TxnSource::is_cdc_write_source_set(x.txn_source))
                     .cloned()
                     .collect::<Vec<EventRow>>();
                 if !filtered.is_empty() {
@@ -692,9 +703,11 @@ impl Delegate {
             } else {
                 downstream.observed_range.filter_entries(entries.clone())
             };
+
             if entries_clone.is_empty() {
                 return Ok(());
             }
+
             let event = Event {
                 region_id,
                 index,
