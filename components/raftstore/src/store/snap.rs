@@ -1031,6 +1031,7 @@ impl Snapshot {
         Ok(s)
     }
 
+    #[cfg(any(test, feature = "testexport"))]
     pub fn tablet_snap_path(&self) -> Option<String> {
         Some(self.meta_file.meta.as_ref()?.tablet_snap_path.clone())
     }
