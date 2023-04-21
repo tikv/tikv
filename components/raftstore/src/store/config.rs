@@ -340,6 +340,7 @@ pub struct Config {
     /// * Responsing GcPeerRequest from v2.
     #[doc(hidden)]
     #[online_config(hidden)]
+    #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
     pub enable_v2_compatible_learner: bool,
 }
 

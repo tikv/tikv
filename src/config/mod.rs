@@ -3295,8 +3295,9 @@ impl TikvConfig {
             if self.raft_store.enable_v2_compatible_learner {
                 self.raft_store.enable_v2_compatible_learner = false;
                 warn!(
-                    "raftstore.enable-v2-compatible-learner was true but storage.engine was \
-                    partitioned-raft-kv, no need to enable v2 compatible learner, overwrite to false"
+                    "raftstore.enable-partitioned-raft-kv-compatible-learner was true but \
+                    storage.engine was partitioned-raft-kv, no need to enable \
+                    enable-partitioned-raft-kv-compatible-learner, overwrite to false"
                 );
             }
         }
@@ -5451,7 +5452,7 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
 
-        // Test raftstore.enable-v2-compatible-learner.
+        // Test raftstore.enable-partitioned-raft-kv-compatible-learner.
         let mut cfg = TikvConfig::default();
         cfg.raft_store.enable_v2_compatible_learner = true;
         cfg.storage.engine = EngineType::RaftKv2;
