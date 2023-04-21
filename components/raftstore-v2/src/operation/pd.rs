@@ -46,8 +46,8 @@ impl Store {
 
         let snap_stats = ctx.snap_mgr.stats();
         // todo: imple snapshot status report
-        stats.set_sending_snap_count(0);
-        stats.set_receiving_snap_count(0);
+        stats.set_sending_snap_count(snap_stats.sending_count as u32);
+        stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
         stats.set_snapshot_stats(snap_stats.stats.into());
 
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC

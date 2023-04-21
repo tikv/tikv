@@ -226,6 +226,7 @@ report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
 unreachable-backoff = "111s"
 max-entry-cache-warmup-duration = "2s"
+enable-partitioned-raft-kv-compatible-learner = false
 
 [coprocessor]
 split-region-on-table = false
@@ -288,9 +289,11 @@ cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
 optimize-filters-for-hits = false
+optimize-filters-for-memory = true
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
@@ -355,9 +358,11 @@ cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
 optimize-filters-for-hits = true
+optimize-filters-for-memory = true
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
@@ -405,9 +410,11 @@ cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
 optimize-filters-for-hits = true
+optimize-filters-for-memory = true
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
@@ -455,9 +462,11 @@ cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
 optimize-filters-for-hits = false
+optimize-filters-for-memory = true
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
@@ -537,9 +546,11 @@ cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
 optimize-filters-for-hits = false
+optimize-filters-for-memory = true
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",

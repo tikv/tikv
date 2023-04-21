@@ -1389,7 +1389,7 @@ pub struct SnapManager {
     max_total_size: Arc<AtomicU64>,
 
     // only used to receive snapshot from v2
-    tablet_snap_manager: TabletSnapManager,
+    tablet_snap_manager: Option<TabletSnapManager>,
 }
 
 impl Clone for SnapManager {
@@ -1626,7 +1626,11 @@ impl SnapManager {
     /// NOTE: don't call it in raftstore thread.
     pub fn get_total_snap_size(&self) -> Result<u64> {
         let size_v1 = self.core.get_total_snap_size()?;
-        let size_v2 = self.tablet_snap_manager.total_snap_size().unwrap_or(0);
+        let size_v2 = self
+            .tablet_snap_manager
+            .as_ref()
+            .map(|s| s.total_snap_size().unwrap_or(0))
+            .unwrap_or(0);
         Ok(size_v1 + size_v2)
     }
 
@@ -1763,8 +1767,8 @@ impl SnapManager {
         self.core.delete_snapshot(key, snap, check_entry)
     }
 
-    pub fn tablet_snap_manager(&self) -> &TabletSnapManager {
-        &self.tablet_snap_manager
+    pub fn tablet_snap_manager(&self) -> Option<&TabletSnapManager> {
+        self.tablet_snap_manager.as_ref()
     }
 
     pub fn limiter(&self) -> &Limiter {
@@ -1873,6 +1877,7 @@ pub struct SnapManagerBuilder {
     max_total_size: u64,
     max_per_file_size: u64,
     enable_multi_snapshot_files: bool,
+    enable_receive_tablet_snapshot: bool,
     key_manager: Option<Arc<DataKeyManager>>,
 }
 
@@ -1895,6 +1900,10 @@ impl SnapManagerBuilder {
         self.enable_multi_snapshot_files = enabled;
         self
     }
+    pub fn enable_receive_tablet_snapshot(mut self, enabled: bool) -> SnapManagerBuilder {
+        self.enable_receive_tablet_snapshot = enabled;
+        self
+    }
     #[must_use]
     pub fn encryption_key_manager(mut self, m: Option<Arc<DataKeyManager>>) -> SnapManagerBuilder {
         self.key_manager = m;
@@ -1915,7 +1924,11 @@ impl SnapManagerBuilder {
         assert!(!path.is_empty());
         let mut path_v2 = path.clone();
         path_v2.push_str("_v2");
-        let tablet_snap_mgr = TabletSnapManager::new(&path_v2).unwrap();
+        let tablet_snap_manager = if self.enable_receive_tablet_snapshot {
+            Some(TabletSnapManager::new(&path_v2, self.key_manager.clone()).unwrap())
+        } else {
+            None
+        };
 
         let mut snapshot = SnapManager {
             core: SnapManagerCore {
@@ -1931,7 +1944,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
-            tablet_snap_manager: tablet_snap_mgr,
+            tablet_snap_manager,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
@@ -1996,12 +2009,18 @@ impl Drop for ReceivingGuard<'_> {
 pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
+    key_manager: Option<Arc<DataKeyManager>>,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
     stats: Arc<Mutex<HashMap<TabletSnapKey, (Instant, SnapshotStat)>>>,
+    sending_count: Arc<AtomicUsize>,
+    recving_count: Arc<AtomicUsize>,
 }
 
 impl TabletSnapManager {
-    pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
+    pub fn new<T: Into<PathBuf>>(
+        path: T,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> io::Result<Self> {
         let path = path.into();
         if !path.exists() {
             file_system::create_dir_all(&path)?;
@@ -2012,12 +2031,15 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_dir(&path, SNAP_GEN_PREFIX)?;
-        file_system::clean_up_trash(&path)?;
+        encryption::clean_up_dir(&path, SNAP_GEN_PREFIX, key_manager.as_deref())?;
+        encryption::clean_up_trash(&path, key_manager.as_deref())?;
         Ok(Self {
             base: path,
+            key_manager,
             receiving: Arc::default(),
             stats: Arc::default(),
+            sending_count: Arc::default(),
+            recving_count: Arc::default(),
         })
     }
 
@@ -2050,8 +2072,8 @@ impl TabletSnapManager {
             .filter(|stat| stat.get_total_duration_sec() > 1)
             .collect();
         SnapStats {
-            sending_count: 0,
-            receiving_count: 0,
+            sending_count: self.sending_count.load(Ordering::SeqCst),
+            receiving_count: self.recving_count.load(Ordering::SeqCst),
             stats,
         }
     }
@@ -2073,16 +2095,17 @@ impl TabletSnapManager {
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
-        if path.exists() && let Err(e) = file_system::trash_dir_all(&path) {
-            error!(
-                "delete snapshot failed";
-                "path" => %path.display(),
-                "err" => ?e,
-            );
-            false
-        } else {
-            true
+        if path.exists() {
+            if let Err(e) = encryption::trash_dir_all(&path, self.key_manager.as_deref()) {
+                error!(
+                    "delete snapshot failed";
+                    "path" => %path.display(),
+                    "err" => ?e,
+                );
+                return false;
+            }
         }
+        true
     }
 
     pub fn total_snap_size(&self) -> Result<u64> {
@@ -2134,6 +2157,19 @@ impl TabletSnapManager {
             receiving: &self.receiving,
             key,
         })
+    }
+
+    pub fn sending_count(&self) -> &Arc<AtomicUsize> {
+        &self.sending_count
+    }
+
+    pub fn recving_count(&self) -> &Arc<AtomicUsize> {
+        &self.recving_count
+    }
+
+    #[inline]
+    pub fn key_manager(&self) -> &Option<Arc<DataKeyManager>> {
+        &self.key_manager
     }
 }
 
@@ -3123,7 +3159,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let start = Instant::now();
-        let mgr = TabletSnapManager::new(snap_dir.path()).unwrap();
+        let mgr = TabletSnapManager::new(snap_dir.path(), None).unwrap();
         let key = TabletSnapKey::new(1, 1, 1, 1);
         mgr.begin_snapshot(key.clone(), start - time::Duration::from_secs(2), 1);
         // filter out the snapshot that is not finished
@@ -3179,8 +3215,8 @@ pub mod tests {
     }
 
     #[test]
-    fn test_init() {
-        let builder = SnapManagerBuilder::default();
+    fn test_init_enable_receive_tablet_snapshot() {
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
         let snap_dir = Builder::new()
             .prefix("test_snap_path_does_not_exist")
             .tempdir()
@@ -3194,7 +3230,7 @@ pub mod tests {
         path.push_str("_v2");
         assert!(Path::new(&path).exists());
 
-        let builder = SnapManagerBuilder::default();
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
         let snap_dir = Builder::new()
             .prefix("test_snap_path_exist")
             .tempdir()
@@ -3207,7 +3243,7 @@ pub mod tests {
         path.push_str("_v2");
         assert!(Path::new(&path).exists());
 
-        let builder = SnapManagerBuilder::default();
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
         let snap_dir = Builder::new()
             .prefix("test_tablet_snap_path_exist")
             .tempdir()
