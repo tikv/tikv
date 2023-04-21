@@ -172,7 +172,7 @@ where
             lazy_worker.scheduler(),
             grpc_thread_load.clone(),
         );
-        let raft_client = RaftClient::new(conn_builder);
+        let raft_client = RaftClient::new(store_id, conn_builder);
 
         let trans = ServerTransport::new(raft_client);
         health_service.set_serving_status("", ServingStatus::NotServing);
