@@ -6,7 +6,6 @@
 // 52 bits are reserved for extendability.
 const CDC_WRITE_SOURCE_BITS: u64 = 8;
 const CDC_WRITE_SOURCE_MAX: u64 = (1 << CDC_WRITE_SOURCE_BITS) - 1;
-
 #[cfg(test)]
 const LOSSY_DDL_REORG_SOURCE_BITS: u64 = 4;
 #[cfg(test)]

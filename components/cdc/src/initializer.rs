@@ -846,7 +846,7 @@ mod tests {
         test_initializer_txn_source_filter(txn_source, false);
 
         // With cdr write source and filter loop is false, we should still ignore lossy
-        // ddl.
+        // ddl changes.
         let mut txn_source = TxnSource::new();
         txn_source.set_cdc_write_source(1);
         txn_source.set_lossy_ddl_reorg_source(1);
