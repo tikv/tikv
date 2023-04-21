@@ -815,6 +815,19 @@ impl Cluster<ServerCluster> {
     pub fn get_addr(&self, node_id: u64) -> String {
         self.sim.rl().get_addr(node_id)
     }
+
+    pub fn register_hook(
+        &self,
+        node_id: u64,
+        register: Box<dyn Fn(&mut CoprocessorHost<RocksEngine>)>,
+    ) {
+        self.sim
+            .wl()
+            .coprocessor_hooks
+            .entry(node_id)
+            .or_default()
+            .push(register);
+    }
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
