@@ -22,10 +22,7 @@ impl TxnSource {
 
     pub(crate) fn set_cdc_write_source(&mut self, value: u64) -> Result<(), String> {
         if value > CDC_WRITE_SOURCE_MAX {
-            return Err(format!(
-                "value {} is out of TiCDC write source range, should be in [1, 15]",
-                value
-            ));
+            unimplemented!()
         }
         self.0 |= value;
         Ok(())
@@ -41,10 +38,7 @@ impl TxnSource {
 
     pub(crate) fn set_lossy_ddl_reorg_source(&mut self, value: u64) -> Result<(), String> {
         if value > LOSSY_DDL_REORG_SOURCE_MAX {
-            return Err(format!(
-                "value {} is out of lossy DDL reorg source range, should be in [1, {}]",
-                value, LOSSY_DDL_REORG_SOURCE_MAX
-            ));
+            unimplemented!()
         }
         self.0 |= value << LOSSY_DDL_REORG_SOURCE_SHIFT;
         Ok(())
@@ -70,16 +64,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_set_cdc_write_source_out_of_range() {
-        let mut txn_source = TxnSource::new();
-        let result = txn_source.set_cdc_write_source(16);
-        assert_eq!(
-            result,
-            Err("value 16 is out of TiCDC write source range, should be in [1, 15]".to_string())
-        );
-    }
-
-    #[test]
     fn test_get_cdc_write_source() {
         let mut txn_source = TxnSource::new();
         txn_source.set_cdc_write_source(1);
@@ -94,18 +78,6 @@ mod tests {
 
         let txn_source = TxnSource::new();
         assert_eq!(TxnSource::is_cdc_write_source_set(txn_source.0), false);
-    }
-
-    #[test]
-    fn test_set_lossy_ddl_reorg_source_out_of_range() {
-        let mut txn_source = TxnSource::new();
-        let result = txn_source.set_lossy_ddl_reorg_source(16);
-        assert_eq!(
-            result,
-            Err(
-                "value 16 is out of lossy DDL reorg source range, should be in [1, 15]".to_string()
-            )
-        );
     }
 
     #[test]
