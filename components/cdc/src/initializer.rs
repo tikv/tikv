@@ -787,7 +787,7 @@ mod tests {
         worker.stop();
     }
 
-    fn test_initializer_txn_source_filter(txn_source: TxnSource) {
+    fn test_initializer_txn_source_filter(txn_source: TxnSource, filter_loop: bool) {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
         let mut total_bytes = 0;
@@ -807,7 +807,7 @@ mod tests {
             buffer,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
-            true,
+            filter_loop,
         );
         let th = pool.spawn(async move {
             initializer
@@ -836,14 +836,28 @@ mod tests {
     fn test_initializer_cdc_write_filter() {
         let mut txn_source = TxnSource::new();
         txn_source.set_cdc_write_source(1);
-        test_initializer_txn_source_filter(txn_source);
+        test_initializer_txn_source_filter(txn_source, true);
     }
 
     #[test]
     fn test_initializer_lossy_ddl_filter() {
         let mut txn_source = TxnSource::new();
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, false);
+
+        // With cdr write source and filter loop is false, we should still ignore lossy
+        // ddl.
+        let mut txn_source = TxnSource::new();
         txn_source.set_cdc_write_source(1);
-        test_initializer_txn_source_filter(txn_source);
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, false);
+
+        // With cdr write source and filter loop is true, we should still ignore all
+        // events.
+        let mut txn_source = TxnSource::new();
+        txn_source.set_cdc_write_source(1);
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, true);
     }
 
     // Test `hint_min_ts` works fine with `ExtraOp::ReadOldValue`.
