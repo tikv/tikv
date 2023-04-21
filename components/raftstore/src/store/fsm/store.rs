@@ -2894,6 +2894,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             HashMapEntry::Occupied(x) => {
                 let ob = x.into_mut();
                 if now.saturating_duration_since(ob.last_broadcast) < unreachable_backoff
+                    // If there are no new messages come from `store_id`, it's not
+                    // necessary to do redundant broadcasts.
                     || (new_messages <= ob.received_message_count && new_messages > 0)
                 {
                     return;
