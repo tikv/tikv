@@ -27,7 +27,7 @@ impl TxnSource {
     #[cfg(test)]
     pub(crate) fn set_cdc_write_source(&mut self, value: u64) {
         if value > CDC_WRITE_SOURCE_MAX {
-            unimplemented!()
+            unreachable!("Only use it in tests")
         }
         self.0 |= value;
     }
@@ -44,7 +44,7 @@ impl TxnSource {
     #[cfg(test)]
     pub(crate) fn set_lossy_ddl_reorg_source(&mut self, value: u64) {
         if value > LOSSY_DDL_REORG_SOURCE_MAX {
-            unimplemented!()
+            unreachable!("Only use it in tests")
         }
         self.0 |= value << LOSSY_DDL_REORG_SOURCE_SHIFT;
     }
