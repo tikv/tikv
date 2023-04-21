@@ -1146,6 +1146,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             unified_read_pool,
             debug_thread_pool,
             health_service,
+            self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 

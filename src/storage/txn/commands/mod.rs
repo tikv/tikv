@@ -719,6 +719,7 @@ impl Command {
     pub fn group_name(&self) -> String {
         self.command_ext()
             .get_ctx()
+            .get_resource_control_context()
             .get_resource_group_name()
             .to_owned()
     }
