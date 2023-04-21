@@ -84,7 +84,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ReadableSize, VersionTrack},
+    config::VersionTrack,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
@@ -1223,7 +1223,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
         );
-        engines_info.set_min_throughput(ReadableSize::mb(20).0 as usize);
+        engines_info.set_min_throughput_portion(0.2);
         engines_info.set_optimize_for_read(false);
         let engines_info = Arc::new(engines_info);
 

@@ -481,7 +481,7 @@ pub struct EnginesResourceInfo {
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
-    min_throughput: usize,
+    min_throughput_portion: f32,
     optimize_for_read: bool,
 }
 
@@ -498,16 +498,15 @@ impl EnginesResourceInfo {
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
-            min_throughput: usize::MAX,
+            min_throughput_portion: 0.5,
             optimize_for_read: true,
         }
     }
 
     /// Allowing minimum throughput, if it's usize::MAX, then 50% of total
     /// budget is chosen.
-    pub fn set_min_throughput(&mut self, min_throughput: usize) {
-        self.min_throughput =
-            ((min_throughput as f64) * file_system::DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
+    pub fn set_min_throughput_portion(&mut self, min_throughput_portion: f32) {
+        self.min_throughput_portion = min_throughput_portion;
     }
 
     /// When optimize for read, pending bytes presure are prioritized.
@@ -581,6 +580,8 @@ impl EnginesResourceInfo {
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
+        // TODO: also need to consider level0 file count if level0 is set to low
+        // priority.
         self.latest_normalized_pending_bytes.store(
             std::cmp::max(normalized_pending_bytes, avg),
             Ordering::Relaxed,
@@ -595,20 +596,15 @@ impl EnginesResourceInfo {
 
 impl IoBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
-        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f64
-            / Self::SCALE_FACTOR as f64;
+        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
+            / Self::SCALE_FACTOR as f32;
         let score = if self.optimize_for_read {
             score.sqrt()
         } else {
             score * score
         };
-        let based = if self.min_throughput >= total_budgets {
-            0.5
-        } else {
-            self.min_throughput as f64 / total_budgets as f64
-        };
-        let score = based + score * (1.0 - based);
-        (total_budgets as f64 * score) as usize
+        let score = self.min_throughput_portion + score * (1.0 - self.min_throughput_portion);
+        (total_budgets as f32 * score) as usize
     }
 }
 
