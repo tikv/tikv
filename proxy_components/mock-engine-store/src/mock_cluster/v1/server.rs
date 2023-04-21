@@ -507,6 +507,7 @@ impl ServerCluster {
                 None,
                 debug_thread_pool.clone(),
                 health_service.clone(),
+                None,
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

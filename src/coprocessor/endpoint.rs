@@ -68,9 +68,9 @@ pub struct Endpoint<E: Engine> {
 
     slow_log_threshold: Duration,
 
-    _phantom: PhantomData<E>,
-
     quota_limiter: Arc<QuotaLimiter>,
+
+    _phantom: PhantomData<E>,
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -104,8 +104,8 @@ impl<E: Engine> Endpoint<E> {
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
-            _phantom: Default::default(),
             quota_limiter,
+            _phantom: Default::default(),
         }
     }
 
@@ -488,6 +488,7 @@ impl<E: Engine> Endpoint<E> {
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
         let group_name = req_ctx
             .context
+            .get_resource_control_context()
             .get_resource_group_name()
             .as_bytes()
             .to_owned();
@@ -727,6 +728,7 @@ impl<E: Engine> Endpoint<E> {
         let priority = req_ctx.context.get_priority();
         let group_name = req_ctx
             .context
+            .get_resource_control_context()
             .get_resource_group_name()
             .as_bytes()
             .to_owned();

@@ -512,7 +512,12 @@ impl CmdBatch {
         self.cmds.push(cmd)
     }
 
-    pub fn extend(&mut self, observe_info: &CmdObserveInfo, region_id: u64, cmds: Vec<Cmd>) {
+    pub fn extend<I: IntoIterator<Item = Cmd>>(
+        &mut self,
+        observe_info: &CmdObserveInfo,
+        region_id: u64,
+        cmds: I,
+    ) {
         assert_eq!(region_id, self.region_id);
         assert_eq!(observe_info.cdc_id.id, self.cdc_id);
         assert_eq!(observe_info.rts_id.id, self.rts_id);

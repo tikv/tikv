@@ -26,6 +26,7 @@ use std::{cmp, time::Instant};
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{
+    metapb,
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
@@ -34,8 +35,10 @@ use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVA
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
-        needs_evict_entry_cache, util, worker_metrics::SNAP_COUNTER, FetchedLogs, ReadProgress,
-        Transport, WriteCallback, WriteTask,
+        needs_evict_entry_cache,
+        util::{self, is_initial_msg},
+        worker_metrics::SNAP_COUNTER,
+        FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
 use slog::{debug, error, info, trace, warn};
@@ -56,7 +59,7 @@ use crate::{
     fsm::{PeerFsmDelegate, Store},
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
-    worker::tablet_gc,
+    worker::tablet,
 };
 
 const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
@@ -119,16 +122,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let region_id = self.region_id();
             let mailbox = store_ctx.router.mailbox(region_id).unwrap();
             let tablet_index = self.storage().tablet_index();
-            let _ = store_ctx
-                .schedulers
-                .tablet_gc
-                .schedule(tablet_gc::Task::trim(
-                    self.tablet().unwrap().clone(),
-                    self.region(),
-                    move || {
-                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
-                    },
-                ));
+            let _ = store_ctx.schedulers.tablet.schedule(tablet::Task::trim(
+                self.tablet().unwrap().clone(),
+                self.region(),
+                move || {
+                    let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                },
+            ));
         }
         let entry_storage = self.storage().entry_storage();
         let committed_index = entry_storage.commit_index();
@@ -219,15 +219,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
                         return;
                     }
-                    let _ =
-                        ctx.schedulers
-                            .tablet_flush
-                            .schedule(crate::TabletFlushTask::TabletFlush {
-                                region_id: self.region().get_id(),
-                                req: None,
-                                is_leader: false,
-                                ch: None,
-                            });
+                    let _ = ctx
+                        .schedulers
+                        .tablet
+                        .schedule(crate::worker::tablet::Task::Flush {
+                            region_id: self.region().get_id(),
+                            cb: None,
+                        });
                     return;
                 }
                 ExtraMessageType::MsgWantRollbackMerge => {
@@ -290,6 +288,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
+        let from_peer_id = from_peer.get_id();
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
             self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
@@ -315,6 +314,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let committed_index = self.raft_group().raft.raft_log.committed;
                 self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
             }
+        }
+
+        // There are two different cases to check peers can be bring back.
+        // 1. If the peer is pending, then only AppendResponse can bring it back to up.
+        // 2. If the peer is down, then HeartbeatResponse and AppendResponse can bring
+        // it back to up.
+        if self.any_new_peer_catch_up(from_peer_id) {
+            self.region_heartbeat_pd(ctx)
         }
 
         self.set_has_ready();
@@ -366,6 +373,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return None;
             }
         };
+        let to_peer_is_learner = to_peer.get_role() == metapb::PeerRole::Learner;
 
         let mut raft_msg = self.prepare_raft_message();
 
@@ -379,6 +387,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "to" => msg.get_to(),
             );
         }
+
+        // Filling start and end key is only needed for being compatible with
+        // raftstore v1 tiflash engine.
+        //
+        // There could be two cases:
+        // - Target peer already exists but has not established communication with
+        //   leader yet
+        // - Target peer is added newly due to member change or region split, but it's
+        //   not created yet
+        // For both cases the region start key and end key are attached in RequestVote
+        // and Heartbeat message for the store of that peer to check whether to create a
+        // new peer when receiving these messages, or just to wait for a pending region
+        // split to perform later.
+        if self.storage().is_initialized() && is_initial_msg(&msg) && to_peer_is_learner {
+            let region = self.region();
+            raft_msg.set_start_key(region.get_start_key().to_vec());
+            raft_msg.set_end_key(region.get_end_key().to_vec());
+        }
+
         raft_msg.set_message(msg);
         Some(raft_msg)
     }
