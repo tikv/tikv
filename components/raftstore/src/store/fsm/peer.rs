@@ -94,9 +94,8 @@ use crate::{
         util,
         util::{KeysInfoFormatter, LeaseState},
         worker::{
-            new_change_peer_v2_request, Bucket, BucketRange, CleanupTask,
-            ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress,
-            RegionTask, SplitCheckTask,
+            new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
+            GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,

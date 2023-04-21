@@ -94,11 +94,11 @@ use crate::{
         util,
         util::{is_initial_msg, RegionReadProgressRegistry},
         worker::{
-            AutoSplitController, CleanupRunner, CleanupSstRunner,
-            CleanupSstTask, CleanupTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
-            ConsistencyCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner,
-            RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner,
-            RegionTask, SplitCheckTask,
+            AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
+            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+            GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
+            ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
+            SplitCheckTask,
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -2072,11 +2072,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
         // it needs to response GcPeerResponse.
         if msg.get_is_tombstone() && self.ctx.cfg.enable_v2_compatible_learner {
-            if let Some(msg) = handle_tombstone_message_on_learner(
-                &self.ctx.engines.kv,
-                self.fsm.store.id,
-                msg,
-            ) {
+            if let Some(msg) =
+                handle_tombstone_message_on_learner(&self.ctx.engines.kv, self.fsm.store.id, msg)
+            {
                 let _ = self.ctx.trans.send(msg);
             }
             // else {

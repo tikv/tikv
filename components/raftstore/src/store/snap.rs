@@ -1925,7 +1925,7 @@ impl SnapManagerBuilder {
         let mut path_v2 = path.clone();
         path_v2.push_str("_v2");
         let tablet_snap_manager = if self.enable_receive_tablet_snapshot {
-            Some(TabletSnapManager::new(&path_v2).unwrap())
+            Some(TabletSnapManager::new(&path_v2, self.key_manager.clone()).unwrap())
         } else {
             None
         };
@@ -2009,12 +2009,18 @@ impl Drop for ReceivingGuard<'_> {
 pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
+    key_manager: Option<Arc<DataKeyManager>>,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
     stats: Arc<Mutex<HashMap<TabletSnapKey, (Instant, SnapshotStat)>>>,
+    sending_count: Arc<AtomicUsize>,
+    recving_count: Arc<AtomicUsize>,
 }
 
 impl TabletSnapManager {
-    pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
+    pub fn new<T: Into<PathBuf>>(
+        path: T,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> io::Result<Self> {
         let path = path.into();
         if !path.exists() {
             file_system::create_dir_all(&path)?;
@@ -2025,12 +2031,15 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_dir(&path, SNAP_GEN_PREFIX)?;
-        file_system::clean_up_trash(&path)?;
+        encryption::clean_up_dir(&path, SNAP_GEN_PREFIX, key_manager.as_deref())?;
+        encryption::clean_up_trash(&path, key_manager.as_deref())?;
         Ok(Self {
             base: path,
+            key_manager,
             receiving: Arc::default(),
             stats: Arc::default(),
+            sending_count: Arc::default(),
+            recving_count: Arc::default(),
         })
     }
 
@@ -2063,8 +2072,8 @@ impl TabletSnapManager {
             .filter(|stat| stat.get_total_duration_sec() > 1)
             .collect();
         SnapStats {
-            sending_count: 0,
-            receiving_count: 0,
+            sending_count: self.sending_count.load(Ordering::SeqCst),
+            receiving_count: self.recving_count.load(Ordering::SeqCst),
             stats,
         }
     }
@@ -2086,16 +2095,17 @@ impl TabletSnapManager {
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
-        if path.exists() && let Err(e) = file_system::trash_dir_all(&path) {
-            error!(
-                "delete snapshot failed";
-                "path" => %path.display(),
-                "err" => ?e,
-            );
-            false
-        } else {
-            true
+        if path.exists() {
+            if let Err(e) = encryption::trash_dir_all(&path, self.key_manager.as_deref()) {
+                error!(
+                    "delete snapshot failed";
+                    "path" => %path.display(),
+                    "err" => ?e,
+                );
+                return false;
+            }
         }
+        true
     }
 
     pub fn total_snap_size(&self) -> Result<u64> {
@@ -2147,6 +2157,19 @@ impl TabletSnapManager {
             receiving: &self.receiving,
             key,
         })
+    }
+
+    pub fn sending_count(&self) -> &Arc<AtomicUsize> {
+        &self.sending_count
+    }
+
+    pub fn recving_count(&self) -> &Arc<AtomicUsize> {
+        &self.recving_count
+    }
+
+    #[inline]
+    pub fn key_manager(&self) -> &Option<Arc<DataKeyManager>> {
+        &self.key_manager
     }
 }
 
@@ -3136,7 +3159,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let start = Instant::now();
-        let mgr = TabletSnapManager::new(snap_dir.path()).unwrap();
+        let mgr = TabletSnapManager::new(snap_dir.path(), None).unwrap();
         let key = TabletSnapKey::new(1, 1, 1, 1);
         mgr.begin_snapshot(key.clone(), start - time::Duration::from_secs(2), 1);
         // filter out the snapshot that is not finished
