@@ -3270,7 +3270,9 @@ pub mod tests {
     #[test]
     fn test_generate_snap_for_tablet_snapshot() {
         let snap_dir = Builder::new().prefix("test_snapshot").tempdir().unwrap();
-        let snap_mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        let snap_mgr = SnapManagerBuilder::default()
+            .enable_receive_tablet_snapshot(true)
+            .build(snap_dir.path().to_str().unwrap());
         snap_mgr.init().unwrap();
         let tablet_snap_key = TabletSnapKey::new(1, 2, 3, 4);
         snap_mgr
