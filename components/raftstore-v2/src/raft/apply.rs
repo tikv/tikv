@@ -21,6 +21,7 @@ use tikv_util::{log::SlogFormat, worker::Scheduler};
 use crate::{
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::CmdResChannel,
+    worker::checkpoint,
 };
 
 pub(crate) struct Observe {
@@ -71,6 +72,8 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
+    checkpoint_cheduler: Scheduler<checkpoint::Task<EK>>,
+
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -91,6 +94,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
         coprocessor_host: CoprocessorHost<EK>,
+        checkpoint_cheduler: Scheduler<checkpoint::Task<EK>>,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -123,6 +127,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
+            checkpoint_cheduler,
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,
@@ -307,5 +312,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn coprocessor_host(&self) -> &CoprocessorHost<EK> {
         &self.coprocessor_host
+    }
+
+    #[inline]
+    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
+        &self.checkpoint_cheduler
     }
 }

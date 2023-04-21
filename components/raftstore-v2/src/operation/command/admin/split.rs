@@ -33,6 +33,7 @@ use engine_traits::{
     Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
 };
 use fail::fail_point;
+use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
     pdpb::CheckPolicy,
@@ -62,7 +63,7 @@ use crate::{
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
-    worker::tablet,
+    worker::{checkpoint, tablet},
     Error,
 };
 
@@ -557,6 +558,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 tablet: Box::new(tablet),
             }),
         ))
+    }
+
+    async fn async_checkpoint(&self, parent_region: u64, split_regions: u64, log_index: u64) {
+        let (tx, rx) = oneshot::channel();
+        self.checkpoint_scheduler().schedule(checkpoint::Task {
+            tablet: self.tablet().clone(),
+            log_index,
+            parent_region,
+            split_regions,
+            sender: tx,
+        })
     }
 }
 

@@ -142,6 +142,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             mailbox,
             store_ctx.tablet_registry.clone(),
             read_scheduler,
+            store_ctx.schedulers.checkpoint.clone(),
             self.flush_state().clone(),
             self.storage().apply_trace().log_recovery(),
             self.entry_storage().applied_term(),
