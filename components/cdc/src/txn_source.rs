@@ -7,8 +7,11 @@
 const CDC_WRITE_SOURCE_BITS: u64 = 8;
 const CDC_WRITE_SOURCE_MAX: u64 = (1 << CDC_WRITE_SOURCE_BITS) - 1;
 
+#[cfg(test)]
 const LOSSY_DDL_REORG_SOURCE_BITS: u64 = 4;
+#[cfg(test)]
 const LOSSY_DDL_COLUMN_REORG_SOURCE: u64 = 1;
+#[cfg(test)]
 const LOSSY_DDL_REORG_SOURCE_MAX: u64 = (1 << LOSSY_DDL_REORG_SOURCE_BITS) - 1;
 const LOSSY_DDL_REORG_SOURCE_SHIFT: u64 = CDC_WRITE_SOURCE_BITS;
 
@@ -16,18 +19,20 @@ const LOSSY_DDL_REORG_SOURCE_SHIFT: u64 = CDC_WRITE_SOURCE_BITS;
 pub(crate) struct TxnSource(u64);
 
 impl TxnSource {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         TxnSource(0)
     }
 
-    pub(crate) fn set_cdc_write_source(&mut self, value: u64) -> Result<(), String> {
+    #[cfg(test)]
+    pub(crate) fn set_cdc_write_source(&mut self, value: u64) {
         if value > CDC_WRITE_SOURCE_MAX {
             unimplemented!()
         }
         self.0 |= value;
-        Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_cdc_write_source(&self) -> u64 {
         self.0 & CDC_WRITE_SOURCE_MAX
     }
@@ -36,14 +41,15 @@ impl TxnSource {
         (txn_source & CDC_WRITE_SOURCE_MAX) != 0
     }
 
-    pub(crate) fn set_lossy_ddl_reorg_source(&mut self, value: u64) -> Result<(), String> {
+    #[cfg(test)]
+    pub(crate) fn set_lossy_ddl_reorg_source(&mut self, value: u64) {
         if value > LOSSY_DDL_REORG_SOURCE_MAX {
             unimplemented!()
         }
         self.0 |= value << LOSSY_DDL_REORG_SOURCE_SHIFT;
-        Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_lossy_ddl_reorg_source(&self) -> u64 {
         (self.0 >> LOSSY_DDL_REORG_SOURCE_SHIFT) & LOSSY_DDL_REORG_SOURCE_MAX
     }
@@ -83,14 +89,17 @@ mod tests {
     #[test]
     fn test_get_lossy_ddl_reorg_source() {
         let mut txn_source = TxnSource::new();
-        txn_source.set_lossy_ddl_reorg_source(1);
-        assert_eq!(txn_source.get_lossy_ddl_reorg_source(), 1);
+        txn_source.set_lossy_ddl_reorg_source(LOSSY_DDL_COLUMN_REORG_SOURCE);
+        assert_eq!(
+            txn_source.get_lossy_ddl_reorg_source(),
+            LOSSY_DDL_COLUMN_REORG_SOURCE
+        );
     }
 
     #[test]
     fn test_is_lossy_ddl_reorg_source_set() {
         let mut txn_source = TxnSource::new();
-        txn_source.set_lossy_ddl_reorg_source(1);
+        txn_source.set_lossy_ddl_reorg_source(LOSSY_DDL_COLUMN_REORG_SOURCE);
         assert_eq!(TxnSource::is_lossy_ddl_reorg_source_set(txn_source.0), true);
 
         let txn_source = TxnSource::new();
