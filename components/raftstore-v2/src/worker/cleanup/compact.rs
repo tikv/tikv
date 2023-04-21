@@ -173,10 +173,10 @@ fn collect_regions_to_compact<E: KvEngine>(
         if let Some((num_ent, num_ver, num_rows)) =
             box_try!(tablet.get_range_entries_and_versions(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
         {
-            println!(
-                "num of rows {}, num of ver {}, num_ents {}",
-                num_rows, num_ver, num_ent
-            );
+            // println!(
+            //     "num of rows {}, num of ver {}, num_ents {}",
+            //     num_rows, num_ver, num_ent
+            // );
             info!(
                 logger,
                 "get range entries and versions";
