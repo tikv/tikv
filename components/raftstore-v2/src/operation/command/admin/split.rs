@@ -55,7 +55,7 @@ use raftstore::{
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
+use tikv_util::{log::SlogFormat, slog_panic, time::Instant, worker::Scheduler};
 
 use crate::{
     batch::StoreContext,
@@ -371,7 +371,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    pub fn apply_split(
+    pub async fn apply_split(
         &mut self,
         req: &AdminRequest,
         log_index: u64,
@@ -389,10 +389,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // This method is executed only when there are unapplied entries after being
         // restarted. So there will be no callback, it's OK to return a response
         // that does not matched with its request.
-        self.apply_batch_split(req, log_index)
+        self.apply_batch_split(req, log_index).await
     }
 
-    pub fn apply_batch_split(
+    pub async fn apply_batch_split(
         &mut self,
         req: &AdminRequest,
         log_index: u64,
@@ -470,58 +470,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // write batch
         self.flush();
 
-        // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
-        // clone new tablets. It may cause large jitter as we need to flush the
-        // memtable. And more what is more important is that after removing WAL, the API
-        // will never flush.
-        // We will freeze the memtable rather than flush it in the following PR.
-        let tablet = self.tablet().clone();
-        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
-            slog_panic!(
-                self.logger,
-                "fails to create checkpoint object";
-                "error" => ?e
-            )
-        });
-
         let now = Instant::now();
-        let reg = self.tablet_registry();
-        for new_region in &regions {
-            let new_region_id = new_region.id;
-            if new_region_id == region_id {
-                continue;
-            }
 
-            let split_temp_path = temp_split_path(reg, new_region_id);
-            checkpointer
-                .create_at(&split_temp_path, None, 0)
-                .unwrap_or_else(|e| {
-                    slog_panic!(
-                        self.logger,
-                        "fails to create checkpoint";
-                        "path" => %split_temp_path.display(),
-                        "error" => ?e
-                    )
-                });
-        }
+        let split_region_ids = regions
+            .iter()
+            .map(|r| r.get_id())
+            .filter(|id| id != &region_id)
+            .collect();
+        let scheduler = self.checkpoint_scheduler().clone();
+        self.async_checkpoint(scheduler, region_id, split_region_ids, log_index)
+            .await;
 
-        let derived_path = self.tablet_registry().tablet_path(region_id, log_index);
-        // If it's recovered from restart, it's possible the target path exists already.
-        // And because checkpoint is atomic, so we don't need to worry about corruption.
-        // And it's also wrong to delete it and remake as it may has applied and flushed
-        // some data to the new checkpoint before being restarted.
-        if !derived_path.exists() {
-            checkpointer
-                .create_at(&derived_path, None, 0)
-                .unwrap_or_else(|e| {
-                    slog_panic!(
-                        self.logger,
-                        "fails to create checkpoint";
-                        "path" => %derived_path.display(),
-                        "error" => ?e
-                    )
-                });
-        }
         let elapsed = now.saturating_elapsed();
         // to be removed after when it's stable
         info!(
@@ -560,15 +519,24 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         ))
     }
 
-    async fn async_checkpoint(&self, parent_region: u64, split_regions: u64, log_index: u64) {
+    async fn async_checkpoint(
+        &self,
+        scheduler: Scheduler<checkpoint::Task<EK>>,
+        parent_region: u64,
+        split_regions: Vec<u64>,
+        log_index: u64,
+    ) {
         let (tx, rx) = oneshot::channel();
-        self.checkpoint_scheduler().schedule(checkpoint::Task {
+        let task = checkpoint::Task::Checkpoint {
             tablet: self.tablet().clone(),
             log_index,
             parent_region,
             split_regions,
             sender: tx,
-        })
+        };
+        scheduler.schedule(task);
+        let res = rx.await;
+        println!("{:?}", res);
     }
 }
 
@@ -1054,6 +1022,7 @@ mod test {
             None,
             importer,
             host,
+            None,
             logger.clone(),
         );
 

@@ -518,6 +518,7 @@ mod tests {
             None,
             importer,
             host,
+            None,
             logger,
         );
 

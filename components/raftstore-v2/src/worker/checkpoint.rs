@@ -28,7 +28,7 @@ impl<EK> Display for Task<EK> {
                 ..
             } => write!(
                 f,
-                "create checkpoint for batch split, parent region_id {}, source region_ids {}, log_index {}",
+                "create checkpoint for batch split, parent region_id {}, source region_ids {:?}, log_index {}",
                 parent_region, split_regions, log_index,
             ),
         }

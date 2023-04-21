@@ -101,7 +101,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             buckets,
             sst_importer,
             coprocessor_host,
-            checkpoint_cheduler,
+            Some(checkpoint_cheduler),
             logger,
         );
         (

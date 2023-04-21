@@ -327,6 +327,7 @@ mod test {
             None,
             importer,
             host,
+            None,
             logger.clone(),
         );
 
