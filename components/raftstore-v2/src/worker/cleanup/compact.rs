@@ -95,9 +95,9 @@ where
                         let Some(tablet) = tablet_cache.latest() else {continue};
                         for cf in &cf_names {
                             // to be removed
-                            let approximate_size = tablet
-                                .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
-                                .unwrap_or_default();
+                            // let approximate_size = tablet
+                            //     .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY),
+                            // 0)     .unwrap_or_default();
                             if let Err(e) =
                                 tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
                             {
@@ -109,16 +109,16 @@ where
                                     "err" => %e,
                                 );
                             }
-                            let cur_approximate_size = tablet
-                                .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
-                                .unwrap_or_default();
+                            // let cur_approximate_size = tablet
+                            //     .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY),
+                            // 0)     .unwrap_or_default();
                             info!(
                                 self.logger,
                                 "Compaction done";
                                 "cf" => cf,
                                 "region_id" => region_id,
-                                "approximate_size_before" => approximate_size,
-                                "approximate_size_after" => cur_approximate_size
+                                // "approximate_size_before" => approximate_size,
+                                // "approximate_size_after" => cur_approximate_size
                             );
                         }
                         fail_point!("raftstore-v2::CheckAndCompact:AfterCompact");
@@ -147,7 +147,9 @@ fn need_compact(
     // When the number of tombstones exceed threshold and ratio, this range need
     // compacting.
     let estimate_num_del = num_entires - num_versions;
-    (num_versions - num_rows) >= tombstones_num_threshold
+    let redundent_keys = num_entires - num_rows;
+    (redundent_keys >= tombstones_num_threshold
+        && redundent_keys * 100 >= tombstones_percent_threshold * num_entires)
         || (estimate_num_del >= tombstones_num_threshold
             && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires)
 }
@@ -171,10 +173,10 @@ fn collect_regions_to_compact<E: KvEngine>(
         if let Some((num_ent, num_ver, num_rows)) =
             box_try!(tablet.get_range_entries_and_versions(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
         {
-            // println!(
-            //     "num of rows {}, num of ver {}, num_ents {}",
-            //     num_rows, num_ver, num_ent
-            // );
+            println!(
+                "num of rows {}, num of ver {}, num_ents {}",
+                num_rows, num_ver, num_ent
+            );
             info!(
                 logger,
                 "get range entries and versions";

@@ -431,12 +431,6 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             }
         };
 
-        // println!(
-        //     "mvcc key collection, key {:?}, ts {}",
-        //     String::from_utf8(k.to_vec()),
-        //     ts
-        // );
-
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
         if entry_type == DBEntryType::Delete {
