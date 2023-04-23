@@ -28,7 +28,7 @@ pub fn check_txn_status_lock_exists(
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
     if verify_is_primary && !primary_key.is_encoded_from(&lock.primary) {
         // Return the current lock info to tell the client what the actual primary is.
-        return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
+        return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(primary_key.into_raw()?)).into());
     }
 
     // Never rollback or push forward min_commit_ts in check_txn_status if it's

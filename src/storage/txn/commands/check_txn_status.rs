@@ -151,18 +151,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 #[cfg(test)]
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
-    use protobuf::reflect::ProtobufValue;
+    use kvproto::kvrpcpb::{self, Context, LockInfo, PrewriteRequestPessimisticAction::*};
     use tikv_util::deadline::Deadline;
-    use txn_types::{Key, LockType, WriteType};
+    use txn_types::{Key, WriteType};
 
     use super::{TxnStatus::*, *};
-    use crate::storage::{kv::Engine, lock_manager::MockLockManager, mvcc::tests::*, txn::{
-        self,
-        commands::{pessimistic_rollback, WriteCommand, WriteContext},
-        scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
-        tests::*,
-    }, types::TxnStatus, ProcessResult, TestEngineBuilder, mvcc};
+    use crate::storage::{
+        kv::Engine,
+        lock_manager::MockLockManager,
+        mvcc,
+        mvcc::tests::*,
+        txn::{
+            self,
+            commands::{pessimistic_rollback, WriteCommand, WriteContext},
+            scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
+            tests::*,
+        },
+        types::TxnStatus,
+        ProcessResult, TestEngineBuilder,
+    };
 
     pub fn must_success<E: Engine>(
         engine: &mut E,
@@ -252,6 +259,12 @@ pub mod tests {
                     raw_ext: None,
                 },
             )
+            .map(|r| {
+                panic!(
+                    "expected check_txn_status fail but succeeded with result: {:?}",
+                    r.pr
+                )
+            })
             .unwrap_err()
     }
 
@@ -1194,30 +1207,41 @@ pub mod tests {
     fn test_verify_is_primary() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
 
-        let check_lock = |l, key, primary, lock_type| {
+        let check_lock = |l: LockInfo, key: &'_ [u8], primary: &'_ [u8], lock_type| {
             assert_eq!(&l.key, key);
             assert_eq!(l.lock_type, lock_type);
             assert_eq!(&l.primary_lock, primary);
         };
 
-        let check_error = |e, key: &[u8], primary: &[u8]  ,lock_type| {
-            match e {
-                txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(mvcc::ErrorInner::KeyIsLocked(lock_info)))) => {
-                    check_lock(lock_info, key, primary, lock_type);
-                }
-                e => panic!("unexpected error: {:?}", e)
+        let check_error = |e, key: &'_ [u8], primary: &'_ [u8], lock_type| match e {
+            txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(
+                box mvcc::ErrorInner::KeyIsLocked(lock_info),
+            ))) => {
+                check_lock(lock_info, key, primary, lock_type);
             }
+            e => panic!("unexpected error: {:?}", e),
         };
 
         must_acquire_pessimistic_lock(&mut engine, b"k1", b"k2", 1, 1);
-        let err = must_err(&mut engine, b"k1", 1, 1, 0, true, false, true);
-        check_error(e, b"k1",  b"k2", LockType::Pessimistic);
+        let e = must_err(&mut engine, b"k1", 1, 1, 0, true, false, true);
+        check_error(e, b"k1", b"k2", kvrpcpb::Op::PessimisticLock);
         let lock = must_pessimistic_locked(&mut engine, b"k1", 1, 1);
-        check_lock(lock.into_lock_info(b"k1".to_vec()), b"k1", b"k2", LockType::Pessimistic);
+        check_lock(
+            lock.into_lock_info(b"k1".to_vec()),
+            b"k1",
+            b"k2",
+            kvrpcpb::Op::PessimisticLock,
+        );
 
         must_prewrite_put(&mut engine, b"k1", b"v1", b"k2", 1);
-        check_error(e, b"k1",  b"k2", LockType::Put);
+        let e = must_err(&mut engine, b"k1", 1, 1, 0, true, false, true);
+        check_error(e, b"k1", b"k2", kvrpcpb::Op::PessimisticLock);
         let lock = must_pessimistic_locked(&mut engine, b"k1", 1, 1);
-        check_lock(lock.into_lock_info(b"k1".to_vec()), b"k1", b"k2", LockType::Put);
+        check_lock(
+            lock.into_lock_info(b"k1".to_vec()),
+            b"k1",
+            b"k2",
+            kvrpcpb::Op::PessimisticLock,
+        );
     }
 }
