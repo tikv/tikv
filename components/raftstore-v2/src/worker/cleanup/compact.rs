@@ -95,9 +95,9 @@ where
                         let Some(tablet) = tablet_cache.latest() else {continue};
                         for cf in &cf_names {
                             // to be removed
-                            // let approximate_size = tablet
-                            //     .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY),
-                            // 0)     .unwrap_or_default();
+                            let approximate_size = tablet
+                                .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
+                                .unwrap_or_default();
                             if let Err(e) =
                                 tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
                             {
@@ -109,16 +109,16 @@ where
                                     "err" => %e,
                                 );
                             }
-                            // let cur_approximate_size = tablet
-                            //     .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY),
-                            // 0)     .unwrap_or_default();
+                            let cur_approximate_size = tablet
+                                .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
+                                .unwrap_or_default();
                             info!(
                                 self.logger,
-                                "Compaction done";
+                                "compaction done #####";
                                 "cf" => cf,
                                 "region_id" => region_id,
-                                // "approximate_size_before" => approximate_size,
-                                // "approximate_size_after" => cur_approximate_size
+                                "approximate_size_before" => approximate_size,
+                                "approximate_size_after" => cur_approximate_size
                             );
                         }
                         fail_point!("raftstore-v2::CheckAndCompact:AfterCompact");
@@ -148,8 +148,7 @@ fn need_compact(
     // compacting.
     let estimate_num_del = num_entires - num_versions;
     let redundent_keys = num_entires - num_rows;
-    (redundent_keys >= tombstones_num_threshold
-        && redundent_keys * 100 >= tombstones_percent_threshold * num_entires)
+    redundent_keys >= tombstones_num_threshold
         || (estimate_num_del >= tombstones_num_threshold
             && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires)
 }
@@ -179,7 +178,7 @@ fn collect_regions_to_compact<E: KvEngine>(
             // );
             info!(
                 logger,
-                "get range entries and versions";
+                "get range entries and versions #####";
                 "num_entries" => num_ent,
                 "num_versions" => num_ver,
                 "num_rows" => num_rows,

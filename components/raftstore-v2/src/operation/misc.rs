@@ -54,9 +54,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             for region_range in ranges {
                 last_check_key = &region_range.0.0;
                 regions_to_check.insert(*region_range.1);
-                // if regions_to_check.len() >= self.store_ctx.cfg.region_compact_check_step as
-                // usize {
-                if regions_to_check.len() >= 20 as usize {
+                if regions_to_check.len() >= self.store_ctx.cfg.region_compact_check_step as usize {
                     break;
                 }
             }
