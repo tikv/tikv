@@ -6,7 +6,7 @@ use std::collections::{
 };
 
 use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
-use slog::{debug, error};
+use slog::{debug, error, info};
 
 use crate::{
     fsm::StoreFsmDelegate, router::StoreTick, worker::cleanup, CompactTask::CheckAndCompact,
