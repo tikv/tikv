@@ -1233,15 +1233,15 @@ pub mod tests {
             kvrpcpb::Op::PessimisticLock,
         );
 
-        must_prewrite_put(&mut engine, b"k1", b"v1", b"k2", 1);
+        must_pessimistic_prewrite_put(&mut engine, b"k1", b"v1", b"k2", 1, 1, DoPessimisticCheck);
         let e = must_err(&mut engine, b"k1", 1, 1, 0, true, false, true);
-        check_error(e, b"k1", b"k2", kvrpcpb::Op::PessimisticLock);
-        let lock = must_pessimistic_locked(&mut engine, b"k1", 1, 1);
+        check_error(e, b"k1", b"k2", kvrpcpb::Op::Put);
+        let lock = must_locked(&mut engine, b"k1", 1);
         check_lock(
             lock.into_lock_info(b"k1".to_vec()),
             b"k1",
             b"k2",
-            kvrpcpb::Op::PessimisticLock,
+            kvrpcpb::Op::Put,
         );
     }
 }
