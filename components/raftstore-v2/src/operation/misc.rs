@@ -23,7 +23,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     pub fn on_ompact_check_tick(&mut self) {
         self.register_compact_check_tick();
         if self.store_ctx.schedulers.cleanup.is_busy() {
-            debug!(
+            info!(
                 self.store_ctx.logger,
                 "compact worker is busy, check space redundancy next time";
             );
