@@ -148,7 +148,7 @@ fn need_compact(
     // compacting.
     let estimate_num_del = num_entires - num_versions;
     let redundent_keys = num_entires - num_rows;
-    redundent_keys >= tombstones_num_threshold
+    (redundent_keys >= tombstones_num_threshold && redundent_keys * 100 >= 10 * num_entires)
         || (estimate_num_del >= tombstones_num_threshold
             && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires)
 }
