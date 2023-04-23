@@ -897,6 +897,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+            self.read_progress()
+                .update_leader_info(ss.leader_id, term, self.region());
             let target = self.refresh_leader_transferee();
             ctx.coprocessor_host.on_role_change(
                 self.region(),
