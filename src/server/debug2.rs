@@ -6,9 +6,15 @@ use engine_traits::{
     CF_LOCK, CF_WRITE,
 };
 use keys::{data_key, DATA_PREFIX_KEY};
-use kvproto::{debugpb::Db as DbType, kvrpcpb::MvccInfo, metapb, raft_serverpb::RegionLocalState};
+use kvproto::{
+    debugpb::Db as DbType,
+    kvrpcpb::MvccInfo,
+    metapb,
+    raft_serverpb::{PeerState, RegionLocalState},
+};
 use nom::AsBytes;
 use raft::prelude::Entry;
+use raftstore::store::util::check_key_in_region;
 
 use super::debug::{BottommostLevelCompaction, RegionInfo};
 use crate::{
@@ -17,10 +23,10 @@ use crate::{
     storage::mvcc::{MvccInfoCollector, MvccInfoScanner},
 };
 
-pub struct MvccInfoIteratorV2<ER: RaftEngine> {
+pub struct MvccInfoIteratorV2 {
     scanner: MvccInfoScanner<RocksEngineIterator, MvccInfoCollector>,
     tablet_reg: TabletRegistry<RocksEngine>,
-    raft_engine: ER,
+    sorted_region_states: Vec<RegionLocalState>,
     cur_region: metapb::Region,
     start: Vec<u8>,
     end: Vec<u8>,
@@ -28,9 +34,9 @@ pub struct MvccInfoIteratorV2<ER: RaftEngine> {
     count: usize,
 }
 
-impl<ER: RaftEngine> MvccInfoIteratorV2<ER> {
+impl MvccInfoIteratorV2 {
     pub fn new(
-        raft_engine: ER,
+        sorted_region_states: Vec<RegionLocalState>,
         tablet_reg: TabletRegistry<RocksEngine>,
         start: &[u8],
         end: &[u8],
@@ -41,7 +47,15 @@ impl<ER: RaftEngine> MvccInfoIteratorV2<ER> {
         } else {
             &start[DATA_PREFIX_KEY.len()..]
         };
-        let mut first_region_state = find_region_state_by_key(&raft_engine, seek_key)?;
+
+        let mut first_region_state = match sorted_region_states
+            .binary_search_by(|state| state.get_region().get_start_key().cmp(seek_key))
+        {
+            Ok(idx) => sorted_region_states[idx].clone(),
+            Err(idx) => sorted_region_states[std::cmp::max(idx, 1) - 1].clone(),
+        };
+
+        check_key_in_region(seek_key, first_region_state.get_region()).unwrap();
 
         let mut tablet_cache = get_tablet_cache(
             &tablet_reg,
@@ -61,7 +75,7 @@ impl<ER: RaftEngine> MvccInfoIteratorV2<ER> {
         Ok(MvccInfoIteratorV2 {
             scanner,
             tablet_reg,
-            raft_engine,
+            sorted_region_states,
             cur_region: first_region_state.take_region(),
             start: start.to_vec(),
             end: end.to_vec(),
@@ -71,7 +85,7 @@ impl<ER: RaftEngine> MvccInfoIteratorV2<ER> {
     }
 }
 
-impl<ER: RaftEngine> Iterator for MvccInfoIteratorV2<ER> {
+impl Iterator for MvccInfoIteratorV2 {
     type Item = raftstore::Result<(Vec<u8>, MvccInfo)>;
 
     fn next(&mut self) -> Option<raftstore::Result<(Vec<u8>, MvccInfo)>> {
@@ -91,38 +105,40 @@ impl<ER: RaftEngine> Iterator for MvccInfoIteratorV2<ER> {
                         return None;
                     }
 
-                    if let Ok(next_region_state) =
-                        find_region_state_by_key(&self.raft_engine, cur_end_key)
-                    {
-                        if &self.cur_region == next_region_state.get_region() {
-                            return None;
-                        }
-                        self.cur_region = next_region_state.get_region().clone();
-                        let mut tablet_cache = get_tablet_cache(
-                            &self.tablet_reg,
-                            next_region_state.get_region().get_id(),
-                            Some(next_region_state),
-                        )
-                        .unwrap();
-                        let tablet = tablet_cache.latest().unwrap();
-                        self.scanner = MvccInfoScanner::new(
-                            |cf, opts| tablet.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
-                            if self.start.is_empty() {
-                                None
-                            } else {
-                                Some(self.start.as_bytes())
-                            },
-                            if self.end.is_empty() {
-                                None
-                            } else {
-                                Some(self.end.as_bytes())
-                            },
-                            MvccInfoCollector::default(),
-                        )
-                        .unwrap();
-                    } else {
+                    let next_region_state =
+                        match self.sorted_region_states.binary_search_by(|state| {
+                            state.get_region().get_start_key().cmp(cur_end_key)
+                        }) {
+                            Ok(idx) => &self.sorted_region_states[idx],
+                            Err(idx) => &self.sorted_region_states[std::cmp::max(idx, 1) - 1],
+                        };
+
+                    if &self.cur_region == next_region_state.get_region() {
                         return None;
                     }
+                    self.cur_region = next_region_state.get_region().clone();
+                    let mut tablet_cache = get_tablet_cache(
+                        &self.tablet_reg,
+                        next_region_state.get_region().get_id(),
+                        Some(next_region_state.clone()),
+                    )
+                    .unwrap();
+                    let tablet = tablet_cache.latest().unwrap();
+                    self.scanner = MvccInfoScanner::new(
+                        |cf, opts| tablet.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
+                        if self.start.is_empty() {
+                            None
+                        } else {
+                            Some(self.start.as_bytes())
+                        },
+                        if self.end.is_empty() {
+                            None
+                        } else {
+                            Some(self.end.as_bytes())
+                        },
+                        MvccInfoCollector::default(),
+                    )
+                    .unwrap();
                 }
                 Err(e) => return Some(Err(e)),
             }
@@ -236,18 +252,34 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
     }
 
     /// Scan MVCC Infos for given range `[start, end)`.
-    pub fn scan_mvcc(
-        &self,
-        start: &[u8],
-        end: &[u8],
-        limit: u64,
-    ) -> Result<MvccInfoIteratorV2<ER>> {
+    pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIteratorV2> {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
 
+        let mut region_states = vec![];
+        self.raft_engine
+            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                let region_state = self
+                    .raft_engine
+                    .get_region_state(region_id, u64::MAX)
+                    .unwrap()
+                    .unwrap();
+                if region_state.state == PeerState::Normal {
+                    region_states.push(region_state);
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        region_states.sort_by(|r1, r2| {
+            r1.get_region()
+                .get_start_key()
+                .cmp(r2.get_region().get_start_key())
+        });
+
         MvccInfoIteratorV2::new(
-            self.raft_engine.clone(),
+            region_states,
             self.tablet_reg.clone(),
             start,
             end,
@@ -414,7 +446,13 @@ fn get_tablet_cache(
         let ctx = TabletContext::new(region_state.get_region(), Some(region_state.tablet_index));
         match tablet_reg.load(ctx, false) {
             Ok(tablet_cache) => Ok(tablet_cache),
-            Err(e) => return Err(box_err!(e)),
+            Err(e) => {
+                println!(
+                    "tablet load failed, region_state {:?}",
+                    region_state.get_state()
+                );
+                return Err(box_err!(e));
+            }
         }
     }
 }
