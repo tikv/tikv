@@ -8053,7 +8053,7 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
                     vec![Mutation::make_put(k.clone(), v)],
-                    k.as_encoded().to_vec(),
+                    k.to_raw().unwrap(),
                     ts(25, 0),
                     100,
                 ),
