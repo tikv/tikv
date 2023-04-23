@@ -213,6 +213,26 @@ fn check_if_to_peer_destroyed<ER: RaftEngine>(
     Ok(false)
 }
 
+// An empty raft message for creating peer fsm.
+fn empty_split_message(store_id: u64, region: &Region) -> Box<RaftMessage> {
+    let mut raft_msg = Box::<RaftMessage>::default();
+    raft_msg.set_region_id(region.get_id());
+    raft_msg.set_region_epoch(region.get_region_epoch().clone());
+    raft_msg.set_to_peer(
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id)
+            .unwrap()
+            .clone(),
+    );
+    raft_msg
+}
+
+pub fn is_empty_split_message(msg: &RaftMessage) -> bool {
+    !msg.has_from_peer() && msg.has_to_peer() && msg.has_region_epoch() && !msg.has_message()
+}
+
 impl Store {
     /// The method is called during split.
     /// The creation process is:
@@ -230,17 +250,33 @@ impl Store {
     {
         let derived_region_id = msg.derived_region_id;
         let region_id = msg.region.id;
-        let mut raft_msg = Box::<RaftMessage>::default();
-        raft_msg.set_region_id(region_id);
-        raft_msg.set_region_epoch(msg.region.get_region_epoch().clone());
-        raft_msg.set_to_peer(
-            msg.region
-                .get_peers()
-                .iter()
-                .find(|p| p.get_store_id() == self.store_id())
-                .unwrap()
-                .clone(),
-        );
+        let raft_msg = empty_split_message(self.store_id(), &msg.region);
+
+        #[allow(unused_mut)]
+        let mut race_initial_message_fp = || {
+            fail::fail_point!(
+                "on_store_2_split_init_race_with_initial_message",
+                self.store_id() == 2,
+                |_| {
+                    let mut initial_msg = raft_msg.clone();
+                    initial_msg.set_from_peer(
+                        msg.region
+                            .get_peers()
+                            .iter()
+                            .find(|p| p.get_store_id() != self.store_id())
+                            .unwrap()
+                            .clone(),
+                    );
+                    let m = initial_msg.mut_message();
+                    m.set_msg_type(raft::prelude::MessageType::MsgRequestPreVote);
+                    m.set_term(raftstore::store::RAFT_INIT_LOG_TERM);
+                    m.set_index(raftstore::store::RAFT_INIT_LOG_INDEX);
+                    assert!(util::is_initial_msg(initial_msg.get_message()));
+                    self.on_raft_message(ctx, initial_msg);
+                }
+            )
+        };
+        race_initial_message_fp();
 
         // It will create the peer if it does not exist
         self.on_raft_message(ctx, raft_msg);
