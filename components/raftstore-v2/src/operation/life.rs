@@ -252,8 +252,7 @@ impl Store {
         let region_id = msg.region.id;
         let raft_msg = empty_split_message(self.store_id(), &msg.region);
 
-        #[allow(unused_mut)]
-        let mut race_initial_message_fp = || {
+        (|| {
             fail::fail_point!(
                 "on_store_2_split_init_race_with_initial_message",
                 self.store_id() == 2,
@@ -275,8 +274,7 @@ impl Store {
                     self.on_raft_message(ctx, initial_msg);
                 }
             )
-        };
-        race_initial_message_fp();
+        })();
 
         // It will create the peer if it does not exist
         self.on_raft_message(ctx, raft_msg);
