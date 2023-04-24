@@ -5,6 +5,7 @@
 #![feature(test)]
 
 mod checkpoint_manager;
+mod tempfiles;
 pub mod config;
 mod endpoint;
 pub mod errors;

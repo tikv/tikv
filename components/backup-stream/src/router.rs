@@ -35,6 +35,7 @@ use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
     codec::stream_event::EventEncoder,
+    config::ReadableSize,
     error, info,
     time::{Instant, Limiter},
     warn,
@@ -57,6 +58,7 @@ use crate::{
     metadata::StreamTask,
     metrics::{HANDLE_KV_HISTOGRAM, SKIP_KV_COUNTER},
     subscription_track::TwoPhaseResolver,
+    tempfiles::{self, TempFilePool},
     try_send,
     utils::{self, CompressionWriter, FilesReader, SegmentMap, SlotMap, StopWatch},
 };
@@ -425,23 +427,16 @@ impl RouterInner {
     // register task info ans range info to router
     pub async fn register_task(
         &self,
-        mut task: StreamTask,
+        task: StreamTask,
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
         merged_file_size_limit: u64,
     ) -> Result<()> {
-        let compression_type = task.info.get_compression_type();
-        let task_name = task.info.take_name();
+        let task_name = task.info.get_name().to_owned();
 
         // register task info
-        let prefix_path = self.prefix.join(&task_name);
-        let stream_task = StreamTaskInfo::new(
-            prefix_path,
-            task,
-            ranges.clone(),
-            merged_file_size_limit,
-            compression_type,
-        )
-        .await?;
+        let cfg = self.tempfile_config_for_task(&task);
+        let stream_task =
+            StreamTaskInfo::new(task, ranges.clone(), merged_file_size_limit, cfg).await?;
         self.tasks
             .lock()
             .await
@@ -451,6 +446,15 @@ impl RouterInner {
         self.register_ranges(&task_name, ranges);
 
         Ok(())
+    }
+
+    fn tempfile_config_for_task(&self, task: &StreamTask) -> tempfiles::Config {
+        tempfiles::Config {
+            soft_max: ReadableSize::mb(512).0 as _,
+            hard_max: ReadableSize::gb(4).0 as _,
+            swap_files: self.prefix.join(&task.info.get_name()),
+            artificate_compression: task.info.get_compression_type(),
+        }
     }
 
     pub async fn unregister_task(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
@@ -763,8 +767,6 @@ pub struct StreamTaskInfo {
     pub(crate) storage: Arc<dyn ExternalStorage>,
     /// The listening range of the task.
     ranges: Vec<(Vec<u8>, Vec<u8>)>,
-    /// The parent directory of temporary files.
-    temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t
     /// prefixed keys).
     files: SlotMap<TempFileKey, DataFile>,
@@ -791,37 +793,14 @@ pub struct StreamTaskInfo {
     global_checkpoint_ts: AtomicU64,
     /// The size limit of the merged file for this task.
     merged_file_size_limit: u64,
-    /// The compression type for this task.
-    compression_type: CompressionType,
-}
-
-impl Drop for StreamTaskInfo {
-    fn drop(&mut self) {
-        let (success, failed): (Vec<_>, Vec<_>) = self
-            .flushing_files
-            .get_mut()
-            .drain(..)
-            .chain(self.flushing_meta_files.get_mut().drain(..))
-            .map(|(_, f, _)| f.local_path)
-            .map(std::fs::remove_file)
-            .partition(|r| r.is_ok());
-        info!("stream task info dropped[1/2], removing flushing_temp files"; "success" => %success.len(), "failure" => %failed.len());
-        let (success, failed): (Vec<_>, Vec<_>) = self
-            .files
-            .get_mut()
-            .drain()
-            .map(|(_, f)| f.into_inner().local_path)
-            .map(std::fs::remove_file)
-            .partition(|r| r.is_ok());
-        info!("stream task info dropped[2/2], removing temp files"; "success" => %success.len(), "failure" => %failed.len());
-    }
+    /// The pool for holding the temporary files.
+    temp_file_pool: Arc<TempFilePool>,
 }
 
 impl std::fmt::Debug for StreamTaskInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamTaskInfo")
             .field("task", &self.task.info.name)
-            .field("temp_dir", &self.temp_dir)
             .field("min_resolved_ts", &self.min_resolved_ts)
             .field("total_size", &self.total_size)
             .field("flushing", &self.flushing)
@@ -832,13 +811,13 @@ impl std::fmt::Debug for StreamTaskInfo {
 impl StreamTaskInfo {
     /// Create a new temporary file set at the `temp_dir`.
     pub async fn new(
-        temp_dir: PathBuf,
         task: StreamTask,
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
         merged_file_size_limit: u64,
-        compression_type: CompressionType,
+        temp_pool_cfg: tempfiles::Config,
     ) -> Result<Self> {
-        tokio::fs::create_dir_all(&temp_dir).await?;
+        let temp_dir = &temp_pool_cfg.swap_files;
+        tokio::fs::create_dir_all(temp_dir).await?;
         let storage = Arc::from(create_storage(
             task.info.get_storage(),
             BackendConfig::default(),
@@ -847,7 +826,6 @@ impl StreamTaskInfo {
         Ok(Self {
             task,
             storage,
-            temp_dir,
             ranges,
             min_resolved_ts: TimeStamp::max(),
             files: SlotMap::default(),
@@ -859,7 +837,7 @@ impl StreamTaskInfo {
             flush_fail_count: AtomicUsize::new(0),
             global_checkpoint_ts: AtomicU64::new(start_ts),
             merged_file_size_limit,
-            compression_type,
+            temp_file_pool: Arc::new(TempFilePool::new(temp_pool_cfg)),
         })
     }
 
@@ -878,8 +856,8 @@ impl StreamTaskInfo {
         // copying.
         #[allow(clippy::map_entry)]
         if !w.contains_key(&key) {
-            let path = self.temp_dir.join(key.temp_file_name());
-            let val = Mutex::new(DataFile::new(path, self.compression_type).await?);
+            let path = key.temp_file_name();
+            let val = Mutex::new(DataFile::new(path, &self.temp_file_pool).await?);
             w.insert(key, val);
         }
 
@@ -923,7 +901,7 @@ impl StreamTaskInfo {
         futures::future::join_all(
             w.iter_mut()
                 .chain(wm.iter_mut())
-                .map(|(_, f, _)| async move { f.inner.as_mut().done().await }),
+                .map(|(_, f, _)| f.inner.done()),
         )
         .await
         .into_iter()
@@ -993,7 +971,7 @@ impl StreamTaskInfo {
 
     pub async fn clear_flushing_files(&self) {
         for (_, data_file, _) in self.flushing_files.write().await.drain(..) {
-            debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.local_path.display());
+            debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.inner.path().display());
             self.total_size
                 .fetch_sub(data_file.file_size, Ordering::SeqCst);
             if let Err(e) = data_file.remove_temp_file().await {
@@ -1002,7 +980,7 @@ impl StreamTaskInfo {
             }
         }
         for (_, data_file, _) in self.flushing_meta_files.write().await.drain(..) {
-            debug!("removing meta data file"; "size" => %data_file.file_size, "name" => %data_file.local_path.display());
+            debug!("removing meta data file"; "size" => %data_file.file_size, "name" => %data_file.inner.path().display());
             self.total_size
                 .fetch_sub(data_file.file_size, Ordering::SeqCst);
             if let Err(e) = data_file.remove_temp_file().await {
@@ -1287,13 +1265,12 @@ struct DataFile {
     min_begin_ts: Option<TimeStamp>,
     sha256: Hasher,
     // TODO: use lz4 with async feature
-    inner: Pin<Box<dyn CompressionWriter>>,
+    inner: tempfiles::File,
     compression_type: CompressionType,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     number_of_entries: usize,
     file_size: usize,
-    local_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -1360,29 +1337,27 @@ impl MetadataInfo {
 impl DataFile {
     /// create and open a logfile at the path.
     /// Note: if a file with same name exists, would truncate it.
-    async fn new(local_path: impl AsRef<Path>, compression_type: CompressionType) -> Result<Self> {
+    async fn new(local_path: impl AsRef<Path>, files: &Arc<TempFilePool>) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
-        let inner =
-            utils::compression_writer_dispatcher(local_path.as_ref(), compression_type).await?;
+        let inner = files.file(local_path.as_ref());
         Ok(Self {
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
             resolved_ts: TimeStamp::zero(),
             min_begin_ts: None,
             inner,
-            compression_type,
+            compression_type: files.config().artificate_compression,
             sha256,
             number_of_entries: 0,
             file_size: 0,
             start_key: vec![],
             end_key: vec![],
-            local_path: local_path.as_ref().to_owned(),
         })
     }
 
     async fn remove_temp_file(&self) -> io::Result<()> {
-        remove_file(&self.local_path).await
+        Ok(())
     }
 
     fn decode_begin_ts(value: Vec<u8>) -> Result<TimeStamp> {
@@ -1407,7 +1382,7 @@ impl DataFile {
             let mut size = 0;
             for slice in encoded {
                 let slice = slice.as_ref();
-                self.inner.write_all(slice).await?;
+                self.inner.append(slice).await?;
                 self.sha256.update(slice).map_err(|err| {
                     Error::Other(box_err!("openssl hasher failed to update: {}", err))
                 })?;
@@ -1495,7 +1470,6 @@ impl std::fmt::Debug for DataFile {
             .field("min_ts", &self.min_ts)
             .field("max_ts", &self.max_ts)
             .field("resolved_ts", &self.resolved_ts)
-            .field("local_path", &self.local_path.display())
             .finish()
     }
 }
@@ -1532,6 +1506,15 @@ mod tests {
     #[derive(Debug)]
     struct KvEventsBuilder {
         events: ApplyEvents,
+    }
+
+    fn make_tempfiles_cfg(p: &Path) -> tempfiles::Config {
+        tempfiles::Config {
+            soft_max: ReadableSize::mb(512).0 as _,
+            hard_max: ReadableSize::gb(4).0 as _,
+            swap_files: p.to_owned(),
+            artificate_compression: CompressionType::Zstd,
+        }
     }
 
     fn make_table_key(table_id: i64, key: &[u8]) -> Vec<u8> {
@@ -1841,11 +1824,10 @@ mod tests {
         };
         let merged_file_size_limit = 0x10000;
         let task = StreamTaskInfo::new(
-            tmp_dir.path().to_path_buf(),
             stream_task,
             vec![(vec![], vec![])],
             merged_file_size_limit,
-            CompressionType::Zstd,
+            make_tempfiles_cfg(tmp_dir.path()),
         )
         .await
         .unwrap();
@@ -2199,11 +2181,10 @@ mod tests {
             is_paused: false,
         };
         let task = StreamTaskInfo::new(
-            tmp_dir.path().to_path_buf(),
             stream_task,
             vec![(vec![], vec![])],
             0x100000,
-            CompressionType::Zstd,
+            make_tempfiles_cfg(tmp_dir.path()),
         )
         .await
         .unwrap();
@@ -2288,14 +2269,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_est_len_in_flush() -> Result<()> {
-        use tokio::io::AsyncWriteExt;
         let noop_s = NoopStorage::default();
         let ms = MockCheckContentStorage { s: noop_s };
-        let file_path = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        let mut f = File::create(file_path.clone()).await?;
-        f.write_all("test-data".as_bytes()).await?;
 
-        let data_file = DataFile::new(file_path, CompressionType::Zstd)
+        let file_name = format!("{}", uuid::Uuid::new_v4());
+        let file_path = Path::new(&file_name);
+        let cfg = make_tempfiles_cfg(&std::env::temp_dir());
+        let pool = Arc::new(TempFilePool::new(cfg));
+        let f = pool.file(&file_path);
+        f.append(b"test-data").await?;
+        let data_file = DataFile::new(&file_path, &pool)
             .await
             .unwrap();
         let info = DataFileInfo::new();
