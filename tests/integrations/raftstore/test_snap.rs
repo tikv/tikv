@@ -867,3 +867,175 @@ fn test_v1_receive_snap_from_v2() {
     // test large snapshot
     test_receive_snap(5000);
 }
+<<<<<<< HEAD
+=======
+
+#[derive(Clone)]
+struct MockApplySnapshotObserver {
+    tablet_snap_paths: Arc<Mutex<HashMap<u64, (bool, String)>>>,
+}
+
+impl Coprocessor for MockApplySnapshotObserver {}
+
+impl ApplySnapshotObserver for MockApplySnapshotObserver {
+    fn should_pre_apply_snapshot(&self) -> bool {
+        true
+    }
+
+    fn pre_apply_snapshot(
+        &self,
+        _: &mut raftstore::coprocessor::ObserverContext<'_>,
+        peer_id: u64,
+        _: &raftstore::store::SnapKey,
+        snap: Option<&raftstore::store::Snapshot>,
+    ) {
+        let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
+        self.tablet_snap_paths
+            .lock()
+            .unwrap()
+            .insert(peer_id, (false, tablet_path));
+    }
+
+    fn post_apply_snapshot(
+        &self,
+        _: &mut raftstore::coprocessor::ObserverContext<'_>,
+        peer_id: u64,
+        _: &raftstore::store::SnapKey,
+        snap: Option<&raftstore::store::Snapshot>,
+    ) {
+        let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
+        match self.tablet_snap_paths.lock().unwrap().entry(peer_id) {
+            collections::HashMapEntry::Occupied(mut entry) => {
+                if entry.get_mut().1 == tablet_path {
+                    entry.get_mut().0 = true;
+                }
+            }
+            collections::HashMapEntry::Vacant(_) => {}
+        }
+    }
+}
+
+#[test]
+fn test_v1_apply_snap_from_v2() {
+    let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
+    let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
+    cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster_v1.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(200);
+
+    let observer = MockApplySnapshotObserver {
+        tablet_snap_paths: Arc::default(),
+    };
+    let observer_clone = observer.clone();
+    cluster_v1.register_hook(
+        1,
+        Box::new(move |host: &mut CoprocessorHost<_>| {
+            host.registry.register_apply_snapshot_observer(
+                1,
+                BoxApplySnapshotObserver::new(observer_clone.clone()),
+            );
+        }),
+    );
+
+    cluster_v1.run();
+    cluster_v2.run();
+
+    let region = cluster_v2.get_region(b"");
+    cluster_v2.must_split(&region, b"k0010");
+
+    let s1_addr = cluster_v1.get_addr(1);
+    let region_id = region.get_id();
+    let engine = cluster_v2.get_engine(1);
+
+    for i in 0..50 {
+        let k = format!("k{:04}", i);
+        cluster_v2.must_put(k.as_bytes(), b"val");
+    }
+    cluster_v2.flush_data();
+
+    let tablet_snap_mgr = cluster_v2.get_snap_mgr(1);
+    let security_mgr = cluster_v2.get_security_mgr();
+    let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
+    let cfg = tikv::server::Config::default();
+    let limit = Limiter::new(f64::INFINITY);
+    let env = Arc::new(Environment::new(1));
+    let _ = block_on(async {
+        send_snap_v2(
+            env.clone(),
+            tablet_snap_mgr.clone(),
+            security_mgr.clone(),
+            &cfg,
+            &s1_addr,
+            msg,
+            limit.clone(),
+        )
+        .unwrap()
+        .await
+    });
+
+    let snap_mgr = cluster_v1.get_snap_mgr(region_id);
+    let path = snap_mgr
+        .tablet_snap_manager()
+        .as_ref()
+        .unwrap()
+        .final_recv_path(&snap_key);
+    let path_str = path.as_path().to_str().unwrap();
+
+    check_observer(&observer, region_id, path_str);
+
+    let region = cluster_v2.get_region(b"k0011");
+    let region_id = region.get_id();
+    let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
+    let _ = block_on(async {
+        send_snap_v2(
+            env,
+            tablet_snap_mgr,
+            security_mgr,
+            &cfg,
+            &s1_addr,
+            msg,
+            limit,
+        )
+        .unwrap()
+        .await
+    });
+
+    let snap_mgr = cluster_v1.get_snap_mgr(region_id);
+    let path = snap_mgr
+        .tablet_snap_manager()
+        .as_ref()
+        .unwrap()
+        .final_recv_path(&snap_key);
+    let path_str = path.as_path().to_str().unwrap();
+
+    check_observer(&observer, region_id, path_str);
+
+    // Verify that the tablet snap will be gced
+    for _ in 0..10 {
+        if !path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    panic!("tablet snap {:?} still exists", path_str);
+}
+
+fn check_observer(observer: &MockApplySnapshotObserver, region_id: u64, snap_path: &str) {
+    for _ in 0..10 {
+        if let Some(pair) = observer
+            .tablet_snap_paths
+            .as_ref()
+            .lock()
+            .unwrap()
+            .get(&region_id)
+        {
+            if pair.0 && pair.1 == snap_path {
+                return;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    panic!("cannot find {:?} in observer", snap_path);
+}
+>>>>>>> 1674d3c487 (raftstore: delete tablet snap if exists (#14647))

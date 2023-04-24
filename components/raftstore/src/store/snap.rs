@@ -20,8 +20,8 @@ use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK,
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
 use file_system::{
-    calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
-    File, Metadata, OpenOptions,
+    calc_crc32, calc_crc32_and_size, delete_dir_if_exist, delete_file_if_exist, file_exists,
+    get_file_size, sync_dir, File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::{
@@ -1006,6 +1006,11 @@ impl Snapshot {
                         mgr.delete_file(file_path).unwrap();
                     }
                 }
+            }
+        }
+        if let Some(ref meta) = self.meta_file.meta {
+            if !meta.tablet_snap_path.is_empty() {
+                delete_dir_if_exist(&meta.tablet_snap_path).unwrap();
             }
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
