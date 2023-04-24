@@ -2,7 +2,7 @@
 
 // The bitmap:
 // |RESERVED|LOSSY_DDL_REORG_SOURCE_BITS|CDC_WRITE_SOURCE_BITS|
-// |  52    |             4             |          8          |
+// |  48    |             8             | 4(RESERVED) |  4    |
 //
 // TiCDC uses 1 - 255 to indicate the source of TiDB.
 // For now, 1 - 15 are reserved for TiCDC to implement BDR synchronization.
@@ -10,10 +10,10 @@
 const CDC_WRITE_SOURCE_BITS: u64 = 8;
 const CDC_WRITE_SOURCE_MAX: u64 = (1 << CDC_WRITE_SOURCE_BITS) - 1;
 
-// TiCDC uses 1-15 to indicate the change from a lossy DDL reorg Backfill job.
+// TiCDC uses 1-255 to indicate the change from a lossy DDL reorg Backfill job.
 // For now, we only use 1 for column reorg backfill job.
 #[cfg(test)]
-const LOSSY_DDL_REORG_SOURCE_BITS: u64 = 4;
+const LOSSY_DDL_REORG_SOURCE_BITS: u64 = 8;
 #[cfg(test)]
 const LOSSY_DDL_COLUMN_REORG_SOURCE: u64 = 1;
 #[cfg(test)]
@@ -22,8 +22,8 @@ const LOSSY_DDL_REORG_SOURCE_SHIFT: u64 = CDC_WRITE_SOURCE_BITS;
 
 /// For kv.TxnSource
 /// We use an uint64 to represent the source of a transaction.
-/// The first 8 bits are reserved for TiCDC, and the next 4 bits are reserved
-/// for Lossy DDL reorg Backfill job. The remaining 52 bits are reserved for
+/// The first 8 bits are reserved for TiCDC, and the next 8 bits are reserved
+/// for Lossy DDL reorg Backfill job. The remaining 48 bits are reserved for
 /// extendability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct TxnSource(u64);
