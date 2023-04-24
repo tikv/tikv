@@ -1021,6 +1021,8 @@ fn test_v1_apply_snap_from_v2() {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+
+    panic!("tablet snap {:?} still exists", path_str);
 }
 
 fn check_observer(observer: &MockApplySnapshotObserver, region_id: u64, snap_path: &str) {
