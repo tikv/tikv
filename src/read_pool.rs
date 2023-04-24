@@ -96,6 +96,23 @@ impl ReadPool {
     }
 }
 
+struct RunningGuard {
+    running_tasks: IntGauge,
+}
+
+impl RunningGuard {
+    fn new(running_tasks: IntGauge) -> Self {
+        running_tasks.inc();
+        Self { running_tasks }
+    }
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.running_tasks.dec();
+    }
+}
+
 #[derive(Clone)]
 pub enum ReadPoolHandle {
     FuturePools {
@@ -146,7 +163,6 @@ impl ReadPoolHandle {
                 resource_ctl,
                 ..
             } => {
-                let running_tasks = running_tasks.clone();
                 // Note that the running task number limit is not strict.
                 // If several tasks are spawned at the same time while the running task number
                 // is close to the limit, they may all pass this check and the number of running
@@ -155,7 +171,7 @@ impl ReadPoolHandle {
                     return Err(ReadPoolError::UnifiedReadPoolFull);
                 }
 
-                running_tasks.inc();
+                let guard = RunningGuard::new(running_tasks.clone());
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -168,7 +184,7 @@ impl ReadPoolHandle {
                         TrackedFuture::new(ControlledFuture::new(
                             async move {
                                 f.await;
-                                running_tasks.dec();
+                                drop(guard);
                             },
                             resource_ctl.clone(),
                             group_meta,
@@ -179,7 +195,7 @@ impl ReadPoolHandle {
                     TaskCell::new(
                         TrackedFuture::new(async move {
                             f.await;
-                            running_tasks.dec();
+                            drop(guard);
                         }),
                         extras,
                     )
