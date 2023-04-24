@@ -1,5 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+// The bitmap:
+// |RESERVED|LOSSY_DDL_REORG_SOURCE_BITS|CDC_WRITE_SOURCE_BITS|
+// |  52    |             4             |          8          |
+//
 // TiCDC uses 1 - 255 to indicate the source of TiDB.
 // For now, 1 - 15 are reserved for TiCDC to implement BDR synchronization.
 // 16 - 255 are reserved for extendability.
