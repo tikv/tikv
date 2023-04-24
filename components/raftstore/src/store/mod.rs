@@ -85,7 +85,7 @@ pub use self::{
         SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
         StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
         BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_QPS_THRESHOLD,
-        DEFAULT_QPS_THRESHOLD, ENGINE, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
-        REGION_CPU_OVERLOAD_THRESHOLD_RATIO, TIFLASH,
+        DEFAULT_QPS_THRESHOLD, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+        REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
     },
 };

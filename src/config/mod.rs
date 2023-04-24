@@ -3291,6 +3291,15 @@ impl TikvConfig {
             if self.rocksdb.titan.enabled {
                 return Err("partitioned-raft-kv doesn't support titan.".into());
             }
+
+            if self.raft_store.enable_v2_compatible_learner {
+                self.raft_store.enable_v2_compatible_learner = false;
+                warn!(
+                    "raftstore.enable-partitioned-raft-kv-compatible-learner was true but \
+                    storage.engine was partitioned-raft-kv, no need to enable \
+                    enable-partitioned-raft-kv-compatible-learner, overwrite to false"
+                );
+            }
         }
 
         self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
@@ -5450,6 +5459,13 @@ mod tests {
         cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
         cfg.validate().unwrap();
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
+
+        // Test raftstore.enable-partitioned-raft-kv-compatible-learner.
+        let mut cfg = TikvConfig::default();
+        cfg.raft_store.enable_v2_compatible_learner = true;
+        cfg.storage.engine = EngineType::RaftKv2;
+        cfg.validate().unwrap();
+        assert!(!cfg.raft_store.enable_v2_compatible_learner);
     }
 
     #[test]
