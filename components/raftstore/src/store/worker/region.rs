@@ -59,12 +59,6 @@ const CLEANUP_MAX_REGION_COUNT: usize = 64;
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";
 
-fn is_tiflash_engine(store: &metapb::Store) -> bool {
-    store.get_labels().iter().any(|label| {
-        label.get_key().to_lowercase() == ENGINE && label.get_value().to_lowercase() == TIFLASH
-    })
-}
-
 /// Region related task
 #[derive(Debug)]
 pub enum Task<S> {
@@ -813,7 +807,10 @@ where
                     } else {
                         let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
                             if let Ok(s) = pd_client.get_store(to_store_id) {
-                                return is_tiflash_engine(&s);
+                                return s.get_labels().iter().any(|label| {
+                                    label.get_key().to_lowercase() == ENGINE
+                                        && label.get_value().to_lowercase() == TIFLASH
+                                });
                             }
                             true
                         });
