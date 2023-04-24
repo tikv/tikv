@@ -13,12 +13,14 @@ use std::{
     task::ready,
 };
 
-use futures::io::Cursor;
+use futures::{io::Cursor, Future, FutureExt};
+use futures_io::SeekFrom;
 use kvproto::brpb::CompressionType;
 use tikv_util::{config::ReadableSize, mpsc::Receiver};
 use tokio::{
     fs::File as OsFile,
-    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
+    pin,
     sync::Mutex,
 };
 
@@ -61,14 +63,14 @@ enum FileInstance {
     SwapOut(SwapOutInner),
 }
 
-enum FileCursor {
-    Mem(Vec<u8>, usize),
-    SwapOut(OsFile),
+pub struct FileCursor {
+    file: File,
+    status: FileCursorStatus,
 }
 
-enum FileCursorRef<'a> {
-    Mem(Cursor<&'a [u8]>),
-    SwapOut(&'a mut OsFile),
+enum FileCursorStatus {
+    Mem(usize),
+    SwapOut(OsFile),
 }
 
 #[derive(Default)]
@@ -147,8 +149,8 @@ impl File {
         &self.path
     }
 
-    pub fn read_content(&mut self) -> FileCursorRef<'_> {
-        
+    pub async fn take_content(&mut self) -> Result<FileCursor> {
+        todo!()
     }
 }
 
@@ -171,26 +173,56 @@ impl SwapOutInner {
     }
 }
 
+impl FileCursor {
+    pub async fn len(&self) -> Result<u64> {
+        match self {
+            FileCursor::Mem(v, _) => Ok(v.len() as _),
+            FileCursor::SwapOut(f) => {
+                let stat = f.metadata().await?;
+                Ok(stat.len())
+            }
+        }
+    }
+
+    pub async fn fetch(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let mut inst = self.file.inst.lock().await;
+        loop {
+            match (&mut *inst, &mut self.status) {
+                (FileInstance::Mem(ref mut m), FileCursorStatus::Mem(offset)) => {
+                    if *offset >= m.0.len() {
+                        return Ok(0);
+                    }
+                    let rem = buf.len();
+                    let items_rem = m.0.len() - *offset;
+                    let max_size = rem.min(items_rem);
+                    (buf[..max_size]).copy_from_slice(&m.0[*offset..*offset + max_size]);
+                    *offset += max_size;
+                    return Ok(max_size);
+                }
+                (FileInstance::SwapOut(ref mut f), FileCursorStatus::Mem(offset)) => {
+                    let mut new_fd = f.internal.try_clone().await?;
+                    new_fd.seek(SeekFrom::Start(*offset as _)).await?;
+                    self.status = FileCursorStatus::SwapOut(new_fd);
+                }
+                (FileInstance::SwapOut(_), FileCursorStatus::SwapOut(ref mut f)) => {
+                    return f.read(buf).await.map_err(From::from);
+                }
+            }
+        }
+    }
+}
+
 impl AsyncRead for FileCursor {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        match &mut *self {
-            FileCursor::Mem(items, offset) => {
-                let offset = *offset;
-                if offset >= items.len() {
-                    return Ok(()).into();
-                }
-                let rem = buf.remaining();
-                let items_rem = items.len() - offset;
-                let max_size = rem.min(items_rem);
-                buf.put_slice(&items[offset..offset + max_size]);
-                Ok(()).into()
-            }
-            FileCursor::SwapOut(f) => ready!(Pin::new(f).poll_read(cx, buf)).into(),
-        }
+        todo!()
     }
 }
 
+#[cfg(test)]
+mod test {
+    fn test_read() {}
+}

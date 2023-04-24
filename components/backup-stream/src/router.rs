@@ -992,7 +992,7 @@ impl StreamTaskInfo {
 
     async fn merge_and_flush_log_files_to(
         storage: Arc<dyn ExternalStorage>,
-        files: &[(TempFileKey, DataFile, DataFileInfo)],
+        files: &mut [(TempFileKey, DataFile, DataFileInfo)],
         metadata: &mut MetadataInfo,
         is_meta: bool,
     ) -> Result<()> {
@@ -1009,8 +1009,8 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
-                let file = File::open(data_file.local_path.clone()).await?;
-                let compress_length = file.metadata().await?.len();
+                let file = data_file.inner.take_content().await?;
+                let compress_length = file.len().await?;
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
                 file
@@ -1085,17 +1085,17 @@ impl StreamTaskInfo {
         files_lock: &RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
         is_meta: bool,
     ) -> Result<()> {
-        let files = files_lock.write().await;
+        let mut files = files_lock.write().await;
         let mut batch_size = 0;
         // file[batch_begin_index, i) is a batch
         let mut batch_begin_index = 0;
         // TODO: upload the merged file concurrently,
         // then collect merged_file_infos and push them into `metadata`.
-        for (i, (_, _, info)) in files.iter().enumerate() {
+        for i in 0..files.len() {
             if batch_size >= self.merged_file_size_limit {
                 Self::merge_and_flush_log_files_to(
                     storage.clone(),
-                    &files[batch_begin_index..i],
+                    &mut files[batch_begin_index..i],
                     metadata,
                     is_meta,
                 )
@@ -1105,12 +1105,12 @@ impl StreamTaskInfo {
                 batch_size = 0;
             }
 
-            batch_size += info.length;
+            batch_size += files[i].2.length;
         }
         if batch_begin_index < files.len() {
             Self::merge_and_flush_log_files_to(
                 storage.clone(),
-                &files[batch_begin_index..],
+                &mut files[batch_begin_index..],
                 metadata,
                 is_meta,
             )
@@ -2286,10 +2286,10 @@ mod tests {
         let mut meta = MetadataInfo::with_capacity(1);
         let kv_event = build_kv_event(1, 1);
         let tmp_key = TempFileKey::of(&kv_event.events[0], 1);
-        let files = vec![(tmp_key, data_file, info)];
+        let mut files = vec![(tmp_key, data_file, info)];
         let result = StreamTaskInfo::merge_and_flush_log_files_to(
             Arc::new(ms),
-            &files[0..],
+            &mut files[0..],
             &mut meta,
             false,
         )
