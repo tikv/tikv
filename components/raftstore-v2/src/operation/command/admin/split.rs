@@ -841,6 +841,7 @@ mod test {
     use engine_traits::{
         FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
     };
+    use futures::executor::block_on;
     use kvproto::{
         metapb::RegionEpoch,
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
@@ -921,7 +922,8 @@ mod test {
         req.set_splits(splits);
 
         // Exec batch split
-        let (resp, apply_res) = apply.apply_batch_split(&req, log_index).unwrap();
+        let (resp, apply_res) =
+            block_on(async { apply.apply_batch_split(&req, log_index).await }).unwrap();
 
         let regions = resp.get_splits().get_regions();
         assert!(regions.len() == region_boundries.len());
@@ -1025,13 +1027,13 @@ mod test {
         splits.mut_requests().push(new_split_req(b"k1", 1, vec![]));
         let mut req = AdminRequest::default();
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 0).unwrap_err();
+        let err = block_on(async { apply.apply_batch_split(&req, 0).await }).unwrap_err();
         // 3 followers are required.
         assert!(err.to_string().contains("invalid new peer id count"));
 
         splits.mut_requests().clear();
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 6).unwrap_err();
+        let err = block_on(async { apply.apply_batch_split(&req, 6).await }).unwrap_err();
         // Empty requests should be rejected.
         assert!(err.to_string().contains("missing split requests"));
 
@@ -1039,7 +1041,9 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k11", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let resp = new_error(apply.apply_batch_split(&req, 0).unwrap_err());
+        let resp =
+            new_error(block_on(async { apply.apply_batch_split(&req, 0).await }).unwrap_err());
+
         // Out of range keys should be rejected.
         assert!(
             resp.get_header().get_error().has_key_not_in_region(),
@@ -1052,7 +1056,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 7).unwrap_err();
+        let err = block_on(async { apply.apply_batch_split(&req, 7).await }).unwrap_err();
         // Empty key will not in any region exclusively.
         assert!(err.to_string().contains("missing split key"), "{:?}", err);
 
@@ -1064,7 +1068,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k1", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 8).unwrap_err();
+        let err = block_on(async { apply.apply_batch_split(&req, 8).await }).unwrap_err();
         // keys should be in ascend order.
         assert!(
             err.to_string().contains("invalid split request"),
@@ -1080,7 +1084,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k2", 1, vec![11, 12]));
         req.set_splits(splits.clone());
-        let err = apply.apply_batch_split(&req, 9).unwrap_err();
+        let err = block_on(async { apply.apply_batch_split(&req, 9).await }).unwrap_err();
         // All requests should be checked.
         assert!(err.to_string().contains("id count"), "{:?}", err);
 
@@ -1198,7 +1202,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k05", 70, vec![71, 72, 73]));
         req.set_splits(splits);
-        apply.apply_batch_split(&req, 51).unwrap();
+        block_on(async { apply.apply_batch_split(&req, 51).await }).unwrap();
         assert!(apply.write_batch.is_none());
         assert_eq!(
             apply
