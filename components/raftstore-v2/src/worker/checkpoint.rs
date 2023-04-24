@@ -8,9 +8,8 @@ use tikv_util::{slog_panic, worker::Runnable};
 
 use crate::operation::SPLIT_PREFIX;
 
-pub enum Task<EK> {
+pub enum Task {
     Checkpoint {
-        tablet: EK,
         log_index: u64,
         parent_region: u64,
         split_regions: Vec<u64>,
@@ -18,7 +17,7 @@ pub enum Task<EK> {
     },
 }
 
-impl<EK> Display for Task<EK> {
+impl Display for Task {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Task::Checkpoint {
@@ -55,12 +54,16 @@ impl<EK: KvEngine> Runner<EK> {
 
     fn checkpoint(
         &self,
-        tablet: EK,
         parent_region: u64,
         split_regions: Vec<u64>,
         log_index: u64,
         sender: Sender<bool>,
     ) {
+        let mut cache = self
+            .tablet_registry
+            .get(parent_region)
+            .expect("which case, this is not some");
+        let tablet = cache.latest().expect("which case, this is not some");
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
             slog_panic!(
                 self.logger,
@@ -102,17 +105,18 @@ impl<EK: KvEngine> Runner<EK> {
 }
 
 impl<EK: KvEngine> Runnable for Runner<EK> {
-    type Task = Task<EK>;
+    type Task = Task;
 
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::Checkpoint {
-                tablet: EK,
                 log_index,
                 parent_region,
                 split_regions,
                 sender,
-            } => {}
+            } => {
+                self.checkpoint(parent_region, split_regions, log_index, sender);
+            }
         }
     }
 }

@@ -476,10 +476,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .iter()
             .map(|r| r.get_id())
             .filter(|id| id != &region_id)
-            .collect();
+            .collect::<Vec<_>>();
         let scheduler = self.checkpoint_scheduler().clone();
-        self.async_checkpoint(scheduler, region_id, split_region_ids, log_index)
-            .await;
+        async_checkpoint(&scheduler, region_id, split_region_ids, log_index).await;
 
         let elapsed = now.saturating_elapsed();
         // to be removed after when it's stable
@@ -518,26 +517,23 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }),
         ))
     }
+}
 
-    async fn async_checkpoint(
-        &self,
-        scheduler: Scheduler<checkpoint::Task<EK>>,
-        parent_region: u64,
-        split_regions: Vec<u64>,
-        log_index: u64,
-    ) {
-        let (tx, rx) = oneshot::channel();
-        let task = checkpoint::Task::Checkpoint {
-            tablet: self.tablet().clone(),
-            log_index,
-            parent_region,
-            split_regions,
-            sender: tx,
-        };
-        scheduler.schedule(task);
-        let res = rx.await;
-        println!("{:?}", res);
-    }
+async fn async_checkpoint(
+    scheduler: &Scheduler<checkpoint::Task>,
+    parent_region: u64,
+    split_regions: Vec<u64>,
+    log_index: u64,
+) {
+    let (tx, rx) = oneshot::channel();
+    let task = checkpoint::Task::Checkpoint {
+        log_index,
+        parent_region,
+        split_regions,
+        sender: tx,
+    };
+    scheduler.schedule_force(task).unwrap();
+    let res = rx.await;
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
