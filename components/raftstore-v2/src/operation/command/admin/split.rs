@@ -29,9 +29,7 @@ use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
-use engine_traits::{
-    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
-};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry};
 use fail::fail_point;
 use futures::channel::oneshot;
 use kvproto::{
@@ -533,7 +531,7 @@ async fn async_checkpoint(
         sender: tx,
     };
     scheduler.schedule_force(task).unwrap();
-    let res = rx.await;
+    let _ = rx.await;
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
