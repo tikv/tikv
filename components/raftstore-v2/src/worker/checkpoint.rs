@@ -1,4 +1,4 @@
-use std::{fmt::Display, path::PathBuf};
+use std::{fmt::Display, path::PathBuf, time::Duration};
 
 use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use futures::channel::oneshot::Sender;
@@ -99,6 +99,8 @@ impl<EK: KvEngine> Runner<EK> {
                     )
                 });
         }
+
+        std::thread::sleep(Duration::from_secs(1));
 
         let _ = sender.send(true);
     }
