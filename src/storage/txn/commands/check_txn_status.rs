@@ -1215,7 +1215,7 @@ pub mod tests {
 
         let check_error = |e, key: &'_ [u8], primary: &'_ [u8], lock_type| match e {
             txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(
-                box mvcc::ErrorInner::KeyIsLocked(lock_info),
+                box mvcc::ErrorInner::PrimaryMismatch(lock_info),
             ))) => {
                 check_lock(lock_info, key, primary, lock_type);
             }
