@@ -37,7 +37,9 @@ use raftstore::{
             Proposal,
         },
         local_metrics::RaftMetrics,
-        metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
+        metrics::{
+            APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM, STORE_APPLY_LOG_HISTOGRAM,
+        },
         msg::ErrorCallback,
         util, Config, Transport, WriteCallback,
     },
@@ -100,7 +102,6 @@ pub struct CommittedEntries {
     /// Entries need to be applied. Note some entries may not be included for
     /// flow control.
     pub entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
-    pub committed_time: Instant,
 }
 
 fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {
@@ -306,7 +307,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // memtables in kv engine is flushed.
         let apply = CommittedEntries {
             entry_and_proposals,
-            committed_time: Instant::now(),
         };
         assert!(
             self.apply_scheduler().is_some() || ctx.router.is_shutdown(),
@@ -517,14 +517,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
-        APPLY_TASK_WAIT_TIME_HISTOGRAM
-            .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
+        let now = std::time::Instant::now();
+        let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
                 apply::notify_req_region_removed(self.region_id(), ch);
                 continue;
             }
             if !e.get_data().is_empty() {
+                for tracker in ch.write_trackers() {
+                    tracker.observe(now, &apply_wait_time, |t| &mut t.metrics.apply_wait_nanos);
+                }
                 let mut set_save_point = false;
                 if let Some(wb) = &mut self.write_batch {
                     wb.set_save_point();
@@ -787,7 +790,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let apply_time = APPLY_TIME_HISTOGRAM.local();
         for (ch, resp) in callbacks.drain(..) {
             for tracker in ch.write_trackers() {
-                tracker.observe(now, &apply_time, |t| &mut t.metrics.apply_time_nanos);
+                let mut apply_wait_nanos = 0_u64;
+                let apply_time_nanos = tracker.observe(now, &apply_time, |t| {
+                    apply_wait_nanos = t.metrics.apply_wait_nanos;
+                    &mut t.metrics.apply_time_nanos
+                });
+                STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(Duration::from_nanos(
+                    apply_time_nanos - apply_wait_nanos,
+                )));
             }
             ch.set_result(resp);
         }

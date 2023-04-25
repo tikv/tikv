@@ -193,7 +193,7 @@ mod test {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::{store::new_peer, time::Instant, worker::dummy_scheduler};
+    use tikv_util::{store::new_peer, worker::dummy_scheduler};
 
     use super::*;
     use crate::{
@@ -357,7 +357,6 @@ mod test {
                     ),
                     vec![],
                 )],
-                committed_time: Instant::now(),
             }),
             ApplyTask::CaptureApply(CaptureChange {
                 observer: ChangeObserver::from_cdc(region.id, ObserveHandle::new()),
@@ -376,7 +375,6 @@ mod test {
                     ),
                     vec![],
                 )],
-                committed_time: Instant::now(),
             }),
         ];
 
