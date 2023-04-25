@@ -769,6 +769,7 @@ impl DataKeyManager {
         Ok(Some(encrypted_file))
     }
 
+    /// Returns initial vector and data key.
     pub fn get_file_internal(&self, fname: &str) -> IoResult<Option<(Vec<u8>, DataKey)>> {
         let (key_id, iv) = {
             match self.dicts.get_file(fname) {

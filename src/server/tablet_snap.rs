@@ -509,9 +509,9 @@ async fn recv_snap_imp<'a>(
     }
     let r = fs::rename(&path, &final_path);
     if let Some(m) = snap_mgr.key_manager() {
-        if r.is_err() {
+        if let Err(e) = r {
             let _ = m.delete_file(final_path.to_str().unwrap());
-            r?;
+            return Err(e.into());
         } else {
             m.delete_file(path.to_str().unwrap())?;
         }
@@ -570,7 +570,6 @@ async fn build_one_preview(
         meta.file_size = size;
         let mut f = WrappedReadableFile::open(key_manager, &path.join(name))?;
 
-        // let mut f = File::open(path.join(name))?;
         let to_read = cmp::min(size as usize, PREVIEW_CHUNK_LEN);
         f.read_to(&mut meta.head_chunk, to_read, limiter).await?;
         if size > PREVIEW_CHUNK_LEN as u64 {
@@ -1020,9 +1019,9 @@ pub fn copy_tablet_snapshot(
     }
     let r = fs::rename(&recv_path, &final_path);
     if let Some(m) = recver_snap_mgr.key_manager() {
-        if r.is_err() {
+        if let Err(e) = r {
             let _ = m.delete_file(final_path.to_str().unwrap());
-            r?;
+            return Err(e.into());
         } else {
             m.delete_file(recv_path.to_str().unwrap())?;
         }
