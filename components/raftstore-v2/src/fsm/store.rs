@@ -13,7 +13,7 @@ use futures::{compat::Future01CompatExt, FutureExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raftstore::store::{
-    fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry, Transport,
+    fsm::store::StoreRegionMeta, Config, ReadDelegate, RegionReadProgressRegistry, Transport,
 };
 use slog::{info, o, Logger};
 use tikv_util::{
@@ -132,6 +132,11 @@ impl<EK: Send> StoreRegionMeta for StoreMeta<EK> {
                 break;
             }
         }
+    }
+
+    #[inline]
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate> {
+        self.readers.get(&region_id).map(|e| &e.0)
     }
 }
 
@@ -276,6 +281,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     .fsm
                     .store
                     .on_store_unreachable(self.store_ctx, to_store_id),
+                StoreMsg::AskCommitMerge(req) => {
+                    self.fsm.store.on_ask_commit_merge(self.store_ctx, req)
+                }
                 #[cfg(feature = "testexport")]
                 StoreMsg::WaitFlush { region_id, ch } => {
                     self.fsm.store.on_wait_flush(self.store_ctx, region_id, ch)

@@ -17,14 +17,16 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
-    raft_serverpb::RaftMessage,
+    raft_serverpb::{PeerState, RaftMessage},
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
-        config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg, WriteResponse,
+        config::Config as RaftstoreConfig,
+        util::{is_initial_msg, is_vote_msg},
+        Callback, PeerMsg, WriteResponse,
     },
     Result,
 };
@@ -32,6 +34,8 @@ use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
+    mpsc::{unbounded, Sender},
+    time::Instant,
     HandyRwLock,
 };
 use txn_types::{Key, PessimisticLock};
@@ -1135,4 +1139,137 @@ fn test_split_during_cluster_shutdown() {
 
     test_split("before_cluster_shutdown1");
     test_split("before_cluster_shutdown2");
+}
+
+// Test that split is handled pretty slow in one node, say node 2. Before node 2
+// handles the split, the peer of the new split region on node 2 has been
+// removed and added back sooner. So, when the new split region on node 2
+// receives a heartbeat from it's leader, it creates a peer with higher peer id
+// than the peer created due to the split on this node.
+#[test]
+fn test_split_race_with_conf_change() {
+    // test case for raftstore-v2
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_snapshot(&mut cluster.cfg);
+    cluster.cfg.raft_store.right_derive_when_split = false;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+
+    let split_key1 = b"k05";
+    let region = cluster.get_region(split_key1);
+    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+
+    fail::cfg("on_apply_batch_split", "pause").unwrap();
+    cluster.must_split(&region, split_key1);
+
+    let region = pd_client.get_region(b"k10").unwrap();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region.get_id(), 3)
+            .msg_type(MessageType::MsgSnapshot)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+
+    let mut peer3 = region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == 3)
+        .unwrap()
+        .clone();
+    pd_client.must_remove_peer(region.get_id(), peer3.clone());
+    peer3.set_id(2000);
+    pd_client.must_add_peer(region.get_id(), peer3.clone());
+
+    fail::remove("on_apply_batch_split");
+    std::thread::sleep(Duration::from_millis(200));
+    cluster.clear_send_filters();
+
+    cluster.stop_node(2);
+    cluster.must_put(b"k06", b"val");
+    assert_eq!(cluster.must_get(b"k06").unwrap(), b"val".to_vec());
+}
+
+// split init races with request prevote should not send messages to store 0.
+//
+// 1. split region.
+// 2. send split init to store because peer is no exist.
+// 3. store receives request prevote from normal peer.
+// 4. store receives split init.
+// 5. store creates peer via request prevote.
+// 6. store sends empty raft message to peer.
+// 7. store sends split init to peer.
+// 7. peer inserts peer(0,0) to cache and step the empty meassge.
+// 8. peer handles split snapshot from split init and response to peer(0,0).
+// 9. transport tries to resolve store 0.
+//
+// We must prevent peer incorrectly inserting peer(0,0) to cache and send
+// messages to store 0.
+#[test]
+fn test_split_init_race_with_initial_msg_v2() {
+    // test case for raftstore-v2
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let split_key1 = b"k01";
+    let region = cluster.get_region(split_key1);
+    cluster.must_transfer_leader(
+        region.get_id(),
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == 1)
+            .unwrap()
+            .to_owned(),
+    );
+
+    // Drop initial messages to store 2.
+    cluster.add_recv_filter_on_node(
+        2,
+        Box::new(DropMessageFilter::new(Arc::new(|m| {
+            !is_initial_msg(m.get_message())
+        }))),
+    );
+    let (tx, rx) = unbounded();
+    cluster.add_send_filter_on_node(2, Box::new(TeeFilter { pipe: tx }));
+
+    fail::cfg("on_store_2_split_init_race_with_initial_message", "return").unwrap();
+    cluster.must_split(&region, split_key1);
+
+    // Wait for store 2 split.
+    let new_region = cluster.get_region(b"k00");
+    let start = Instant::now();
+    loop {
+        sleep_ms(500);
+        let region_state = cluster.region_local_state(new_region.get_id(), 2);
+        if region_state.get_state() == PeerState::Normal {
+            break;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("timeout");
+        }
+    }
+    cluster.clear_send_filter_on_node(2);
+    while let Ok(msg) = rx.recv_timeout(Duration::from_millis(500)) {
+        if msg.get_to_peer().get_store_id() == 0 {
+            panic!("must not send messages to store 0");
+        }
+    }
+}
+
+struct TeeFilter {
+    pipe: Sender<RaftMessage>,
+}
+
+impl Filter for TeeFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            let _ = self.pipe.send(msg.clone());
+        }
+        Ok(())
+    }
 }

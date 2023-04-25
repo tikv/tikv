@@ -831,18 +831,18 @@ impl Filter for LeaseReadFilter {
 
 #[derive(Clone)]
 pub struct DropMessageFilter {
-    ty: MessageType,
+    retain: Arc<dyn Fn(&RaftMessage) -> bool + Sync + Send>,
 }
 
 impl DropMessageFilter {
-    pub fn new(ty: MessageType) -> DropMessageFilter {
-        DropMessageFilter { ty }
+    pub fn new(retain: Arc<dyn Fn(&RaftMessage) -> bool + Sync + Send>) -> DropMessageFilter {
+        DropMessageFilter { retain }
     }
 }
 
 impl Filter for DropMessageFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        msgs.retain(|m| m.get_message().get_msg_type() != self.ty);
+        msgs.retain(|m| (self.retain)(m));
         Ok(())
     }
 }

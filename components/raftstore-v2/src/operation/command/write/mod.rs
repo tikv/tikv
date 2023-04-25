@@ -17,18 +17,16 @@ use tikv_util::slog_panic;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
+    operation::SimpleWriteReqEncoder,
     raft::{Apply, Peer},
     router::{ApplyTask, CmdResChannel},
 };
 
 mod ingest;
-mod simple_write;
 
-pub use simple_write::{
-    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
+pub use raftstore::store::simple_write::{
+    SimpleWrite, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
 };
-
-pub use self::simple_write::SimpleWrite;
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]

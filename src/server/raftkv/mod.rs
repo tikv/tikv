@@ -160,7 +160,11 @@ pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
     }
     header.set_sync_log(ctx.get_sync_log());
     header.set_replica_read(ctx.get_replica_read());
-    header.set_resource_group_name(ctx.get_resource_group_name().to_owned());
+    header.set_resource_group_name(
+        ctx.get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned(),
+    );
     header
 }
 

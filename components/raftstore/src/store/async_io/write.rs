@@ -20,6 +20,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use file_system::{set_io_type, IoType};
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use parking_lot::Mutex;
 use protobuf::Message;
@@ -965,7 +966,7 @@ where
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            writers[i].send(WriteMsg::Shutdown, 0).unwrap();
+            writers[i].send(WriteMsg::Shutdown, None).unwrap();
             handler.join().unwrap();
         }
     }
@@ -1026,6 +1027,7 @@ where
                         thread::Builder::new()
                             .name(thd_name!(tag))
                             .spawn_wrapper(move || {
+                                set_io_type(IoType::ForegroundWrite);
                                 worker.run();
                             })?;
                     cached_senders.push(tx);

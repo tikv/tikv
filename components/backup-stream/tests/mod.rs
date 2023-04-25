@@ -19,7 +19,8 @@ use backup_stream::{
     },
     observer::BackupStreamObserver,
     router::Router,
-    utils, Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
+    utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
+    RegionSet, Service, Task,
 };
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
@@ -32,6 +33,8 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
+use raftstore::router::CdcRaftRouter;
+use resolved_ts::LeadershipResolver;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
@@ -335,11 +338,24 @@ impl Suite {
         let worker = self.endpoints.get_mut(&id).unwrap();
         let sim = cluster.sim.wl();
         let raft_router = sim.get_server_router(id);
+        let raft_router = CdcRaftRouter(raft_router);
         let cm = sim.get_concurrency_manager(id);
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
+        let resolver = LeadershipResolver::new(
+            id,
+            cluster.pd_client.clone(),
+            Arc::clone(&self.env),
+            Arc::clone(&sim.security_mgr),
+            cluster.store_metas[&id]
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone(),
+            Duration::from_secs(60),
+        );
         let endpoint = Endpoint::new(
             id,
             self.meta_store.clone(),
@@ -350,13 +366,7 @@ impl Suite {
             raft_router,
             cluster.pd_client.clone(),
             cm,
-            Arc::clone(&self.env),
-            cluster.store_metas[&id]
-                .lock()
-                .unwrap()
-                .region_read_progress
-                .clone(),
-            Arc::clone(&sim.security_mgr),
+            BackupStreamResolver::V1(resolver),
         );
         worker.start(endpoint);
     }
@@ -819,10 +829,15 @@ mod test {
     use std::time::{Duration, Instant};
 
     use backup_stream::{
-        errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
-        RegionSet, Task,
+        errors::Error,
+        metadata::{
+            keys::MetaKey,
+            store::{Keys, MetaStore},
+        },
+        router::TaskSelector,
+        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
-    use futures::{Stream, StreamExt};
+    use futures::{executor::block_on, Stream, StreamExt};
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
     use tikv_util::{box_err, defer, info, HandyRwLock};
@@ -1370,7 +1385,7 @@ mod test {
             .schedule(Task::ForceFlush("r".to_owned()))
             .unwrap();
         suite.sync();
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_secs(2));
         run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.iter().map(|x| x.as_slice()),
@@ -1428,5 +1443,55 @@ mod test {
             suite.flushed_files.path(),
             round1.iter().map(|k| k.as_slice()),
         ))
+    }
+
+    #[test]
+    fn test_retry_abort() {
+        let mut suite = super::SuiteBuilder::new_named("retry_abort")
+            .nodes(1)
+            .build();
+        defer! {
+            fail::list().into_iter().for_each(|(name, _)| fail::remove(name))
+        };
+
+        suite.must_register_task(1, "retry_abort");
+        fail::cfg("subscribe_mgr_retry_start_observe_delay", "return(10)").unwrap();
+        fail::cfg("try_start_observe", "return()").unwrap();
+
+        suite.must_split(&make_split_key_at_record(1, 42));
+        std::thread::sleep(Duration::from_secs(2));
+
+        let error = run_async_test(suite.get_meta_cli().get_last_error("retry_abort", 1)).unwrap();
+        let error = error.expect("no error uploaded");
+        error
+            .get_error_message()
+            .find("retry")
+            .expect("error doesn't contain retry");
+        fail::cfg("try_start_observe", "10*return()").unwrap();
+        // Resume the task manually...
+        run_async_test(async {
+            suite
+                .meta_store
+                .delete(Keys::Key(MetaKey::pause_of("retry_abort")))
+                .await?;
+            suite
+                .meta_store
+                .delete(Keys::Prefix(MetaKey::last_errors_of("retry_abort")))
+                .await?;
+            backup_stream::errors::Result::Ok(())
+        })
+        .unwrap();
+
+        suite.sync();
+        suite.wait_with(move |r| block_on(r.get_task_info("retry_abort")).is_ok());
+        let items = run_async_test(suite.write_records(0, 128, 1));
+        suite.force_flush_files("retry_abort");
+        suite.wait_for_flush();
+        run_async_test(
+            suite.check_for_write_records(
+                suite.flushed_files.path(),
+                items.iter().map(Vec::as_slice),
+            ),
+        );
     }
 }
