@@ -193,7 +193,7 @@ mod test {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::{store::new_peer, time::Instant, worker::dummy_scheduler};
+    use tikv_util::{store::new_peer, worker::dummy_scheduler};
 
     use super::*;
     use crate::{
