@@ -246,11 +246,11 @@ impl TimeTracker {
         now: std::time::Instant,
         local_metric: &LocalHistogram,
         tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
-    ) {
+    ) -> u64 {
         let dur = now.saturating_duration_since(self.start);
         local_metric.observe(dur.as_secs_f64());
         if self.token == INVALID_TRACKER_TOKEN {
-            return;
+            return 0;
         }
         GLOBAL_TRACKERS.with_tracker(self.token, |tracker| {
             let metric = tracker_metric(tracker);
@@ -258,6 +258,7 @@ impl TimeTracker {
                 *metric = dur.as_nanos() as u64;
             }
         });
+        dur.as_nanos() as u64
     }
 
     #[inline]
