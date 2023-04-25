@@ -549,9 +549,11 @@ dependencies = [
  "openssl",
  "pd_client",
  "pin-project",
+ "proc-macro2",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
+ "quote",
  "raft",
  "raftstore",
  "rand 0.8.5",
@@ -560,8 +562,10 @@ dependencies = [
  "security",
  "slog",
  "slog-global",
+ "syn",
  "tempdir",
  "tempfile",
+ "test_backup_macro",
  "test_pd",
  "test_raftstore",
  "test_util",
@@ -5923,6 +5927,15 @@ dependencies = [
  "tikv",
  "tikv_util",
  "txn_types",
+]
+
+[[package]]
+name = "test_backup_macro"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

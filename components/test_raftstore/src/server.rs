@@ -84,7 +84,8 @@ use txn_types::TxnExtraScheduler;
 use super::*;
 use crate::Config;
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>;
+pub type SimulateStoreTransport =
+    SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>;
 
 pub type SimulateEngine = RaftKv<RocksEngine, SimulateStoreTransport>;
 type SimulateRaftExtension = <SimulateEngine as Engine>::RaftExtension;

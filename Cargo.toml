@@ -273,6 +273,7 @@ members = [
   "components/snap_recovery",
   "components/sst_importer",
   "components/test_backup",
+  "components/test_backup_macro",
   "components/test_coprocessor",
   "components/test_coprocessor_plugin/example_plugin",
   "components/test_pd",
@@ -350,6 +351,7 @@ server = { path = "components/server" }
 snap_recovery = { path = "components/snap_recovery" }
 sst_importer = { path = "components/sst_importer" }
 test_backup = { path = "components/test_backup" }
+test_backup_macro = { path = "components/test_backup_macro" }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
 example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 test_pd = { path = "components/test_pd" }
