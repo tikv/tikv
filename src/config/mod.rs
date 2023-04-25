@@ -4336,8 +4336,9 @@ mod tests {
             region_info_accessor::MockRegionInfoProvider,
         },
         store::{
-            BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_QPS_THRESHOLD,
-            DEFAULT_QPS_THRESHOLD, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+            BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
+            DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
+            REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
         },
     };
     use slog::Level;
@@ -5782,6 +5783,7 @@ mod tests {
             default_cfg.split.region_cpu_overload_threshold_ratio,
             REGION_CPU_OVERLOAD_THRESHOLD_RATIO
         );
+        assert_eq!(default_cfg.split.byte_threshold, DEFAULT_BYTE_THRESHOLD);
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.storage.engine = EngineType::RaftKv2;
@@ -5797,6 +5799,10 @@ mod tests {
         assert_eq!(
             default_cfg.split.region_cpu_overload_threshold_ratio,
             BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+        );
+        assert_eq!(
+            default_cfg.split.byte_threshold,
+            DEFAULT_BIG_REGION_BYTE_THRESHOLD
         );
         assert!(default_cfg.coprocessor.enable_region_bucket());
 

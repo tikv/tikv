@@ -16,7 +16,8 @@ const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
 pub(crate) const DEFAULT_SAMPLE_NUM: usize = 20;
 pub const DEFAULT_QPS_THRESHOLD: usize = 3000;
 pub const DEFAULT_BIG_REGION_QPS_THRESHOLD: usize = 7000;
-const DEFAULT_BYTE_THRESHOLD: usize = 30 * 1024 * 1024;
+pub const DEFAULT_BYTE_THRESHOLD: usize = 30 * 1024 * 1024;
+pub const DEFAULT_BIG_REGION_BYTE_THRESHOLD: usize = 100 * 1024 * 1024;
 
 // We get balance score by
 // abs(sample.left-sample.right)/(sample.right+sample.left). It will be used to
@@ -145,6 +146,7 @@ impl SplitConfig {
         if region_size.as_mb() >= LARGE_REGION_SIZE_IN_MB {
             self.qps_threshold = DEFAULT_BIG_REGION_QPS_THRESHOLD;
             self.region_cpu_overload_threshold_ratio = BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO;
+            self.byte_threshold = DEFAULT_BIG_REGION_BYTE_THRESHOLD;
         }
     }
 }
