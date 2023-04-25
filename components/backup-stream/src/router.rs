@@ -18,7 +18,7 @@ use std::{
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
-use futures::io::Cursor;
+use futures::io::{AllowStdIo, Cursor};
 use kvproto::{
     brpb::{
         CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
@@ -995,6 +995,7 @@ impl StreamTaskInfo {
         files: &mut [(TempFileKey, DataFile, DataFileInfo)],
         metadata: &mut MetadataInfo,
         is_meta: bool,
+        shared_pool: Arc<TempFilePool>,
     ) -> Result<()> {
         let mut data_files_open = Vec::new();
         let mut data_file_infos = Vec::new();
@@ -1009,7 +1010,7 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
-                let file = data_file.inner.take_content().await?;
+                let file = shared_pool.open_for_read(data_file.inner.path())?;
                 let compress_length = file.len().await?;
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
@@ -1098,6 +1099,7 @@ impl StreamTaskInfo {
                     &mut files[batch_begin_index..i],
                     metadata,
                     is_meta,
+                    self.temp_file_pool.clone(),
                 )
                 .await?;
 
@@ -1113,6 +1115,7 @@ impl StreamTaskInfo {
                 &mut files[batch_begin_index..],
                 metadata,
                 is_meta,
+                self.temp_file_pool.clone(),
             )
             .await?;
         }
@@ -1265,7 +1268,7 @@ struct DataFile {
     min_begin_ts: Option<TimeStamp>,
     sha256: Hasher,
     // TODO: use lz4 with async feature
-    inner: tempfiles::File,
+    inner: tempfiles::ForWrite,
     compression_type: CompressionType,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -1340,7 +1343,7 @@ impl DataFile {
     async fn new(local_path: impl AsRef<Path>, files: &Arc<TempFilePool>) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
-        let inner = files.file(local_path.as_ref());
+        let inner = files.open(local_path.as_ref());
         Ok(Self {
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
@@ -1382,7 +1385,7 @@ impl DataFile {
             let mut size = 0;
             for slice in encoded {
                 let slice = slice.as_ref();
-                self.inner.append(slice).await?;
+                self.inner.write(slice).await?;
                 self.sha256.update(slice).map_err(|err| {
                     Error::Other(box_err!("openssl hasher failed to update: {}", err))
                 })?;
@@ -2276,11 +2279,9 @@ mod tests {
         let file_path = Path::new(&file_name);
         let cfg = make_tempfiles_cfg(&std::env::temp_dir());
         let pool = Arc::new(TempFilePool::new(cfg));
-        let f = pool.file(&file_path);
-        f.append(b"test-data").await?;
-        let data_file = DataFile::new(&file_path, &pool)
-            .await
-            .unwrap();
+        let mut f = pool.open(&file_path);
+        f.write(b"test-data").await?;
+        let data_file = DataFile::new(&file_path, &pool).await.unwrap();
         let info = DataFileInfo::new();
 
         let mut meta = MetadataInfo::with_capacity(1);
@@ -2292,6 +2293,7 @@ mod tests {
             &mut files[0..],
             &mut meta,
             false,
+            pool.clone(),
         )
         .await;
         assert_eq!(result.is_ok(), true);

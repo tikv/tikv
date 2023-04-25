@@ -19,6 +19,7 @@ use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
+use futures_io::AsyncRead as FutIoAsyncRead;
 use kvproto::{
     brpb::CompressionType,
     metapb::Region,
@@ -609,6 +610,35 @@ impl<R> FilesReader<R> {
     }
 }
 
+impl<R> FutIoAsyncRead for FilesReader<R>
+where
+    R: FutIoAsyncRead + Unpin,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut buf: &mut [u8],
+    ) -> Poll<futures_io::Result<usize>> {
+        let me = self.get_mut();
+        let mut read = 0;
+
+        while me.index < me.files.len() {
+            let n = ready!(Pin::new(&mut me.files[me.index]).poll_read(cx, buf))?;
+            read += n;
+            buf = &mut buf[n..];
+
+            if buf.len() == 0 {
+                return Ok(read).into();
+            }
+            if n == 0 {
+                me.index += 1;
+            }
+        }
+
+        Ok(read).into()
+    }
+}
+
 impl<R: AsyncRead + Unpin> AsyncRead for FilesReader<R> {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -1156,4 +1186,3 @@ mod test {
         assert_eq!(content, read_content);
     }
 }
-
