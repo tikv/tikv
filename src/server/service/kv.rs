@@ -2018,6 +2018,30 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) $else_branch: block) => {
+        txn_command_future!(inner $fn_name, $req_ty, $resp_ty, ($req) {$($prelude)*}; ($v, $resp, $tracker) {
+            $else_branch
+            GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
+                tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
+                tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
+            });
+        });
+    };
+
+    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident, $tracker: ident) $else_branch: block ) => {
+        txn_command_future!(inner $fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp, $tracker) {
+            $else_branch
+            GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
+                tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
+                tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
+            });
+        });
+    };
+
+    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident) $else_branch: block ) => {
+        txn_command_future!(inner $fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp, tracker) { $else_branch });
+    };
+
+    (inner $fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) $else_branch: block) => {
         fn $fn_name<E: Engine, L: LockManager, F: KvFormat>(
             storage: &Storage<E, L, F>,
             $req: $req_ty,
@@ -2050,27 +2074,15 @@ macro_rules! txn_command_future {
             }
         }
     };
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident, $tracker: ident) $else_branch: block ) => {
-        txn_command_future!($fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp, $tracker) {
-            $else_branch
-            GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
-                tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
-                tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
-            });
-        });
-    };
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident) $else_branch: block ) => {
-        txn_command_future!($fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp, tracker) { $else_branch });
-    };
 }
 
-txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp, tracker) {{
+txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp, tracker) {
     if let Ok(v) = &v {
         resp.set_min_commit_ts(v.min_commit_ts.into_inner());
         resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
-}});
+});
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse,
     (req) {
         let mode = req.get_wake_up_mode()
