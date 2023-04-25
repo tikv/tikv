@@ -497,7 +497,6 @@ impl AzureStorage {
         let bucket = (*config.bucket.bucket).to_owned();
         // priority: explicit shared key > env Azure AD > env shared key
         if let Some(connection_string) = config.parse_plaintext_account_url() {
-            #[cfg(test)]
             #[cfg(feature = "azurite")]
             {
                 debug_assert!(!connection_string.is_empty());
@@ -515,9 +514,19 @@ impl AzureStorage {
             }
             let account_name = config.get_account_name()?;
             let storage_credentials = ConnectionString::new(&connection_string)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invalid configurations for SharedKey, err: {}", e),
+                    )
+                })?
                 .storage_credentials()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?;
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invalid credentials for blob, err: {}", e),
+                    )
+                })?;
             let container_client = Arc::new(
                 BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
             );
@@ -552,9 +561,19 @@ impl AzureStorage {
         } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
             let account_name = config.get_account_name()?;
             let storage_credentials = ConnectionString::new(&connection_string)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invald configurations for SharedKey from ENV, err: {}", e),
+                    )
+                })?
                 .storage_credentials()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))?;
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invalid credentials for blob, err: {}", e),
+                    )
+                })?;
             let container_client = Arc::new(
                 BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
             );
