@@ -4323,6 +4323,13 @@ impl ConfigController {
     pub fn get_current(&self) -> TikvConfig {
         self.inner.read().unwrap().current.clone()
     }
+
+    pub fn get_engine_type(&self) -> &'static str {
+        if self.get_current().storage.engine == EngineType::RaftKv2 {
+            return "partitioned-raft-kv";
+        }
+        return "raft-kv";
+    }
 }
 
 #[cfg(test)]
