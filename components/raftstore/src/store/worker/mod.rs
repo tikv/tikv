@@ -16,8 +16,6 @@ mod split_check;
 mod split_config;
 mod split_controller;
 
-pub use region::{ENGINE, TIFLASH};
-
 #[cfg(test)]
 pub use self::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
 pub use self::{
