@@ -925,6 +925,7 @@ fn test_v1_apply_snap_from_v2() {
     let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
     let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
     cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster_v1.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(200);
 
     let observer = MockApplySnapshotObserver {
         tablet_snap_paths: Arc::default(),
@@ -1012,6 +1013,16 @@ fn test_v1_apply_snap_from_v2() {
     let path_str = path.as_path().to_str().unwrap();
 
     check_observer(&observer, region_id, path_str);
+
+    // Verify that the tablet snap will be gced
+    for _ in 0..10 {
+        if !path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    panic!("tablet snap {:?} still exists", path_str);
 }
 
 fn check_observer(observer: &MockApplySnapshotObserver, region_id: u64, snap_path: &str) {

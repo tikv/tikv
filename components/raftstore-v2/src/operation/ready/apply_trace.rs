@@ -406,13 +406,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
         apply_state.set_applied_index(applied_index);
-        let mut reset_apply_index = || {
+        (|| {
             // Make node reply from start.
             fail_point!("RESET_APPLY_INDEX_WHEN_RESTART", |_| {
                 apply_state.set_applied_index(5);
             });
-        };
-        reset_apply_index();
+        })();
 
         Self::create(
             store_id,
