@@ -35,7 +35,7 @@ use std::{
 use collections::HashMap;
 use crc64fast::Digest;
 use encryption_export::DataKeyManager;
-use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
+use engine_traits::{Checkpointer, EncryptionKeyManager, KvEngine, TabletRegistry};
 use file_system::{IoType, OpenOptions, WithIoType};
 use futures::{
     future::FutureExt,
@@ -286,7 +286,9 @@ pub(crate) async fn cleanup_cache(
         let entry = entry?;
         let ft = entry.file_type()?;
         if ft.is_dir() {
-            // TODO(tabokie)
+            if let Some(m) = key_manager {
+                m.remove_dir(&entry.path(), None)?;
+            }
             fs::remove_dir_all(entry.path())?;
             continue;
         }
@@ -466,7 +468,9 @@ async fn recv_snap_imp<'a>(
     let path = snap_mgr.tmp_recv_path(&context.key);
     info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
     if path.exists() {
-        // TODO(tabokie)
+        if let Some(m) = snap_mgr.key_manager() {
+            m.remove_dir(&path, None)?;
+        }
         fs::remove_dir_all(&path)?;
     }
     let (reused, missing_ssts) = if context.use_cache {
@@ -490,9 +494,18 @@ async fn recv_snap_imp<'a>(
     .await?;
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
-    // TODO(tabokie)
-    fs::rename(&path, final_path)?;
-
+    if let Some(m) = snap_mgr.key_manager() {
+        m.link_file(path.to_str().unwrap(), final_path.to_str().unwrap())?;
+    }
+    let r = fs::rename(&path, &final_path);
+    if let Some(m) = snap_mgr.key_manager() {
+        if r.is_err() {
+            let _ = m.delete_file(final_path.to_str().unwrap());
+            r?;
+        } else {
+            m.delete_file(path.to_str().unwrap())?;
+        }
+    }
     Ok(context)
 }
 
@@ -978,6 +991,18 @@ pub fn copy_tablet_snapshot(
     }
 
     let final_path = recver_snap_mgr.final_recv_path(&recv_context.key);
-    fs::rename(&recv_path, final_path)?;
+    if let Some(m) = recver_snap_mgr.key_manager() {
+        m.link_file(recv_path.to_str().unwrap(), final_path.to_str().unwrap())?;
+    }
+    let r = fs::rename(&recv_path, &final_path);
+    if let Some(m) = recver_snap_mgr.key_manager() {
+        if r.is_err() {
+            let _ = m.delete_file(final_path.to_str().unwrap());
+            r?;
+        } else {
+            m.delete_file(recv_path.to_str().unwrap())?;
+        }
+    }
+
     Ok(())
 }
