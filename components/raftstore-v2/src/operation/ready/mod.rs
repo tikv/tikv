@@ -399,7 +399,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Filling start and end key is only needed for being compatible with
-        // raftstore v1 tiflash engine.
+        // raftstore v1 learners (e.g. tiflash engine).
         //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
