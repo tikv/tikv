@@ -150,7 +150,7 @@ pub struct NodeCluster<EK: KvEngine> {
     nodes: HashMap<u64, NodeV2<TestPdClient, EK, RaftTestEngine>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
-    // snap_mgrs: HashMap<u64, TabletSnapManager>,
+    snap_mgrs: HashMap<u64, TabletSnapManager>,
 }
 
 impl<EK: KvEngine> NodeCluster<EK> {
@@ -161,7 +161,7 @@ impl<EK: KvEngine> NodeCluster<EK> {
             nodes: HashMap::default(),
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
-            // snap_mgrs: HashMap::default(),
+            snap_mgrs: HashMap::default(),
         }
     }
 }
@@ -231,12 +231,16 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_path = tmp.path().to_str().unwrap().to_owned();
-            (TabletSnapManager::new(snap_path)?, Some(tmp))
+            (
+                TabletSnapManager::new(snap_path, key_manager.clone())?,
+                Some(tmp),
+            )
         } else {
             let trans = self.trans.core.lock().unwrap();
             let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         let raft_router = RaftRouter::new_with_store_meta(node.router().clone(), store_meta);
         // Create coprocessor.
@@ -272,7 +276,13 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let importer = {
             let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
-                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
+                SstImporter::new(
+                    &cfg.import,
+                    dir,
+                    key_manager.clone(),
+                    cfg.storage.api_version(),
+                )
+                .unwrap(),
             )
         };
 
@@ -294,6 +304,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             Arc::new(VersionTrack::new(raft_store)),
             &state,
             importer,
+            key_manager,
         )?;
         assert!(
             raft_engine
@@ -419,6 +430,10 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn get_snap_mgr(&self, node_id: u64) -> &TabletSnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
     }
 
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {

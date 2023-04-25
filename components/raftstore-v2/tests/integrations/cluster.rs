@@ -262,8 +262,19 @@ impl RunningState {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, Self) {
+        // TODO(tabokie): Enable encryption by default. (after snapshot encryption)
+        // let encryption_cfg = test_util::new_file_security_config(path);
+        // let key_manager = Some(Arc::new(
+        //     data_key_manager_from_config(&encryption_cfg, path.to_str().unwrap())
+        //         .unwrap()
+        //         .unwrap(),
+        // ));
+        let key_manager = None;
+
+        let mut opts = engine_test::ctor::RaftDbOptions::default();
+        opts.set_key_manager(key_manager.clone());
         let raft_engine =
-            engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
+            engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), Some(opts))
                 .unwrap();
 
         let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
@@ -286,6 +297,7 @@ impl RunningState {
             raft_engine.clone(),
             router.clone(),
         )));
+        db_opt.set_key_manager(key_manager.clone());
         let factory = Box::new(TestTabletFactory::new(db_opt, cf_opts));
         let registry = TabletRegistry::new(factory, path.join("tablets")).unwrap();
         if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
@@ -302,14 +314,18 @@ impl RunningState {
 
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
-        let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap()).unwrap();
+        let snap_mgr = TabletSnapManager::new(
+            path.join("tablets_snap").to_str().unwrap(),
+            key_manager.clone(),
+        )
+        .unwrap();
         let coprocessor_host =
             CoprocessorHost::new(router.store_router().clone(), cop_cfg.value().clone());
         let importer = Arc::new(
             SstImporter::new(
                 &Default::default(),
                 path.join("importer"),
-                None,
+                key_manager.clone(),
                 ApiVersion::V1,
             )
             .unwrap(),
@@ -336,6 +352,7 @@ impl RunningState {
                 background.clone(),
                 pd_worker,
                 importer,
+                key_manager,
             )
             .unwrap();
 
@@ -826,10 +843,11 @@ pub mod merge_helper {
     };
     use raftstore_v2::router::PeerMsg;
 
-    use super::TestRouter;
+    use super::Cluster;
 
     pub fn merge_region(
-        router: &mut TestRouter,
+        cluster: &Cluster,
+        store_offset: usize,
         source: metapb::Region,
         source_peer: metapb::Peer,
         target: metapb::Region,
@@ -848,25 +866,35 @@ pub mod merge_helper {
         req.set_admin_request(admin_req);
 
         let (msg, sub) = PeerMsg::admin_command(req);
-        router.send(region_id, msg).unwrap();
-        let resp = block_on(sub.result()).unwrap();
-        if check {
-            assert!(!resp.get_header().has_error(), "{:?}", resp);
-        }
+        cluster.routers[store_offset].send(region_id, msg).unwrap();
+        // They may communicate about trimmed status.
+        cluster.dispatch(region_id, vec![]);
+        let _ = block_on(sub.result()).unwrap();
+        // We don't check the response because it needs to do a lot of checks async
+        // before actually proposing the command.
 
         // TODO: when persistent implementation is ready, we can use tablet index of
         // the parent to check whether the split is done. Now, just sleep a second.
         thread::sleep(Duration::from_secs(1));
 
-        let new_target = router.region_detail(target.id);
+        let mut new_target = cluster.routers[store_offset].region_detail(target.id);
         if check {
-            if new_target.get_start_key() == source.get_start_key() {
-                // [source, target] => new_target
-                assert_eq!(new_target.get_end_key(), target.get_end_key());
-            } else {
-                // [target, source] => new_target
-                assert_eq!(new_target.get_start_key(), target.get_start_key());
-                assert_eq!(new_target.get_end_key(), source.get_end_key());
+            for i in 1..=100 {
+                let r1 = new_target.get_start_key() == source.get_start_key()
+                    && new_target.get_end_key() == target.get_end_key();
+                let r2 = new_target.get_start_key() == target.get_start_key()
+                    && new_target.get_end_key() == source.get_end_key();
+                if r1 || r2 {
+                    break;
+                } else if i == 100 {
+                    panic!(
+                        "still not merged after 5s: {:?} + {:?} != {:?}",
+                        source, target, new_target
+                    );
+                } else {
+                    thread::sleep(Duration::from_millis(50));
+                    new_target = cluster.routers[store_offset].region_detail(target.id);
+                }
             }
         }
         new_target

@@ -36,7 +36,7 @@ use pd_client::PdClient;
 use raftstore::{
     store::{
         cmd_resp, initial_region, util::check_key_in_region, Bucket, BucketRange, Callback,
-        RegionSnapshot, WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        RegionSnapshot, TabletSnapManager, WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
 };
@@ -97,6 +97,7 @@ pub trait Simulator<EK: KvEngine> {
 
     fn get_router(&self, node_id: u64) -> Option<StoreRouter<EK, RaftTestEngine>>;
     fn get_snap_dir(&self, node_id: u64) -> String;
+    fn get_snap_mgr(&self, node_id: u64) -> &TabletSnapManager;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
@@ -1530,6 +1531,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         self.sim.rl().get_snap_dir(node_id)
     }
 
+    pub fn get_snap_mgr(&self, node_id: u64) -> TabletSnapManager {
+        self.sim.rl().get_snap_mgr(node_id).clone()
+    }
+
     pub fn get_router(&self, node_id: u64) -> Option<StoreRouter<EK, RaftTestEngine>> {
         self.sim.rl().get_router(node_id)
     }
@@ -1695,6 +1700,10 @@ impl<EK: KvEngine> WrapFactory<EK> {
         // todo: unwrap
         let region_id = self.region_id_of_key(key);
         self.tablet_registry.get(region_id)?.latest().cloned()
+    }
+
+    pub fn get_tablet_by_id(&self, id: u64) -> Option<EK> {
+        self.tablet_registry.get(id)?.latest().cloned()
     }
 }
 

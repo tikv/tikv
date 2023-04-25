@@ -189,7 +189,7 @@ fn test_node_base_merge_v2() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+// No v2, it requires all peers to be available to check trim status.
 fn test_node_merge_with_slow_learner() {
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
@@ -410,8 +410,8 @@ fn test_node_check_merged_message() {
 
 // Test if a merge handled properly when there is a unfinished slow split before
 // merge.
+// No v2, it requires all peers to be available to check trim status.
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_merge_slow_split() {
     fn imp(is_right_derive: bool) {
         let mut cluster = new_cluster(0, 3);
@@ -913,8 +913,8 @@ fn test_merge_with_slow_promote() {
 /// logically)
 /// - A split => C (-∞, k3), A [k3, +∞)
 /// - Then network recovery
+// No v2, it requires all peers to be available to check trim status.
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_merge_isolated_store_with_no_target_peer() {
     let mut cluster = new_cluster(0, 4);
     configure_for_merge(&mut cluster.cfg);
@@ -973,8 +973,8 @@ fn test_merge_isolated_store_with_no_target_peer() {
 
 /// Test whether a isolated peer can recover when two other regions merge to its
 /// region
+// No v2, it requires all peers to be available to check trim status.
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_merge_cascade_merge_isolated() {
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
