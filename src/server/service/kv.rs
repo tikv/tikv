@@ -2017,7 +2017,7 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 macro_rules! txn_command_future {
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) $else_branch: block ) => {
+    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) $else_branch: block) => {
         fn $fn_name<E: Engine, L: LockManager, F: KvFormat>(
             storage: &Storage<E, L, F>,
             $req: $req_ty,
@@ -2044,16 +2044,22 @@ macro_rules! txn_command_future {
                 if let Some(err) = extract_region_error(&$v) {
                     $resp.set_region_error(err);
                 } else {
-                    $else_branch;
+                    $else_branch
                 }
                 Ok($resp)
             }
         }
     };
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident, $tracker: ident) $else_branch: block ) => {
-        txn_command_future!($fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp, $tracker) { $else_branch });
+        txn_command_future!($fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp, $tracker) {
+            $else_branch
+            GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
+                tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
+                tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
+            });
+        });
     };
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident) $else_branch: block) => {
+    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident) $else_branch: block ) => {
         txn_command_future!($fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp, tracker) { $else_branch });
     };
 }
@@ -2062,13 +2068,8 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     if let Ok(v) = &v {
         resp.set_min_commit_ts(v.min_commit_ts.into_inner());
         resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
-
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    });
 }});
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse,
     (req) {
@@ -2100,36 +2101,20 @@ txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, Pes
                 resp.set_errors(vec![extract_key_error(&e)].into())
             },
         }
-        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-            tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-            tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-        });
     }}
 );
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp, tracker) {
-    resp.set_errors(extract_key_errors(v).into());
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    })
+    resp.set_errors(extract_key_errors(v).into())
 });
 txn_command_future!(future_batch_rollback, BatchRollbackRequest, BatchRollbackResponse, (v, resp, tracker) {
     if let Err(e) = v {
         resp.set_error(extract_key_error(&e));
     };
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    })
 });
 txn_command_future!(future_resolve_lock, ResolveLockRequest, ResolveLockResponse, (v, resp, tracker) {
     if let Err(e) = v {
         resp.set_error(extract_key_error(&e));
     }
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    });
 });
 txn_command_future!(future_commit, CommitRequest, CommitResponse, (v, resp, tracker) {
     match v {
@@ -2139,10 +2124,6 @@ txn_command_future!(future_commit, CommitRequest, CommitResponse, (v, resp, trac
         Ok(_) => unreachable!(),
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    });
 });
 txn_command_future!(future_cleanup, CleanupRequest, CleanupResponse, (v, resp) {
     if let Err(e) = v {
@@ -2164,10 +2145,6 @@ txn_command_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResp
         }
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    });
 });
 txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStatusResponse,
     (v, resp, tracker) {
@@ -2192,10 +2169,6 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
         }
-        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-            tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-            tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-        });
 });
 txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, CheckSecondaryLocksResponse, (status, resp, tracker) {
     match status {
@@ -2208,10 +2181,6 @@ txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, Ch
         Ok(SecondaryLocksStatus::RolledBack) => {},
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    });
 });
 txn_command_future!(future_mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse, (v, resp) {
     match v {

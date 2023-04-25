@@ -2500,7 +2500,7 @@ fn test_commands_write_detail() {
 
     let mut check_txn_status_req = CheckTxnStatusRequest::default();
     check_txn_status_req.set_context(ctx);
-    check_txn_status_req.set_primary_key(k.clone());
+    check_txn_status_req.set_primary_key(k);
     check_txn_status_req.set_lock_ts(20);
     check_txn_status_req.set_rollback_if_not_exist(true);
     let check_txn_status_resp = client.kv_check_txn_status(&check_txn_status_req).unwrap();
