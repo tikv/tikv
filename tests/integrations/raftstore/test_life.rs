@@ -50,11 +50,7 @@ impl Filter for ForwardFilter {
 fn test_gc_peer_tiflash_engine() {
     let mut cluster_v1 = test_raftstore::new_node_cluster(1, 2);
     let mut cluster_v2 = test_raftstore_v2::new_node_cluster(1, 2);
-    cluster_v1
-        .cfg
-        .server
-        .labels
-        .insert(String::from("engine"), String::from("tiflash"));
+    cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
     cluster_v1.pd_client.disable_default_operator();
     cluster_v2.pd_client.disable_default_operator();
     let r11 = cluster_v1.run_conf_change();
