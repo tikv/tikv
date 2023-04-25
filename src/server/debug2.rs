@@ -5,7 +5,7 @@ use engine_traits::{
     CachedTablet, Iterable, Peekable, RaftEngine, TabletContext, TabletRegistry, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
 };
-use keys::{data_key, DATA_PREFIX_KEY};
+use keys::{data_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
 use kvproto::{
     debugpb::Db as DbType,
     kvrpcpb::MvccInfo,
@@ -309,6 +309,10 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
                     .get_region_state(region_id, u64::MAX)
                     .unwrap()
                     .unwrap();
+                if region_state.state != PeerState::Normal {
+                    return Ok(());
+                }
+
                 if let Some((start_key, end_key)) =
                     range_in_region((start, end), region_state.get_region())
                 {
@@ -317,7 +321,7 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
                     } else {
                         Some(data_key(start_key))
                     };
-                    let end = if end.is_empty() {
+                    let end = if end_key.is_empty() {
                         None
                     } else {
                         Some(data_key(end_key))
@@ -365,39 +369,71 @@ fn validate_db_and_cf(db: DbType, cf: &str) -> Result<()> {
     }
 }
 
-// return the overlap range (without data prefix) of the `range` in region or
+// Return the overlap range (without data prefix) of the `range` in region or
 // None if they are exclusive
+// Note: generally, range should start with `DATA_PREFIX_KEY`, but they can also
+// be empty in case of compacting whole cluster for example.
+// Note: the range end being `DATA_PREFIX_KEY` and `DATA_MAX_KEY` both means the
+// largest key
 fn range_in_region<'a>(
     range: (&'a [u8], &'a [u8]),
     region: &'a metapb::Region,
 ) -> Option<(&'a [u8], &'a [u8])> {
-    if range.0.is_empty() && range.1.is_empty() {
+    let range_start = if !range.0.is_empty() {
+        range.0
+    } else {
+        DATA_PREFIX_KEY
+    };
+
+    let range_end = if !range.1.is_empty() && range.1 != DATA_MAX_KEY {
+        range.1
+    } else {
+        DATA_PREFIX_KEY
+    };
+
+    if range_start == DATA_PREFIX_KEY && range_end == DATA_PREFIX_KEY {
         return Some((region.get_start_key(), region.get_end_key()));
-    } else if range.0.is_empty() {
-        assert!(range.1.starts_with(DATA_PREFIX_KEY));
-        if region.get_start_key() < &range.1[DATA_PREFIX_KEY.len()..] {
+    } else if range_start == DATA_PREFIX_KEY {
+        assert!(range_end.starts_with(DATA_PREFIX_KEY));
+        if region.get_start_key() < &range_end[DATA_PREFIX_KEY.len()..] {
             return Some((
                 region.get_start_key(),
-                smaller_key(&range.1[DATA_PREFIX_KEY.len()..], region.get_end_key()),
+                smaller_key(
+                    &range_end[DATA_PREFIX_KEY.len()..],
+                    region.get_end_key(),
+                    true,
+                ),
             ));
         }
         None
-    } else if range.1.is_empty() {
-        assert!(range.0.starts_with(DATA_PREFIX_KEY));
-        if &range.0[DATA_PREFIX_KEY.len()..] < region.get_end_key()
+    } else if range_end == DATA_PREFIX_KEY {
+        assert!(range_start.starts_with(DATA_PREFIX_KEY));
+        if &range_start[DATA_PREFIX_KEY.len()..] < region.get_end_key()
             || region.get_end_key().is_empty()
         {
             return Some((
-                larger_key(&range.0[DATA_PREFIX_KEY.len()..], region.get_start_key()),
+                larger_key(
+                    &range_start[DATA_PREFIX_KEY.len()..],
+                    region.get_start_key(),
+                    false,
+                ),
                 region.get_end_key(),
             ));
         }
         None
     } else {
-        assert!(range.0.starts_with(DATA_PREFIX_KEY));
-        assert!(range.1.starts_with(DATA_PREFIX_KEY));
-        let start_key = larger_key(&range.0[DATA_PREFIX_KEY.len()..], region.get_start_key());
-        let end_key = smaller_key(&range.1[DATA_PREFIX_KEY.len()..], region.get_end_key());
+        assert!(range_start.starts_with(DATA_PREFIX_KEY));
+        assert!(range_end.starts_with(DATA_PREFIX_KEY));
+        let start_key = larger_key(
+            &range_start[DATA_PREFIX_KEY.len()..],
+            region.get_start_key(),
+            false,
+        );
+        let end_key = smaller_key(
+            &range_end[DATA_PREFIX_KEY.len()..],
+            region.get_end_key(),
+            true,
+        );
         if start_key < end_key {
             return Some((start_key, end_key));
         }
@@ -457,15 +493,27 @@ fn get_tablet_cache(
     }
 }
 
-fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8]) -> &'a [u8] {
+fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
+    if end_key && key1.is_empty() {
+        return key2;
+    }
+    if end_key && key2.is_empty() {
+        return key1;
+    }
     if key1 < key2 {
         return key1;
     }
     key2
 }
 
-fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8]) -> &'a [u8] {
-    if key1 < key2 || key2.is_empty() {
+fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
+    if end_key && key1.is_empty() {
+        return key1;
+    }
+    if end_key && key2.is_empty() {
+        return key2;
+    }
+    if key1 < key2 {
         return key2;
     }
     key1
@@ -785,11 +833,15 @@ mod tests {
 
         let ranges = vec![
             ("", "", "k01", "k10"),
+            ("z", "z", "k01", "k10"),
             ("zk00", "", "k01", "k10"),
+            ("zk00", "z", "k01", "k10"),
             ("", "zk11", "k01", "k10"),
+            ("z", "zk11", "k01", "k10"),
             ("zk02", "zk07", "k02", "k07"),
             ("zk00", "zk07", "k01", "k07"),
             ("zk02", "zk11", "k02", "k10"),
+            ("zk02", "{", "k02", "k10"),
         ];
 
         for (range_start, range_end, expect_start, expect_end) in ranges {
@@ -800,6 +852,64 @@ mod tests {
         }
 
         let ranges = vec![("zk05", "zk02"), ("zk11", ""), ("", "zk00")];
+        for (range_start, range_end) in ranges {
+            assert!(
+                range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).is_none()
+            );
+        }
+
+        region.set_start_key(b"".to_vec());
+        region.set_end_key(b"k10".to_vec());
+
+        let ranges = vec![
+            ("", "", "", "k10"),
+            ("z", "z", "", "k10"),
+            ("zk00", "", "k00", "k10"),
+            ("zk00", "z", "k00", "k10"),
+            ("", "zk11", "", "k10"),
+            ("z", "zk11", "", "k10"),
+            ("zk02", "zk07", "k02", "k07"),
+            ("zk02", "zk11", "k02", "k10"),
+            ("zk02", "{", "k02", "k10"),
+        ];
+
+        for (range_start, range_end, expect_start, expect_end) in ranges {
+            assert_eq!(
+                (expect_start.as_bytes(), expect_end.as_bytes()),
+                range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).unwrap()
+            );
+        }
+
+        let ranges = vec![("zk05", "zk02"), ("zk11", "")];
+        for (range_start, range_end) in ranges {
+            assert!(
+                range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).is_none()
+            );
+        }
+
+        region.set_start_key(b"k01".to_vec());
+        region.set_end_key(b"".to_vec());
+
+        let ranges = vec![
+            ("", "", "k01", ""),
+            ("z", "z", "k01", ""),
+            ("zk00", "", "k01", ""),
+            ("zk00", "z", "k01", ""),
+            ("", "zk11", "k01", "k11"),
+            ("z", "zk11", "k01", "k11"),
+            ("zk02", "zk07", "k02", "k07"),
+            ("zk02", "zk11", "k02", "k11"),
+            ("zk02", "{", "k02", ""),
+        ];
+
+        for (range_start, range_end, expect_start, expect_end) in ranges {
+            assert_eq!(
+                (expect_start.as_bytes(), expect_end.as_bytes()),
+                range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).unwrap()
+            );
+        }
+
+        let ranges = vec![("zk05", "zk02"), ("", "zk00")];
         for (range_start, range_end) in ranges {
             assert!(
                 range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).is_none()
