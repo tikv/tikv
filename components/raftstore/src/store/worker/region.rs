@@ -20,10 +20,7 @@ use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
-use kvproto::{
-    metapb,
-    raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
-};
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
