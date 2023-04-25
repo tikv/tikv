@@ -1150,8 +1150,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_manager.consume_penalty(resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
-                    .inc();
+                        .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                        .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
@@ -1192,8 +1192,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_manager.consume_penalty(resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
-                    .inc();
+                        .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                        .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
@@ -1226,8 +1226,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_manager.consume_penalty(resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
-                    .inc();
+                        .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                        .inc();
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
                     let resp = $future_fn($($arg,)* req)
