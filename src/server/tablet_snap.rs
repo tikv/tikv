@@ -34,7 +34,7 @@ use std::{
 
 use collections::HashMap;
 use crc64fast::Digest;
-use encryption_export::DataKeyManager;
+use encryption_export::{DataKeyImporter, DataKeyManager};
 use engine_traits::{Checkpointer, EncryptionKeyManager, KvEngine, TabletRegistry};
 use file_system::{IoType, OpenOptions, WithIoType};
 use futures::{
@@ -335,22 +335,27 @@ pub(crate) async fn cleanup_cache(
     Ok((reused, missing))
 }
 
-pub(crate) async fn accept_one_file(
+pub async fn accept_one_file(
     path: &Path,
     mut chunk: TabletSnapshotFileChunk,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
     limiter: &Limiter,
-    key_manager: &Option<Arc<DataKeyManager>>,
+    key_importer: &mut Option<DataKeyImporter<'_>>,
     digest: &mut Digest,
 ) -> Result<u64> {
+    let iv = chunk.take_iv();
+    let key = if chunk.has_key() {
+        Some(chunk.take_key())
+    } else {
+        None
+    };
     let name = chunk.file_name;
     digest.write(name.as_bytes());
-    let iv = chunk.iv;
-    // let key = chunk.key;
+    let path = path.join(&name);
     let mut f = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(path.join(&name))?;
+        .open(&path)?;
     let exp_size = chunk.file_size;
     let mut file_size = 0;
     loop {
@@ -369,9 +374,10 @@ pub(crate) async fn accept_one_file(
         f.write_all(&chunk.data)?;
         if exp_size == file_size {
             f.sync_data()?;
-            if !iv.is_empty() {
-                if let Some(_m) = key_manager {
-                    unimplemented!();
+            if let Some(key) = key {
+                if let Some(i) = key_importer {
+                    i.add(path.to_str().unwrap(), iv, key)
+                        .map_err(|e| Error::Other(e.into()))?;
                 } else {
                     return Err(Error::Other(
                         "encryption not enabled on receiving end".to_string().into(),
@@ -399,6 +405,7 @@ pub(crate) async fn accept_missing(
 ) -> Result<u64> {
     let mut digest = Digest::default();
     let mut received_bytes: u64 = 0;
+    let mut key_importer = key_manager.as_deref().map(|m| DataKeyImporter::new(m));
     for name in missing_ssts {
         let chunk = match stream.next().await {
             Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
@@ -408,7 +415,7 @@ pub(crate) async fn accept_missing(
             return Err(protocol_error(&name, &chunk.file_name));
         }
         received_bytes +=
-            accept_one_file(path, chunk, stream, limiter, key_manager, &mut digest).await?;
+            accept_one_file(path, chunk, stream, limiter, &mut key_importer, &mut digest).await?;
     }
     // Now receive other files.
     loop {
@@ -427,6 +434,9 @@ pub(crate) async fn accept_missing(
                 File::open(path)?.sync_data()?;
                 let res = stream.next().await;
                 return if res.is_none() {
+                    if let Some(i) = key_importer {
+                        i.commit().map_err(|e| Error::Other(e.into()))?;
+                    }
                     Ok(received_bytes)
                 } else {
                     Err(protocol_error("None", res))
@@ -438,7 +448,7 @@ pub(crate) async fn accept_missing(
             return Err(protocol_error("file_name", &chunk.file_name));
         }
         received_bytes +=
-            accept_one_file(path, chunk, stream, limiter, key_manager, &mut digest).await?;
+            accept_one_file(path, chunk, stream, limiter, &mut key_importer, &mut digest).await?;
     }
 }
 
@@ -647,17 +657,23 @@ async fn send_missing(
     missing: Vec<(String, u64)>,
     sender: &mut (impl Sink<(TabletSnapshotRequest, WriteFlags), Error = Error> + Unpin),
     limiter: &Limiter,
+    key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<(u64, u64)> {
     let mut total_sent = 0;
     let mut digest = Digest::default();
     for (name, mut file_size) in missing {
+        let file_path = path.join(&name);
         let mut chunk = TabletSnapshotFileChunk::default();
         chunk.file_name = name;
         digest.write(chunk.file_name.as_bytes());
         chunk.file_size = file_size;
         total_sent += file_size;
-        // chunk.iv = unimplemented!();
-        // chunk.key = unimplemented!();
+        if let Some(m) = key_manager
+            && let Some((iv, key)) = m.get_file_internal(file_path.to_str().unwrap())?
+        {
+            chunk.iv = iv;
+            chunk.set_key(key);
+        }
         if file_size == 0 {
             let mut req = TabletSnapshotRequest::default();
             req.set_chunk(chunk);
@@ -668,7 +684,7 @@ async fn send_missing(
         }
 
         // Send encrypted content.
-        let mut f = WrappedReadableFile::open(&None, &path.join(&chunk.file_name))?;
+        let mut f = WrappedReadableFile::open(&None, &file_path)?;
         loop {
             let to_read = cmp::min(FILE_CHUNK_LEN as u64, file_size) as usize;
             f.read_to(&mut chunk.data, to_read, limiter).await?;
@@ -730,7 +746,8 @@ pub async fn send_snap(
         snap_mgr.key_manager(),
     )
     .await?;
-    let (total_size, checksum) = send_missing(&path, missing, &mut sink, &limiter).await?;
+    let (total_size, checksum) =
+        send_missing(&path, missing, &mut sink, &limiter, snap_mgr.key_manager()).await?;
     // In gRPC, stream in serverside can finish without error (when the connection
     // is closed). So we need to use an explicit `Done` to indicate all messages
     // are sent. In V1, we have checksum and meta list, so this is not a
@@ -980,14 +997,21 @@ pub fn copy_tablet_snapshot(
     let recv_path = recver_snap_mgr.tmp_recv_path(&recv_context.key);
     fs::create_dir_all(&recv_path)?;
 
+    let mut key_importer = recver_snap_mgr
+        .key_manager()
+        .as_deref()
+        .map(|m| DataKeyImporter::new(m));
     for path in files {
-        let sender_name = path.file_name().unwrap().to_str().unwrap();
-        let mut sender_f = File::open(&path)?;
-
-        let recv_p = recv_path.join(sender_name);
-        let mut recv_f = File::create(recv_p)?;
-
-        while std::io::copy(&mut sender_f, &mut recv_f)? != 0 {}
+        let recv = recv_path.join(path.file_name().unwrap());
+        std::fs::copy(&path, &recv)?;
+        if let Some(m) = sender_snap_mgr.key_manager()
+            && let Some((iv, key)) = m.get_file_internal(path.to_str().unwrap())?
+        {
+            key_importer.as_mut().unwrap().add(recv.to_str().unwrap(), iv, key).unwrap();
+        }
+    }
+    if let Some(i) = key_importer {
+        i.commit().unwrap();
     }
 
     let final_path = recver_snap_mgr.final_recv_path(&recv_context.key);
