@@ -497,9 +497,10 @@ fn find_region_state_by_key<ER: RaftEngine>(
     for region_id in region_ids {
         if let Ok(Some(region_state)) = raft_engine.get_region_state(region_id, u64::MAX) {
             let region = region_state.get_region();
-            if region.get_start_key() <= key
-                && (key < region.get_end_key() || region.get_end_key().is_empty())
-            {
+            if check_key_in_region(key, region).is_ok() {
+                if region_state.get_state() != PeerState::Normal {
+                    break;
+                }
                 return Ok(region_state);
             }
         }
@@ -534,6 +535,7 @@ fn get_tablet_cache(
     }
 }
 
+// `key1` and `key2` should both be start_key or end_key.
 fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
     if end_key && key1.is_empty() {
         return key2;
@@ -547,6 +549,7 @@ fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
     key2
 }
 
+// `key1` and `key2` should both be start_key or end_key.
 fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
     if end_key && key1.is_empty() {
         return key1;
@@ -635,6 +638,14 @@ mod tests {
         match debugger.get(DbType::Kv, CF_DEFAULT, b"k15") {
             Err(Error::NotFound(_)) => (),
             _ => panic!("expect Error::NotFound(_)"),
+        }
+
+        let mut wb = raft_engine.log_batch(10);
+        state.set_state(PeerState::Tombstone);
+        wb.put_region_state(region_id, 10, &state).unwrap();
+        raft_engine.consume(&mut wb, true).unwrap();
+        for cf in &cfs {
+            debugger.get(DbType::Kv, cf, &k).unwrap_err();
         }
     }
 
