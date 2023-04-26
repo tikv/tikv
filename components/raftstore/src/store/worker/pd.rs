@@ -983,16 +983,20 @@ where
             slow_trend_cause: Trend::new(
                 // Disable SpikeFilter for now
                 Duration::from_secs(0),
-                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_value"]),
-                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_count"]),
+                STORE_SLOW_TREND_MISC_GAUGE_VEC
+                    .with_label_values(&["disk-io", "spike_filter_value"]),
+                STORE_SLOW_TREND_MISC_GAUGE_VEC
+                    .with_label_values(&["disk-io", "spike_filter_count"]),
                 Duration::from_secs(180),
                 Duration::from_secs(30),
                 Duration::from_secs(120),
                 Duration::from_secs(600),
                 1,
                 tikv_util::time::duration_to_us(Duration::from_micros(500)),
-                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L1"]),
-                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L2"]),
+                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                    .with_label_values(&["disk-io", "L1"]),
+                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                    .with_label_values(&["disk-io", "L2"]),
                 cfg.slow_trend_unsensitive_cause,
             ),
             slow_trend_result: Trend::new(
@@ -1418,7 +1422,9 @@ where
         total_query_num: Option<f64>,
     ) {
         let slow_trend_cause_rate = self.slow_trend_cause.increasing_rate();
-        STORE_SLOW_TREND_GAUGE.set(slow_trend_cause_rate);
+        STORE_SLOW_TREND_GAUGE
+            .with_label_values(&["disk-io"])
+            .set(slow_trend_cause_rate);
         let mut slow_trend = pdpb::SlowTrend::default();
         slow_trend.set_cause_rate(slow_trend_cause_rate);
         slow_trend.set_cause_value(self.slow_trend_cause.l0_avg());
@@ -1439,13 +1445,29 @@ where
     }
 
     fn write_slow_trend_metrics(&mut self) {
-        STORE_SLOW_TREND_L0_GAUGE.set(self.slow_trend_cause.l0_avg());
-        STORE_SLOW_TREND_L1_GAUGE.set(self.slow_trend_cause.l1_avg());
-        STORE_SLOW_TREND_L2_GAUGE.set(self.slow_trend_cause.l2_avg());
-        STORE_SLOW_TREND_L0_L1_GAUGE.set(self.slow_trend_cause.l0_l1_rate());
-        STORE_SLOW_TREND_L1_L2_GAUGE.set(self.slow_trend_cause.l1_l2_rate());
-        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l1_margin_error_base());
-        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l2_margin_error_base());
+        let label = ["disk-io"];
+        STORE_SLOW_TREND_L0_GAUGE
+            .with_label_values(&label)
+            .set(self.slow_trend_cause.l0_avg());
+        STORE_SLOW_TREND_L1_GAUGE
+            .with_label_values(&label)
+            .set(self.slow_trend_cause.l1_avg());
+        STORE_SLOW_TREND_L2_GAUGE
+            .with_label_values(&label)
+            .set(self.slow_trend_cause.l2_avg());
+        STORE_SLOW_TREND_L0_L1_GAUGE
+            .with_label_values(&label)
+            .set(self.slow_trend_cause.l0_l1_rate());
+        STORE_SLOW_TREND_L1_L2_GAUGE
+            .with_label_values(&label)
+            .set(self.slow_trend_cause.l1_l2_rate());
+        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE
+            .with_label_values(&label)
+            .set(self.slow_trend_cause.l1_margin_error_base());
+        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE
+            .with_label_values(&label)
+            .set(self.slow_trend_cause.l2_margin_error_base());
+        // Report results of all slow Trends.
         STORE_SLOW_TREND_RESULT_L0_GAUGE.set(self.slow_trend_result.l0_avg());
         STORE_SLOW_TREND_RESULT_L1_GAUGE.set(self.slow_trend_result.l1_avg());
         STORE_SLOW_TREND_RESULT_L2_GAUGE.set(self.slow_trend_result.l2_avg());

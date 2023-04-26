@@ -8,6 +8,7 @@ use prometheus::local::LocalHistogram;
 use raft::eraftpb::MessageType;
 use tikv_util::time::{Duration, Instant};
 use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
+use yatp::pool::Local;
 
 use super::metrics::*;
 
@@ -68,6 +69,38 @@ impl RaftSendMessageMetrics {
     }
 }
 
+#[derive(Default)]
+pub struct RaftCommitLogStatistics {
+    pub last_commit_log_duration_sum: Duration,
+    pub last_commit_log_count_sum: u64,
+}
+
+impl RaftCommitLogStatistics {
+    #[inline]
+    pub fn record(&mut self, dur: Duration) {
+        self.last_commit_log_count_sum += 1;
+        self.last_commit_log_duration_sum += dur;
+    }
+
+    #[inline]
+    pub fn avg(&self) -> Duration {
+        if self.last_commit_log_count_sum > 0 {
+            Duration::from_micros(
+                self.last_commit_log_duration_sum.as_micros() as u64
+                    / self.last_commit_log_count_sum,
+            )
+        } else {
+            Duration::default()
+        }
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.last_commit_log_count_sum = 0;
+        self.last_commit_log_duration_sum = Duration::default();
+    }
+}
+
 /// The buffered metrics counters for raft.
 pub struct RaftMetrics {
     // local counter
@@ -96,6 +129,9 @@ pub struct RaftMetrics {
     pub wf_persist_log: LocalHistogram,
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
+
+    // local statistics for slowness
+    pub stat_commit_log: RaftCommitLogStatistics,
 
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
 
@@ -132,6 +168,7 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            stat_commit_log: RaftCommitLogStatistics::default(),
             leader_missing: Arc::default(),
             last_flush_time: Instant::now_coarse(),
         }
@@ -247,10 +284,20 @@ impl TimeTracker {
         local_metric: &LocalHistogram,
         tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
     ) {
+        let _ = self.observe_and_return(now, local_metric, tracker_metric);
+    }
+
+    #[inline]
+    pub fn observe_and_return(
+        &self,
+        now: std::time::Instant,
+        local_metric: &LocalHistogram,
+        tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
+    ) -> Duration {
         let dur = now.saturating_duration_since(self.start);
         local_metric.observe(dur.as_secs_f64());
         if self.token == INVALID_TRACKER_TOKEN {
-            return;
+            return Duration::ZERO;
         }
         GLOBAL_TRACKERS.with_tracker(self.token, |tracker| {
             let metric = tracker_metric(tracker);
@@ -258,6 +305,7 @@ impl TimeTracker {
                 *metric = dur.as_nanos() as u64;
             }
         });
+        dur
     }
 
     #[inline]

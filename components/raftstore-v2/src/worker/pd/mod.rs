@@ -12,26 +12,29 @@ use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    util::KeysInfoFormatter, AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor,
-    ReadStats, RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager,
-    TxnExt, WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+    metrics::STORE_INSPECT_DURTION_HISTOGRAM,
+    util::{KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+    AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor, ReadStats,
+    RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
+    WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
-use slog::{error, Logger};
+use slog::{error, warn, Logger};
 use tikv_util::{
     config::VersionTrack,
-    time::UnixSecs,
-    worker::{Runnable, Scheduler},
+    time::{Instant as TiInstant, UnixSecs},
+    worker::{Runnable, RunnableWithTimer, Scheduler},
 };
 use yatp::{task::future::TaskCell, Remote};
 
 use crate::{
     batch::StoreRouter,
-    router::{CmdResChannel, PeerMsg},
+    router::{CmdResChannel, PeerMsg, StoreMsg},
 };
 
 mod misc;
 mod region;
+mod slowness;
 mod split;
 mod store;
 
@@ -83,6 +86,11 @@ pub enum Task {
     ReportMinResolvedTs {
         store_id: u64,
         min_resolved_ts: u64,
+    },
+    // In slowness.rs
+    UpdateSlownessStats {
+        tick_id: u64,
+        duration: RaftstoreDuration,
     },
 }
 
@@ -148,6 +156,11 @@ impl Display for Task {
                 "report min resolved ts: store {}, resolved ts {}",
                 store_id, min_resolved_ts,
             ),
+            Task::UpdateSlownessStats { tick_id, duration } => write!(
+                f,
+                "update slowness statistics: tick_id {}, duration {:?}",
+                tick_id, duration
+            ),
         }
     }
 }
@@ -171,6 +184,7 @@ where
     // For store.
     start_ts: UnixSecs,
     store_stat: store::StoreStat,
+    store_heartbeat_interval: std::time::Duration,
 
     // For region.
     region_peers: HashMap<u64, region::PeerStat>,
@@ -182,6 +196,9 @@ where
     // For update_max_timestamp.
     concurrency_manager: ConcurrencyManager,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+
+    // For slowness detection
+    slowness_stats: slowness::SlownessStatistics,
 
     logger: Logger,
     shutdown: Arc<AtomicBool>,
@@ -212,8 +229,9 @@ where
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
     ) -> Result<Self, std::io::Error> {
+        let store_heartbeat_interval = cfg.value().pd_store_heartbeat_tick_interval.0;
         let mut stats_monitor = PdStatsMonitor::new(
-            cfg.value().pd_store_heartbeat_tick_interval.0 / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+            store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().report_min_resolved_ts_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
         );
@@ -231,6 +249,7 @@ where
             snap_mgr,
             router,
             stats_monitor,
+            store_heartbeat_interval,
             remote,
             start_ts: UnixSecs::zero(),
             store_stat: store::StoreStat::default(),
@@ -240,6 +259,7 @@ where
             is_hb_receiver_scheduled: false,
             concurrency_manager,
             causal_ts_provider,
+            slowness_stats: slowness::SlownessStatistics::new(&cfg.value()),
             logger,
             shutdown,
             cfg,
@@ -289,7 +309,60 @@ where
                 store_id,
                 min_resolved_ts,
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
+            Task::UpdateSlownessStats { tick_id, duration } => {
+                self.handle_update_slowness_stats(tick_id, duration)
+            }
         }
+    }
+}
+
+impl<EK, ER, T> RunnableWithTimer for Runner<EK, ER, T>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: PdClient + 'static,
+{
+    fn on_timeout(&mut self) {
+        self.handle_slowness_stats_timeout();
+        // Tick a new latency inspector.
+        let scheduler = self.scheduler.clone();
+        let tick_id = self.slowness_stats.get_latest_tick();
+
+        let inspector = LatencyInspector::new(
+            tick_id,
+            Box::new(move |tick_id, duration| {
+                let dur = duration.sum();
+
+                STORE_INSPECT_DURTION_HISTOGRAM
+                    .with_label_values(&["store_process"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.store_process_duration.unwrap(),
+                    ));
+                STORE_INSPECT_DURTION_HISTOGRAM
+                    .with_label_values(&["store_wait"])
+                    .observe(tikv_util::time::duration_to_sec(
+                        duration.store_wait_duration.unwrap(),
+                    ));
+                STORE_INSPECT_DURTION_HISTOGRAM
+                    .with_label_values(&["all"])
+                    .observe(tikv_util::time::duration_to_sec(dur));
+                if let Err(e) = scheduler.schedule(Task::UpdateSlownessStats { tick_id, duration })
+                {
+                    warn!(self.logger, "schedule pd UpdateSlownessStats task failed"; "err" => ?e);
+                }
+            }),
+        );
+        let msg = StoreMsg::LatencyInspect {
+            send_time: TiInstant::now(),
+            inspector,
+        };
+        if let Err(e) = self.router.send_control(msg) {
+            warn!(self.logger, "pd worker send latency inspecter failed"; "err" => ?e);
+        }
+    }
+
+    fn get_interval(&self) -> std::time::Duration {
+        self.slowness_stats.get_inspect_interval()
     }
 }
 

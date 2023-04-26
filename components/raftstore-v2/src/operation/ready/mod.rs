@@ -787,6 +787,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let now = Instant::now();
+        let stat_raft_commit_log = &mut ctx.raft_metrics.stat_commit_log;
         for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
@@ -797,10 +798,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         &ctx.raft_metrics.wf_commit_not_persist_log
                     };
                     for tracker in trackers {
-                        tracker.observe(now, hist, |t| {
+                        // Collect the metrics related to commit_log
+                        // durations.
+                        stat_raft_commit_log.record(tracker.observe_and_return(now, hist, |t| {
                             t.metrics.commit_not_persisted = !commit_persisted;
                             &mut t.metrics.wf_commit_log_nanos
-                        });
+                        }));
                     }
                 }
             }

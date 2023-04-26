@@ -10,7 +10,10 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{
-    fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
+    fsm::ChangeObserver,
+    metrics::RaftEventDurationType,
+    simple_write::SimpleWriteBinary,
+    util::{LatencyInspector, RaftstoreDuration},
     FetchedLogs, GenSnapRes,
 };
 use resource_control::ResourceMetered;
@@ -311,6 +314,15 @@ pub enum StoreMsg {
     WaitFlush {
         region_id: u64,
         ch: super::FlushChannel,
+    },
+    /// Inspect the latency of raftstore.
+    LatencyInspect {
+        send_time: Instant,
+        inspector: LatencyInspector,
+    },
+    /// A message that used to awaken all hibernated regions.
+    AwakenRegions {
+        abnormal_stores: Vec<u64>,
     },
 }
 
