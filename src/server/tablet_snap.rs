@@ -518,14 +518,14 @@ async fn recv_snap_imp<'a>(
     if let Some(m) = snap_mgr.key_manager() {
         m.link_file(path.to_str().unwrap(), final_path.to_str().unwrap())?;
     }
-    let r = fs::rename(&path, &final_path);
-    if let Some(m) = snap_mgr.key_manager() {
-        if let Err(e) = r {
+    fs::rename(&path, &final_path).map_err(|e| {
+        if let Some(m) = snap_mgr.key_manager() {
             let _ = m.delete_file(final_path.to_str().unwrap());
-            return Err(e.into());
-        } else {
-            m.delete_file(path.to_str().unwrap())?;
         }
+        e
+    })?;
+    if let Some(m) = snap_mgr.key_manager() {
+        m.delete_file(path.to_str().unwrap())?;
     }
     Ok(context)
 }
@@ -580,7 +580,6 @@ async fn build_one_preview(
         meta.file_name = name.clone();
         meta.file_size = size;
         let mut f = EncryptedFile::open(key_manager, &path.join(name))?;
-
         let to_read = cmp::min(size as usize, PREVIEW_CHUNK_LEN);
         read_to(&mut f, &mut meta.head_chunk, to_read, limiter).await?;
         if size > PREVIEW_CHUNK_LEN as u64 {
@@ -636,12 +635,10 @@ async fn find_missing(
     let mut ssts_iter = ssts.iter().peekable();
     while ssts_iter.peek().is_some() {
         let mut req = build_one_preview(path, &mut ssts_iter, limiter, key_manager).await?;
-        req.mut_preview().end = ssts_iter.peek().is_none();
+        let is_end = ssts_iter.peek().is_none();
+        req.mut_preview().end = is_end;
         sender
-            .send((
-                req,
-                WriteFlags::default().buffer_hint(ssts_iter.peek().is_some()),
-            ))
+            .send((req, WriteFlags::default().buffer_hint(!is_end)))
             .await?;
     }
 
@@ -1027,14 +1024,14 @@ pub fn copy_tablet_snapshot(
     if let Some(m) = recver_snap_mgr.key_manager() {
         m.link_file(recv_path.to_str().unwrap(), final_path.to_str().unwrap())?;
     }
-    let r = fs::rename(&recv_path, &final_path);
-    if let Some(m) = recver_snap_mgr.key_manager() {
-        if let Err(e) = r {
+    fs::rename(&recv_path, &final_path).map_err(|e| {
+        if let Some(m) = recver_snap_mgr.key_manager() {
             let _ = m.delete_file(final_path.to_str().unwrap());
-            return Err(e.into());
-        } else {
-            m.delete_file(recv_path.to_str().unwrap())?;
         }
+        e
+    })?;
+    if let Some(m) = recver_snap_mgr.key_manager() {
+        m.delete_file(recv_path.to_str().unwrap())?;
     }
 
     Ok(())
