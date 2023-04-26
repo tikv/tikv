@@ -157,5 +157,5 @@ fn test_compact() {
     // compact all regions
     check_compact(b"".to_vec(), b"".to_vec(), regions_compacted.clone());
     check_compact(b"z".to_vec(), b"z".to_vec(), regions_compacted.clone());
-    check_compact(b"z".to_vec(), b"{".to_vec(), regions_compacted.clone());
+    check_compact(b"z".to_vec(), b"{".to_vec(), regions_compacted);
 }
