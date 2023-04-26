@@ -26,7 +26,7 @@ use std::{
     convert::TryFrom,
     fmt::Debug,
     fs::{self, File},
-    io::{BorrowedBuf, Read, Seek, SeekFrom, Write},
+    io::{self, BorrowedBuf, Read, Seek, SeekFrom, Write},
     path::Path,
     sync::{atomic::Ordering, Arc},
     time::Duration,
@@ -84,9 +84,40 @@ fn is_sst(file_name: &str) -> bool {
     file_name.ends_with(".sst")
 }
 
-struct WrappedReadableFile(Either<File, encryption_export::DecrypterReader<File>>);
+async fn read_to(
+    f: &mut impl Read,
+    to: &mut Vec<u8>,
+    size: usize,
+    limiter: &Limiter,
+) -> Result<()> {
+    // It's likely in page cache already.
+    let cost = size / 2;
+    limiter.consume(cost).await;
+    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+        .send
+        .inc_by(cost as u64);
+    to.clear();
+    to.reserve_exact(size);
+    let mut buf: BorrowedBuf<'_> = to.spare_capacity_mut().into();
+    f.read_buf_exact(buf.unfilled())?;
+    unsafe {
+        to.set_len(size);
+    }
+    Ok(())
+}
 
-impl WrappedReadableFile {
+struct EncryptedFile(Either<File, encryption_export::DecrypterReader<File>>);
+
+impl Read for EncryptedFile {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match &mut self.0 {
+            Either::Left(f) => f.read(buf),
+            Either::Right(f) => f.read(buf),
+        }
+    }
+}
+
+impl EncryptedFile {
     fn open(key_manager: &Option<Arc<DataKeyManager>>, path: &Path) -> Result<Self> {
         let f = File::open(path)?;
         let inner = if let Some(m) = key_manager {
@@ -114,26 +145,6 @@ impl WrappedReadableFile {
             Either::Right(f) => f.inner().metadata()?.len(),
         };
         Ok(r)
-    }
-
-    async fn read_to(&mut self, to: &mut Vec<u8>, size: usize, limiter: &Limiter) -> Result<()> {
-        // It's likely in page cache already.
-        let cost = size / 2;
-        limiter.consume(cost).await;
-        SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
-            .send
-            .inc_by(cost as u64);
-        to.clear();
-        to.reserve_exact(size);
-        let mut buf: BorrowedBuf<'_> = to.spare_capacity_mut().into();
-        match &mut self.0 {
-            Either::Left(f) => f.read_buf_exact(buf.unfilled())?,
-            Either::Right(f) => f.read_buf_exact(buf.unfilled())?,
-        }
-        unsafe {
-            to.set_len(size);
-        }
-        Ok(())
     }
 }
 
@@ -234,14 +245,14 @@ fn protocol_error(exp: &str, act: impl Debug) -> Error {
 /// actual data of an SST;
 /// 3. The last `PREVIEW_CHUNK_LEN` bytes are the same, this contains checksum,
 /// properties and other medata of an SST.
-pub(crate) async fn is_sst_match_preview(
+async fn is_sst_match_preview(
     preview_meta: &TabletSnapshotFileMeta,
     target: &Path,
     buffer: &mut Vec<u8>,
     limiter: &Limiter,
     key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<bool> {
-    let mut f = WrappedReadableFile::open(key_manager, target)?;
+    let mut f = EncryptedFile::open(key_manager, target)?;
     if f.len()? != preview_meta.file_size {
         return Ok(false);
     }
@@ -257,7 +268,7 @@ pub(crate) async fn is_sst_match_preview(
             .into(),
         ));
     }
-    f.read_to(buffer, head_len, limiter).await?;
+    read_to(&mut f, buffer, head_len, limiter).await?;
     if *buffer != preview_meta.head_chunk {
         return Ok(false);
     }
@@ -269,11 +280,11 @@ pub(crate) async fn is_sst_match_preview(
     }
 
     f.seek(SeekFrom::End(-(trailing_len as i64)))?;
-    f.read_to(buffer, trailing_len, limiter).await?;
+    read_to(&mut f, buffer, trailing_len, limiter).await?;
     Ok(*buffer == preview_meta.trailing_chunk)
 }
 
-pub(crate) async fn cleanup_cache(
+async fn cleanup_cache(
     path: &Path,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
     sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
@@ -335,7 +346,7 @@ pub(crate) async fn cleanup_cache(
     Ok((reused, missing))
 }
 
-pub async fn accept_one_file(
+async fn accept_one_file(
     path: &Path,
     mut chunk: TabletSnapshotFileChunk,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
@@ -396,7 +407,7 @@ pub async fn accept_one_file(
     }
 }
 
-pub(crate) async fn accept_missing(
+async fn accept_missing(
     path: &Path,
     missing_ssts: Vec<String>,
     stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
@@ -568,14 +579,13 @@ async fn build_one_preview(
         let mut meta = TabletSnapshotFileMeta::default();
         meta.file_name = name.clone();
         meta.file_size = size;
-        let mut f = WrappedReadableFile::open(key_manager, &path.join(name))?;
+        let mut f = EncryptedFile::open(key_manager, &path.join(name))?;
 
         let to_read = cmp::min(size as usize, PREVIEW_CHUNK_LEN);
-        f.read_to(&mut meta.head_chunk, to_read, limiter).await?;
+        read_to(&mut f, &mut meta.head_chunk, to_read, limiter).await?;
         if size > PREVIEW_CHUNK_LEN as u64 {
             f.seek(SeekFrom::End(-(to_read as i64)))?;
-            f.read_to(&mut meta.trailing_chunk, to_read, limiter)
-                .await?;
+            read_to(&mut f, &mut meta.trailing_chunk, to_read, limiter).await?;
         }
         preview.mut_metas().push(meta);
     }
@@ -683,10 +693,10 @@ async fn send_missing(
         }
 
         // Send encrypted content.
-        let mut f = WrappedReadableFile::open(&None, &file_path)?;
+        let mut f = File::open(&file_path)?;
         loop {
             let to_read = cmp::min(FILE_CHUNK_LEN as u64, file_size) as usize;
-            f.read_to(&mut chunk.data, to_read, limiter).await?;
+            read_to(&mut f, &mut chunk.data, to_read, limiter).await?;
             digest.write(&chunk.data);
             let mut req = TabletSnapshotRequest::default();
             req.set_chunk(chunk);
