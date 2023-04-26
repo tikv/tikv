@@ -16,7 +16,7 @@ aws-http = "0.55.0"
 aws-sdk-kms = "0.25.1"
 aws-sdk-s3 = "0.25.1"
 aws-sig-auth = "0.55.0"
-aws-smithy-client = { version = "0.55.0", features = ["test-util"] }
+aws-smithy-client = "0.55.0"
 aws-smithy-http = "0.55.0"
 aws-types = "0.55.0" 
 
@@ -47,5 +47,6 @@ url = "2.0"
 uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
+aws-smithy-client = { version = "0.55.0", features = ["test-util"] }
 base64 = "0.13"
 futures = "0.3"

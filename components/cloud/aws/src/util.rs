@@ -20,8 +20,8 @@ use tikv_util::{
 };
 
 #[allow(dead_code)] // This will be used soon, please remove the allow.
-pub const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
-pub const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
+const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
 const DEFAULT_REGION: &str = "us-east-1";
 
