@@ -5,36 +5,31 @@
 use std::{
     collections::HashMap,
     fs::File as SyncOsFile,
-    io::{Read, Seek},
+    io::Read,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
-        Arc, Mutex as BlockMutex, MutexGuard,
+        Arc, Mutex as BlockMutex,
     },
     task::{ready, Context, Poll},
 };
 
-use futures::{io::Cursor, Future, FutureExt, TryFutureExt};
-use futures_io::SeekFrom;
+use futures::{Future, FutureExt, TryFutureExt};
 use kvproto::brpb::CompressionType;
-use tikv_util::{
-    config::{ReadableDuration, ReadableSize},
-    mpsc::Receiver,
-    stream::block_on_external_io,
-};
+use tikv_util::stream::block_on_external_io;
 use tokio::{
     fs::File as OsFile,
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter},
-    pin,
-    sync::Mutex,
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, BufWriter},
 };
 
 use crate::{
-    errors::{Error, Result},
-    utils::{CompressionWriter, ZstdCompressionWriter}, annotate,
+    annotate,
+    errors::Result,
+    utils::{CompressionWriter, ZstdCompressionWriter},
 };
 
+#[derive(Debug)]
 pub struct Config {
     /// When the in memory bytes reaches this, start to flush files into disk at
     /// background.
@@ -45,12 +40,26 @@ pub struct Config {
     pub swap_files: PathBuf,
     /// The compression type used for compression.
     pub artificate_compression: CompressionType,
+    /// Prevent files with size less than this being swapped out.
+    /// We perfer to swap larger files for reducing IOps.
+    pub swap_out_threashold: usize,
 }
 
 pub struct TempFilePool {
     cfg: Config,
     current: AtomicUsize,
     files: BlockMutex<FileSet>,
+
+    override_swapout: Option<Box<dyn Fn(&Path) -> Box<dyn AsyncWrite> + Send + Sync + 'static>>,
+}
+
+impl std::fmt::Debug for TempFilePool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TempFilePool")
+            .field("cfg", &self.cfg)
+            .field("current", &self.current)
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -62,9 +71,20 @@ struct File {
 enum PersistentFile {
     Compressed(ZstdCompressionWriter),
     Plain(OsFile),
+    Dynamic(Pin<Box<dyn AsyncWrite + Send + 'static>>),
 }
 
-#[derive(Default)]
+impl std::fmt::Debug for PersistentFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compressed(_) => f.debug_tuple("Compressed").finish(),
+            Self::Plain(_) => f.debug_tuple("Plain").finish(),
+            Self::Dynamic(_) => f.debug_tuple("Dynamic").finish(),
+        }
+    }
+}
+
+#[derive(Default, Debug)]
 struct Content {
     in_mem: Vec<u8>,
     external_file: Option<PersistentFile>,
@@ -73,6 +93,7 @@ struct Content {
     written: usize,
 }
 
+#[derive(Debug)]
 pub struct ForWrite {
     content: Arc<BlockMutex<Content>>,
 
@@ -83,6 +104,7 @@ pub struct ForWrite {
     done: bool,
 }
 
+#[derive(Debug)]
 pub struct ForRead {
     content: Arc<BlockMutex<Content>>,
 
@@ -96,12 +118,17 @@ struct FileSet {
 }
 
 impl TempFilePool {
-    pub fn new(cfg: Config) -> Self {
-        Self {
+    pub fn new(cfg: Config) -> Result<Self> {
+        std::fs::create_dir_all(&cfg.swap_files)?;
+
+        let this = Self {
             cfg,
             current: AtomicUsize::new(0usize),
             files: BlockMutex::default(),
-        }
+
+            override_swapout: None,
+        };
+        Ok(this)
     }
 
     pub fn open(self: &Arc<Self>, p: &Path) -> ForWrite {
@@ -114,6 +141,7 @@ impl TempFilePool {
             rel_path: p.to_owned(),
             done: false,
         };
+        f.writer_count.fetch_add(1, Ordering::SeqCst);
         fr
     }
 
@@ -121,7 +149,7 @@ impl TempFilePool {
     pub fn open_for_read(&self, p: &Path) -> std::io::Result<ForRead> {
         use std::io::{Error, ErrorKind};
 
-        let mut fs = self.files.lock().unwrap();
+        let fs = self.files.lock().unwrap();
         let f = fs.items.get(p);
         if f.is_none() {
             return Err(Error::new(
@@ -203,7 +231,9 @@ impl ForWrite {
                 tokio::runtime::Handle::current().block_on(Pin::new(c).done())?;
             }
             Result::Ok(())
-        }).map_err(|err| annotate!(err, "joining the background `done` job")).await??;
+        })
+        .map_err(|err| annotate!(err, "joining the background `done` job"))
+        .await??;
         Ok(())
     }
 }
@@ -228,6 +258,7 @@ impl Content {
             }
             let ext_file = Pin::new(self.external_file.as_mut().unwrap());
             let n = ready!(ext_file.poll_write(cx, to_write))?;
+            println!("poll_writing: {} => {}", to_write.escape_ascii(), n);
             if n == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
@@ -242,17 +273,31 @@ impl Content {
 
 impl AsyncWrite for ForWrite {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         use std::io::{Error as IoErr, ErrorKind};
-        let mem_use = self.shared.current.load(Ordering::SeqCst);
+        if self.done {
+            return Err(IoErr::new(
+                ErrorKind::BrokenPipe,
+                "the write part has been closed",
+            ))
+            .into();
+        }
+
         let mut stat = self.content.lock().unwrap();
-        let should_swap_out = mem_use > self.shared.cfg.soft_max && stat.in_mem.len() > 4096;
-        if should_swap_out || stat.written > 0 {
+
+        let mem_use = self.shared.current.load(Ordering::SeqCst);
+        let in_mem_exceeds_quota = stat.in_mem.len() > self.shared.cfg.swap_out_threashold
+            && mem_use > self.shared.cfg.soft_max;
+        let already_exist = stat.in_mem.len() > 4096 && stat.external_file.is_some();
+        let swapping = stat.written > 0;
+        let should_swap_out = in_mem_exceeds_quota || already_exist || swapping;
+        if should_swap_out {
             ready!(stat.poll_swap_out_unpin(cx, &self.shared, &self.rel_path))?;
         }
+
         if mem_use > self.shared.cfg.hard_max {
             return Err(IoErr::new(
                 ErrorKind::OutOfMemory,
@@ -307,7 +352,7 @@ impl ForRead {
         } else {
             0
         };
-        let mut st = self.content.lock().unwrap();
+        let st = self.content.lock().unwrap();
         let len_in_mem = st.in_mem.len() - st.written;
         Ok(len_in_file + len_in_mem as u64)
     }
@@ -330,8 +375,8 @@ impl AsyncRead for ForRead {
         }
         let st = this.content.lock().unwrap();
         let rem = buf.remaining();
-        let fill_len = st.in_mem.len().min(rem);
-        let to_fill = &st.in_mem[this.read..fill_len];
+        let fill_len = Ord::min(st.in_mem.len() - this.read, rem);
+        let to_fill = &st.in_mem[this.read..this.read + fill_len];
         buf.put_slice(to_fill);
         this.read += fill_len;
         Ok(()).into()
@@ -347,6 +392,7 @@ impl AsyncWrite for PersistentFile {
         match self.get_mut() {
             PersistentFile::Compressed(c) => Pin::new(c).poll_write(cx, buf),
             PersistentFile::Plain(f) => Pin::new(f).poll_write(cx, buf),
+            PersistentFile::Dynamic(d) => d.as_mut().poll_write(cx, buf),
         }
     }
 
@@ -357,6 +403,7 @@ impl AsyncWrite for PersistentFile {
         match self.get_mut() {
             PersistentFile::Compressed(c) => Pin::new(c).poll_flush(cx),
             PersistentFile::Plain(f) => Pin::new(f).poll_flush(cx),
+            PersistentFile::Dynamic(d) => d.as_mut().poll_flush(cx),
         }
     }
 
@@ -367,6 +414,7 @@ impl AsyncWrite for PersistentFile {
         match self.get_mut() {
             PersistentFile::Compressed(c) => Pin::new(c).poll_shutdown(cx),
             PersistentFile::Plain(f) => Pin::new(f).poll_shutdown(cx),
+            PersistentFile::Dynamic(d) => d.as_mut().poll_shutdown(cx),
         }
     }
 }
@@ -380,7 +428,7 @@ fn block_on_current_rt<T>(f: impl Future<Output = T>) -> T {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{io::Read, sync::Arc};
 
     use kvproto::brpb::CompressionType;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -396,12 +444,16 @@ mod test {
     }
 
     fn simple_pool(soft_max: usize) -> Arc<TempFilePool> {
-        Arc::new(TempFilePool::new(Config {
-            soft_max,
-            hard_max: 99999999999,
-            swap_files: std::env::temp_dir().join(format!("{}", std::process::id())),
-            artificate_compression: CompressionType::Zstd,
-        }))
+        Arc::new(
+            TempFilePool::new(Config {
+                soft_max,
+                hard_max: 99999999999,
+                swap_files: std::env::temp_dir().join(format!("{}", std::process::id())),
+                artificate_compression: CompressionType::Unknown,
+                swap_out_threashold: 0,
+            })
+            .unwrap(),
+        )
     }
 
     #[test]
@@ -410,12 +462,19 @@ mod test {
         let mut f = pool.open("hello.txt".as_ref());
         let rt = rt_for_test();
         rt.block_on(f.write(b"Hello, world.")).unwrap();
+        drop(f);
         let mut cur = pool.open_for_read("hello.txt".as_ref()).unwrap();
         rt.block_on(rt.spawn(async move {
             let mut buf = [0u8; 6];
             assert_eq!(cur.read(&mut buf[..]).await.unwrap(), 6);
             assert_eq!(&buf, b"Hello,");
-            assert_eq!(cur.read(&mut buf[..]).await.unwrap(), 6);
+            let mut buf = [0u8; 6];
+            assert_eq!(
+                cur.read(&mut buf[..]).await.unwrap(),
+                6,
+                "{}",
+                buf.escape_ascii()
+            );
             assert_eq!(&buf, b" world");
         }))
         .unwrap();
@@ -429,10 +488,34 @@ mod test {
         rt.block_on(f.write(b"Once the word count...")).unwrap();
         rt.block_on(f.write(b"Reachs 30. The content of files shall be swaped out to the disk."))
             .unwrap();
+        rt.block_on(f.write(b"Isn't it? This swap will be finished in this call."))
+            .unwrap();
+        rt.block_on(f.done()).unwrap();
         let mut cur = pool.open_for_read("world.txt".as_ref()).unwrap();
         let mut buf = vec![];
         rt.block_on(cur.read_to_end(&mut buf)).unwrap();
-        assert_eq!(b"Once the word count...Reachs 30. The content of files shall be swaped out to the disk.", buf.as_slice());
-        let mut local_file = std::fs::File::open(&pool.cfg.swap_files.join("world.txt"));
+        let excepted = b"Once the word count...Reachs 30. The content of files shall be swaped out to the disk.Isn't it? This swap will be finished in this call.";
+        assert_eq!(
+            excepted,
+            buf.as_slice(),
+            "\n{}\n ## \n{}",
+            excepted.escape_ascii(),
+            buf.escape_ascii()
+        );
+
+        let mut local_file = pool
+            .open_relative("world.txt".as_ref())
+            .unwrap()
+            .try_into_std()
+            .unwrap();
+        buf.clear();
+        local_file.read_to_end(&mut buf).unwrap();
+        assert_eq!(
+            excepted,
+            buf.as_slice(),
+            "\n{}\n ## \n{}",
+            excepted.escape_ascii(),
+            buf.escape_ascii()
+        );
     }
 }

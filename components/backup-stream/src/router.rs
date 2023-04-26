@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use core::pin::Pin;
+
 use std::{
     borrow::Borrow,
     collections::HashMap,
@@ -18,7 +18,7 @@ use std::{
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
-use futures::io::{AllowStdIo, Cursor};
+use futures::io::{Cursor};
 use kvproto::{
     brpb::{
         CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
@@ -43,7 +43,6 @@ use tikv_util::{
     Either, HandyRwLock,
 };
 use tokio::{
-    fs::{remove_file, File},
     io::AsyncWriteExt,
     sync::{Mutex, RwLock},
 };
@@ -454,6 +453,7 @@ impl RouterInner {
             hard_max: ReadableSize::gb(4).0 as _,
             swap_files: self.prefix.join(&task.info.get_name()),
             artificate_compression: task.info.get_compression_type(),
+            swap_out_threashold: ReadableSize::kb(8).0 as _,
         }
     }
 
@@ -837,7 +837,7 @@ impl StreamTaskInfo {
             flush_fail_count: AtomicUsize::new(0),
             global_checkpoint_ts: AtomicU64::new(start_ts),
             merged_file_size_limit,
-            temp_file_pool: Arc::new(TempFilePool::new(temp_pool_cfg)),
+            temp_file_pool: Arc::new(TempFilePool::new(temp_pool_cfg)?),
         })
     }
 
@@ -1500,7 +1500,7 @@ mod tests {
         config::ReadableDuration,
         worker::{dummy_scheduler, ReceiverWrapper},
     };
-    use tokio::fs::File;
+    
     use txn_types::{Write, WriteType};
 
     use super::*;
@@ -1517,6 +1517,7 @@ mod tests {
             hard_max: ReadableSize::gb(4).0 as _,
             swap_files: p.to_owned(),
             artificate_compression: CompressionType::Zstd,
+            swap_out_threashold: 0,
         }
     }
 
@@ -2278,7 +2279,7 @@ mod tests {
         let file_name = format!("{}", uuid::Uuid::new_v4());
         let file_path = Path::new(&file_name);
         let cfg = make_tempfiles_cfg(&std::env::temp_dir());
-        let pool = Arc::new(TempFilePool::new(cfg));
+        let pool = Arc::new(TempFilePool::new(cfg).unwrap());
         let mut f = pool.open(&file_path);
         f.write(b"test-data").await?;
         let data_file = DataFile::new(&file_path, &pool).await.unwrap();
