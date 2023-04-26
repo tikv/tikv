@@ -644,9 +644,7 @@ impl Cluster {
                                 importer.add(new_path.to_str().unwrap(), iv, key).unwrap();
                             }
                         }
-                        if !importer.is_empty() {
-                            importer.commit().unwrap();
-                        }
+                        importer.commit().unwrap();
                     }
                     std::fs::rename(&gen_path, &recv_path).unwrap();
                     if let Some(m) = from_snap_mgr.key_manager() {

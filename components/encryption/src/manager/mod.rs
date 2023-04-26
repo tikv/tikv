@@ -1008,8 +1008,8 @@ impl<'a> DataKeyImporter<'a> {
     }
 
     pub fn commit(mut self) -> Result<()> {
-        let (tx, rx) = std::sync::mpsc::channel();
         if !self.key_additions.is_empty() {
+            let (tx, rx) = std::sync::mpsc::channel();
             self.manager
                 .rotate_tx
                 .send(RotateTask::Save(tx))
@@ -1033,25 +1033,23 @@ impl<'a> DataKeyImporter<'a> {
         while let Some(f) = iter.next() {
             self.manager.dicts.delete_file(&f, iter.peek().is_none())?;
         }
-        for key_id in self.key_additions.drain(..) {
-            let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
-            key_dict.keys.remove(&key_id);
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.manager
-            .rotate_tx
-            .send(RotateTask::Save(tx))
-            .map_err(|_| {
-                Error::Other(box_err!("Failed to request background key dict rotation"))
+        if !self.key_additions.is_empty() {
+            for key_id in self.key_additions.drain(..) {
+                let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
+                key_dict.keys.remove(&key_id);
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.manager
+                .rotate_tx
+                .send(RotateTask::Save(tx))
+                .map_err(|_| {
+                    Error::Other(box_err!("Failed to request background key dict rotation"))
+                })?;
+            rx.recv().map_err(|_| {
+                Error::Other(box_err!("Failed to wait for background key dict rotation"))
             })?;
-        rx.recv().map_err(|_| {
-            Error::Other(box_err!("Failed to wait for background key dict rotation"))
-        })?;
+        }
         Ok(())
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.file_additions.is_empty() && self.key_additions.is_empty()
     }
 }
 
