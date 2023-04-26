@@ -1,3 +1,5 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+
 use collections::{HashMap, HashSet};
 use engine_rocks::{raw::Range, util::get_cf_handle};
 use engine_traits::{CachedTablet, MiscExt, CF_WRITE};
