@@ -5,7 +5,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, Range, TabletRegistry, CF_WRITE};
+use engine_traits::{KvEngine, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use slog::{error, info, warn, Logger};
@@ -13,7 +13,6 @@ use thiserror::Error;
 use tikv_util::{box_try, worker::Runnable};
 
 pub enum Task {
-    // Compact {},
     CheckAndCompact {
         // Column families need to compact
         cf_names: Vec<String>,
@@ -21,6 +20,8 @@ pub enum Task {
         // The minimum RocksDB tombstones a range that need compacting has
         tombstones_num_threshold: u64,
         tombstones_percent_threshold: u64,
+        redundant_rows_threshold: u64,
+        redundant_rows_percent_threshold: u64,
     },
 }
 
@@ -32,6 +33,8 @@ impl Display for Task {
                 ref region_ids,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                redundant_rows_threshold,
+                redundant_rows_percent_threshold,
             } => f
                 .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
@@ -40,6 +43,11 @@ impl Display for Task {
                 .field(
                     "tombstones_percent_threshold",
                     &tombstones_percent_threshold,
+                )
+                .field("redundant_rows_threshold", &redundant_rows_threshold)
+                .field(
+                    "redundant_rows_percent_threshold",
+                    &redundant_rows_percent_threshold,
                 )
                 .finish(),
         }
@@ -82,11 +90,15 @@ where
                 region_ids,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                redundant_rows_threshold,
+                redundant_rows_percent_threshold,
             } => match collect_regions_to_compact(
                 &self.tablet_registry,
                 region_ids,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                redundant_rows_threshold,
+                redundant_rows_percent_threshold,
                 &self.logger,
             ) {
                 Ok(mut region_ids) => {
@@ -94,10 +106,6 @@ where
                         let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {continue};
                         let Some(tablet) = tablet_cache.latest() else {continue};
                         for cf in &cf_names {
-                            // to be removed
-                            let approximate_size = tablet
-                                .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
-                                .unwrap_or_default();
                             if let Err(e) =
                                 tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
                             {
@@ -109,19 +117,14 @@ where
                                     "err" => %e,
                                 );
                             }
-                            let cur_approximate_size = tablet
-                                .get_range_approximate_size_cf(cf, Range::new(b"", DATA_MAX_KEY), 0)
-                                .unwrap_or_default();
                             info!(
                                 self.logger,
-                                "compaction done #####";
+                                "compaction done";
                                 "cf" => cf,
                                 "region_id" => region_id,
-                                "approximate_size_before" => approximate_size,
-                                "approximate_size_after" => cur_approximate_size
                             );
                         }
-                        fail_point!("raftstore-v2::CheckAndCompact:AfterCompact");
+                        fail_point!("raftstore-v2::CheckAndCompact::AfterCompact");
                     }
                 }
                 Err(e) => warn!(
@@ -139,6 +142,8 @@ fn need_compact(
     num_versions: u64,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
+    redundant_rows_threshold: u64,
+    redundant_rows_percent_threshold: u64,
 ) -> bool {
     if num_entires < num_versions {
         return false;
@@ -148,7 +153,8 @@ fn need_compact(
     // compacting.
     let estimate_num_del = num_entires - num_versions;
     let redundent_keys = num_entires - num_rows;
-    (redundent_keys >= tombstones_num_threshold && redundent_keys * 100 >= 10 * num_entires)
+    (redundent_keys >= redundant_rows_threshold
+        && redundent_keys * 100 >= redundant_rows_percent_threshold * num_entires)
         || (estimate_num_del >= tombstones_num_threshold
             && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires)
 }
@@ -158,8 +164,11 @@ fn collect_regions_to_compact<E: KvEngine>(
     region_ids: Vec<u64>,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
+    redundant_rows_threshold: u64,
+    redundant_rows_percent_threshold: u64,
     logger: &Logger,
 ) -> Result<Vec<u64>, Error> {
+    fail_point!("on_collect_regions_to_compact");
     info!(
         logger,
         "received compaction check";
@@ -169,16 +178,21 @@ fn collect_regions_to_compact<E: KvEngine>(
     for id in region_ids {
         let Some(mut tablet_cache) = reg.get(id) else {continue};
         let Some(tablet) = tablet_cache.latest() else {continue};
+        if tablet.auto_compactions_is_disabled().expect("cf") {
+            info!(
+                logger,
+                "skip compact check when disabled auto compactions";
+                "region_id" => id,
+            );
+            continue;
+        }
+
         if let Some((num_ent, num_ver, num_rows)) =
             box_try!(tablet.get_range_entries_and_versions(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
         {
-            // println!(
-            //     "num of rows {}, num of ver {}, num_ents {}",
-            //     num_rows, num_ver, num_ent
-            // );
             info!(
                 logger,
-                "get range entries and versions #####";
+                "get range entries and versions";
                 "num_entries" => num_ent,
                 "num_versions" => num_ver,
                 "num_rows" => num_rows,
@@ -190,6 +204,8 @@ fn collect_regions_to_compact<E: KvEngine>(
                 num_ver,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                redundant_rows_threshold,
+                redundant_rows_percent_threshold,
             ) {
                 regions_to_compact.push(id);
             }

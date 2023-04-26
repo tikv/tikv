@@ -20,7 +20,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         )
     }
 
-    pub fn on_ompact_check_tick(&mut self) {
+    pub fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
         if self.store_ctx.schedulers.cleanup.is_busy() {
             info!(
@@ -30,10 +30,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             return;
         }
 
-        // todo: auto compaction disable?
-
         // Start from last checked key.
         let mut regions_to_check: HashSet<u64> = HashSet::default();
+
+        let check_step: usize = (self.store_ctx.cfg.region_compact_check_step / 10)
+            .try_into()
+            .unwrap();
         let (largest_key, last_check_key) = {
             let mut last_check_key = self.fsm.store.last_compact_checked_key();
 
@@ -54,7 +56,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             for region_range in ranges {
                 last_check_key = &region_range.0.0;
                 regions_to_check.insert(*region_range.1);
-                if regions_to_check.len() >= 25 {
+
+                if regions_to_check.len() >= check_step {
                     break;
                 }
             }
@@ -85,6 +88,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 region_ids: regions_to_check.into_iter().collect::<Vec<_>>(),
                 tombstones_num_threshold: self.store_ctx.cfg.region_compact_min_tombstones,
                 tombstones_percent_threshold: self.store_ctx.cfg.region_compact_tombstones_percent,
+                redundant_rows_threshold: self.store_ctx.cfg.region_compact_min_redundant_rows,
+                redundant_rows_percent_threshold: self
+                    .store_ctx
+                    .cfg
+                    .region_compact_redundant_rows_percent,
             }))
         {
             error!(
