@@ -3781,8 +3781,14 @@ dependencies = [
 
 [[package]]
 name = "pprof"
+<<<<<<< HEAD
 version = "0.9.0"
 source = "git+https://github.com/tikv/pprof-rs.git?rev=a5a993a33a23557b27e633f18723366281d3b1c0#a5a993a33a23557b27e633f18723366281d3b1c0"
+=======
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "196ded5d4be535690899a4631cc9f18cdc41b7ebf24a79400f46f48e49a11059"
+>>>>>>> b96fe4de8c (update pprof (#14635))
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -3790,7 +3796,7 @@ dependencies = [
  "inferno",
  "libc 0.2.125",
  "log",
- "nix 0.24.1",
+ "nix 0.26.2",
  "once_cell",
  "parking_lot 0.12.0",
  "protobuf",
