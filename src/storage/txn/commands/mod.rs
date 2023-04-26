@@ -306,6 +306,7 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
             req.get_rollback_if_not_exist(),
             req.get_force_sync_commit(),
             req.get_resolving_pessimistic_lock(),
+            req.get_verify_is_primary(),
             req.take_context(),
         )
     }

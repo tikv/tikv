@@ -693,6 +693,12 @@
 ## filter.
 # block-based-bloom-filter = false
 
+## Use Ribbon filter for levels higher or equal to this value. Use non-block-based bloom filter for
+## lower levels. When this is set, `block-based-bloom-filter` will be ignored.
+## Only effective for `format-version` >= 5.
+## Disabled by default.
+# ribbon-filter-above-level = 0
+
 # level0-file-num-compaction-trigger = 4
 
 ## Soft limit on number of level-0 files.
@@ -788,6 +794,10 @@
 ## whether really exists by upper logic instead of bloom filters. But we suggest to set it to false
 ## while using `Raw` mode.
 # optimize-filters-for-hits = true
+
+## Option to generate Bloom/Ribbon filters that minimize memory internal fragmentation.
+## Only effective for `format-version` >= 5.
+# optimize-filters-for-memory = false
 
 ## Enable compaction guard, which is an optimization to split SST files at TiKV region boundaries.
 ## The optimization can help reduce compaction IO, and allow us to use larger SST file size
