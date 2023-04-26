@@ -104,6 +104,8 @@ pub struct Config {
     pub region_compact_check_interval: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
+    /// Number of regions for each time checking for partitioned-raft-kv.
+    pub region_compact_check_step_v2: u64,
     /// Minimum number of tombstones to trigger manual compaction.
     pub region_compact_min_tombstones: u64,
     /// Minimum percentage of tombstones to trigger manual compaction.
@@ -377,6 +379,7 @@ impl Default for Config {
             region_split_check_diff: None,
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
+            region_compact_check_step_v2: 10,
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
@@ -884,8 +887,17 @@ impl Config {
             .with_label_values(&["region_compact_check_step"])
             .set(self.region_compact_check_step as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["region_compact_check_step_v2"])
+            .set(self.region_compact_check_step as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_min_tombstones"])
             .set(self.region_compact_min_tombstones as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["region_compact_tombstones_percent"])
+            .set(self.region_compact_tombstones_percent as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["region_compact_min_redundant_rows"])
+            .set(self.region_compact_min_redundant_rows as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_tombstones_percent"])
             .set(self.region_compact_tombstones_percent as f64);

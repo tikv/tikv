@@ -33,9 +33,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         // Start from last checked key.
         let mut regions_to_check: HashSet<u64> = HashSet::default();
 
-        let check_step: usize = (self.store_ctx.cfg.region_compact_check_step / 10)
-            .try_into()
-            .unwrap();
         let (largest_key, last_check_key) = {
             let mut last_check_key = self.fsm.store.last_compact_checked_key();
 
@@ -57,7 +54,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 last_check_key = &region_range.0.0;
                 regions_to_check.insert(*region_range.1);
 
-                if regions_to_check.len() >= check_step {
+                if regions_to_check.len()
+                    >= self.store_ctx.cfg.region_compact_check_step_v2 as usize
+                {
                     break;
                 }
             }

@@ -195,6 +195,7 @@ fn test_serde_custom_tikv_config() {
         region_compact_check_interval: ReadableDuration::secs(12),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         region_compact_check_step: 1_234,
+        region_compact_check_step_v2: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
         region_compact_min_redundant_rows: 999,

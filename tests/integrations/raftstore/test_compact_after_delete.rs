@@ -97,7 +97,7 @@ fn test_node_compact_after_delete_v2() {
     cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
     // disable it
     cluster.cfg.raft_store.region_compact_min_redundant_rows = 10000000;
-    cluster.cfg.raft_store.region_compact_check_step = 20;
+    cluster.cfg.raft_store.region_compact_check_step_v2 = 2;
     cluster.cfg.rocksdb.titan.enabled = true;
     cluster.run();
 
@@ -168,7 +168,7 @@ fn test_node_compact_after_update_v2() {
     cluster.cfg.raft_store.region_compact_min_tombstones = 1000000;
     cluster.cfg.raft_store.region_compact_redundant_rows_percent = 40;
     cluster.cfg.raft_store.region_compact_min_redundant_rows = 50;
-    cluster.cfg.raft_store.region_compact_check_step = 20;
+    cluster.cfg.raft_store.region_compact_check_step_v2 = 2;
     cluster.cfg.rocksdb.titan.enabled = true;
     cluster.run();
 
