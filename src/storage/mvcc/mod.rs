@@ -158,6 +158,18 @@ pub enum ErrorInner {
         existing_commit_ts: TimeStamp,
     },
 
+<<<<<<< HEAD
+=======
+    #[error(
+        "Lock_only_if_exists of a pessimistic lock request is set to true, but return_value is not, start_ts:{}, key:{}",
+        .start_ts, log_wrappers::Value::key(.key)
+    )]
+    LockIfExistsFailed { start_ts: TimeStamp, key: Vec<u8> },
+
+    #[error("check_txn_status sent to secondary lock, current lock: {0:?}")]
+    PrimaryMismatch(kvproto::kvrpcpb::LockInfo),
+
+>>>>>>> 8656623b8b (txn: Check whether the primary matches when handling check_txn_status requests (#14637))
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
@@ -276,6 +288,16 @@ impl ErrorInner {
                 existing_start_ts: *existing_start_ts,
                 existing_commit_ts: *existing_commit_ts,
             }),
+<<<<<<< HEAD
+=======
+            ErrorInner::LockIfExistsFailed { start_ts, key } => {
+                Some(ErrorInner::LockIfExistsFailed {
+                    start_ts: *start_ts,
+                    key: key.clone(),
+                })
+            }
+            ErrorInner::PrimaryMismatch(l) => Some(ErrorInner::PrimaryMismatch(l.clone())),
+>>>>>>> 8656623b8b (txn: Check whether the primary matches when handling check_txn_status requests (#14637))
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -375,6 +397,11 @@ impl ErrorCodeExt for Error {
             }
             ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
             ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
+<<<<<<< HEAD
+=======
+            ErrorInner::LockIfExistsFailed { .. } => error_code::storage::LOCK_IF_EXISTS_FAILED,
+            ErrorInner::PrimaryMismatch(_) => error_code::storage::PRIMARY_MISMATCH,
+>>>>>>> 8656623b8b (txn: Check whether the primary matches when handling check_txn_status requests (#14637))
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }

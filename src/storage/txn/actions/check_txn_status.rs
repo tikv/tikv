@@ -22,9 +22,23 @@ pub fn check_txn_status_lock_exists(
     caller_start_ts: TimeStamp,
     force_sync_commit: bool,
     resolving_pessimistic_lock: bool,
+    verify_is_primary: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
+<<<<<<< HEAD
     // Never rollback or push forward min_commit_ts in check_txn_status if it's using async commit.
     // Rollback of async-commit locks are done during ResolveLock.
+=======
+    if verify_is_primary && !primary_key.is_encoded_from(&lock.primary) {
+        // Return the current lock info to tell the client what the actual primary is.
+        return Err(
+            ErrorInner::PrimaryMismatch(lock.into_lock_info(primary_key.into_raw()?)).into(),
+        );
+    }
+
+    // Never rollback or push forward min_commit_ts in check_txn_status if it's
+    // using async commit. Rollback of async-commit locks are done during
+    // ResolveLock.
+>>>>>>> 8656623b8b (txn: Check whether the primary matches when handling check_txn_status requests (#14637))
     if lock.use_async_commit {
         if force_sync_commit {
             info!(

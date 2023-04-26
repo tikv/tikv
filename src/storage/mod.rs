@@ -6648,6 +6648,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
@@ -6674,6 +6675,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, LockNotExist),
@@ -6731,6 +6733,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -6776,6 +6779,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
@@ -6787,7 +6791,7 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
                     vec![Mutation::make_put(k.clone(), v)],
-                    k.as_encoded().to_vec(),
+                    k.to_raw().unwrap(),
                     ts(25, 0),
                     100,
                 ),
@@ -6807,6 +6811,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TtlExpire),
@@ -7615,6 +7620,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -7651,6 +7657,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TxnStatus::TtlExpire),
@@ -8028,6 +8035,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),

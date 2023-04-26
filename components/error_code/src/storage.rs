@@ -41,5 +41,7 @@ define_error_codes!(
 
     ASSERTION_FAILED => ("AssertionFailed", "", ""),
 
+    PRIMARY_MISMATCH => ("PrimaryMismatch", "", ""),
+
     UNKNOWN => ("Unknown", "", "")
 );

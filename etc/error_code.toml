@@ -708,6 +708,19 @@ error = '''
 KV:Storage:AssertionFailed
 '''
 
+<<<<<<< HEAD
+=======
+["KV:Storage:LockIfExistsFailed"]
+error = '''
+KV:Storage:LockIfExistsFailed
+'''
+
+["KV:Storage:PrimaryMismatch"]
+error = '''
+KV:Storage:PrimaryMismatch
+'''
+
+>>>>>>> 8656623b8b (txn: Check whether the primary matches when handling check_txn_status requests (#14637))
 ["KV:Storage:Unknown"]
 error = '''
 KV:Storage:Unknown
