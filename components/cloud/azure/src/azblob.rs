@@ -489,6 +489,28 @@ impl AzureStorage {
         Self::new(Config::from_input(input)?)
     }
 
+    /// Mock a dummpy AzureStorage with a shared key Config for
+    /// testing by Azurite tool.
+    ///
+    /// This function should only be used for testing Blob with a
+    /// local Azurite server.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn from_dummy_input(input: InputConfig) -> io::Result<Self> {
+        let config = Config::from_input(input)?;
+        let bucket = (*config.bucket.bucket).to_owned();
+        Ok(AzureStorage {
+            config,
+            client_builder: Arc::new(SharedKeyContainerBuilder {
+                container_client: Arc::new(
+                    ClientBuilder::emulator()
+                        .blob_service_client()
+                        .container_client(bucket),
+                ),
+            }),
+        })
+    }
+
     pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
         Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
     }
@@ -497,21 +519,6 @@ impl AzureStorage {
         let bucket = (*config.bucket.bucket).to_owned();
         // priority: explicit shared key > env Azure AD > env shared key
         if let Some(connection_string) = config.parse_plaintext_account_url() {
-            #[cfg(feature = "azurite")]
-            {
-                debug_assert!(!connection_string.is_empty());
-                return Ok(AzureStorage {
-                    config,
-                    client_builder: Arc::new(SharedKeyContainerBuilder {
-                        container_client: Arc::new(
-                            ClientBuilder::emulator()
-                                .blob_service_client()
-                                .container_client(bucket)
-                                .clone(),
-                        ),
-                    }),
-                });
-            }
             let account_name = config.get_account_name()?;
             let storage_credentials = ConnectionString::new(&connection_string)
                 .map_err(|e| {
@@ -751,7 +758,7 @@ mod tests {
         input.set_endpoint("http://127.0.0.1:10000/devstoreaccount1".to_owned());
         input.set_prefix("backup 01/prefix/".to_owned());
 
-        let storage = AzureStorage::from_input(input).unwrap();
+        let storage = AzureStorage::from_dummy_input(input).unwrap();
         assert_eq!(storage.maybe_prefix_key("t"), "backup 01/prefix/t");
         let mut magic_contents = String::new();
         for _ in 0..4096 {
