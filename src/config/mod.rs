@@ -4298,7 +4298,7 @@ impl ConfigController {
         if self.get_current().storage.engine == EngineType::RaftKv2 {
             return "partitioned-raft-kv";
         }
-        return "raft-kv";
+        "raft-kv"
     }
 }
 
