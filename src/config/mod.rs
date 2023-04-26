@@ -89,6 +89,7 @@ use crate::{
 };
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
+pub const DEFAULT_TABLET_SUB_DIR: &str = "tablets";
 
 /// By default, block cache size will be set to 45% of system memory.
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
@@ -308,11 +309,15 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub optimize_filters_for_hits: bool,
             #[online_config(skip)]
+            pub optimize_filters_for_memory: bool,
+            #[online_config(skip)]
             pub whole_key_filtering: bool,
             #[online_config(skip)]
             pub bloom_filter_bits_per_key: i32,
             #[online_config(skip)]
             pub block_based_bloom_filter: bool,
+            #[online_config(skip)]
+            pub ribbon_filter_above_level: Option<u32>,
             #[online_config(skip)]
             pub read_amp_bytes_per_bit: u32,
             #[serde(with = "rocks_config::compression_type_level_serde")]
@@ -431,6 +436,9 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "optimize_filters_for_hits"])
             .set(($cf.optimize_filters_for_hits as i32).into());
         $metrics
+            .with_label_values(&[$tag, "optimize_filters_for_memory"])
+            .set(($cf.optimize_filters_for_memory as i32).into());
+        $metrics
             .with_label_values(&[$tag, "whole_key_filtering"])
             .set(($cf.whole_key_filtering as i32).into());
         $metrics
@@ -439,6 +447,11 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "block_based_bloom_filter"])
             .set(($cf.block_based_bloom_filter as i32).into());
+        if let Some(level) = $cf.ribbon_filter_above_level {
+            $metrics
+                .with_label_values(&[$tag, "ribbon_filter_above_level"])
+                .set((level as i32).into());
+        }
 
         $metrics
             .with_label_values(&[$tag, "read_amp_bytes_per_bit"])
@@ -547,16 +560,24 @@ macro_rules! build_cf_opt {
         block_base_opts
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
         if $opt.use_bloom_filter {
-            block_base_opts.set_bloom_filter(
-                $opt.bloom_filter_bits_per_key as f64,
-                $opt.block_based_bloom_filter,
-            );
+            if let Some(level) = $opt.ribbon_filter_above_level {
+                block_base_opts.set_ribbon_filter(
+                    $opt.bloom_filter_bits_per_key as f64,
+                    level as i32 - 1, // bloom_before_level
+                );
+            } else {
+                block_base_opts.set_bloom_filter(
+                    $opt.bloom_filter_bits_per_key as f64,
+                    $opt.block_based_bloom_filter,
+                );
+            }
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
         }
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
         block_base_opts.set_prepopulate_block_cache($opt.prepopulate_block_cache);
         block_base_opts.set_format_version($opt.format_version);
         block_base_opts.set_checksum($opt.checksum);
+        block_base_opts.set_optimize_filters_for_memory($opt.optimize_filters_for_memory);
         let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_block_based_table_factory(&block_base_opts);
         cf_opts.set_num_levels($opt.num_levels);
@@ -649,9 +670,11 @@ impl Default for DefaultCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
             optimize_filters_for_hits: true,
+            optimize_filters_for_memory: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -813,9 +836,11 @@ impl Default for WriteCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
             optimize_filters_for_hits: false,
+            optimize_filters_for_memory: false,
             whole_key_filtering: false,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -939,9 +964,11 @@ impl Default for LockCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
             optimize_filters_for_hits: false,
+            optimize_filters_for_memory: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
             write_buffer_size: ReadableSize::mb(32),
@@ -1032,9 +1059,11 @@ impl Default for RaftCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
             optimize_filters_for_hits: true,
+            optimize_filters_for_memory: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
             write_buffer_size: ReadableSize::mb(128),
@@ -1543,9 +1572,11 @@ impl Default for RaftDefaultCfConfig {
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: false,
             optimize_filters_for_hits: true,
+            optimize_filters_for_memory: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -2789,7 +2820,7 @@ impl Default for CdcConfig {
 }
 
 impl CdcConfig {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self, raftstore_v2: bool) -> Result<(), Box<dyn Error>> {
         let default_cfg = CdcConfig::default();
         if self.min_ts_interval.is_zero() {
             warn!(
@@ -2823,6 +2854,13 @@ impl CdcConfig {
             );
             self.incremental_scan_ts_filter_ratio = default_cfg.incremental_scan_ts_filter_ratio;
         }
+        if raftstore_v2 && self.hibernate_regions_compatible {
+            warn!(
+                "cdc.hibernate_regions_compatible is overwritten to false for partitioned-raft-kv"
+            );
+            self.hibernate_regions_compatible = false;
+        }
+
         Ok(())
     }
 }
@@ -3253,6 +3291,15 @@ impl TikvConfig {
             if self.rocksdb.titan.enabled {
                 return Err("partitioned-raft-kv doesn't support titan.".into());
             }
+
+            if self.raft_store.enable_v2_compatible_learner {
+                self.raft_store.enable_v2_compatible_learner = false;
+                warn!(
+                    "raftstore.enable-partitioned-raft-kv-compatible-learner was true but \
+                    storage.engine was partitioned-raft-kv, no need to enable \
+                    enable-partitioned-raft-kv-compatible-learner, overwrite to false"
+                );
+            }
         }
 
         self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
@@ -3284,7 +3331,9 @@ impl TikvConfig {
         let kv_data_exists = if self.storage.engine == EngineType::RaftKv {
             RocksEngine::exists(&kv_db_path)
         } else {
-            Path::new(&self.storage.data_dir).join("tablets").exists()
+            Path::new(&self.storage.data_dir)
+                .join(DEFAULT_TABLET_SUB_DIR)
+                .exists()
         };
 
         RaftDataStateMachine::new(
@@ -3360,7 +3409,8 @@ impl TikvConfig {
         self.import.validate()?;
         self.backup.validate()?;
         self.log_backup.validate()?;
-        self.cdc.validate()?;
+        self.cdc
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         self.resolved_ts.validate()?;
@@ -5401,6 +5451,13 @@ mod tests {
         cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
         cfg.validate().unwrap();
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
+
+        // Test raftstore.enable-partitioned-raft-kv-compatible-learner.
+        let mut cfg = TikvConfig::default();
+        cfg.raft_store.enable_v2_compatible_learner = true;
+        cfg.storage.engine = EngineType::RaftKv2;
+        cfg.validate().unwrap();
+        assert!(!cfg.raft_store.enable_v2_compatible_learner);
     }
 
     #[test]
@@ -5677,31 +5734,43 @@ mod tests {
         cfg.raft_engine.mut_config().memory_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
         cfg.rocksdb.write_buffer_limit = None;
+        //
         cfg.rocksdb.defaultcf.enable_compaction_guard = None;
-        cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = None;
-        cfg.rocksdb.defaultcf.level0_stop_writes_trigger = None;
-        cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = None;
-        cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = None;
         cfg.rocksdb.writecf.enable_compaction_guard = None;
-        cfg.rocksdb.writecf.level0_slowdown_writes_trigger = None;
-        cfg.rocksdb.writecf.level0_stop_writes_trigger = None;
-        cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit = None;
-        cfg.rocksdb.writecf.hard_pending_compaction_bytes_limit = None;
         cfg.rocksdb.lockcf.enable_compaction_guard = None;
-        cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = None;
-        cfg.rocksdb.lockcf.level0_stop_writes_trigger = None;
-        cfg.rocksdb.lockcf.soft_pending_compaction_bytes_limit = None;
-        cfg.rocksdb.lockcf.hard_pending_compaction_bytes_limit = None;
         cfg.rocksdb.raftcf.enable_compaction_guard = None;
-        cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = None;
-        cfg.rocksdb.raftcf.level0_stop_writes_trigger = None;
-        cfg.rocksdb.raftcf.soft_pending_compaction_bytes_limit = None;
-        cfg.rocksdb.raftcf.hard_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.enable_compaction_guard = None;
+        //
+        cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.writecf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = None;
         cfg.raftdb.defaultcf.level0_slowdown_writes_trigger = None;
+        //
+        cfg.rocksdb.defaultcf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.writecf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.lockcf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.raftcf.level0_stop_writes_trigger = None;
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
+        //
+        cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.lockcf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.raftcf.soft_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;
+        //
+        cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.writecf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.lockcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.raftcf.hard_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        //
+        cfg.rocksdb.defaultcf.ribbon_filter_above_level = None;
+        cfg.rocksdb.writecf.ribbon_filter_above_level = None;
+        cfg.rocksdb.lockcf.ribbon_filter_above_level = None;
+        cfg.rocksdb.raftcf.ribbon_filter_above_level = None;
+        cfg.raftdb.defaultcf.ribbon_filter_above_level = None;
+
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
 
@@ -5816,6 +5885,16 @@ mod tests {
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
+
+        let content = r#"
+            [storage]
+            engine = "partitioned-raft-kv"
+            [cdc]
+            hibernate-regions-compatible = true
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert!(!cfg.cdc.hibernate_regions_compatible);
     }
 
     #[test]

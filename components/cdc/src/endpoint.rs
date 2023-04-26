@@ -33,7 +33,7 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::{store::StoreRegionMeta, ChangeObserver},
 };
-use resolved_ts::{LeadershipResolver, Resolver};
+use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{
     config::CdcConfig,
@@ -333,6 +333,7 @@ pub struct Endpoint<T, E, S> {
     /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
 
+    raftstore_v2: bool,
     config: CdcConfig,
     api_version: ApiVersion,
 
@@ -362,6 +363,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
+        raftstore_v2: bool,
         api_version: ApiVersion,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -430,6 +432,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             max_scan_batch_bytes,
             max_scan_batch_size,
             config: config.clone(),
+            raftstore_v2,
             api_version,
             workers,
             scan_concurrency_semaphore,
@@ -463,7 +466,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             warn!("cdc config update failed"; "error" => ?e);
             return;
         }
-        if let Err(e) = validate_cfg.validate() {
+        if let Err(e) = validate_cfg.validate(self.raftstore_v2) {
             warn!("cdc config update failed"; "error" => ?e);
             return;
         }
@@ -1076,9 +1079,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     leader_resolver.resolve(regions, min_ts).await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
-                    leader_resolver
-                        .resolve_by_raft(regions, min_ts, cdc_handle)
-                        .await
+                    resolve_by_raft(regions, min_ts, cdc_handle).await
                 };
             leader_resolver_tx.send(leader_resolver).unwrap();
 
@@ -1375,6 +1376,7 @@ mod tests {
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
+            false,
             api_version,
             pd_client,
             task_sched.clone(),

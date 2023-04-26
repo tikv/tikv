@@ -29,6 +29,7 @@ use kvproto::raft_cmdpb::{
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_proto::ConfChangeI;
 use raftstore::{
+    coprocessor::ObserveLevel,
     store::{
         cmd_resp,
         fsm::{
@@ -36,13 +37,15 @@ use raftstore::{
             Proposal,
         },
         local_metrics::RaftMetrics,
-        metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
+        metrics::{
+            APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM, STORE_APPLY_LOG_HISTOGRAM,
+        },
         msg::ErrorCallback,
         util, Config, Transport, WriteCallback,
     },
     Error, Result,
 };
-use slog::{debug, error, info, warn};
+use slog::{debug, error, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -54,7 +57,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerTick},
+    router::{ApplyRes, ApplyTask, CmdResChannel},
 };
 
 mod admin;
@@ -75,7 +78,12 @@ pub type SimpleWriteReqEncoder =
 
 use self::write::SimpleWrite;
 
-fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64, term: u64) -> M {
+pub(crate) fn parse_at<M: Message + Default>(
+    logger: &slog::Logger,
+    buf: &[u8],
+    index: u64,
+    term: u64,
+) -> M {
     let mut m = M::default();
     match m.merge_from_bytes(buf) {
         Ok(()) => m,
@@ -93,8 +101,7 @@ fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64,
 pub struct CommittedEntries {
     /// Entries need to be applied. Note some entries may not be included for
     /// flow control.
-    entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
-    committed_time: Instant,
+    pub entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
 }
 
 fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {
@@ -141,6 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.entry_storage().applied_term(),
             buckets,
             store_ctx.sst_importer.clone(),
+            store_ctx.coprocessor_host.clone(),
             logger,
         );
 
@@ -299,7 +307,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // memtables in kv engine is flushed.
         let apply = CommittedEntries {
             entry_and_proposals,
-            committed_time: Instant::now(),
         };
         assert!(
             self.apply_scheduler().is_some() || ctx.router.is_shutdown(),
@@ -394,17 +401,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
-        if self.pause_for_recovery()
-            && self.storage().entry_storage().commit_index() <= apply_res.applied_index
-        {
-            info!(self.logger, "recovery completed"; "apply_index" => apply_res.applied_index);
-            self.set_pause_for_recovery(false);
-            // Flush to avoid recover again and again.
-            if let Some(scheduler) = self.apply_scheduler() {
-                scheduler.send(ApplyTask::ManualFlush);
-            }
-            self.add_pending_tick(PeerTick::Raft);
-        }
+        self.try_compelete_recovery();
         if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
@@ -520,21 +517,24 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
-        APPLY_TASK_WAIT_TIME_HISTOGRAM
-            .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
+        let now = std::time::Instant::now();
+        let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
                 apply::notify_req_region_removed(self.region_id(), ch);
                 continue;
             }
             if !e.get_data().is_empty() {
+                for tracker in ch.write_trackers() {
+                    tracker.observe(now, &apply_wait_time, |t| &mut t.metrics.apply_wait_nanos);
+                }
                 let mut set_save_point = false;
                 if let Some(wb) = &mut self.write_batch {
                     wb.set_save_point();
                     set_save_point = true;
                 }
-                let resp = match self.apply_entry(&e).await {
-                    Ok(resp) => resp,
+                let (req, resp) = match self.apply_entry(&e).await {
+                    Ok(req_resp) => req_resp,
                     Err(e) => {
                         if let Some(wb) = &mut self.write_batch {
                             if set_save_point {
@@ -543,9 +543,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 wb.clear();
                             }
                         }
-                        cmd_resp::new_error(e)
+                        (RaftCmdRequest::default(), cmd_resp::new_error(e))
                     }
                 };
+                self.observe_apply(e.get_index(), e.get_term(), req, &resp);
                 self.callbacks_mut().push((ch, resp));
             } else {
                 assert!(ch.is_empty());
@@ -557,7 +558,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 
     #[inline]
-    async fn apply_entry(&mut self, entry: &Entry) -> Result<RaftCmdResponse> {
+    async fn apply_entry(&mut self, entry: &Entry) -> Result<(RaftCmdRequest, RaftCmdResponse)> {
         let mut conf_change = None;
         let log_index = entry.get_index();
         let req = match entry.get_entry_type() {
@@ -576,7 +577,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         true,
                         true,
                     )?;
-                    let res = Ok(new_response(decoder.header()));
+                    let mut req = RaftCmdRequest::default();
+                    if self.observe().level != ObserveLevel::None {
+                        req = decoder.to_raft_cmd_request();
+                    }
+                    let resp = new_response(decoder.header());
                     for req in decoder {
                         match req {
                             SimpleWrite::Put(put) => {
@@ -599,7 +604,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             }
                         }
                     }
-                    return res;
+                    return Ok((req, resp));
                 }
                 Err(req) => req,
             },
@@ -657,7 +662,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);
-            Ok(resp)
+            Ok((req, resp))
         } else {
             for r in req.get_requests() {
                 match r.get_cmd_type() {
@@ -684,7 +689,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     _ => unimplemented!(),
                 }
             }
-            Ok(new_response(req.get_header()))
+            let resp = new_response(req.get_header());
+            Ok((req, resp))
         }
     }
 
@@ -772,6 +778,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             buckets.clear_stats();
         }
 
+        // Call it before invoking callback for preventing Commit is executed before
+        // Prewrite is observed.
+        self.flush_observed_apply();
+
         // Report result first and then invoking callbacks. This may delays callback a
         // little bit, but can make sure all following messages must see the side
         // effect of admin commands.
@@ -780,7 +790,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let apply_time = APPLY_TIME_HISTOGRAM.local();
         for (ch, resp) in callbacks.drain(..) {
             for tracker in ch.write_trackers() {
-                tracker.observe(now, &apply_time, |t| &mut t.metrics.apply_time_nanos);
+                let mut apply_wait_nanos = 0_u64;
+                let apply_time_nanos = tracker.observe(now, &apply_time, |t| {
+                    apply_wait_nanos = t.metrics.apply_wait_nanos;
+                    &mut t.metrics.apply_time_nanos
+                });
+                STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(Duration::from_nanos(
+                    apply_time_nanos - apply_wait_nanos,
+                )));
             }
             ch.set_result(resp);
         }

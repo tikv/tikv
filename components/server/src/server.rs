@@ -25,6 +25,7 @@ use std::{
 use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{
     config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
+    BackupStreamResolver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
@@ -68,6 +69,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
+use resolved_ts::LeadershipResolver;
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
@@ -95,6 +97,7 @@ use tikv::{
     },
     storage::{
         self,
+        config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
@@ -640,6 +643,9 @@ where
                     .feature_gate()
                     .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
             )
+            .enable_receive_tablet_snapshot(
+                self.core.config.raft_store.enable_v2_compatible_learner,
+            )
             .build(snap_path);
 
         // Create coprocessor endpoint.
@@ -744,7 +750,7 @@ where
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
-                Arc::clone(&self.quota_limiter),
+                self.quota_limiter.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
@@ -755,6 +761,7 @@ where
             unified_read_pool,
             debug_thread_pool,
             health_service,
+            self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -784,6 +791,21 @@ where
                 )),
             );
 
+            let region_read_progress = engines
+                .store_meta
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone();
+            let leadership_resolver = LeadershipResolver::new(
+                node.id(),
+                self.pd_client.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+                region_read_progress,
+                Duration::from_secs(60),
+            );
+
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -794,17 +816,10 @@ where
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
-                self.router.clone(),
+                CdcRaftRouter(self.router.clone()),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
-                Arc::clone(&self.env),
-                engines
-                    .store_meta
-                    .lock()
-                    .unwrap()
-                    .region_read_progress
-                    .clone(),
-                Arc::clone(&self.security_mgr),
+                BackupStreamResolver::V1(leadership_resolver),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
@@ -933,6 +948,7 @@ where
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),

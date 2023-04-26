@@ -5,7 +5,7 @@ use std::assert_matches::debug_assert_matches;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
     import_sstpb::SstMeta,
-    raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::{CodedInputStream, Message};
 use slog::Logger;
@@ -276,6 +276,59 @@ impl<'a> SimpleWriteReqDecoder<'a> {
     #[inline]
     pub fn header(&self) -> &RaftRequestHeader {
         &self.header
+    }
+
+    pub fn to_raft_cmd_request(&self) -> RaftCmdRequest {
+        let mut req = RaftCmdRequest::default();
+        req.set_header(self.header().clone());
+        let decoder = Self {
+            header: Default::default(),
+            buf: self.buf,
+        };
+        for s in decoder {
+            match s {
+                SimpleWrite::Put(Put { cf, key, value }) => {
+                    let mut request = Request::default();
+                    request.set_cmd_type(CmdType::Put);
+                    request.mut_put().set_cf(cf.to_owned());
+                    request.mut_put().set_key(key.to_owned());
+                    request.mut_put().set_value(value.to_owned());
+                    req.mut_requests().push(request);
+                }
+                SimpleWrite::Delete(Delete { cf, key }) => {
+                    let mut request = Request::default();
+                    request.set_cmd_type(CmdType::Delete);
+                    request.mut_delete().set_cf(cf.to_owned());
+                    request.mut_delete().set_key(key.to_owned());
+                    req.mut_requests().push(request);
+                }
+                SimpleWrite::DeleteRange(DeleteRange {
+                    cf,
+                    start_key,
+                    end_key,
+                    notify_only,
+                }) => {
+                    let mut request = Request::default();
+                    request.set_cmd_type(CmdType::DeleteRange);
+                    request.mut_delete_range().set_cf(cf.to_owned());
+                    request
+                        .mut_delete_range()
+                        .set_start_key(start_key.to_owned());
+                    request.mut_delete_range().set_end_key(end_key.to_owned());
+                    request.mut_delete_range().set_notify_only(notify_only);
+                    req.mut_requests().push(request);
+                }
+                SimpleWrite::Ingest(ssts) => {
+                    for sst in ssts {
+                        let mut request = Request::default();
+                        request.set_cmd_type(CmdType::IngestSst);
+                        request.mut_ingest_sst().set_sst(sst);
+                        req.mut_requests().push(request);
+                    }
+                }
+            }
+        }
+        req
     }
 }
 
@@ -626,7 +679,12 @@ mod tests {
         let mut header = Box::<RaftRequestHeader>::default();
         header.set_term(2);
         let mut req_encoder: SimpleWriteReqEncoder<Callback<engine_rocks::RocksSnapshot>> =
-            SimpleWriteReqEncoder::new(header.clone(), bin.clone(), 512, false);
+            SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+                header.clone(),
+                bin.clone(),
+                512,
+                false,
+            );
 
         let mut header2 = Box::<RaftRequestHeader>::default();
         header2.set_term(4);
@@ -638,7 +696,12 @@ mod tests {
         // Frozen bin can't be merged with other bin.
         assert!(!req_encoder.amend(&header, &bin2));
         let mut req_encoder2: SimpleWriteReqEncoder<Callback<engine_rocks::RocksSnapshot>> =
-            SimpleWriteReqEncoder::new(header.clone(), bin2.clone(), 512, false);
+            SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+                header.clone(),
+                bin2.clone(),
+                512,
+                false,
+            );
         assert!(!req_encoder2.amend(&header, &bin));
 
         // Batch should not excceed max size limit.
@@ -659,5 +722,108 @@ mod tests {
 
         let res = decoder.next();
         assert!(res.is_none(), "{:?}", res);
+    }
+
+    #[test]
+    fn test_to_raft_cmd_request() {
+        let logger = slog_global::borrow_global().new(o!());
+
+        // Test header.
+        let mut header = Box::<RaftRequestHeader>::default();
+        header.set_term(2);
+        let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header.clone(),
+            SimpleWriteEncoder::with_capacity(512).encode(),
+            512,
+            false,
+        );
+        let (bin, _) = req_encoder.encode();
+        assert_eq!(
+            header.as_ref(),
+            SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
+                .unwrap()
+                .to_raft_cmd_request()
+                .get_header(),
+        );
+
+        // Test put.
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        encoder.put(CF_WRITE, b"write", b"value");
+        let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header.clone(),
+            encoder.encode(),
+            512,
+            false,
+        );
+        let (bin, _) = req_encoder.encode();
+        let req = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
+            .unwrap()
+            .to_raft_cmd_request();
+        assert_eq!(req.get_requests().len(), 1);
+        assert_eq!(req.get_requests()[0].get_put().get_cf(), CF_WRITE);
+        assert_eq!(req.get_requests()[0].get_put().get_key(), b"write");
+        assert_eq!(req.get_requests()[0].get_put().get_value(), b"value");
+
+        // Test delete.
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        encoder.delete(CF_DEFAULT, b"write");
+        let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header.clone(),
+            encoder.encode(),
+            512,
+            false,
+        );
+        let (bin, _) = req_encoder.encode();
+        let req = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
+            .unwrap()
+            .to_raft_cmd_request();
+        assert_eq!(req.get_requests().len(), 1);
+        assert_eq!(req.get_requests()[0].get_delete().get_cf(), CF_DEFAULT);
+        assert_eq!(req.get_requests()[0].get_delete().get_key(), b"write");
+
+        // Test delete range.
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        encoder.delete_range(CF_LOCK, b"start", b"end", true);
+        let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header.clone(),
+            encoder.encode(),
+            512,
+            false,
+        );
+        let (bin, _) = req_encoder.encode();
+        let req = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
+            .unwrap()
+            .to_raft_cmd_request();
+        assert_eq!(req.get_requests().len(), 1);
+        assert_eq!(req.get_requests()[0].get_delete_range().get_cf(), CF_LOCK);
+        assert_eq!(
+            req.get_requests()[0].get_delete_range().get_start_key(),
+            b"start"
+        );
+        assert_eq!(
+            req.get_requests()[0].get_delete_range().get_end_key(),
+            b"end"
+        );
+        assert_eq!(
+            req.get_requests()[0].get_delete_range().get_notify_only(),
+            true
+        );
+
+        // Test ingest.
+        let mut encoder = SimpleWriteEncoder::with_capacity(512);
+        encoder.ingest(vec![SstMeta::default(); 5]);
+        let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+            header,
+            encoder.encode(),
+            512,
+            false,
+        );
+        let (bin, _) = req_encoder.encode();
+        let req = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
+            .unwrap()
+            .to_raft_cmd_request();
+        assert_eq!(req.get_requests().len(), 5);
+        assert!(req.get_requests()[0].has_ingest_sst());
+        assert!(req.get_requests()[4].has_ingest_sst());
     }
 }

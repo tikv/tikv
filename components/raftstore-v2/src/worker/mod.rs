@@ -2,5 +2,4 @@
 
 pub mod cleanup;
 pub mod pd;
-pub mod tablet_flush;
-pub mod tablet_gc;
+pub mod tablet;

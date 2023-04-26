@@ -4,7 +4,7 @@ use std::{
     cell::Cell,
     cmp::{max, min},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -14,7 +14,7 @@ use collections::HashMap;
 use dashmap::{mapref::one::Ref, DashMap};
 use fail::fail_point;
 use kvproto::{
-    kvrpcpb::CommandPri,
+    kvrpcpb::{CommandPri, ResourceControlContext},
     resource_manager::{GroupMode, ResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
@@ -54,7 +54,7 @@ pub enum ResourceConsumeType {
 #[derive(Default)]
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
-    registry: Mutex<Vec<Arc<ResourceController>>>,
+    registry: RwLock<Vec<Arc<ResourceController>>>,
 }
 
 impl ResourceGroupManager {
@@ -85,7 +85,7 @@ impl ResourceGroupManager {
 
     pub fn add_resource_group(&self, rg: ResourceGroup) {
         let group_name = rg.get_name().to_ascii_lowercase();
-        self.registry.lock().unwrap().iter().for_each(|controller| {
+        self.registry.read().iter().for_each(|controller| {
             let ru_quota = Self::get_ru_setting(&rg, controller.is_read);
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
@@ -95,7 +95,7 @@ impl ResourceGroupManager {
 
     pub fn remove_resource_group(&self, name: &str) {
         let group_name = name.to_ascii_lowercase();
-        self.registry.lock().unwrap().iter().for_each(|controller| {
+        self.registry.read().iter().for_each(|controller| {
             controller.remove_resource_group(group_name.as_bytes());
         });
         info!("remove resource group"; "name"=> name);
@@ -112,7 +112,7 @@ impl ResourceGroupManager {
             ret
         });
         if !removed_names.is_empty() {
-            self.registry.lock().unwrap().iter().for_each(|controller| {
+            self.registry.read().iter().for_each(|controller| {
                 for name in &removed_names {
                     controller.remove_resource_group(name.as_bytes());
                 }
@@ -130,7 +130,7 @@ impl ResourceGroupManager {
 
     pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
         let controller = Arc::new(ResourceController::new(name, is_read));
-        self.registry.lock().unwrap().push(controller.clone());
+        self.registry.write().push(controller.clone());
         for g in &self.resource_groups {
             let ru_quota = Self::get_ru_setting(g.value(), controller.is_read);
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.priority);
@@ -139,8 +139,27 @@ impl ResourceGroupManager {
     }
 
     pub fn advance_min_virtual_time(&self) {
-        for controller in self.registry.lock().unwrap().iter() {
+        for controller in self.registry.read().iter() {
             controller.update_min_virtual_time();
+        }
+    }
+
+    pub fn consume_penalty(&self, ctx: &ResourceControlContext) {
+        for controller in self.registry.read().iter() {
+            // FIXME: Should consume CPU time for read controller and write bytes for write
+            // controller, once CPU process time of scheduler worker is tracked. Currently,
+            // we consume write bytes for read controller as the
+            // order of magnitude of CPU time and write bytes is similar.
+            controller.consume(
+                ctx.resource_group_name.as_bytes(),
+                ResourceConsumeType::CpuTime(Duration::from_nanos(
+                    (ctx.get_penalty().total_cpu_time_ms * 1_000_000.0) as u64,
+                )),
+            );
+            controller.consume(
+                ctx.resource_group_name.as_bytes(),
+                ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
+            );
         }
     }
 }
@@ -169,6 +188,8 @@ pub struct ResourceController {
     last_min_vt: AtomicU64,
     // the last time min vt is overflow
     last_rest_vt_time: Cell<Instant>,
+    // whether the settings is customized by user
+    customized: AtomicBool,
 }
 
 // we are ensure to visit the `last_rest_vt_time` by only 1 thread so it's
@@ -185,6 +206,7 @@ impl ResourceController {
             last_min_vt: AtomicU64::new(0),
             max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
+            customized: AtomicBool::new(false),
         };
         // add the "default" resource group
         controller.add_resource_group(
@@ -244,6 +266,16 @@ impl ResourceController {
 
         // maybe update existed group
         self.resource_consumptions.write().insert(name, group);
+        self.check_customized();
+    }
+
+    fn check_customized(&self) {
+        let groups = self.resource_consumptions.read();
+        if groups.len() == 1 && groups.get(DEFAULT_RESOURCE_GROUP_NAME.as_bytes()).is_some() {
+            self.customized.store(false, Ordering::Release);
+            return;
+        }
+        self.customized.store(true, Ordering::Release);
     }
 
     // we calculate the weight of each resource group based on the currently maximum
@@ -268,9 +300,15 @@ impl ResourceController {
                 0,
                 MEDIUM_PRIORITY,
             );
+            self.check_customized();
             return;
         }
         self.resource_consumptions.write().remove(name);
+        self.check_customized();
+    }
+
+    pub fn is_customized(&self) -> bool {
+        self.customized.load(Ordering::Acquire)
     }
 
     #[inline]
@@ -285,8 +323,8 @@ impl ResourceController {
         })
     }
 
-    pub fn consume(&self, name: &[u8], delta: ResourceConsumeType) {
-        self.resource_group(name).consume(delta)
+    pub fn consume(&self, name: &[u8], resource: ResourceConsumeType) {
+        self.resource_group(name).consume(resource)
     }
 
     pub fn update_min_virtual_time(&self) {
@@ -405,8 +443,8 @@ impl GroupPriorityTracker {
 
     // TODO: make it delta type as generic to avoid mixed consume different types.
     #[inline]
-    fn consume(&self, delta: ResourceConsumeType) {
-        let vt_delta = match delta {
+    fn consume(&self, resource: ResourceConsumeType) {
+        let vt_delta = match resource {
             ResourceConsumeType::CpuTime(dur) => dur.as_micros() as u64,
             ResourceConsumeType::IoBytes(bytes) => bytes,
         } * self.weight;
@@ -625,7 +663,8 @@ pub(crate) mod tests {
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
-
+        assert_eq!(resource_ctl.is_customized(), false);
+        assert_eq!(resource_ctl_write.is_customized(), false);
         let group1 = new_resource_group_ru("test1".into(), 5000, 0);
         resource_manager.add_resource_group(group1);
         assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 20);
@@ -633,6 +672,8 @@ pub(crate) mod tests {
             resource_ctl_write.resource_group("test1".as_bytes()).weight,
             20
         );
+        assert_eq!(resource_ctl.is_customized(), true);
+        assert_eq!(resource_ctl_write.is_customized(), true);
 
         // add a resource group with big ru
         let group1 = new_resource_group_ru("test2".into(), 50000, 0);

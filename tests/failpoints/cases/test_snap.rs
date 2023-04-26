@@ -641,33 +641,31 @@ fn test_snapshot_gc_after_failed() {
     cluster.sim.wl().clear_recv_filters(3);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_sending_fail_with_net_error() {
-    let mut cluster = new_server_cluster(1, 2);
+    let mut cluster = new_cluster(1, 2);
     configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
-    // Disable default max peer count check.
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     let (send_tx, send_rx) = mpsc::sync_channel(1);
     // only send one MessageType::MsgSnapshot message
-    cluster.sim.wl().add_send_filter(
-        1,
-        Box::new(
-            RegionPacketFilter::new(r1, 1)
-                .allow(1)
-                .direction(Direction::Send)
-                .msg_type(MessageType::MsgSnapshot)
-                .set_msg_callback(Arc::new(move |m: &RaftMessage| {
-                    if m.get_message().get_msg_type() == MessageType::MsgSnapshot {
-                        let _ = send_tx.send(());
-                    }
-                })),
-        ),
-    );
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 1)
+            .allow(1)
+            .direction(Direction::Send)
+            .msg_type(MessageType::MsgSnapshot)
+            .set_msg_callback(Arc::new(move |m: &RaftMessage| {
+                if m.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                    let _ = send_tx.send(());
+                }
+            })),
+    ));
 
     // peer2 will interrupt in receiving snapshot
     fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
@@ -678,8 +676,8 @@ fn test_sending_fail_with_net_error() {
     // need to wait receiver handle the snapshot request
     sleep_ms(100);
 
-    // peer2 will not become learner so ti will has k1 key and receiving count will
-    // zero
+    // peer2 can't receive any snapshot, so it doesn't have any key valuse.
+    // but the receiving_count should be zero if receiving snapshot is failed.
     let engine2 = cluster.get_engine(2);
     must_get_none(&engine2, b"k1");
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
@@ -899,4 +897,37 @@ fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
     for i in 20..25 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
+}
+
+#[test]
+fn test_snapshot_complete_recover_raft_tick() {
+    // https://github.com/tikv/tikv/issues/14548 gives the description of what the following tests.
+    let mut cluster = test_raftstore_v2::new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+
+    cluster.run();
+
+    let region = cluster.get_region(b"k");
+    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+    for i in 0..200 {
+        let k = format!("k{:04}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+
+    cluster.stop_node(2);
+    for i in 200..300 {
+        let k = format!("k{:04}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+
+    fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
+    fail::cfg("RESET_APPLY_INDEX_WHEN_RESTART", "return").unwrap();
+    cluster.run_node(2).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    fail::remove("APPLY_COMMITTED_ENTRIES");
+    cluster.stop_node(1);
+
+    cluster.must_put(b"k0500", b"val");
+    assert_eq!(cluster.must_get(b"k0500").unwrap(), b"val".to_vec());
 }

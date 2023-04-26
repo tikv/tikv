@@ -39,7 +39,11 @@ pub use split::{
 use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
-use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
+use crate::{
+    batch::StoreContext,
+    raft::Peer,
+    router::{CmdResChannel, PeerMsg, RaftRequest},
+};
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
@@ -147,9 +151,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // the follower so that they can flush memtalbes in advance too.
                         //
                         // 2. When the task finishes, it will propose a batch split with
-                        // `SPLIT_SECOND_PHASE` flag.
+                        // `PRE_FLUSH_FINISHED` flag.
                         if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
-                            .contains(WriteBatchFlags::SPLIT_SECOND_PHASE)
+                            .contains(WriteBatchFlags::PRE_FLUSH_FINISHED)
                         {
                             if self.tablet_being_flushed() {
                                 return;
@@ -161,14 +165,42 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 self.logger,
                                 "Schedule flush tablet";
                             );
-                            if let Err(e) = ctx.schedulers.tablet_flush.schedule(
-                                crate::TabletFlushTask::TabletFlush {
+
+                            let mailbox = match ctx.router.mailbox(region_id) {
+                                Some(mailbox) => mailbox,
+                                None => {
+                                    // None means the node is shutdown concurrently and thus the
+                                    // mailboxes in router have been cleared
+                                    assert!(
+                                        ctx.router.is_shutdown(),
+                                        "{} router should have been closed",
+                                        SlogFormat(&self.logger)
+                                    );
+                                    return;
+                                }
+                            };
+
+                            let logger = self.logger.clone();
+                            let on_flush_finish = move || {
+                                req.mut_header()
+                                    .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
+                                if let Err(e) = mailbox
+                                    .try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
+                                {
+                                    error!(
+                                        logger,
+                                        "send split request fail after pre-flush finished";
+                                        "err" => ?e,
+                                    );
+                                }
+                            };
+
+                            if let Err(e) =
+                                ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
                                     region_id,
-                                    req: Some(req),
-                                    is_leader: true,
-                                    ch: Some(ch),
-                                },
-                            ) {
+                                    cb: Some(Box::new(on_flush_finish)),
+                                })
+                            {
                                 error!(
                                     self.logger,
                                     "Fail to schedule flush task";
@@ -176,6 +208,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 )
                             }
 
+                            // Notify followers to flush their relevant memtables
                             let peers = self.region().get_peers().to_vec();
                             for p in peers {
                                 if p == *self.peer()

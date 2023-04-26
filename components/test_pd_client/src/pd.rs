@@ -439,6 +439,7 @@ struct PdCluster {
     // region id -> leader
     leaders: HashMap<u64, metapb::Peer>,
     down_peers: HashMap<u64, pdpb::PeerStats>,
+    // peer id -> peer
     pending_peers: HashMap<u64, metapb::Peer>,
     is_bootstraped: bool,
 

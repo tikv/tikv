@@ -364,7 +364,6 @@ pub struct Runner<R: RaftExtension> {
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
-    can_receive_tablet_snapshot: bool,
 }
 
 impl<R: RaftExtension + 'static> Runner<R> {
@@ -377,7 +376,6 @@ impl<R: RaftExtension + 'static> Runner<R> {
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
-        can_receive_tablet_snapshot: bool,
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
         let config = cfg.value().clone();
@@ -397,7 +395,6 @@ impl<R: RaftExtension + 'static> Runner<R> {
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
-            can_receive_tablet_snapshot,
         };
         snap_worker
     }
@@ -467,35 +464,39 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 self.pool.spawn(task);
             }
             Task::RecvTablet { stream, sink } => {
-                if !self.can_receive_tablet_snapshot {
-                    let status = RpcStatus::with_message(
-                        RpcStatusCode::UNIMPLEMENTED,
-                        "tablet snap is not supported".to_string(),
-                    );
-                    self.pool.spawn(sink.fail(status).map(|_| ()));
-                    return;
-                }
+                let tablet_snap_mgr = match self.snap_mgr.tablet_snap_manager() {
+                    Some(s) => s.clone(),
+                    None => {
+                        let status = RpcStatus::with_message(
+                            RpcStatusCode::UNIMPLEMENTED,
+                            "tablet snap is not supported".to_string(),
+                        );
+                        self.pool.spawn(sink.fail(status).map(|_| ()));
+                        return;
+                    }
+                };
 
                 if let Some(status) = self.receiving_busy() {
                     self.pool.spawn(sink.fail(status));
                     return;
                 }
 
-                SNAP_TASK_COUNTER_STATIC.recv.inc();
+                SNAP_TASK_COUNTER_STATIC.recv_v2.inc();
 
-                let snap_mgr = self.snap_mgr.tablet_snap_manager().clone();
                 let raft_router = self.raft_router.clone();
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.snap_mgr.limiter().clone();
+                let snap_mgr_v1 = self.snap_mgr.clone();
                 let task = async move {
                     let result = crate::server::tablet_snap::recv_snap(
                         stream,
                         sink,
-                        snap_mgr,
+                        tablet_snap_mgr,
                         raft_router,
                         NoSnapshotCache, // do not use cache in v1
                         limiter,
+                        Some(snap_mgr_v1),
                     )
                     .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);

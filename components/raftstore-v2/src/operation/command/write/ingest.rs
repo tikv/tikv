@@ -16,7 +16,7 @@ use crate::{
     fsm::{ApplyResReporter, Store, StoreFsmDelegate},
     raft::{Apply, Peer},
     router::{PeerMsg, StoreTick},
-    worker::tablet_gc,
+    worker::tablet,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
@@ -53,7 +53,7 @@ impl Store {
             if let Err(TrySendError::Disconnected(msg)) = ctx.router.send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
                 && !ctx.router.is_shutdown() {
                 let PeerMsg::CleanupImportSst(ssts) = msg else { unreachable!() };
-                let _ = ctx.schedulers.tablet_gc.schedule(tablet_gc::Task::CleanupImportSst(ssts));
+                let _ = ctx.schedulers.tablet.schedule(tablet::Task::CleanupImportSst(ssts));
             }
         }
 
@@ -75,8 +75,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let _ = ctx
             .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::CleanupImportSst(stale_ssts.into()));
+            .tablet
+            .schedule(tablet::Task::CleanupImportSst(stale_ssts.into()));
     }
 }
 

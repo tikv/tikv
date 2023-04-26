@@ -45,5 +45,5 @@ pub use raftstore::{store::Config, Error, Result};
 pub use worker::{
     cleanup::CompactTask,
     pd::{PdReporter, Task as PdTask},
-    tablet_flush::Task as TabletFlushTask,
+    tablet::Task as TabletTask,
 };
