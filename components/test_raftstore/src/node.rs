@@ -273,6 +273,7 @@ impl Simulator for NodeCluster {
                 .encryption_key_manager(key_manager)
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
                 .enable_multi_snapshot_files(true)
+                .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
@@ -505,12 +506,16 @@ impl Simulator for NodeCluster {
     }
 }
 
+// Compare to server cluster, node cluster does not have server layer and
+// storage layer.
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
+// This cluster does not support batch split, we expect it to transfer the
+// `BatchSplit` request to `split` request
 pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));

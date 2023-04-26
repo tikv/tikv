@@ -33,7 +33,7 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
-    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
@@ -50,7 +50,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
-    import::{ImportSstService, LocalTablets, SstImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
         gc_worker::GcWorker,
@@ -65,7 +65,7 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, SnapContext},
+        kv::{FakeExtension, LocalTablets, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
@@ -154,7 +154,8 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, SnapManager>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<AddressMap, FakeExtension>,
+    raft_clients: HashMap<u64, RaftClient<AddressMap, FakeExtension>>,
+    conn_builder: ConnectionBuilder<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
@@ -182,7 +183,6 @@ impl ServerCluster {
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
-        let raft_client = RaftClient::new(conn_builder);
         ServerCluster {
             metas: HashMap::default(),
             addrs: map,
@@ -196,7 +196,8 @@ impl ServerCluster {
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
             health_services: HashMap::default(),
-            raft_client,
+            raft_clients: HashMap::default(),
+            conn_builder,
             concurrency_managers: HashMap::default(),
             env,
             txn_extra_schedulers: HashMap::default(),
@@ -355,7 +356,7 @@ impl ServerCluster {
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
                 rts_worker.scheduler(),
-                raft_router,
+                CdcRaftRouter(raft_router),
                 store_meta.clone(),
                 self.pd_client.clone(),
                 concurrency_manager.clone(),
@@ -458,6 +459,7 @@ impl ServerCluster {
             .encryption_key_manager(key_manager)
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
+            .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -536,6 +538,7 @@ impl ServerCluster {
                 None,
                 debug_thread_pool.clone(),
                 health_service.clone(),
+                resource_manager.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -643,6 +646,8 @@ impl ServerCluster {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
+        let client = RaftClient::new(node_id, self.conn_builder.clone());
+        self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }
 }
@@ -696,6 +701,7 @@ impl Simulator for ServerCluster {
             }
             (meta.rsmeter_cleanup)();
         }
+        let _ = self.raft_clients.remove(&node_id);
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {
@@ -737,8 +743,12 @@ impl Simulator for ServerCluster {
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
-        self.raft_client.send(raft_msg).unwrap();
-        self.raft_client.flush();
+        let from_store = raft_msg.get_from_peer().store_id;
+        assert_ne!(from_store, 0);
+        if let Some(client) = self.raft_clients.get_mut(&from_store) {
+            client.send(raft_msg).unwrap();
+            client.flush();
+        }
         Ok(())
     }
 
@@ -808,6 +818,23 @@ impl Cluster<ServerCluster> {
 
     pub fn raft_extension(&self, node_id: u64) -> SimulateRaftExtension {
         self.sim.rl().storages[&node_id].raft_extension()
+    }
+
+    pub fn get_addr(&self, node_id: u64) -> String {
+        self.sim.rl().get_addr(node_id)
+    }
+
+    pub fn register_hook(
+        &self,
+        node_id: u64,
+        register: Box<dyn Fn(&mut CoprocessorHost<RocksEngine>)>,
+    ) {
+        self.sim
+            .wl()
+            .coprocessor_hooks
+            .entry(node_id)
+            .or_default()
+            .push(register);
     }
 }
 

@@ -4,7 +4,7 @@ use std::{
     collections::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
-        HashMap, VecDeque,
+        VecDeque,
     },
     fmt::{self, Display, Formatter},
     sync::{
@@ -16,6 +16,7 @@ use std::{
     u64,
 };
 
+use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -803,14 +804,10 @@ where
                     } else {
                         let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
                             if let Ok(s) = pd_client.get_store(to_store_id) {
-                                if let Some(_l) = s.get_labels().iter().find(|l| {
-                                    l.key.to_lowercase() == ENGINE
-                                        && l.value.to_lowercase() == TIFLASH
-                                }) {
-                                    return true;
-                                } else {
-                                    return false;
-                                }
+                                return s.get_labels().iter().any(|label| {
+                                    label.get_key().to_lowercase() == ENGINE
+                                        && label.get_value().to_lowercase() == TIFLASH
+                                });
                             }
                             true
                         });
@@ -1143,6 +1140,7 @@ pub(crate) mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let bg_worker = Worker::new("snap-manager");
         let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();

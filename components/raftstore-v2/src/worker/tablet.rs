@@ -8,11 +8,12 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
+use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
+    time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
@@ -41,6 +42,14 @@ pub enum Task<EK> {
     DirectDestroy { tablet: Either<EK, PathBuf> },
     /// Cleanup ssts.
     CleanupImportSst(Box<[SstMeta]>),
+    /// Flush memtable before split
+    ///
+    /// cb is some iff the task is sent from leader, it is used to real propose
+    /// split when flush finishes
+    Flush {
+        region_id: u64,
+        cb: Option<Box<dyn FnOnce() + Send>>,
+    },
 }
 
 impl<EK> Display for Task<EK> {
@@ -76,6 +85,17 @@ impl<EK> Display for Task<EK> {
             }
             Task::CleanupImportSst(ssts) => {
                 write!(f, "cleanup import ssts {:?}", ssts)
+            }
+            Task::Flush {
+                region_id,
+                cb: on_flush_finish,
+            } => {
+                write!(
+                    f,
+                    "flush tablet for region_id {}, is leader {}",
+                    region_id,
+                    on_flush_finish.is_some()
+                )
             }
         }
     }
@@ -160,7 +180,7 @@ impl<EK: KvEngine> Runner<EK> {
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
             background_pool: YatpPoolBuilder::new(DefaultTicker::default())
-                .name_prefix("tablet-gc-bg")
+                .name_prefix("tablet-bg")
                 .thread_count(
                     0,
                     DEFAULT_BACKGROUND_POOL_SIZE,
@@ -311,6 +331,46 @@ impl<EK: KvEngine> Runner<EK> {
             }
         }
     }
+
+    fn flush_tablet(&self, region_id: u64, cb: Option<Box<dyn FnOnce() + Send>>) {
+        let Some(Some(tablet)) = self
+            .tablet_registry
+            .get(region_id)
+            .map(|mut cache| cache.latest().cloned()) else {return};
+
+        // The callback `cb` being some means it's the task sent from
+        // leader, we should sync flush memtables and call it after the flush complete
+        // where the split will be proposed again with extra flag.
+        if let Some(cb) = cb {
+            let logger = self.logger.clone();
+            let now = Instant::now();
+            self.background_pool
+                .spawn(async move {
+                    // sync flush for leader to let the flush happend before later checkpoint.
+                    tablet.flush_cfs(DATA_CFS, true).unwrap();
+                    let elapsed = now.saturating_elapsed();
+                    // to be removed after when it's stable
+                    info!(
+                        logger,
+                        "flush memtable for leader";
+                        "region_id" => region_id,
+                        "duration" => ?elapsed,
+                    );
+
+                    drop(tablet);
+                    cb();
+                })
+                .unwrap();
+        } else {
+            info!(
+                self.logger,
+                "flush memtable for follower";
+                "region_id" => region_id,
+            );
+
+            tablet.flush_cfs(DATA_CFS, false).unwrap();
+        }
+    }
 }
 
 impl<EK> Runnable for Runner<EK>
@@ -338,6 +398,7 @@ where
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
+            Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
         }
     }
 }

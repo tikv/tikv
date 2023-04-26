@@ -9,11 +9,12 @@ mod ready;
 mod txn_ext;
 
 pub use command::{
-    AdminCmdResult, ApplyFlowControl, CommittedEntries, CompactLogContext, MergeContext,
-    ProposalControl, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SimpleWriteEncoder,
-    SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl, SPLIT_PREFIX,
+    AdminCmdResult, ApplyFlowControl, CatchUpLogs, CommittedEntries, CompactLogContext,
+    MergeContext, ProposalControl, RequestHalfSplit, RequestSplit, SimpleWriteBinary,
+    SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder, SplitFlowControl,
+    MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
 };
-pub use life::{DestroyProgress, GcPeerContext};
+pub use life::{AbnormalPeerContext, DestroyProgress, GcPeerContext};
 pub use ready::{
     write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, SnapState, StateStorage,
 };

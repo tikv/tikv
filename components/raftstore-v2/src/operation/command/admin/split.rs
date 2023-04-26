@@ -54,7 +54,7 @@ use raftstore::{
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::{log::SlogFormat, slog_panic};
+use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -62,7 +62,7 @@ use crate::{
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
-    worker::tablet_gc,
+    worker::tablet,
     Error,
 };
 
@@ -132,8 +132,8 @@ pub fn report_split_init_finish<EK, ER, T>(
 
     if let Err(e) = ctx
         .schedulers
-        .tablet_gc
-        .schedule(tablet_gc::Task::direct_destroy_path(temp_split_path(
+        .tablet
+        .schedule(tablet::Task::direct_destroy_path(temp_split_path(
             &ctx.tablet_registry,
             finish_region_id,
         )))
@@ -260,6 +260,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn force_split_check<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        let control = self.split_flow_control_mut();
+        control.size_diff_hint = ctx.cfg.region_split_check_diff().0 as i64;
+        self.add_pending_tick(PeerTick::SplitRegionCheck);
+    }
+
     pub fn on_request_split<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -356,7 +362,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
-        validate_batch_split(req.get_admin_request(), self.region())?;
         // We rely on ConflictChecker to detect conflicts, so no need to set proposal
         // context.
         let data = req.write_to_bytes().unwrap();
@@ -478,6 +483,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             )
         });
 
+        let now = Instant::now();
         let reg = self.tablet_registry();
         for new_region in &regions {
             let new_region_id = new_region.id;
@@ -515,6 +521,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     )
                 });
         }
+        let elapsed = now.saturating_elapsed();
+        // to be removed after when it's stable
+        info!(
+            self.logger,
+            "create checkpoint time consumes";
+            "region" =>  ?self.region(),
+            "duration" => ?elapsed
+        );
+
         let reg = self.tablet_registry();
         let path = reg.tablet_path(region_id, log_index);
         let mut ctx = TabletContext::new(&regions[derived_index], Some(log_index));
@@ -626,16 +641,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         };
         let tablet_index = res.tablet_index;
-        let _ = store_ctx
-            .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::trim(
-                self.tablet().unwrap().clone(),
-                derived,
-                move || {
-                    let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
-                },
-            ));
+        let _ = store_ctx.schedulers.tablet.schedule(tablet::Task::trim(
+            self.tablet().unwrap().clone(),
+            derived,
+            move || {
+                let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+            },
+        ));
 
         let last_region_id = res.regions.last().unwrap().get_id();
         let mut new_ids = HashSet::default();
@@ -756,16 +768,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.storage().has_dirty_data() {
             let tablet_index = self.storage().tablet_index();
             if let Some(mailbox) = store_ctx.router.mailbox(region_id) {
-                let _ = store_ctx
-                    .schedulers
-                    .tablet_gc
-                    .schedule(tablet_gc::Task::trim(
-                        self.tablet().unwrap().clone(),
-                        self.region(),
-                        move || {
-                            let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
-                        },
-                    ));
+                let _ = store_ctx.schedulers.tablet.schedule(tablet::Task::trim(
+                    self.tablet().unwrap().clone(),
+                    self.region(),
+                    move || {
+                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                    },
+                ));
             } else {
                 // None means the node is shutdown concurrently and thus the
                 // mailboxes in router have been cleared
@@ -863,7 +872,10 @@ mod test {
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
         raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raftstore::store::{cmd_resp::new_error, Config};
+    use raftstore::{
+        coprocessor::CoprocessorHost,
+        store::{cmd_resp::new_error, Config},
+    };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
@@ -873,7 +885,9 @@ mod test {
 
     use super::*;
     use crate::{
-        fsm::ApplyResReporter, operation::test_util::create_tmp_importer, raft::Apply,
+        fsm::ApplyResReporter,
+        operation::{test_util::create_tmp_importer, CatchUpLogs},
+        raft::Apply,
         router::ApplyRes,
     };
 
@@ -892,6 +906,8 @@ mod test {
         fn report(&self, apply_res: ApplyRes) {
             let _ = self.sender.send(apply_res);
         }
+
+        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
     }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {
@@ -1007,6 +1023,7 @@ mod test {
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let (_tmp_dir, importer) = create_tmp_importer();
+        let host = CoprocessorHost::<KvTestEngine>::default();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -1024,6 +1041,7 @@ mod test {
             5,
             None,
             importer,
+            host,
             logger.clone(),
         );
 

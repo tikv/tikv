@@ -30,3 +30,6 @@ test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 tikv_util = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+
+[dev-dependencies]
+rand = "0.8"
