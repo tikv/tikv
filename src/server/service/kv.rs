@@ -935,6 +935,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut request: CheckLeaderRequest,
         sink: UnarySink<CheckLeaderResponse>,
     ) {
+        let begin_instant = Instant::now();
         let addr = ctx.peer();
         let ts = request.get_ts();
         let leaders = request.take_regions().into();
@@ -956,6 +957,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 }
                 return Err(Error::from(e));
             }
+            let elapsed = begin_instant.saturating_elapsed();
+            GRPC_MSG_HISTOGRAM_STATIC
+                .check_leader
+                .observe(elapsed.as_secs_f64());
             ServerResult::Ok(())
         }
         .map_err(move |e| {
