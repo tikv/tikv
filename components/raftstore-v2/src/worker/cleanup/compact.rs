@@ -270,23 +270,25 @@ mod tests {
         for i in 0..5 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(tablet, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
+            mvcc_put(tablet, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
         }
         tablet.flush_cf(CF_WRITE, true).unwrap();
 
         // gc 0..5
         for i in 0..5 {
             let k = format!("k{}", i);
-            delete(tablet, k.as_bytes(), 2.into());
+            delete(tablet, k.as_bytes(), 4.into());
         }
         tablet.flush_cf(CF_WRITE, true).unwrap();
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) = tablet
+        let (entries, version, rows) = tablet
             .get_range_entries_and_versions(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
-        assert_eq!(entries, 10);
-        assert_eq!(version, 5);
+        assert_eq!(entries, 15);
+        assert_eq!(version, 10);
+        assert_eq!(rows, 5);
 
         region.set_id(3);
         let ctx = TabletContext::new(&region, Some(5));
@@ -297,37 +299,55 @@ mod tests {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(tablet, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
-        tablet.flush_cf(CF_WRITE, true).unwrap();
-
-        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = tablet
-            .get_range_entries_and_versions(CF_WRITE, &s, &e)
-            .unwrap()
-            .unwrap();
-        assert_eq!(entries, 5);
-        assert_eq!(version, 5);
-
-        // gc 5..8
         for i in 5..8 {
-            let k = format!("k{}", i);
-            delete(tablet, k.as_bytes(), 2.into());
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            mvcc_put(tablet, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
         }
         tablet.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = tablet
+        let (entries, version, rows) = tablet
             .get_range_entries_and_versions(CF_WRITE, &s, &e)
             .unwrap()
             .unwrap();
         assert_eq!(entries, 8);
-        assert_eq!(version, 5);
+        assert_eq!(version, 8);
+        assert_eq!(rows, 5);
+
+        // gc 5..8
+        for i in 5..8 {
+            let k = format!("k{}", i);
+            delete(tablet, k.as_bytes(), 4.into());
+        }
+        tablet.flush_cf(CF_WRITE, true).unwrap();
+
+        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
+        let (entries, version, rows) = tablet
+            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entries, 11);
+        assert_eq!(version, 8);
+        assert_eq!(rows, 5);
 
         let logger = slog_global::borrow_global().new(slog::o!());
 
-        let regions = collect_regions_to_compact(&registry, vec![2, 3, 4], 4, 50, &logger).unwrap();
+        // collect regions according to tombstone's parameters
+        let regions =
+            collect_regions_to_compact(&registry, vec![2, 3, 4], 4, 30, 100, 100, &logger).unwrap();
         assert!(regions.len() == 1 && regions[0] == 2);
 
-        let regions = collect_regions_to_compact(&registry, vec![2, 3, 4], 3, 30, &logger).unwrap();
+        let regions =
+            collect_regions_to_compact(&registry, vec![2, 3, 4], 3, 25, 100, 100, &logger).unwrap();
+        assert!(regions.len() == 2 && !regions.contains(&4));
+
+        // collect regions accroding to redundant rows' parameter
+        let regions =
+            collect_regions_to_compact(&registry, vec![2, 3, 4], 100, 100, 9, 60, &logger).unwrap();
+        assert!(regions.len() == 1 && regions[0] == 2);
+
+        let regions =
+            collect_regions_to_compact(&registry, vec![2, 3, 4], 100, 100, 5, 50, &logger).unwrap();
         assert!(regions.len() == 2 && !regions.contains(&4));
     }
 }

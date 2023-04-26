@@ -773,7 +773,7 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let (entries, versions) =
+        let (entries, versions, _) =
             get_range_entries_and_versions(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
         assert_eq!(entries, (cases.len() * 2) as u64);
         assert_eq!(versions, cases.len() as u64);

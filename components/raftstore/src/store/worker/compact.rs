@@ -357,7 +357,7 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) = engine
+        let (entries, version, _) = engine
             .get_range_entries_and_versions(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
@@ -372,7 +372,7 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = engine
+        let (entries, version, _) = engine
             .get_range_entries_and_versions(CF_WRITE, &s, &e)
             .unwrap()
             .unwrap();
@@ -399,7 +399,7 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = engine
+        let (entries, version, _) = engine
             .get_range_entries_and_versions(CF_WRITE, &s, &e)
             .unwrap()
             .unwrap();
