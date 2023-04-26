@@ -78,6 +78,7 @@ use crate::{
         config::Config,
         fsm::{
             create_apply_batch_system,
+            life::handle_tombstone_message_on_learner,
             metrics::*,
             peer::{
                 maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -2072,6 +2073,23 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .inc();
             return Ok(());
         }
+
+        // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
+        // it needs to response GcPeerResponse.
+        if msg.get_is_tombstone() && self.ctx.cfg.enable_v2_compatible_learner {
+            if let Some(msg) =
+                handle_tombstone_message_on_learner(&self.ctx.engines.kv, self.fsm.store.id, msg)
+            {
+                let _ = self.ctx.trans.send(msg);
+            }
+            // else {
+            // TODO: we should create the peer and destroy immediately to leave
+            //       a tombstone record, otherwise it leaks removed_record
+            //       and merged_record.
+            // }
+            return Ok(());
+        }
+
         if msg.get_is_tombstone() || msg.has_merge_target() {
             // Target tombstone peer doesn't exist, so ignore it.
             return Ok(());
