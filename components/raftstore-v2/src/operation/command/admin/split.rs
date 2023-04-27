@@ -481,7 +481,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .collect::<Vec<_>>();
         let (_, _, cur_suffix) = self
             .tablet_registry()
-            .parse_tablet_name(&Path::new(self.tablet().path()))
+            .parse_tablet_name(Path::new(self.tablet().path()))
             .unwrap();
         let scheduler = self.checkpoint_scheduler().clone();
         async_checkpoint(

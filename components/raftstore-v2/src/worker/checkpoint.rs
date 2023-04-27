@@ -69,7 +69,7 @@ impl<EK: KvEngine> Runner<EK> {
         let tablet = cache.latest().unwrap();
         let (_, _, suffix) = self
             .tablet_registry
-            .parse_tablet_name(&Path::new(tablet.path()))
+            .parse_tablet_name(Path::new(tablet.path()))
             .unwrap();
         assert_eq!(cur_suffix, suffix);
 
