@@ -1,6 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-
 use std::{
     borrow::Borrow,
     collections::HashMap,
@@ -12,13 +11,13 @@ use std::{
         atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
     },
-    time::Duration,
+    time::Duration, pin::Pin,
 };
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
-use futures::io::{Cursor};
+use futures::io::Cursor;
 use kvproto::{
     brpb::{
         CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
@@ -453,7 +452,8 @@ impl RouterInner {
             hard_max: ReadableSize::gb(4).0 as _,
             swap_files: self.prefix.join(&task.info.get_name()),
             artificate_compression: task.info.get_compression_type(),
-            swap_out_threashold: ReadableSize::kb(8).0 as _,
+            minimal_swap_out_file_size: ReadableSize::mb(8).0 as _,
+            write_buffer_size: ReadableSize::kb(4).0 as _,
         }
     }
 
@@ -1010,7 +1010,7 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
-                let file = shared_pool.open_for_read(data_file.inner.path())?;
+                let file = shared_pool.open_raw_for_read(data_file.inner.path())?;
                 let compress_length = file.len().await?;
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
@@ -1343,7 +1343,7 @@ impl DataFile {
     async fn new(local_path: impl AsRef<Path>, files: &Arc<TempFilePool>) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
-        let inner = files.open(local_path.as_ref());
+        let inner = files.open_for_write(local_path.as_ref())?;
         Ok(Self {
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
@@ -1500,7 +1500,6 @@ mod tests {
         config::ReadableDuration,
         worker::{dummy_scheduler, ReceiverWrapper},
     };
-    
     use txn_types::{Write, WriteType};
 
     use super::*;
@@ -1517,7 +1516,8 @@ mod tests {
             hard_max: ReadableSize::gb(4).0 as _,
             swap_files: p.to_owned(),
             artificate_compression: CompressionType::Zstd,
-            swap_out_threashold: 0,
+            minimal_swap_out_file_size: 0,
+            write_buffer_size: 0,
         }
     }
 
@@ -2280,7 +2280,7 @@ mod tests {
         let file_path = Path::new(&file_name);
         let cfg = make_tempfiles_cfg(&std::env::temp_dir());
         let pool = Arc::new(TempFilePool::new(cfg).unwrap());
-        let mut f = pool.open(&file_path);
+        let mut f = pool.open_for_write(&file_path).unwrap();
         f.write(b"test-data").await?;
         let data_file = DataFile::new(&file_path, &pool).await.unwrap();
         let info = DataFileInfo::new();
