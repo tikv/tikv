@@ -4,14 +4,13 @@ use std::{
     borrow::Borrow,
     collections::HashMap,
     fmt::Display,
-    io,
     path::{Path, PathBuf},
     result,
     sync::{
         atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
     },
-    time::Duration, pin::Pin,
+    time::Duration,
 };
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -450,7 +449,7 @@ impl RouterInner {
         tempfiles::Config {
             soft_max: ReadableSize::mb(512).0 as _,
             hard_max: ReadableSize::gb(4).0 as _,
-            swap_files: self.prefix.join(&task.info.get_name()),
+            swap_files: self.prefix.join(task.info.get_name()),
             artificate_compression: task.info.get_compression_type(),
             minimal_swap_out_file_size: ReadableSize::mb(8).0 as _,
             write_buffer_size: ReadableSize::kb(4).0 as _,
@@ -974,18 +973,16 @@ impl StreamTaskInfo {
             debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.inner.path().display());
             self.total_size
                 .fetch_sub(data_file.file_size, Ordering::SeqCst);
-            if let Err(e) = data_file.remove_temp_file().await {
-                // if remove template failed, just skip it.
-                info!("remove template file"; "err" => ?e);
+            if !self.temp_file_pool.remove(data_file.inner.path()) {
+                warn!("Trying to remove file not exists."; "file" => %data_file.inner.path().display());
             }
         }
         for (_, data_file, _) in self.flushing_meta_files.write().await.drain(..) {
             debug!("removing meta data file"; "size" => %data_file.file_size, "name" => %data_file.inner.path().display());
             self.total_size
                 .fetch_sub(data_file.file_size, Ordering::SeqCst);
-            if let Err(e) = data_file.remove_temp_file().await {
-                // if remove template failed, just skip it.
-                info!("remove template file"; "err" => ?e);
+            if !self.temp_file_pool.remove(data_file.inner.path()) {
+                warn!("Trying to remove file not exists."; "file" => %data_file.inner.path().display());
             }
         }
     }
@@ -1359,10 +1356,6 @@ impl DataFile {
         })
     }
 
-    async fn remove_temp_file(&self) -> io::Result<()> {
-        Ok(())
-    }
-
     fn decode_begin_ts(value: Vec<u8>) -> Result<TimeStamp> {
         WriteRef::parse(&value).map_or_else(
             |e| {
@@ -1385,7 +1378,7 @@ impl DataFile {
             let mut size = 0;
             for slice in encoded {
                 let slice = slice.as_ref();
-                self.inner.write(slice).await?;
+                self.inner.write_all(slice).await?;
                 self.sha256.update(slice).map_err(|err| {
                     Error::Other(box_err!("openssl hasher failed to update: {}", err))
                 })?;
@@ -1489,7 +1482,7 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, time::Duration};
+    use std::{ffi::OsStr, time::Duration, io};
 
     use external_storage::{ExternalData, NoopStorage};
     use futures::AsyncReadExt;
@@ -2280,8 +2273,8 @@ mod tests {
         let file_path = Path::new(&file_name);
         let cfg = make_tempfiles_cfg(&std::env::temp_dir());
         let pool = Arc::new(TempFilePool::new(cfg).unwrap());
-        let mut f = pool.open_for_write(&file_path).unwrap();
-        f.write(b"test-data").await?;
+        let mut f = pool.open_for_write(file_path).unwrap();
+        f.write_all(b"test-data").await?;
         let data_file = DataFile::new(&file_path, &pool).await.unwrap();
         let info = DataFileInfo::new();
 

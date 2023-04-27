@@ -5,7 +5,6 @@
 use std::{
     collections::HashMap,
     fs::File as SyncOsFile,
-    io::Read,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
@@ -15,12 +14,12 @@ use std::{
     task::{ready, Context, Poll},
 };
 
-use futures::{Future, FutureExt, TryFutureExt};
+use futures::TryFutureExt;
 use kvproto::brpb::CompressionType;
-use tikv_util::{stream::block_on_external_io, warn};
+use tikv_util::warn;
 use tokio::{
     fs::File as OsFile,
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, BufWriter},
+    io::{AsyncRead, AsyncWrite},
 };
 
 use crate::{
@@ -233,7 +232,8 @@ impl TempFilePool {
     }
 
     /// Remove a file from the pool.
-    /// If there are still some reference to
+    /// If there are still some reference to the file, the deletion may be
+    /// delaied until all reference to the file drop.
     pub fn remove(&self, p: &Path) -> bool {
         let mut files = self.files.lock().unwrap();
         files.items.remove(p).is_some()
@@ -259,7 +259,7 @@ impl TempFilePool {
         };
         #[cfg(not(test))]
         let pfile = {
-            let file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
+            let file = OsFile::from_std(SyncOsFile::create(abs_path)?);
             PersistentFile::Plain(file)
         };
         Ok(pfile)
@@ -334,8 +334,7 @@ impl FileCore {
             let to_write = &self.in_mem[self.written..];
             if to_write.is_empty() {
                 self.in_mem.clear();
-                self.in_mem
-                    .shrink_to(self.shared.cfg.write_buffer_size);
+                self.in_mem.shrink_to(self.shared.cfg.write_buffer_size);
                 self.shared
                     .current
                     .fetch_sub(self.written, Ordering::SeqCst);
@@ -367,7 +366,8 @@ impl FileCore {
         let mem_use = self.shared.current.load(Ordering::SeqCst);
         let in_mem_exceeds_quota = self.in_mem.len() > self.shared.cfg.minimal_swap_out_file_size
             && mem_use > self.shared.cfg.soft_max;
-        let already_exist = self.in_mem.len() > self.shared.cfg.write_buffer_size && self.external_file.is_some();
+        let already_exist =
+            self.in_mem.len() > self.shared.cfg.write_buffer_size && self.external_file.is_some();
         let swapping = self.written > 0;
         in_mem_exceeds_quota || already_exist || swapping
     }
@@ -588,12 +588,14 @@ mod test {
     use std::{
         io::Read,
         pin::Pin,
-        sync::Arc,
+        sync::{atomic::Ordering, Arc},
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use kvproto::brpb::CompressionType;
+    use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+    use walkdir::WalkDir;
 
     use super::{Config, TempFilePool};
     use crate::{tempfiles::ForWrite, utils::CompressionWriter};
@@ -708,7 +710,7 @@ mod test {
             b"Meow!",
         ];
         for content in content_to_write {
-            assert_eq!(dbg!(rt.block_on(f.write(content)).unwrap()), content.len());
+            assert_eq!(rt.block_on(f.write(content)).unwrap(), content.len());
             match &mut f {
                 // Flush the compressed writer so we can test swapping out.
                 ForWrite::ZstdCompressed(z) => rt.block_on(z.flush()).unwrap(),
@@ -815,6 +817,43 @@ mod test {
 
     #[test]
     fn test_not_leaked() {
-        let pool = simple_pool_with_soft_max(15);
+        // Open a distinct dir for this case.
+        let tmp = tempdir().unwrap();
+        let pool = simple_pool_with_modify(|cfg| {
+            cfg.soft_max = 15;
+            cfg.minimal_swap_out_file_size = 15;
+            cfg.swap_files = tmp.path().to_owned();
+        });
+        let rt = rt_for_test();
+        let content_to_write: [&[u8]; 4] = [
+            b"This case tests whether the resource(Say, files, memory.) leaked.",
+            b"That is it, but I wanna write 4 sentences to keep every case aliged.",
+            b"What to write? Perhaps some poems or lyrics.",
+            b"But will that bring some copyright conflicts? Emmm, 4 sentences already, bye.",
+        ];
+        let file_names = ["object-a.txt", "object-b.txt"];
+
+        let mut buf = vec![];
+        for file_name in file_names {
+            let mut f = pool.open_for_write(file_name.as_ref()).unwrap();
+            for content in content_to_write {
+                assert_eq!(rt.block_on(f.write(content)).unwrap(), content.len());
+            }
+            rt.block_on(f.done()).unwrap();
+            let mut r = pool.open_raw_for_read(file_name.as_ref()).unwrap();
+            rt.block_on(r.read_to_end(&mut buf)).unwrap();
+            assert_eq!(content_to_write.join(&b""[..]), buf.as_slice());
+            buf.clear();
+        }
+        for file_name in file_names {
+            assert!(pool.remove(file_name.as_ref()));
+        }
+        assert_eq!(pool.current.load(Ordering::SeqCst), 0);
+        for file in WalkDir::new(&pool.cfg.swap_files) {
+            let file = file.unwrap();
+            if file.depth() > 0 {
+                panic!("file leaked: {}", file.path().display());
+            }
+        }
     }
 }

@@ -627,7 +627,7 @@ where
             read += n;
             buf = &mut buf[n..];
 
-            if buf.len() == 0 {
+            if buf.is_empty() {
                 return Ok(read).into();
             }
             if n == 0 {
