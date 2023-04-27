@@ -1,7 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(test)]
+#![feature(core_intrinsics)]
 #![feature(duration_consts_float)]
+#![feature(new_uninit)]
+#![feature(test)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -16,6 +18,7 @@ mod file;
 mod io_stats;
 mod metrics;
 mod metrics_manager;
+mod queue_based_rate_limiter;
 mod rate_limiter;
 
 pub use std::{
@@ -41,6 +44,7 @@ use openssl::{
     error::ErrorStack,
     hash::{self, Hasher, MessageDigest},
 };
+pub use queue_based_rate_limiter::RateLimiter as QueueBasedRateLimiter;
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter,
     IoRateLimiterStatistics, DEFAULT_REFILL_PERIOD,

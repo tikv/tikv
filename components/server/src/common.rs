@@ -8,7 +8,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc, Arc,
     },
     time::Duration,
@@ -483,6 +483,7 @@ pub struct EnginesResourceInfo {
     normalized_pending_bytes_collector: MovingAvgU32,
     min_throughput_portion: f32,
     optimize_for_read: bool,
+    latest_pressure: AtomicU64,
 }
 
 impl EnginesResourceInfo {
@@ -500,6 +501,7 @@ impl EnginesResourceInfo {
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
             min_throughput_portion: 0.5,
             optimize_for_read: true,
+            latest_pressure: AtomicU64::new(u64::MAX),
         }
     }
 
@@ -521,6 +523,7 @@ impl EnginesResourceInfo {
     ) {
         let mut compaction_pending_bytes = [0; DATA_CFS.len()];
         let mut soft_pending_compaction_bytes_limit = [0; DATA_CFS.len()];
+        let mut level0_pressure = 0;
 
         let mut fetch_engine_cf = |engine: &RocksEngine, cf: &str| {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
@@ -531,6 +534,10 @@ impl EnginesResourceInfo {
                         cf_opts.get_soft_pending_compaction_bytes_limit(),
                         soft_pending_compaction_bytes_limit[offset],
                     );
+                }
+                if let Ok(Some(b)) = engine.get_cf_num_files_at_level(cf, 0) {
+                    level0_pressure = level0_pressure
+                        .max(b * 100 / cf_opts.get_level_zero_slowdown_writes_trigger() as u64);
                 }
             }
         };
@@ -586,6 +593,10 @@ impl EnginesResourceInfo {
             std::cmp::max(normalized_pending_bytes, avg),
             Ordering::Relaxed,
         );
+        self.latest_pressure.store(
+            level0_pressure.max(normalized_pending_bytes as u64),
+            Ordering::Relaxed,
+        );
     }
 
     #[cfg(any(test, feature = "testexport"))]
@@ -605,6 +616,18 @@ impl IoBudgetAdjustor for EnginesResourceInfo {
         };
         let score = self.min_throughput_portion + score * (1.0 - self.min_throughput_portion);
         (total_budgets as f32 * score) as usize
+    }
+
+    fn pressure(&self) -> Option<u64> {
+        let mut latest_pressure = self.latest_pressure.load(Ordering::Relaxed);
+        if latest_pressure != u64::MAX {
+            latest_pressure = self.latest_pressure.swap(u64::MAX, Ordering::Relaxed);
+        }
+        if latest_pressure == u64::MAX {
+            None
+        } else {
+            Some(latest_pressure)
+        }
     }
 }
 
