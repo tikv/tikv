@@ -103,7 +103,7 @@ impl RowSlice<'_> {
             }
         };
         if with_checksum {
-            let mut checksum_bytes = row.get_checksum_bytes(non_null_cnt);
+            let mut checksum_bytes = row.cut_checksum_bytes(non_null_cnt);
             assert!(checksum_bytes.len() == 5 || checksum_bytes.len() == 9);
             let header = checksum_bytes.read_u8()?;
             let val = checksum_bytes.read_u32_le()?;
@@ -226,19 +226,25 @@ impl RowSlice<'_> {
     }
 
     #[inline]
-    pub fn get_checksum_bytes(&self, non_null_col_num: usize) -> &[u8] {
+    // Return the checksum byte slice, remove it from the `values` field of
+    // `RowSlice`.
+    pub fn cut_checksum_bytes(&mut self, non_null_col_num: usize) -> &[u8] {
         match self {
             RowSlice::Big {
                 offsets, values, ..
             } => {
                 let last_slice_idx = offsets.get(non_null_col_num - 1).unwrap() as usize;
-                &values.slice[last_slice_idx..]
+                let slice = values.slice;
+                *values = LeBytes::new(&slice[..last_slice_idx]);
+                &slice[last_slice_idx..]
             }
             RowSlice::Small {
                 offsets, values, ..
             } => {
                 let last_slice_idx = offsets.get(non_null_col_num - 1).unwrap() as usize;
-                &values.slice[last_slice_idx..]
+                let slice = values.slice;
+                *values = LeBytes::new(&slice[..last_slice_idx]);
+                &slice[last_slice_idx..]
             }
         }
     }
