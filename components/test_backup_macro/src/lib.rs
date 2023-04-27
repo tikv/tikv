@@ -125,7 +125,7 @@ fn parse_test_case(test_case: TokenStream2) -> Ident {
                 match iter.next().unwrap() {
                     TokenTree::Group(group) => {
                         let stream = group.stream();
-                        return parse_test_case(stream);
+                        parse_test_case(stream)
                     }
                     _ => panic!("Invalid token stream"),
                 }
