@@ -1,9 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::box_err;
 
-use crate::{Error, Result};
+use crate::{DataKeyPair, EncryptedKey, Error, Result};
+
+#[async_trait]
+pub trait CrypterProvider: Sync + Send + 'static + std::fmt::Debug {
+    async fn generate_data_key(&self) -> Result<DataKeyPair>;
+    async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
+    fn name(&self) -> &str;
+}
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
@@ -28,7 +36,28 @@ mod metadata;
 use self::metadata::*;
 
 mod kms;
-pub use self::kms::{DataKeyPair, EncryptedKey, KmsBackend, KmsProvider};
+pub use self::kms::KmsBackend;
+
+#[derive(Debug)]
+pub(crate) struct State {
+    pub(crate) encryption_backend: MemAesGcmBackend,
+    pub(crate) cached_ciphertext_key: EncryptedKey,
+}
+
+impl State {
+    pub(crate) fn new_from_datakey(datakey: DataKeyPair) -> Result<State> {
+        Ok(State {
+            cached_ciphertext_key: datakey.encrypted,
+            encryption_backend: MemAesGcmBackend {
+                key: datakey.plaintext,
+            },
+        })
+    }
+
+    pub(crate) fn cached(&self, ciphertext_key: &EncryptedKey) -> bool {
+        *ciphertext_key == self.cached_ciphertext_key
+    }
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextBackend {}

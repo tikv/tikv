@@ -2,81 +2,31 @@
 
 use std::{sync::Mutex, time::Duration};
 
-use async_trait::async_trait;
-use derive_more::Deref;
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::{
-    box_err, error,
+    box_err,
     stream::{retry, with_timeout},
     sys::thread::ThreadBuildWrapper,
 };
 use tokio::runtime::{Builder, Runtime};
 
-use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
+use super::{metadata::MetadataKey, Backend, CrypterProvider, State};
 use crate::{
-    crypter::{Iv, PlainKey},
+    crypter::{DataKeyPair, EncryptedKey, Iv, PlainKey},
     Error, Result,
 };
-
-#[async_trait]
-pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
-    async fn generate_data_key(&self) -> Result<DataKeyPair>;
-    async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
-    fn name(&self) -> &str;
-}
-
-// EncryptedKey is a newtype used to mark data as an encrypted key
-// It requires the vec to be non-empty
-#[derive(PartialEq, Clone, Debug, Deref)]
-pub struct EncryptedKey(Vec<u8>);
-
-impl EncryptedKey {
-    pub fn new(key: Vec<u8>) -> Result<Self> {
-        if key.is_empty() {
-            error!("Encrypted content is empty");
-        }
-        Ok(Self(key))
-    }
-}
-
-#[derive(Debug)]
-pub struct DataKeyPair {
-    pub encrypted: EncryptedKey,
-    pub plaintext: PlainKey,
-}
-
-#[derive(Debug)]
-struct State {
-    encryption_backend: MemAesGcmBackend,
-    cached_ciphertext_key: EncryptedKey,
-}
-
-impl State {
-    fn new_from_datakey(datakey: DataKeyPair) -> Result<State> {
-        Ok(State {
-            cached_ciphertext_key: datakey.encrypted,
-            encryption_backend: MemAesGcmBackend {
-                key: datakey.plaintext,
-            },
-        })
-    }
-
-    fn cached(&self, ciphertext_key: &EncryptedKey) -> bool {
-        *ciphertext_key == self.cached_ciphertext_key
-    }
-}
 
 #[derive(Debug)]
 pub struct KmsBackend {
     timeout_duration: Duration,
     state: Mutex<Option<State>>,
-    kms_provider: Box<dyn KmsProvider>,
+    kms_provider: Box<dyn CrypterProvider>,
     // This mutex allows the decrypt_content API to be reference based
     runtime: Mutex<Runtime>,
 }
 
 impl KmsBackend {
-    pub fn new(kms_provider: Box<dyn KmsProvider>) -> Result<KmsBackend> {
+    pub fn new(kms_provider: Box<dyn CrypterProvider>) -> Result<KmsBackend> {
         // Basic scheduler executes futures in the current thread.
         let runtime = Mutex::new(
             Builder::new_current_thread()
@@ -215,7 +165,7 @@ mod fake {
     }
 
     #[async_trait]
-    impl KmsProvider for FakeKms {
+    impl CrypterProvider for FakeKms {
         async fn generate_data_key(&self) -> Result<DataKeyPair> {
             Ok(DataKeyPair {
                 encrypted: EncryptedKey::new(FAKE_DATA_KEY_ENCRYPTED.to_vec())?,

@@ -16,7 +16,7 @@ pub use self::{
     config::*,
     crypter::{
         from_engine_encryption_method, to_engine_encryption_method, verify_encryption_config,
-        AesGcmCrypter, Iv, PlainKey,
+        AesGcmCrypter, DataKeyPair, EncryptedKey, Iv, PlainKey,
     },
     encrypted_file::EncryptedFile,
     errors::{Error, Result, RetryCodedError},
@@ -25,9 +25,7 @@ pub use self::{
         create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
     manager::{DataKeyManager, DataKeyManagerArgs},
-    master_key::{
-        Backend, DataKeyPair, EncryptedKey, FileBackend, KmsBackend, KmsProvider, PlaintextBackend,
-    },
+    master_key::{Backend, CrypterProvider, FileBackend, KmsBackend, PlaintextBackend},
 };
 
 const TRASH_PREFIX: &str = "TRASH-";

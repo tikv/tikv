@@ -4,10 +4,11 @@ use std::{fmt::Debug, path::Path};
 use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
 use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
-#[cfg(feature = "cloud-aws")]
-use cloud::kms::Config as CloudConfig;
 use cloud::{
-    kms::{EncryptedKey as CloudEncryptedKey, KmsProvider as CloudKmsProvider},
+    crypter::{
+        Config as CloudConfig, CrypterProvider as CloudCrypterProvider,
+        EncryptedKey as CloudEncryptedKey,
+    },
     Error as CloudError,
 };
 use derive_more::Deref;
@@ -19,7 +20,7 @@ pub use encryption::{
     KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{
-    DataKeyPair, EncryptedKey, FileBackend, KmsProvider, PlainKey, PlaintextBackend,
+    CrypterProvider, DataKeyPair, EncryptedKey, FileBackend, PlainKey, PlaintextBackend,
     RetryCodedError,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
@@ -64,7 +65,7 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
         STORAGE_VENDOR_NAME_AWS | "" => {
             let conf = CloudConfig::from_proto(config.clone().into_proto())
                 .map_err(cloud_convert_error("aws from proto".to_owned()))?;
-            let kms_provider = CloudKms(Box::new(
+            let kms_provider = CloudCrypter(Box::new(
                 AwsKms::new(conf).map_err(cloud_convert_error("new AWS KMS".to_owned()))?,
             ));
             Ok(Box::new(KmsBackend::new(Box::new(kms_provider))?) as Box<dyn Backend>)
@@ -83,13 +84,13 @@ fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
     })
 }
 
-// CloudKMS adapts the KmsProvider definition from the cloud crate to that of
-// the encryption crate
+// CloudCrypter adapts the CrypterProvider definition from the cloud crate to
+// that of the encryption crate
 #[derive(Debug, Deref)]
-struct CloudKms(Box<dyn CloudKmsProvider>);
+struct CloudCrypter(Box<dyn CloudCrypterProvider>);
 
 #[async_trait]
-impl KmsProvider for CloudKms {
+impl CrypterProvider for CloudCrypter {
     async fn generate_data_key(&self) -> Result<DataKeyPair> {
         let cdk = (**self)
             .generate_data_key()

@@ -217,6 +217,26 @@ impl std::fmt::Debug for PlainKey {
 // Don't expose the key in a display print
 impl_display_as_debug!(PlainKey);
 
+// EncryptedKey is a newtype used to mark data as an encrypted key
+// It requires the vec to be non-empty
+#[derive(PartialEq, Clone, Debug, Deref)]
+pub struct EncryptedKey(Vec<u8>);
+
+impl EncryptedKey {
+    pub fn new(key: Vec<u8>) -> Result<Self> {
+        if key.is_empty() {
+            return Err(box_err!("encrypted content is empty"));
+        }
+        Ok(Self(key))
+    }
+}
+
+#[derive(Debug)]
+pub struct DataKeyPair {
+    pub encrypted: EncryptedKey,
+    pub plaintext: PlainKey,
+}
+
 #[cfg(test)]
 mod tests {
     use hex::FromHex;

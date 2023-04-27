@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use derive_more::Deref;
 use kvproto::encryptionpb::MasterKeyKms;
 
-use crate::error::{Error, KmsError, Result};
+use crate::error::{CrypterError, Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct Location {
@@ -42,7 +42,7 @@ impl KeyId {
     pub fn new(id: String) -> Result<KeyId> {
         if id.is_empty() {
             let msg = "KMS key id can not be empty";
-            Err(Error::KmsError(KmsError::EmptyKey(msg.to_owned())))
+            Err(Error::CrypterError(CrypterError::EmptyKey(msg.to_owned())))
         } else {
             Ok(KeyId(id))
         }
@@ -57,7 +57,7 @@ pub struct EncryptedKey(Vec<u8>);
 impl EncryptedKey {
     pub fn new(key: Vec<u8>) -> Result<Self> {
         if key.is_empty() {
-            Err(Error::KmsError(KmsError::EmptyKey(
+            Err(Error::CrypterError(CrypterError::EmptyKey(
                 "Encrypted Key".to_owned(),
             )))
         } else {
@@ -94,7 +94,7 @@ pub struct DataKeyPair {
 }
 
 #[async_trait]
-pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
+pub trait CrypterProvider: Sync + Send + 'static + std::fmt::Debug {
     async fn generate_data_key(&self) -> Result<DataKeyPair>;
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
     fn name(&self) -> &str;
