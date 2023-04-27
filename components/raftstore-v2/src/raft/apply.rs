@@ -94,7 +94,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
         coprocessor_host: CoprocessorHost<EK>,
-        checkpoint_cheduler: Option<Scheduler<checkpoint::Task>>,
+        checkpoint_cheduler: Scheduler<checkpoint::Task>,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -127,7 +127,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
-            checkpoint_cheduler: checkpoint_cheduler.unwrap(),
+            checkpoint_cheduler,
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,

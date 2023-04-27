@@ -338,7 +338,7 @@ mod tests {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::Worker;
+    use tikv_util::{defer, worker::Worker};
 
     use super::*;
     use crate::{
@@ -346,6 +346,7 @@ mod tests {
         operation::{test_util::create_tmp_importer, write_initial_states, CatchUpLogs},
         raft::Apply,
         router::ApplyRes,
+        worker::checkpoint,
     };
 
     #[derive(Clone)]
@@ -506,6 +507,14 @@ mod tests {
         state.set_region(region.clone());
         let (_tmp_dir, importer) = create_tmp_importer();
         let host = CoprocessorHost::<KvTestEngine>::default();
+
+        let checkpoint_worker = Worker::new("checkpoint-worker");
+        let checkpoint_scheduler = checkpoint_worker.start(
+            "checkpoint-worker",
+            checkpoint::Runner::new(logger.clone(), reg.clone()),
+        );
+        defer!(checkpoint_worker.stop());
+
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -520,7 +529,7 @@ mod tests {
             None,
             importer,
             host,
-            None,
+            checkpoint_scheduler,
             logger,
         );
 

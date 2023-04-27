@@ -854,8 +854,9 @@ mod test {
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
+        defer,
         store::{new_learner_peer, new_peer},
-        worker::dummy_scheduler,
+        worker::{dummy_scheduler, Worker},
     };
 
     use super::*;
@@ -996,6 +997,13 @@ mod test {
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
 
+        let checkpoint_worker = Worker::new("checkpoint-worker");
+        let checkpoint_scheduler = checkpoint_worker.start(
+            "checkpoint-worker",
+            checkpoint::Runner::new(logger.clone(), reg.clone()),
+        );
+        defer!(checkpoint_worker.stop());
+
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let (_tmp_dir, importer) = create_tmp_importer();
@@ -1018,7 +1026,7 @@ mod test {
             None,
             importer,
             host,
-            None,
+            checkpoint_scheduler,
             logger.clone(),
         );
 
