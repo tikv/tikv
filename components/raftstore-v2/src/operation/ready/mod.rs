@@ -57,6 +57,7 @@ pub use self::{
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsmDelegate, Store},
+    operation::life::is_empty_split_message,
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
     worker::tablet,
@@ -289,10 +290,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
         let from_peer_id = from_peer.get_id();
-        if self.is_leader() && from_peer.get_id() != INVALID_ID {
-            self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
+        if from_peer_id != INVALID_ID {
+            if self.is_leader() {
+                self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
+            }
+            // We only cache peer with an vaild ID.
+            // It prevents cache peer(0,0) which is sent by region split.
+            self.insert_peer_cache(from_peer);
         }
-        self.insert_peer_cache(from_peer);
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
@@ -304,6 +309,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.peer_id())
             {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+            // As this peer is already created, the empty split message is meaningless.
+            if is_empty_split_message(&msg) {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
@@ -369,7 +379,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
-                warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to);
+                warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to, "message_type" => ?msg.msg_type);
                 return None;
             }
         };
@@ -389,7 +399,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Filling start and end key is only needed for being compatible with
-        // raftstore v1 tiflash engine.
+        // raftstore v1 learners (e.g. tiflash engine).
         //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
@@ -897,6 +907,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+            self.read_progress()
+                .update_leader_info(ss.leader_id, term, self.region());
             let target = self.refresh_leader_transferee();
             ctx.coprocessor_host.on_role_change(
                 self.region(),
