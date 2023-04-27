@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::{RocksCfOptions, RocksDbOptions, RocksEngine};
+use engine_rocks::{RocksCfOptions, RocksDbOptions};
 use engine_traits::{Checkpointer, KvEngine, Peekable, SyncMutable, LARGE_CFS};
 use futures::executor::block_on;
 use grpcio::Environment;
@@ -204,22 +204,16 @@ fn test_v1_simple_write() {
     let r11 = cluster_v1.run_conf_change();
     let r21 = cluster_v2.run_conf_change();
 
+    cluster_v1.must_put(b"k0", b"v0");
+    cluster_v2.must_put(b"k0", b"v0");
     cluster_v1
         .pd_client
         .must_add_peer(r11, new_learner_peer(2, 10));
     cluster_v2
         .pd_client
         .must_add_peer(r21, new_learner_peer(2, 10));
-    cluster_v1.must_put(b"k0", b"v0");
-    cluster_v2.must_put(b"k0", b"v0");
-    assert_eq!(
-        cluster_v1.must_get(b"k0").unwrap(),
-        "v0".as_bytes().to_vec()
-    );
-    assert_eq!(
-        cluster_v2.must_get(b"k0").unwrap(),
-        "v0".as_bytes().to_vec()
-    );
+    check_key_in_engine(&cluster_v1.get_engine(2), b"zk0", b"v0");
+    check_key_in_engine(&cluster_v2.get_engine(2), b"zk0", b"v0");
     let trans1 = Mutex::new(cluster_v1.sim.read().unwrap().get_router(2).unwrap());
     let trans2 = Mutex::new(cluster_v2.sim.read().unwrap().get_router(1).unwrap());
 
@@ -261,7 +255,7 @@ fn test_v1_simple_write() {
     cluster_v2.shutdown();
 }
 
-fn check_key_in_engine(engine: &RocksEngine, key: &[u8], value: &[u8]) {
+fn check_key_in_engine<T: Peekable>(engine: &T, key: &[u8], value: &[u8]) {
     for _ in 0..10 {
         if let Ok(Some(vec)) = engine.get_value(key) {
             assert_eq!(vec.to_vec(), value.to_vec());
