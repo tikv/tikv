@@ -243,7 +243,7 @@ impl Column {
 ///   - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
 pub trait ChecksumHandler {
     // checksum calculates the checksum value according to the input column values.
-    fn checksum(&mut self, cols: &Vec<Column>) -> Result<()>;
+    fn checksum(&mut self, cols: &[Column]) -> Result<()>;
 
     // header_value returns the checksum header value.
     fn header_value(&self) -> u8;
@@ -258,7 +258,7 @@ pub struct Crc32RowChecksumHandler {
     buf: Vec<u8>,
 }
 
-fn get_non_null_columns(cols: &Vec<Column>) -> Vec<Column> {
+fn get_non_null_columns(cols: &[Column]) -> Vec<Column> {
     let mut res = vec![];
     for col in cols {
         if col.value.is_some() {
@@ -270,7 +270,7 @@ fn get_non_null_columns(cols: &Vec<Column>) -> Vec<Column> {
 }
 
 impl ChecksumHandler for Crc32RowChecksumHandler {
-    fn checksum(&mut self, cols: &Vec<Column>) -> Result<()> {
+    fn checksum(&mut self, cols: &[Column]) -> Result<()> {
         // For testing purposes, the DDL compatibility was not fully considered for
         // checksum calculation, using all non-null columns regardless of the column's
         // DDL status, such as write-reorg.
