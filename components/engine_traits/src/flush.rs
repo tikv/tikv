@@ -56,6 +56,37 @@ struct FlushProgress {
 
 /// A share state between raftstore and underlying engine.
 ///
+/// raftstore will update state changes and corresponding sst apply index, when
+/// apply ingest sst request, it should ensure the sst can be deleted
+/// if the flushed index greater than it .
+#[derive(Debug)]
+pub struct SSTState {
+    sst_applied_index: AtomicU64,
+}
+
+impl SSTState {
+    pub fn new(sst_applied_index: u64) -> Self {
+        Self {
+            sst_applied_index: AtomicU64::new(sst_applied_index),
+        }
+    }
+
+    /// Set the latest sst applied index.
+    #[inline]
+    pub fn set_sst_applied_index(&self, sst_applied_index: u64) {
+        self.sst_applied_index
+            .store(sst_applied_index, Ordering::Release);
+    }
+
+    /// Query the sst applied index.
+    #[inline]
+    pub fn sst_applied_index(&self) -> u64 {
+        self.sst_applied_index.load(Ordering::Acquire)
+    }
+}
+
+/// A share state between raftstore and underlying engine.
+///
 /// raftstore will update state changes and corresponding apply index, when
 /// flush, `PersistenceListener` will query states related to the memtable
 /// and persist the relation to raft engine.

@@ -73,6 +73,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if stale_ssts.is_empty() {
             return;
         }
+        let sst_index = self.sst_state().sst_applied_index();
+        // some sst needs to be kept if the log didn't flush the dish.
+        if let Some(log_recovery) = self.storage().apply_trace().log_recovery() {
+            stale_ssts.retain(|sst| {
+                let off = data_cf_offset(sst.get_cf_name());
+                log_recovery.as_ref()[off] >= sst_index
+            });
+        }
+
         let _ = ctx
             .schedulers
             .tablet
@@ -116,6 +125,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 slog_panic!(self.logger, "ingest fail"; "ssts" => ?ssts, "error" => ?e);
             }
         }
+        self.set_sst_applied_index(index);
         Ok(())
     }
 }

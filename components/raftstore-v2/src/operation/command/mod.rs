@@ -144,6 +144,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             store_ctx.tablet_registry.clone(),
             read_scheduler,
             self.flush_state().clone(),
+            self.sst_state().clone(),
             self.storage().apply_trace().log_recovery(),
             self.entry_storage().applied_term(),
             buckets,
