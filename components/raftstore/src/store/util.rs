@@ -1347,6 +1347,10 @@ impl RegionReadProgress {
         core.leader_info.leader_term = term;
         if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
             core.leader_info.epoch = region.get_region_epoch().clone();
+        }
+        if core.leader_info.peers != region.get_peers() {
+            // In v2, we check peers and region epoch independently, because
+            // peers are incomplete but epoch is set correctly during split.
             core.leader_info.peers = region.get_peers().to_vec();
         }
         core.leader_info.leader_store_id =
@@ -2275,7 +2279,8 @@ mod tests {
         }
 
         let cap = 10;
-        let rrp = RegionReadProgress::new(&Default::default(), 10, cap, 1);
+        let mut region = Region::default();
+        let rrp = RegionReadProgress::new(&region, 10, cap, 1);
         for i in 1..=20 {
             rrp.update_safe_ts(i, i);
         }
@@ -2322,5 +2327,20 @@ mod tests {
         rrp.update_safe_ts(400, 0);
         rrp.update_safe_ts(0, 700);
         assert_eq!(pending_items_num(&rrp), 0);
+
+        // update leader info, epoch
+        region.mut_region_epoch().version += 1;
+        rrp.update_leader_info(1, 5, &region);
+        assert_eq!(
+            rrp.core.lock().unwrap().get_local_leader_info().epoch,
+            *region.get_region_epoch(),
+        );
+        // update leader info, peers
+        region.mut_peers().push(new_peer(1, 2));
+        rrp.update_leader_info(1, 5, &region);
+        assert_eq!(
+            rrp.core.lock().unwrap().get_local_leader_info().peers,
+            *region.get_peers(),
+        );
     }
 }
