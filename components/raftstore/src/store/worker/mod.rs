@@ -44,6 +44,10 @@ pub use self::{
     split_check::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },
-    split_config::{SplitConfig, SplitConfigManager},
+    split_config::{
+        SplitConfig, SplitConfigManager, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+        DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
+        DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+    },
     split_controller::{AutoSplitController, ReadStats, SplitConfigChange, SplitInfo, WriteStats},
 };
