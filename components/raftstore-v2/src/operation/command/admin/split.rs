@@ -25,7 +25,12 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
+use std::{
+    any::Any,
+    borrow::Cow,
+    cmp,
+    path::{Path, PathBuf},
+};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
@@ -469,14 +474,24 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.flush();
 
         let now = Instant::now();
-
         let split_region_ids = regions
             .iter()
             .map(|r| r.get_id())
             .filter(|id| id != &region_id)
             .collect::<Vec<_>>();
+        let (_, _, cur_suffix) = self
+            .tablet_registry()
+            .parse_tablet_name(&Path::new(self.tablet().path()))
+            .unwrap();
         let scheduler = self.checkpoint_scheduler().clone();
-        async_checkpoint(&scheduler, region_id, split_region_ids, log_index).await;
+        async_checkpoint(
+            &scheduler,
+            region_id,
+            split_region_ids,
+            cur_suffix,
+            log_index,
+        )
+        .await;
 
         let elapsed = now.saturating_elapsed();
         // to be removed after when it's stable
@@ -521,17 +536,19 @@ async fn async_checkpoint(
     scheduler: &Scheduler<checkpoint::Task>,
     parent_region: u64,
     split_regions: Vec<u64>,
+    cur_suffix: u64,
     log_index: u64,
 ) {
     let (tx, rx) = oneshot::channel();
     let task = checkpoint::Task::Checkpoint {
+        cur_suffix,
         log_index,
         parent_region,
         split_regions,
         sender: tx,
     };
     scheduler.schedule_force(task).unwrap();
-    let _ = rx.await;
+    assert!(rx.await.unwrap());
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -967,6 +984,11 @@ mod test {
                 assert!(reg.tablet_factory().exists(&path));
             }
         }
+
+        let AdminCmdResult::SplitRegion(SplitResult { tablet, .. }) = apply_res else { panic!() };
+        // update cache
+        let mut cache = apply.tablet_registry().get(parent_id).unwrap();
+        cache.set(*tablet.downcast().unwrap());
     }
 
     #[test]

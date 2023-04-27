@@ -1,4 +1,7 @@
-use std::{fmt::Display, path::PathBuf};
+use std::{
+    fmt::Display,
+    path::{Path, PathBuf},
+};
 
 use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use futures::channel::oneshot::Sender;
@@ -10,6 +13,8 @@ use crate::operation::SPLIT_PREFIX;
 
 pub enum Task {
     Checkpoint {
+        // it is only used to assert
+        cur_suffix: u64,
         log_index: u64,
         parent_region: u64,
         split_regions: Vec<u64>,
@@ -56,14 +61,18 @@ impl<EK: KvEngine> Runner<EK> {
         &self,
         parent_region: u64,
         split_regions: Vec<u64>,
+        cur_suffix: u64,
         log_index: u64,
         sender: Sender<bool>,
     ) {
-        let mut cache = self
+        let mut cache = self.tablet_registry.get(parent_region).unwrap();
+        let tablet = cache.latest().unwrap();
+        let (_, _, suffix) = self
             .tablet_registry
-            .get(parent_region)
-            .expect("which case, this is not some");
-        let tablet = cache.latest().expect("which case, this is not some");
+            .parse_tablet_name(&Path::new(tablet.path()))
+            .unwrap();
+        assert_eq!(cur_suffix, suffix);
+
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
             slog_panic!(
                 self.logger,
@@ -87,6 +96,11 @@ impl<EK: KvEngine> Runner<EK> {
         }
 
         let derived_path = self.tablet_registry.tablet_path(parent_region, log_index);
+
+        // If it's recovered from restart, it's possible the target path exists already.
+        // And because checkpoint is atomic, so we don't need to worry about corruption.
+        // And it's also wrong to delete it and remake as it may has applied and flushed
+        // some data to the new checkpoint before being restarted.
         if !derived_path.exists() {
             checkpointer
                 .create_at(&derived_path, None, 0)
@@ -100,7 +114,7 @@ impl<EK: KvEngine> Runner<EK> {
                 });
         }
 
-        let _ = sender.send(true);
+        sender.send(true).unwrap();
     }
 }
 
@@ -110,12 +124,13 @@ impl<EK: KvEngine> Runnable for Runner<EK> {
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::Checkpoint {
+                cur_suffix,
                 log_index,
                 parent_region,
                 split_regions,
                 sender,
             } => {
-                self.checkpoint(parent_region, split_regions, log_index, sender);
+                self.checkpoint(parent_region, split_regions, cur_suffix, log_index, sender);
             }
         }
     }

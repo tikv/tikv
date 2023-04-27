@@ -193,11 +193,7 @@ mod test {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::{
-        defer,
-        store::new_peer,
-        worker::{dummy_scheduler, Worker},
-    };
+    use tikv_util::{store::new_peer, worker::dummy_scheduler};
 
     use super::*;
     use crate::{
@@ -207,7 +203,6 @@ mod test {
         },
         raft::Apply,
         router::{build_any_channel, ApplyRes},
-        worker::checkpoint,
         SimpleWriteEncoder,
     };
 
@@ -315,13 +310,7 @@ mod test {
         host.registry
             .register_cmd_observer(0, BoxCmdObserver::new(ob));
 
-        let checkpoint_worker = Worker::new("checkpoint-worker");
-        let checkpoint_scheduler = checkpoint_worker.start(
-            "checkpoint-worker",
-            checkpoint::Runner::new(logger.clone(), reg.clone()),
-        );
-        defer!(checkpoint_worker.stop());
-
+        let (dummy_scheduler, _) = dummy_scheduler();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -340,7 +329,7 @@ mod test {
             None,
             importer,
             host,
-            checkpoint_scheduler,
+            dummy_scheduler,
             logger.clone(),
         );
 
