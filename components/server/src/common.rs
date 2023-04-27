@@ -481,8 +481,6 @@ pub struct EnginesResourceInfo {
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
-    min_throughput_portion: f32,
-    optimize_for_read: bool,
 }
 
 impl EnginesResourceInfo {
@@ -498,20 +496,7 @@ impl EnginesResourceInfo {
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
-            min_throughput_portion: 0.5,
-            optimize_for_read: true,
         }
-    }
-
-    /// Allowing minimum throughput, if it's usize::MAX, then 50% of total
-    /// budget is chosen.
-    pub fn set_min_throughput_portion(&mut self, min_throughput_portion: f32) {
-        self.min_throughput_portion = min_throughput_portion;
-    }
-
-    /// When optimize for read, pending bytes presure are prioritized.
-    pub fn set_optimize_for_read(&mut self, optimize_for_read: bool) {
-        self.optimize_for_read = optimize_for_read;
     }
 
     pub fn update(
@@ -596,12 +581,16 @@ impl IoBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
         let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
             / Self::SCALE_FACTOR as f32;
-        let score = if self.optimize_for_read {
-            score.sqrt()
-        } else {
-            score * score
-        };
-        let score = self.min_throughput_portion + score * (1.0 - self.min_throughput_portion);
+        // Two reasons for adding `sqrt` on top:
+        // 1) In theory the convergence point is independent of the value of pending
+        //    bytes (as long as backlog generating rate equals consuming rate, which is
+        //    determined by compaction budgets), a convex helps reach that point while
+        //    maintaining low level of pending bytes.
+        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
+        //    with decreasing derivative can help balance such trend.
+        let score = score.sqrt();
+        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
+        let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
     }
 }
