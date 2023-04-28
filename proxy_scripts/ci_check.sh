@@ -39,10 +39,10 @@ elif [[ $M == "testnew" ]]; then
     # tests based on mock-engine-store, with compat for new proxy
     cargo test --package proxy_tests --test proxy shared::write
     cargo test --package proxy_tests --test proxy shared::snapshot
-    cargo test --package proxy_tests --test proxy normal::store
-    cargo test --package proxy_tests --test proxy normal::config
-    cargo test --package proxy_tests --test proxy normal::restart
-    cargo test --package proxy_tests --test proxy normal::persist
+    cargo test --package proxy_tests --test proxy shared::normal::store
+    cargo test --package proxy_tests --test proxy shared::normal::config
+    cargo test --package proxy_tests --test proxy shared::normal::restart
+    cargo test --package proxy_tests --test proxy shared::normal::persist
     cargo test --package proxy_tests --test proxy shared::ingest
     cargo test --package proxy_tests --test proxy shared::engine
     cargo test --package proxy_tests --test proxy shared::config

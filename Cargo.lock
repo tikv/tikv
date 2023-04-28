@@ -1474,6 +1474,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "toml",
+ "walkdir",
 ]
 
 [[package]]
@@ -1731,10 +1732,14 @@ dependencies = [
 name = "engine_traits_tests"
 version = "0.0.1"
 dependencies = [
+ "encryption",
+ "encryption_export",
  "engine_test",
  "engine_traits",
+ "kvproto",
  "panic_hook",
  "tempfile",
+ "test_util",
  "tikv_alloc",
 ]
 
@@ -2880,7 +2885,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#dc3cd8784a19bc7f058dbeb19cd8cc4672ee9aad"
+source = "git+https://github.com/pingcap/kvproto.git#10e7620a630db63d769503ba99c7389f19fb6516"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3009,7 +3014,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
+source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -3028,7 +3033,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
+source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4136,9 +4141,9 @@ checksum = "26f6a7b87c2e435a3241addceeeff740ff8b7e76b74c13bf9acb17fa454ea00b"
 
 [[package]]
 name = "pprof"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e20150f965e0e4c925982b9356da71c84bcd56cb66ef4e894825837cbcf6613e"
+checksum = "196ded5d4be535690899a4631cc9f18cdc41b7ebf24a79400f46f48e49a11059"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -4146,7 +4151,7 @@ dependencies = [
  "inferno",
  "libc 0.2.139",
  "log",
- "nix 0.24.1",
+ "nix 0.26.2",
  "once_cell",
  "parking_lot 0.12.1",
  "protobuf",
@@ -4811,6 +4816,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "encryption_export",
  "engine_rocks",
  "engine_test",
  "engine_traits",
@@ -5226,7 +5232,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a9fbe325939c166ffc5f80e63066f5d8594a1fff"
+source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -6752,7 +6758,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "7.1.0-alpha"
+version = "7.1.0-rc.0"
 dependencies = [
  "anyhow",
  "api_version",
