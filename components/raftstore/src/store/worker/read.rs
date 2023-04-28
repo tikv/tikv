@@ -828,20 +828,33 @@ where
         // be performed.
         let is_in_flashback = delegate.region.is_in_flashback;
         let flashback_start_ts = delegate.region.flashback_start_ts;
-        if let Err(e) =
-            util::check_flashback_state(is_in_flashback, flashback_start_ts, req, region_id, false)
-        {
-            TLS_LOCAL_READ_METRICS.with(|m| match e {
+        let header = req.get_header();
+        let admin_type = req.admin_request.as_ref().map(|req| req.get_cmd_type());
+        if let Err(e) = util::check_flashback_state(
+            is_in_flashback,
+            flashback_start_ts,
+            header,
+            admin_type,
+            region_id,
+            true,
+        ) {
+            debug!("rejected by flashback state";
+                "error" => ?e,
+                "is_in_flashback" => is_in_flashback,
+                "tag" => &delegate.tag);
+            match e {
                 Error::FlashbackNotPrepared(_) => {
-                    m.borrow_mut().reject_reason.flashback_not_prepared.inc()
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().reject_reason.flashback_not_prepared.inc());
+                    return Err(Error::FlashbackNotPrepared(region_id));
                 }
                 Error::FlashbackInProgress(..) => {
-                    m.borrow_mut().reject_reason.flashback_in_progress.inc()
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().reject_reason.flashback_in_progress.inc());
+                    return Err(Error::FlashbackInProgress(region_id, flashback_start_ts));
                 }
-                _ => unreachable!(),
-            });
-            debug!("rejected by flashback state"; "is_in_flashback" => is_in_flashback, "tag" => &delegate.tag);
-            return Ok(None);
+                _ => unreachable!("{:?}", e),
+            };
         }
 
         Ok(Some(delegate))

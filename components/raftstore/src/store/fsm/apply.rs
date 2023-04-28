@@ -1662,10 +1662,13 @@ where
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_req_region_epoch(req, &self.region, include_region)?;
+        let header = req.get_header();
+        let admin_type = req.admin_request.as_ref().map(|req| req.get_cmd_type());
         check_flashback_state(
             self.region.is_in_flashback,
             self.region.flashback_start_ts,
-            req,
+            header,
+            admin_type,
             self.region_id(),
             false,
         )?;
