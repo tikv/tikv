@@ -399,7 +399,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Filling start and end key is only needed for being compatible with
-        // raftstore v1 tiflash engine.
+        // raftstore v1 learners (e.g. tiflash engine).
         //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
@@ -1031,8 +1031,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             if let Err(e) = self.apply_snapshot(
                 ready.snapshot(),
                 write_task,
-                ctx.snap_mgr.clone(),
-                ctx.tablet_registry.clone(),
+                &ctx.snap_mgr,
+                &ctx.tablet_registry,
+                ctx.key_manager.as_ref(),
             ) {
                 SNAP_COUNTER.apply.fail.inc();
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)

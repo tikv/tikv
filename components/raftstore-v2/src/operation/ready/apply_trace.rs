@@ -29,6 +29,7 @@
 
 use std::{cmp, sync::Mutex};
 
+use encryption_export::DataKeyManager;
 use engine_traits::{
     data_cf_offset, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS,
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
@@ -429,7 +430,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Region state is written before actually moving data. It's possible that
     /// the tablet is missing after restart. We need to move the data again
     /// after being restarted.
-    pub fn recover_tablet(&self, registry: &TabletRegistry<EK>, snap_mgr: &TabletSnapManager) {
+    pub fn recover_tablet(
+        &self,
+        registry: &TabletRegistry<EK>,
+        key_manager: Option<&DataKeyManager>,
+        snap_mgr: &TabletSnapManager,
+    ) {
         let tablet_index = self.region_state().get_tablet_index();
         if tablet_index == 0 {
             // It's an uninitialized peer, nothing to recover.
@@ -444,7 +450,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         if tablet_index == RAFT_INIT_LOG_INDEX {
             // Its data may come from split or snapshot. Try split first.
             let split_path = temp_split_path(registry, region_id);
-            if install_tablet(registry, &split_path, region_id, tablet_index) {
+            if install_tablet(registry, key_manager, &split_path, region_id, tablet_index) {
                 return;
             }
         }
@@ -459,7 +465,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 self.entry_storage().truncated_term(),
                 tablet_index,
             );
-            if install_tablet(registry, &snap_path, region_id, tablet_index) {
+            if install_tablet(registry, key_manager, &snap_path, region_id, tablet_index) {
                 return;
             }
         }
