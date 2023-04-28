@@ -13,7 +13,7 @@ use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
-use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager, ENGINE, TIFLASH};
+use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use tikv_util::{
@@ -71,7 +71,6 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     // For sending/receiving snapshots.
     snap_mgr: Either<SnapManager, TabletSnapManager>,
     snap_worker: LazyWorker<SnapTask>,
-    tiflash_engine: bool,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
@@ -182,12 +181,6 @@ where
         let trans = ServerTransport::new(raft_client);
         health_service.set_serving_status("", ServingStatus::NotServing);
 
-        let tiflash_engine = cfg
-            .value()
-            .labels
-            .iter()
-            .any(|entry| entry.0 == ENGINE && entry.1 == TIFLASH);
-
         let svr = Server {
             env: Arc::clone(&env),
             builder_or_server: Some(builder),
@@ -203,7 +196,6 @@ where
             debug_thread_pool,
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
-            tiflash_engine,
         };
 
         Ok(svr)
@@ -273,7 +265,6 @@ where
                     self.raft_router.clone(),
                     security_mgr,
                     cfg,
-                    self.tiflash_engine,
                 );
                 self.snap_worker.start(snap_runner);
             }
