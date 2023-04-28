@@ -162,6 +162,14 @@ impl From<f64> for ScalarValue {
     }
 }
 
+impl From<&str> for ScalarValue {
+    #[inline]
+    fn from(s: &str) -> ScalarValue {
+        let bytes = Bytes::from(s);
+        ScalarValue::Bytes(Some(bytes))
+    }
+}
+
 impl From<ScalarValue> for Option<f64> {
     #[inline]
     fn from(s: ScalarValue) -> Option<f64> {
@@ -400,6 +408,34 @@ impl_as_ref! { Real, as_real }
 impl_as_ref! { Decimal, as_decimal }
 impl_as_ref! { DateTime, as_date_time }
 impl_as_ref! { Duration, as_duration }
+
+impl ScalarValue {
+    #[inline]
+    pub fn as_enum(&self) -> Option<EnumRef<'_>> {
+        match self {
+            ScalarValue::Enum(x) => x.as_ref().map(|x| x.as_ref()),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
+        }
+    }
+}
+
+impl ScalarValue {
+    #[inline]
+    pub fn as_set(&self) -> Option<SetRef<'_>> {
+        match self {
+            ScalarValue::Set(x) => x.as_ref().map(|x| x.as_ref()),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
+        }
+    }
+}
 
 impl ScalarValue {
     #[inline]
