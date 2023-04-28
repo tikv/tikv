@@ -86,7 +86,7 @@ impl TabletReader {
         }
         let b = self.iter.borrow();
         let iter = b.as_ref().unwrap();
-        let ori_key = keys::origin_key(iter.value());
+        let ori_key = iter.value();
         ori_key.into()
     }
 

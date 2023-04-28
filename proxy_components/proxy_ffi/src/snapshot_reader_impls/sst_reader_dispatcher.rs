@@ -98,7 +98,8 @@ pub unsafe extern "C" fn ffi_make_sst_reader(
             _ => SSTFileReader::ffi_get_cf_file_reader(path, key_manager.clone()),
         },
         SSTFormatKind::KIND_TABLET => {
-            todo!()
+            let new_path = SSTReaderPtr::decode_v2(path);
+            TabletReader::ffi_get_cf_file_reader(new_path, view.type_, key_manager.clone())
         }
     }
 }

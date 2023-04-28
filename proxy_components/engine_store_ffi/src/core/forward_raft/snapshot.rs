@@ -8,46 +8,75 @@ use crate::{
 
 type SSTInfo = (String, ColumnFamilyType);
 
-fn retrieve_sst_files(snap: &store::Snapshot) -> Vec<SSTInfo> {
+fn retrieve_sst_files(peer_id: u64, snap: &store::Snapshot) -> Vec<SSTInfo> {
     let mut sst_views: Vec<SSTInfo> = vec![];
     let mut ssts = vec![];
-    let is_v2_format = false;
-    for cf_file in snap.cf_files() {
-        // Skip empty cf file.
-        // CfFile is changed by dynamic region.
-        if cf_file.size.is_empty() {
-            continue;
-        }
-
-        if cf_file.size[0] == 0 {
-            continue;
-        }
-
-        if plain_file_used(cf_file.cf) {
-            assert!(cf_file.cf == CF_LOCK);
-        }
-        let mut full_paths = cf_file.file_paths();
-        assert!(!full_paths.is_empty());
-        if full_paths.len() != 1 {
-            // Multi sst files for one cf.
-            tikv_util::info!("observe multi-file snapshot";
-                "snap" => ?snap,
-                "cf" => ?cf_file.cf,
-                "total" => full_paths.len(),
-            );
-            for f in full_paths.into_iter() {
-                ssts.push((f, name_to_cf(cf_file.cf)));
-            }
+    let v2_db_path = snap.snapshot_meta().as_ref().map_or(None, |m| {
+        if m.get_tablet_snap_path().is_empty() {
+            None
         } else {
-            // Old case, one file for one cf.
-            ssts.push((full_paths.remove(0), name_to_cf(cf_file.cf)));
+            Some(m.get_tablet_snap_path().to_owned())
+        }
+    });
+    let v2_format_snap = v2_db_path.is_some();
+
+    if !v2_format_snap {
+        for cf_file in snap.cf_files() {
+            // Skip empty cf file.
+            // CfFile is changed by dynamic region.
+            if cf_file.size.is_empty() {
+                continue;
+            }
+
+            if cf_file.size[0] == 0 {
+                continue;
+            }
+
+            if plain_file_used(cf_file.cf) {
+                assert!(cf_file.cf == CF_LOCK);
+            }
+            let mut full_paths = cf_file.file_paths();
+            assert!(!full_paths.is_empty());
+            if full_paths.len() != 1 {
+                // Multi sst files for one cf.
+                tikv_util::info!("observe multi-file snapshot";
+                    "snap" => ?snap,
+                    "cf" => ?cf_file.cf,
+                    "total" => full_paths.len(),
+                );
+                for f in full_paths.into_iter() {
+                    ssts.push((f, name_to_cf(cf_file.cf)));
+                }
+            } else {
+                // Old case, one file for one cf.
+                ssts.push((full_paths.remove(0), name_to_cf(cf_file.cf)));
+            }
+        }
+    } else {
+        let path = v2_db_path.unwrap();
+        for cf in &[
+            ColumnFamilyType::Default,
+            ColumnFamilyType::Lock,
+            ColumnFamilyType::Write,
+        ] {
+            ssts.push((path.clone(), *cf));
         }
     }
+
     for (s, cf) in ssts.into_iter() {
-        if is_v2_format {
+        if v2_format_snap {
             sst_views.push((SSTReaderPtr::encode_v2(s.as_str()), cf));
         } else {
             sst_views.push((s, cf));
+        }
+    }
+    if sst_views.is_empty() {
+        warn!("meet a empty snapshot, maybe error";
+            "peer_id" => peer_id
+        );
+        #[cfg(any(test, feature = "testexport"))]
+        {
+            panic!("meet a empty snapshot")
         }
     }
     sst_views
@@ -98,7 +127,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
 
         // Simulate loss of sst files.
         fail::fail_point!("on_ob_pre_handle_snapshot_delete", |_| {
-            let ssts = retrieve_sst_files(snap);
+            let ssts = retrieve_sst_files(peer_id, snap);
             for (path, _) in ssts.iter() {
                 debug!("delete snapshot file"; "path" => ?path);
                 std::fs::remove_file(std::path::Path::new(path)).unwrap();
@@ -152,7 +181,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 let engine_store_server_helper = self.engine_store_server_helper;
                 let region = ob_region.clone();
                 let snap_key = snap_key.clone();
-                let ssts = retrieve_sst_files(snap);
+                let ssts = retrieve_sst_files(peer_id, snap);
 
                 // We use thread pool to do pre handling.
                 self.engine
@@ -324,7 +353,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
 
         if need_retry && !should_skip {
             // Blocking pre handle.
-            let ssts = retrieve_sst_files(snap);
+            let ssts = retrieve_sst_files(peer_id, snap);
             let ptr = pre_handle_snapshot_impl(
                 self.engine_store_server_helper,
                 peer_id,
