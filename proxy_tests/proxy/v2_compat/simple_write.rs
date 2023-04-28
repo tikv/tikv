@@ -17,7 +17,7 @@ fn test_write_simple() {
         .server
         .labels
         .insert(String::from("engine"), String::from("tiflash"));
-    // cluster_v1.cfg.tikv.raft_store.enable_v2_compatible_learner = true;
+    cluster_v1.cfg.tikv.raft_store.enable_v2_compatible_learner = true;
     cluster_v1.pd_client.disable_default_operator();
     cluster_v2.pd_client.disable_default_operator();
     let r11 = cluster_v1.run_conf_change();
