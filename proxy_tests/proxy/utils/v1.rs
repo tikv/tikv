@@ -24,10 +24,12 @@ pub fn new_mock_cluster(id: u64, count: usize) -> (Cluster<NodeCluster>, Arc<Tes
 
     #[cfg(feature = "enable-pagestorage")]
     {
+        debug!("new_mock_cluster created with enable_unips = true");
         cluster.cfg.proxy_cfg.engine_store.enable_unips = true;
     }
     #[cfg(not(feature = "enable-pagestorage"))]
     {
+        debug!("new_mock_cluster created with enable_unips = false");
         cluster.cfg.proxy_cfg.engine_store.enable_unips = false;
     }
     (cluster, pd_client)

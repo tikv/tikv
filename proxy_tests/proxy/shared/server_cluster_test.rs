@@ -7,7 +7,7 @@ use proxy_server::status_server::StatusServer;
 use security::SecurityConfig;
 use tikv::config::ConfigController;
 
-use super::utils::v1_server::*;
+use crate::utils::v1_server::*;
 
 async fn check_impl(authority: SocketAddr, _region_id: u64) -> Result<(), Box<dyn Error>> {
     let client = Client::new();

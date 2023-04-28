@@ -22,7 +22,8 @@ use raftstore::{
     },
     DiscardReason, Error, Result as RaftStoreResult, Result,
 };
-use test_raftstore::FilterFactory;
+// Exported for v2_compat tests.
+pub use test_raftstore::FilterFactory;
 use tikv_util::{error, time::ThreadReadId, Either, HandyRwLock};
 
 use super::common::*;

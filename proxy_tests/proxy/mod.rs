@@ -11,20 +11,8 @@
 #[macro_use]
 extern crate slog_global;
 
-mod config;
-mod engine;
-mod fast_add_peer;
-mod ffi;
-mod ingest;
-mod mock;
-mod normal;
-mod region;
-mod replica_read;
-mod server_cluster_test;
-mod snapshot;
-mod store;
-mod tablet_snapshot;
+mod shared;
 mod utils;
 mod v1_specific;
+mod v2_compat;
 mod v2_specific;
-mod write;

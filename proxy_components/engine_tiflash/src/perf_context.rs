@@ -31,7 +31,15 @@ impl PerfContext for RocksPerfContext {
         self.stats.start()
     }
 
+    #[allow(unreachable_code)]
+    #[allow(unused_variables)]
     fn report_metrics(&mut self, trackers: &[TrackerToken]) {
+        #[cfg(any(test, feature = "testexport"))]
+        {
+            // TODO When test v2_compat, it will create different RocksEngine, that raise
+            // error here.
+            return;
+        }
         self.stats.report(trackers)
     }
 }

@@ -37,26 +37,27 @@ elif [[ $M == "testnew" ]]; then
     export ENABLE_FEATURES="test-engine-kv-rocksdb test-engine-raft-raft-engine"
     cargo check --package proxy_server --features="$ENABLE_FEATURES"
     # tests based on mock-engine-store, with compat for new proxy
-    cargo test --package proxy_tests --test proxy write
-    cargo test --package proxy_tests --test proxy snapshot
+    cargo test --package proxy_tests --test proxy shared::write
+    cargo test --package proxy_tests --test proxy shared::snapshot
     cargo test --package proxy_tests --test proxy normal::store
     cargo test --package proxy_tests --test proxy normal::config
     cargo test --package proxy_tests --test proxy normal::restart
     cargo test --package proxy_tests --test proxy normal::persist
-    cargo test --package proxy_tests --test proxy ingest
-    cargo test --package proxy_tests --test proxy engine
-    cargo test --package proxy_tests --test proxy config
-    cargo test --package proxy_tests --test proxy store
-    cargo test --package proxy_tests --test proxy region
-    cargo test --package proxy_tests --test proxy flashback
-    cargo test --package proxy_tests --test proxy tablet_snapshot
+    cargo test --package proxy_tests --test proxy shared::ingest
+    cargo test --package proxy_tests --test proxy shared::engine
+    cargo test --package proxy_tests --test proxy shared::config
+    cargo test --package proxy_tests --test proxy shared::store
+    cargo test --package proxy_tests --test proxy shared::region
+    cargo test --package proxy_tests --test proxy shared::flashback
+    cargo test --package proxy_tests --test proxy v2_compat::tablet_snapshot
+    cargo test --package proxy_tests --test proxy v2_compat::simple_write
     cargo test --package proxy_tests --test proxy v1_specific::region_ext
     cargo test --package proxy_tests --test proxy v1_specific::flashback
-    cargo test --package proxy_tests --test proxy server_cluster_test -- --test-threads 1
-    cargo test --package proxy_tests --test proxy fast_add_peer
-    cargo test --package proxy_tests --test proxy replica_read -- --test-threads 1
-    cargo test --package proxy_tests --test proxy ffi -- --test-threads 1
-    cargo test --package proxy_tests --test proxy write --features="proxy_tests/enable-pagestorage"
+    cargo test --package proxy_tests --test proxy shared::server_cluster_test -- --test-threads 1
+    cargo test --package proxy_tests --test proxy shared::fast_add_peer
+    cargo test --package proxy_tests --test proxy shared::replica_read -- --test-threads 1
+    cargo test --package proxy_tests --test proxy shared::ffi -- --test-threads 1
+    cargo test --package proxy_tests --test proxy shared::write --features="proxy_tests/enable-pagestorage"
     # We don't support snapshot test for PS, since it don't support trait Snapshot.
 elif [[ $M == "debug" ]]; then
     # export RUSTC_WRAPPER=~/.cargo/bin/sccache
