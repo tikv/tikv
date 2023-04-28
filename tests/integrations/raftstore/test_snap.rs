@@ -867,8 +867,6 @@ fn test_v1_receive_snap_from_v2() {
     // test large snapshot
     test_receive_snap(5000);
 }
-<<<<<<< HEAD
-=======
 
 #[derive(Clone)]
 struct MockApplySnapshotObserver {
@@ -1038,4 +1036,3 @@ fn check_observer(observer: &MockApplySnapshotObserver, region_id: u64, snap_pat
 
     panic!("cannot find {:?} in observer", snap_path);
 }
->>>>>>> 1674d3c487 (raftstore: delete tablet snap if exists (#14647))
