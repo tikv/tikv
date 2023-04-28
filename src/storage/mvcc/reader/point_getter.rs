@@ -415,6 +415,13 @@ impl<S: Snapshot> PointGetter<S> {
 mod tests {
     use engine_rocks::ReadPerfInstant;
     use kvproto::kvrpcpb::{Assertion, AssertionLevel, PrewriteRequestPessimisticAction::*};
+    use tidb_query_datatype::{
+        codec::row::v2::{
+            encoder_for_test::{prepare_cols_for_test, RowEncoder},
+            RowSlice,
+        },
+        expr::EvalContext,
+    };
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -1288,5 +1295,25 @@ mod tests {
         assert_eq!(s.write.seek, 1);
         assert_eq!(s.write.next, 0);
         assert_eq!(s.write.get, 0);
+    }
+
+    #[test]
+    fn test_point_get_with_checksum() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k";
+        let mut val_buf = Vec::new();
+        let columns = prepare_cols_for_test();
+        val_buf
+            .write_row_with_checksum(&mut EvalContext::default(), columns, Some(123))
+            .unwrap();
+
+        must_prewrite_put(&mut engine, k, val_buf.as_slice(), k, 1);
+        must_commit(&mut engine, k, 1, 2);
+
+        let mut getter = new_point_getter(&mut engine, 40.into());
+        let val = getter.get(&Key::from_raw(k)).unwrap().unwrap();
+        assert_eq!(val, val_buf.as_slice());
+        let row_slice = RowSlice::from_bytes(val.as_slice()).unwrap();
+        assert!(row_slice.get_checksum().unwrap().get_checksum_val() > 0);
     }
 }

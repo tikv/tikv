@@ -463,6 +463,8 @@ where
     /// `ApplyRes` uncommitted. Data will finally be written to kvdb in
     /// `flush`.
     uncommitted_res_count: usize,
+
+    enable_v2_compatible_learner: bool,
 }
 
 impl<EK> ApplyContext<EK>
@@ -519,6 +521,7 @@ where
             key_buffer: Vec::with_capacity(1024),
             disable_wal: false,
             uncommitted_res_count: 0,
+            enable_v2_compatible_learner: cfg.enable_v2_compatible_learner,
         }
     }
 
@@ -1210,7 +1213,18 @@ where
 
         if !data.is_empty() {
             if !self.peer.is_witness || !can_witness_skip(entry) {
-                let cmd = util::parse_data_at(data, index, &self.tag);
+                let cmd = match util::parse_raft_cmd_request(data, index, term, &self.tag) {
+                    util::RaftCmd::V1(cmd) => cmd,
+                    util::RaftCmd::V2(simple_write_decoder) => {
+                        if !apply_ctx.enable_v2_compatible_learner {
+                            panic!(
+                                "{} can not handle v2 command when enable_v2_compatible_learner is false",
+                                self.tag
+                            );
+                        }
+                        simple_write_decoder.to_raft_cmd_request()
+                    }
+                };
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
                 }
@@ -5000,7 +5014,12 @@ mod tests {
     use super::*;
     use crate::{
         coprocessor::*,
-        store::{msg::WriteResponse, peer_storage::RAFT_INIT_LOG_INDEX, Config, RegionTask},
+        store::{
+            msg::WriteResponse,
+            peer_storage::RAFT_INIT_LOG_INDEX,
+            simple_write::{SimpleWriteEncoder, SimpleWriteReqEncoder},
+            Config, RegionTask,
+        },
     };
 
     impl GenSnapTask {
@@ -5611,6 +5630,93 @@ mod tests {
         }
     }
 
+    struct EntryBuilderUsingSimpleWrite {
+        entry: Entry,
+        header: Box<RaftRequestHeader>,
+        encoder: SimpleWriteEncoder,
+    }
+
+    impl EntryBuilderUsingSimpleWrite {
+        fn new(index: u64, term: u64) -> EntryBuilderUsingSimpleWrite {
+            let encoder = SimpleWriteEncoder::with_capacity(64);
+            let header = Box::<RaftRequestHeader>::default();
+            let mut entry = Entry::default();
+            entry.set_index(index);
+            entry.set_term(term);
+            EntryBuilderUsingSimpleWrite {
+                entry,
+                header,
+                encoder,
+            }
+        }
+
+        fn epoch(mut self, conf_ver: u64, version: u64) -> EntryBuilderUsingSimpleWrite {
+            let mut epoch = RegionEpoch::default();
+            epoch.set_version(version);
+            epoch.set_conf_ver(conf_ver);
+            self.header.set_region_epoch(epoch);
+            self
+        }
+
+        fn put(mut self, key: &[u8], value: &[u8]) -> EntryBuilderUsingSimpleWrite {
+            self.encoder.put(CF_DEFAULT, key, value);
+            self
+        }
+
+        fn put_cf(mut self, cf: &str, key: &[u8], value: &[u8]) -> EntryBuilderUsingSimpleWrite {
+            self.encoder.put(cf, key, value);
+            self
+        }
+
+        fn delete(mut self, key: &[u8]) -> EntryBuilderUsingSimpleWrite {
+            self.encoder.delete(CF_DEFAULT, key);
+            self
+        }
+
+        fn delete_cf(mut self, cf: &str, key: &[u8]) -> EntryBuilderUsingSimpleWrite {
+            self.encoder.delete(cf, key);
+            self
+        }
+
+        fn delete_range(
+            mut self,
+            start_key: &[u8],
+            end_key: &[u8],
+        ) -> EntryBuilderUsingSimpleWrite {
+            self.encoder
+                .delete_range(CF_DEFAULT, start_key, end_key, false);
+            self
+        }
+
+        fn delete_range_cf(
+            mut self,
+            cf: &str,
+            start_key: &[u8],
+            end_key: &[u8],
+        ) -> EntryBuilderUsingSimpleWrite {
+            self.encoder.delete_range(cf, start_key, end_key, false);
+            self
+        }
+
+        fn ingest_sst(mut self, meta: &SstMeta) -> EntryBuilderUsingSimpleWrite {
+            self.encoder.ingest(vec![meta.clone()]);
+            self
+        }
+
+        fn build(mut self) -> Entry {
+            let bin = self.encoder.encode();
+            let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
+                self.header.clone(),
+                bin,
+                1000,
+                false,
+            );
+            let (bytes, _) = req_encoder.encode();
+            self.entry.set_data(bytes.into());
+            self.entry
+        }
+    }
+
     #[derive(Clone, Default)]
     struct ApplyObserver {
         pre_query_count: Arc<AtomicUsize>,
@@ -6039,6 +6145,351 @@ mod tests {
                 ],
             )),
         );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        check_db_range(&engine, sst_range);
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(resp.get_header().has_error());
+
+        // The region was rescheduled to normal-priority handler because of
+        // nomral put command, so the first apple_res.exec_res should be empty.
+        let apply_res = fetch_apply_res(&rx);
+        assert!(apply_res.exec_res.is_empty());
+        // The region was rescheduled low-priority becasuee of ingest command,
+        // only put entry has been applied;
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 9);
+        // The region will yield after timeout.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
+        // The third entry should be applied now.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 11);
+
+        let write_batch_max_keys = <KvTestEngine as WriteBatchExt>::WRITE_BATCH_MAX_KEYS;
+
+        let mut props = vec![];
+        let mut entries = vec![];
+        for i in 0..write_batch_max_keys {
+            let put_entry = EntryBuilder::new(i as u64 + 12, 3)
+                .put(b"k", b"v")
+                .epoch(1, 3)
+                .build();
+            entries.push(put_entry);
+            props.push(cb(i as u64 + 12, 3, capture_tx.clone()));
+        }
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 3, entries, props)));
+        for _ in 0..write_batch_max_keys {
+            capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        let index = write_batch_max_keys + 11;
+        // The region was rescheduled to normal-priority handler. Discard the first
+        // apply_res.
+        fetch_apply_res(&rx);
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
+        assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
+        assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);
+
+        system.shutdown();
+    }
+
+    #[test]
+    fn test_handle_raft_committed_entries_from_v2() {
+        let (_path, engine) = create_tmp_engine("test-delegate");
+        let (import_dir, importer) = create_tmp_importer("test-delegate");
+        let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let mut config = Config::default();
+        config.enable_v2_compatible_learner = true;
+        let cfg = Arc::new(VersionTrack::new(config));
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer: importer.clone(),
+            engine: engine.clone(),
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(2, 3));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let put_entry = EntryBuilderUsingSimpleWrite::new(1, 1)
+            .put(b"k1", b"v1")
+            .put(b"k2", b"v1")
+            .put(b"k3", b"v1")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![put_entry],
+                vec![cb(1, 1, capture_tx.clone())],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let dk_k1 = keys::data_key(b"k1");
+        let dk_k2 = keys::data_key(b"k2");
+        let dk_k3 = keys::data_key(b"k3");
+        assert_eq!(engine.get_value(&dk_k1).unwrap().unwrap(), b"v1");
+        assert_eq!(engine.get_value(&dk_k2).unwrap().unwrap(), b"v1");
+        assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
+        validate(&router, 1, |delegate| {
+            assert_eq!(delegate.applied_term, 1);
+            assert_eq!(delegate.apply_state.get_applied_index(), 1);
+        });
+        fetch_apply_res(&rx);
+
+        let put_entry = EntryBuilderUsingSimpleWrite::new(2, 2)
+            .put_cf(CF_LOCK, b"k1", b"v1")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.region_id, 1);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 2);
+        assert_eq!(apply_res.applied_term, 2);
+        assert!(apply_res.exec_res.is_empty());
+        assert!(apply_res.metrics.written_bytes >= 5);
+        assert_eq!(apply_res.metrics.written_keys, 2);
+        assert_eq!(apply_res.metrics.size_diff_hint, 5);
+        assert_eq!(apply_res.metrics.lock_cf_written_bytes, 5);
+        assert_eq!(
+            engine.get_value_cf(CF_LOCK, &dk_k1).unwrap().unwrap(),
+            b"v1"
+        );
+
+        let put_entry = EntryBuilderUsingSimpleWrite::new(3, 2)
+            .put(b"k2", b"v2")
+            .epoch(1, 1)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                2,
+                vec![put_entry],
+                vec![cb(3, 2, capture_tx.clone())],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(resp.get_header().get_error().has_epoch_not_match());
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_term, 2);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 3);
+
+        let put_entry = EntryBuilderUsingSimpleWrite::new(4, 2)
+            .put(b"k3", b"v3")
+            .put(b"k5", b"v5")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                2,
+                vec![put_entry],
+                vec![cb(4, 2, capture_tx.clone())],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(resp.get_header().get_error().has_key_not_in_region());
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_term, 2);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 4);
+        // a writebatch should be atomic.
+        assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
+
+        let put_entry = EntryBuilderUsingSimpleWrite::new(5, 3)
+            .delete(b"k1")
+            .delete_cf(CF_LOCK, b"k1")
+            .delete_cf(CF_WRITE, b"k1")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                vec![put_entry],
+                vec![cb(5, 2, capture_tx.clone()), cb(5, 3, capture_tx.clone())],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        // stale command should be cleared.
+        assert!(resp.get_header().get_error().has_stale_command());
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        assert!(engine.get_value(&dk_k1).unwrap().is_none());
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.metrics.lock_cf_written_bytes, 3);
+        assert_eq!(apply_res.metrics.delete_keys_hint, 2);
+        assert_eq!(apply_res.metrics.size_diff_hint, -9);
+
+        let delete_entry = EntryBuilderUsingSimpleWrite::new(6, 3)
+            .delete(b"k5")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                vec![delete_entry],
+                vec![cb(6, 3, capture_tx.clone())],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(resp.get_header().get_error().has_key_not_in_region());
+        fetch_apply_res(&rx);
+
+        let delete_range_entry = EntryBuilderUsingSimpleWrite::new(7, 3)
+            .delete_range(b"", b"")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                vec![delete_range_entry],
+                vec![cb(7, 3, capture_tx.clone())],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(resp.get_header().get_error().has_key_not_in_region());
+        assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
+        fetch_apply_res(&rx);
+
+        let delete_range_entry = EntryBuilderUsingSimpleWrite::new(8, 3)
+            .delete_range_cf(CF_DEFAULT, b"", b"k5")
+            .delete_range_cf(CF_LOCK, b"", b"k5")
+            .delete_range_cf(CF_WRITE, b"", b"k5")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                vec![delete_range_entry],
+                vec![cb(8, 3, capture_tx.clone())],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        assert!(engine.get_value(&dk_k1).unwrap().is_none());
+        assert!(engine.get_value(&dk_k2).unwrap().is_none());
+        assert!(engine.get_value(&dk_k3).unwrap().is_none());
+
+        // The region was rescheduled from normal-priority handler to
+        // low-priority handler, so the first apple_res.exec_res should be empty.
+        let apply_res = fetch_apply_res(&rx);
+        assert!(apply_res.exec_res.is_empty());
+        // The entry should be applied now.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 8);
+
+        // UploadSST
+        let sst_path = import_dir.path().join("test.sst");
+        let mut sst_epoch = RegionEpoch::default();
+        sst_epoch.set_conf_ver(1);
+        sst_epoch.set_version(3);
+        let sst_range = (0, 100);
+        let (mut meta1, data1) = gen_sst_file(&sst_path, sst_range);
+        meta1.set_region_id(1);
+        meta1.set_region_epoch(sst_epoch);
+        let mut file1 = importer.create(&meta1).unwrap();
+        file1.append(&data1).unwrap();
+        file1.finish().unwrap();
+        let (mut meta2, data2) = gen_sst_file(&sst_path, sst_range);
+        meta2.set_region_id(1);
+        meta2.mut_region_epoch().set_conf_ver(1);
+        meta2.mut_region_epoch().set_version(1234);
+        let mut file2 = importer.create(&meta2).unwrap();
+        file2.append(&data2).unwrap();
+        file2.finish().unwrap();
+
+        // IngestSst
+        let put_ok = EntryBuilderUsingSimpleWrite::new(9, 3)
+            .put(&[sst_range.0], &[sst_range.1])
+            .epoch(0, 3)
+            .build();
+        // Add a put above to test flush before ingestion.
+        let capture_tx_clone = capture_tx.clone();
+        let ingest_ok = EntryBuilderUsingSimpleWrite::new(10, 3)
+            .ingest_sst(&meta1)
+            .epoch(0, 3)
+            .build();
+        let ingest_epoch_not_match = EntryBuilderUsingSimpleWrite::new(11, 3)
+            .ingest_sst(&meta2)
+            .epoch(0, 3)
+            .build();
+        let entries = vec![put_ok, ingest_ok, ingest_epoch_not_match];
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                entries,
+                vec![
+                    cb(9, 3, capture_tx.clone()),
+                    proposal(
+                        false,
+                        10,
+                        3,
+                        Callback::write(Box::new(move |resp: WriteResponse| {
+                            // Sleep until yield timeout.
+                            thread::sleep(Duration::from_millis(500));
+                            capture_tx_clone.send(resp.response).unwrap();
+                        })),
+                    ),
+                    cb(11, 3, capture_tx.clone()),
+                ],
+            )),
+        );
+
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();

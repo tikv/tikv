@@ -43,7 +43,11 @@ use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
-use crate::{coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result};
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{simple_write::SimpleWriteReqDecoder, snap::SNAPSHOT_VERSION},
+    Error, Result,
+};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
 
@@ -749,18 +753,30 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
     if entry.get_entry_type() != EntryType::EntryNormal {
         return RaftRequestHeader::default();
     }
-    // request header is encoded into data
-    let mut is = CodedInputStream::from_bytes(entry.get_data());
-    if is.eof().unwrap() {
-        return RaftRequestHeader::default();
+    let logger = slog_global::get_global().new(slog::o!());
+    match SimpleWriteReqDecoder::new(
+        |_, _, _| RaftCmdRequest::default(),
+        &logger,
+        entry.get_data(),
+        entry.get_index(),
+        entry.get_term(),
+    ) {
+        Ok(decoder) => decoder.header().clone(),
+        Err(_) => {
+            // request header is encoded into data
+            let mut is = CodedInputStream::from_bytes(entry.get_data());
+            if is.eof().unwrap() {
+                return RaftRequestHeader::default();
+            }
+            let (field_number, _) = is.read_tag_unpack().unwrap();
+            let t = is.read_message().unwrap();
+            // Header field is of number 1
+            if field_number != 1 {
+                panic!("unexpected field number: {} {:?}", field_number, t);
+            }
+            t
+        }
     }
-    let (field_number, _) = is.read_tag_unpack().unwrap();
-    let t = is.read_message().unwrap();
-    // Header field is of number 1
-    if field_number != 1 {
-        panic!("unexpected field number: {} {:?}", field_number, t);
-    }
-    t
 }
 
 /// Parse data of entry `index`.
@@ -782,6 +798,25 @@ pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -
         );
     });
     result
+}
+
+pub enum RaftCmd<'a> {
+    V1(RaftCmdRequest),
+    V2(SimpleWriteReqDecoder<'a>),
+}
+
+pub fn parse_raft_cmd_request<'a>(data: &'a [u8], index: u64, term: u64, tag: &str) -> RaftCmd<'a> {
+    let logger = slog_global::get_global().new(slog::o!());
+    match SimpleWriteReqDecoder::new(
+        |_, _, _| parse_data_at(data, index, tag),
+        &logger,
+        data,
+        index,
+        term,
+    ) {
+        Ok(simple_write_decoder) => RaftCmd::V2(simple_write_decoder),
+        Err(cmd) => RaftCmd::V1(cmd),
+    }
 }
 
 /// Check if two regions are sibling.
@@ -1347,6 +1382,10 @@ impl RegionReadProgress {
         core.leader_info.leader_term = term;
         if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
             core.leader_info.epoch = region.get_region_epoch().clone();
+        }
+        if core.leader_info.peers != region.get_peers() {
+            // In v2, we check peers and region epoch independently, because
+            // peers are incomplete but epoch is set correctly during split.
             core.leader_info.peers = region.get_peers().to_vec();
         }
         core.leader_info.leader_store_id =
@@ -2275,7 +2314,8 @@ mod tests {
         }
 
         let cap = 10;
-        let rrp = RegionReadProgress::new(&Default::default(), 10, cap, 1);
+        let mut region = Region::default();
+        let rrp = RegionReadProgress::new(&region, 10, cap, 1);
         for i in 1..=20 {
             rrp.update_safe_ts(i, i);
         }
@@ -2322,5 +2362,20 @@ mod tests {
         rrp.update_safe_ts(400, 0);
         rrp.update_safe_ts(0, 700);
         assert_eq!(pending_items_num(&rrp), 0);
+
+        // update leader info, epoch
+        region.mut_region_epoch().version += 1;
+        rrp.update_leader_info(1, 5, &region);
+        assert_eq!(
+            rrp.core.lock().unwrap().get_local_leader_info().epoch,
+            *region.get_region_epoch(),
+        );
+        // update leader info, peers
+        region.mut_peers().push(new_peer(1, 2));
+        rrp.update_leader_info(1, 5, &region);
+        assert_eq!(
+            rrp.core.lock().unwrap().get_local_leader_info().peers,
+            *region.get_peers(),
+        );
     }
 }
