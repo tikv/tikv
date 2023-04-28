@@ -1482,7 +1482,7 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, time::Duration, io};
+    use std::{ffi::OsStr, io, time::Duration};
 
     use external_storage::{ExternalData, NoopStorage};
     use futures::AsyncReadExt;

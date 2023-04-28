@@ -612,7 +612,10 @@ mod test {
         let mut cfg = Config {
             soft_max: 99999999999,
             hard_max: 99999999999,
-            swap_files: std::env::temp_dir().join(format!("{}", std::process::id())),
+            swap_files: std::env::temp_dir().join(format!(
+                "backup_stream::tempfiles::test::{}",
+                std::process::id()
+            )),
             artificate_compression: CompressionType::Unknown,
             minimal_swap_out_file_size: 8192,
             write_buffer_size: 4096,
