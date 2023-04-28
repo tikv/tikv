@@ -36,7 +36,11 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage},
 };
-use raftstore::store::{metrics::RAFT_PEER_PENDING_DURATION, util, Transport, WriteTask};
+use raftstore::store::{
+    fsm::life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
+    metrics::RAFT_PEER_PENDING_DURATION,
+    util, Transport, WriteTask,
+};
 use slog::{debug, error, info, warn};
 use tikv_util::{
     store::find_peer,
@@ -356,7 +360,9 @@ impl Store {
                 if extra_msg.get_type() == ExtraMessageType::MsgGcPeerRequest
                     && extra_msg.has_check_gc_peer()
                 {
-                    forward_destroy_to_source_peer(ctx, &msg);
+                    forward_destroy_to_source_peer(&msg, |m| {
+                        let _ = ctx.router.send_raft_message(m.into());
+                    });
                     return;
                 }
             }
@@ -431,62 +437,6 @@ impl Store {
             let _ = ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
         }
     }
-}
-
-/// Tell leader that `to_peer` from `tombstone_msg` is destroyed.
-fn build_peer_destroyed_report(tombstone_msg: &mut RaftMessage) -> Option<RaftMessage> {
-    let to_region_id = if tombstone_msg.has_extra_msg() {
-        assert_eq!(
-            tombstone_msg.get_extra_msg().get_type(),
-            ExtraMessageType::MsgGcPeerRequest
-        );
-        tombstone_msg
-            .get_extra_msg()
-            .get_check_gc_peer()
-            .get_from_region_id()
-    } else {
-        tombstone_msg.get_region_id()
-    };
-    if to_region_id == 0 || tombstone_msg.get_from_peer().get_id() == 0 {
-        return None;
-    }
-    let mut msg = RaftMessage::default();
-    msg.set_region_id(to_region_id);
-    msg.set_from_peer(tombstone_msg.take_to_peer());
-    msg.set_to_peer(tombstone_msg.take_from_peer());
-    msg.mut_extra_msg()
-        .set_type(ExtraMessageType::MsgGcPeerResponse);
-    Some(msg)
-}
-
-/// Forward the destroy request from target peer to merged source peer.
-fn forward_destroy_to_source_peer<EK, ER, T>(ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage)
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-    T: Transport,
-{
-    let extra_msg = msg.get_extra_msg();
-    // Instead of respond leader directly, send a message to target region to
-    // double check it's really destroyed.
-    let check_gc_peer = extra_msg.get_check_gc_peer();
-    let mut tombstone_msg = Box::<RaftMessage>::default();
-    tombstone_msg.set_region_id(check_gc_peer.get_check_region_id());
-    tombstone_msg.set_from_peer(msg.get_from_peer().clone());
-    tombstone_msg.set_to_peer(check_gc_peer.get_check_peer().clone());
-    tombstone_msg.set_region_epoch(check_gc_peer.get_check_region_epoch().clone());
-    tombstone_msg.set_is_tombstone(true);
-    // No need to set epoch as we don't know what it is.
-    // This message will not be handled by `on_gc_peer_request` due to
-    // `is_tombstone` being true.
-    tombstone_msg
-        .mut_extra_msg()
-        .set_type(ExtraMessageType::MsgGcPeerRequest);
-    tombstone_msg
-        .mut_extra_msg()
-        .mut_check_gc_peer()
-        .set_from_region_id(check_gc_peer.get_from_region_id());
-    let _ = ctx.router.send_raft_message(tombstone_msg);
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -588,7 +538,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        forward_destroy_to_source_peer(ctx, msg);
+        forward_destroy_to_source_peer(msg, |m| {
+            let _ = ctx.router.send_raft_message(m.into());
+        });
     }
 
     /// A peer confirms it's destroyed.
