@@ -1521,6 +1521,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
+ "cloud",
  "crc32fast",
  "crossbeam",
  "derive_more",

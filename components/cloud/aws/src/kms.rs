@@ -4,7 +4,9 @@ use std::ops::Deref;
 
 use async_trait::async_trait;
 use cloud::{
-    crypter::{Config, CrypterProvider, DataKeyPair, EncryptedKey, KeyId, PlainKey},
+    crypter::{
+        Config, CryphotographType, CrypterProvider, DataKeyPair, EncryptedKey, KeyId, PlainKey,
+    },
     error::{CrypterError, Error, Result},
 };
 use rusoto_core::{request::DispatchSignedRequest, RusotoError};
@@ -119,7 +121,7 @@ impl CrypterProvider for AwsKms {
                 let plaintext_key = response.plaintext.unwrap().as_ref().to_vec();
                 Ok(DataKeyPair {
                     encrypted: EncryptedKey::new(ciphertext_key)?,
-                    plaintext: PlainKey::new(plaintext_key)?,
+                    plaintext: PlainKey::new(plaintext_key, CryphotographType::AesGcm256)?,
                 })
             })
     }

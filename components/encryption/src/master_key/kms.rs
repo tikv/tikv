@@ -2,6 +2,12 @@
 
 use std::{sync::Mutex, time::Duration};
 
+// use super::{metadata::MetadataKey, Backend, CrypterProvider, State};
+// use crate::{
+//     crypter::{DataKeyPair, EncryptedKey, Iv, PlainKey},
+//     Error, Result,
+// };
+use cloud::crypter::{CryphotographType, CrypterProvider, DataKeyPair, EncryptedKey, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::{
     box_err,
@@ -10,11 +16,8 @@ use tikv_util::{
 };
 use tokio::runtime::{Builder, Runtime};
 
-use super::{metadata::MetadataKey, Backend, CrypterProvider, State};
-use crate::{
-    crypter::{DataKeyPair, EncryptedKey, Iv, PlainKey},
-    Error, Result,
-};
+use super::{metadata::MetadataKey, Backend, State};
+use crate::{crypter::Iv, errors::cloud_convert_error, Error, Result};
 
 #[derive(Debug)]
 pub struct KmsBackend {
@@ -49,12 +52,16 @@ impl KmsBackend {
         let mut opt_state = self.state.lock().unwrap();
         if opt_state.is_none() {
             let runtime = self.runtime.lock().unwrap();
-            let data_key = runtime.block_on(retry(|| {
-                with_timeout(self.timeout_duration, self.kms_provider.generate_data_key())
-            }))?;
+            let data_key = runtime
+                .block_on(retry(|| {
+                    with_timeout(self.timeout_duration, self.kms_provider.generate_data_key())
+                }))
+                .map_err(cloud_convert_error("get data key failed".into()))?;
             *opt_state = Some(State::new_from_datakey(DataKeyPair {
-                plaintext: PlainKey::new(data_key.plaintext.clone())?,
-                encrypted: EncryptedKey::new((*data_key.encrypted).clone())?,
+                plaintext: PlainKey::new(data_key.plaintext.clone(), CryphotographType::default())
+                    .map_err(cloud_convert_error("invalid plain key".into()))?,
+                encrypted: EncryptedKey::new((*data_key.encrypted).clone())
+                    .map_err(cloud_convert_error("invalid encrypted key".into()))?,
             })?);
         }
         let state = opt_state.as_ref().unwrap();
@@ -99,7 +106,8 @@ impl KmsBackend {
 
         let ciphertext_key = match content.metadata.get(MetadataKey::KmsCiphertextKey.as_str()) {
             None => return Err(box_err!("KMS ciphertext key not found")),
-            Some(key) => EncryptedKey::new(key.to_vec())?,
+            Some(key) => EncryptedKey::new(key.to_vec())
+                .map_err(cloud_convert_error("invalid encrypted key".into()))?,
         };
 
         {
@@ -111,15 +119,18 @@ impl KmsBackend {
             }
             {
                 let runtime = self.runtime.lock().unwrap();
-                let plaintext = runtime.block_on(retry(|| {
-                    with_timeout(
-                        self.timeout_duration,
-                        self.kms_provider.decrypt_data_key(&ciphertext_key),
-                    )
-                }))?;
+                let plaintext = runtime
+                    .block_on(retry(|| {
+                        with_timeout(
+                            self.timeout_duration,
+                            self.kms_provider.decrypt_data_key(&ciphertext_key),
+                        )
+                    }))
+                    .map_err(cloud_convert_error("decrypt encrypted key failed".into()))?;
                 let data_key = DataKeyPair {
                     encrypted: ciphertext_key,
-                    plaintext: PlainKey::new(plaintext)?,
+                    plaintext: PlainKey::new(plaintext, CryphotographType::default())
+                        .map_err(cloud_convert_error("invalid plain key".into()))?,
                 };
                 let state = State::new_from_datakey(data_key)?;
                 let content = state.encryption_backend.decrypt_content(content)?;
@@ -146,6 +157,8 @@ impl Backend for KmsBackend {
 
 #[cfg(test)]
 mod fake {
+    use cloud::crypter::CrypterProvider;
+
     use super::*;
 
     const FAKE_VENDOR_NAME: &str = "FAKE";
@@ -159,7 +172,7 @@ mod fake {
     impl FakeKms {
         pub fn new(plaintext_key: Vec<u8>) -> Self {
             Self {
-                plaintext_key: PlainKey::new(plaintext_key).unwrap(),
+                plaintext_key: PlainKey::new(plaintext_key, CryphotographType::default()).unwrap(),
             }
         }
     }
@@ -169,7 +182,8 @@ mod fake {
         async fn generate_data_key(&self) -> Result<DataKeyPair> {
             Ok(DataKeyPair {
                 encrypted: EncryptedKey::new(FAKE_DATA_KEY_ENCRYPTED.to_vec())?,
-                plaintext: PlainKey::new(self.plaintext_key.clone()).unwrap(),
+                plaintext: PlainKey::new(self.plaintext_key.clone(), CryphotographType::default())
+                    .unwrap(),
             })
         }
 
@@ -192,10 +206,10 @@ mod tests {
 
     #[test]
     fn test_state() {
-        let plaintext = PlainKey::new(vec![1u8; 32]).unwrap();
+        let plaintext = PlainKey::new(vec![1u8; 32], CryphotographType::default()).unwrap();
         let encrypted = EncryptedKey::new(vec![2u8; 32]).unwrap();
         let data_key = DataKeyPair {
-            plaintext: PlainKey::new(plaintext.clone()).unwrap(),
+            plaintext: PlainKey::new(plaintext.clone(), CryphotographType::default()).unwrap(),
             encrypted: encrypted.clone(),
         };
         let encrypted2 = EncryptedKey::new(vec![3u8; 32]).unwrap();

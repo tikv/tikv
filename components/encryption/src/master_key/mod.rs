@@ -1,17 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use async_trait::async_trait;
+use cloud::crypter::{DataKeyPair, EncryptedKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::box_err;
 
-use crate::{DataKeyPair, EncryptedKey, Error, Result};
-
-#[async_trait]
-pub trait CrypterProvider: Sync + Send + 'static + std::fmt::Debug {
-    async fn generate_data_key(&self) -> Result<DataKeyPair>;
-    async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
-    fn name(&self) -> &str;
-}
+use crate::{Error, Result};
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///

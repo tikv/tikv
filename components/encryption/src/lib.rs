@@ -16,16 +16,16 @@ pub use self::{
     config::*,
     crypter::{
         from_engine_encryption_method, to_engine_encryption_method, verify_encryption_config,
-        AesGcmCrypter, DataKeyPair, EncryptedKey, Iv, PlainKey,
+        AesGcmCrypter, Iv,
     },
     encrypted_file::EncryptedFile,
-    errors::{Error, Result, RetryCodedError},
+    errors::{cloud_convert_error, Error, Result, RetryCodedError},
     file_dict_file::FileDictionaryFile,
     io::{
         create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
     manager::{DataKeyManager, DataKeyManagerArgs},
-    master_key::{Backend, CrypterProvider, FileBackend, KmsBackend, PlaintextBackend},
+    master_key::{Backend, FileBackend, KmsBackend, PlaintextBackend},
 };
 
 const TRASH_PREFIX: &str = "TRASH-";

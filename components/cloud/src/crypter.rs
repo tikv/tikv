@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use derive_more::Deref;
 use kvproto::encryptionpb::MasterKeyKms;
+use tikv_util::box_err;
 
 use crate::error::{CrypterError, Error, Result};
 
@@ -66,15 +67,61 @@ impl EncryptedKey {
     }
 }
 
+#[repr(u8)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum CryphotographType {
+    Plain = 0,
+    AesGcm256,
+    // ..
+}
+
+impl Default for CryphotographType {
+    fn default() -> Self {
+        CryphotographType::AesGcm256
+    }
+}
+
+impl CryphotographType {
+    #[inline]
+    pub fn target_key_size(&self) -> usize {
+        match self {
+            CryphotographType::Plain => 0, // Plain text has no limitation
+            CryphotographType::AesGcm256 => 32,
+        }
+    }
+}
+
 // PlainKey is a newtype used to mark a vector a plaintext key.
 // It requires the vec to be a valid AesGcmCrypter key.
-#[derive(Deref)]
-pub struct PlainKey(Vec<u8>);
+pub struct PlainKey {
+    tag: CryphotographType,
+    key: Vec<u8>,
+}
 
 impl PlainKey {
-    pub fn new(key: Vec<u8>) -> Result<Self> {
-        // TODO: crypter.rs in encryption performs additional validation
-        Ok(Self(key))
+    pub fn new(key: Vec<u8>, t: CryphotographType) -> Result<Self> {
+        let limitation = t.target_key_size();
+        if limitation > 0 && key.len() != limitation {
+            Err(Error::CrypterError(CrypterError::Other(box_err!(
+                "encryption method and key length mismatch, expect {} get
+                    {}",
+                limitation,
+                key.len()
+            ))))
+        } else {
+            Ok(Self { key, tag: t })
+        }
+    }
+
+    pub fn key_tag(&self) -> CryphotographType {
+        self.tag
+    }
+}
+
+impl core::ops::Deref for PlainKey {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Self::Target {
+        &self.key
     }
 }
 
