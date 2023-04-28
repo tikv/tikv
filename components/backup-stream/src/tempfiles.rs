@@ -30,15 +30,12 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Config {
-    /// When the in memory bytes reaches this, start to flush files into disk at
-    /// background.
-    pub soft_max: usize,
-    /// When the in memory bytes reaches this, abort the log backup task.
-    pub hard_max: usize,
+    /// The max memory usage of the in memory file content.
+    pub cache_size: usize,
     /// The base directory for swapping out files.
     pub swap_files: PathBuf,
-    /// The compression type used for compression.
-    pub artificate_compression: CompressionType,
+    /// The compression type applied for files.
+    pub content_compression: CompressionType,
     /// Prevent files with size less than this being swapped out.
     /// We perfer to swap larger files for reducing IOps.
     pub minimal_swap_out_file_size: usize,
@@ -112,9 +109,7 @@ pub enum ForWrite {
 pub struct ForWriteCore {
     content: Arc<BlockMutex<FileCore>>,
 
-    shared: Arc<TempFilePool>,
     rel_path: PathBuf,
-
     ref_counter: Arc<AtomicU8>,
     done: bool,
 }
@@ -135,6 +130,10 @@ struct FileSet {
 
 impl TempFilePool {
     pub fn new(cfg: Config) -> Result<Self> {
+        if let Ok(true) = std::fs::metadata(&cfg.swap_files).map(|x| x.is_dir()) {
+            warn!("find content in the swap file directory node. truncating them."; "dir" => %cfg.swap_files.display());
+            std::fs::remove_dir_all(&cfg.swap_files)?;
+        }
         std::fs::create_dir_all(&cfg.swap_files)?;
 
         let this = Self {
@@ -167,13 +166,12 @@ impl TempFilePool {
         }
         let fr = ForWriteCore {
             content: Arc::clone(&f.content),
-            shared: Arc::clone(self),
             ref_counter: Arc::clone(&f.writer_count),
             rel_path: p.to_owned(),
             done: false,
         };
         f.writer_count.fetch_add(1, Ordering::SeqCst);
-        match self.cfg.artificate_compression {
+        match self.cfg.content_compression {
             CompressionType::Unknown => Ok(ForWrite::Plain(fr)),
             CompressionType::Zstd => Ok(ForWrite::ZstdCompressed(ZstdCompressionWriter::new(fr))),
             unknown_compression => Err(Error::new(
@@ -332,12 +330,12 @@ impl FileCore {
     fn poll_swap_out_unpin(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         loop {
             let to_write = &self.in_mem[self.written..];
+            let buf_size = self.shared.cfg.write_buffer_size;
             if to_write.is_empty() {
-                self.in_mem.clear();
-                self.in_mem.shrink_to(self.shared.cfg.write_buffer_size);
-                self.shared
-                    .current
-                    .fetch_sub(self.written, Ordering::SeqCst);
+                modify_and_update_cap_diff(&mut self.in_mem, &self.shared.current, |v| {
+                    v.clear();
+                    v.shrink_to(buf_size);
+                });
                 self.written = 0;
                 return Ok(()).into();
             }
@@ -358,28 +356,27 @@ impl FileCore {
     }
 
     fn append_to_buffer(&mut self, bs: &[u8]) {
-        self.shared.current.fetch_add(bs.len(), Ordering::SeqCst);
-        self.in_mem.extend_from_slice(bs);
+        modify_and_update_cap_diff(&mut self.in_mem, &self.shared.current, |v| {
+            v.extend_from_slice(bs);
+        })
     }
 
     fn should_swap_out(&self) -> bool {
         let mem_use = self.shared.current.load(Ordering::SeqCst);
         let in_mem_exceeds_quota = self.in_mem.len() > self.shared.cfg.minimal_swap_out_file_size
-            && mem_use > self.shared.cfg.soft_max;
+            && mem_use > self.shared.cfg.cache_size;
         let already_exist =
             self.in_mem.len() > self.shared.cfg.write_buffer_size && self.external_file.is_some();
         let swapping = self.written > 0;
         in_mem_exceeds_quota || already_exist || swapping
     }
 
-    fn should_abort(&self) -> bool {
-        let mem_use = self.shared.current.load(Ordering::SeqCst);
-        mem_use > self.shared.cfg.hard_max
-    }
-
     fn new(pool: Arc<TempFilePool>, rel_path: PathBuf) -> Self {
+        let cap = pool.cfg.write_buffer_size;
+        let v = Vec::with_capacity(cap);
+        pool.current.fetch_add(v.capacity(), Ordering::SeqCst);
         Self {
-            in_mem: vec![],
+            in_mem: v,
             external_file: None,
             written: 0,
             shared: pool,
@@ -407,17 +404,6 @@ impl AsyncWrite for ForWriteCore {
 
         if stat.should_swap_out() {
             ready!(stat.poll_swap_out_unpin(cx))?;
-        }
-
-        if stat.should_abort() {
-            return Err(IoErr::new(
-                ErrorKind::OutOfMemory,
-                format!(
-                    "the memory usage exceeds the quota {}",
-                    self.shared.cfg.hard_max
-                ),
-            ))
-            .into();
         }
 
         stat.append_to_buffer(buf);
@@ -451,7 +437,7 @@ impl Drop for FileCore {
     fn drop(&mut self) {
         self.shared
             .current
-            .fetch_sub(self.in_mem.len(), Ordering::SeqCst);
+            .fetch_sub(self.in_mem.capacity(), Ordering::SeqCst);
         if self.external_file.is_some() {
             if let Err(err) = self.shared.delete_relative(&self.rel_path) {
                 warn!("failed to remove the file."; "file" => %self.rel_path.display(), "err" => %err);
@@ -583,10 +569,29 @@ impl AsyncWrite for PersistentFile {
     }
 }
 
+#[inline(always)]
+fn modify_and_update_cap_diff(v: &mut Vec<u8>, record: &AtomicUsize, f: impl FnOnce(&mut Vec<u8>)) {
+    let cap_old = v.capacity();
+    f(v);
+    let cap_new = v.capacity();
+    use std::cmp::Ordering::*;
+    match cap_old.cmp(&cap_new) {
+        Less => {
+            record.fetch_add(cap_new - cap_old, Ordering::SeqCst);
+        }
+        Equal => {}
+        Greater => {
+            record.fetch_sub(cap_old - cap_new, Ordering::SeqCst);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::{
         io::Read,
+        mem::ManuallyDrop,
+        path::Path,
         pin::Pin,
         sync::{atomic::Ordering, Arc},
     };
@@ -610,13 +615,12 @@ mod test {
 
     fn simple_pool_with_modify(m: impl FnOnce(&mut Config)) -> Arc<TempFilePool> {
         let mut cfg = Config {
-            soft_max: 99999999999,
-            hard_max: 99999999999,
+            cache_size: 99999999999,
             swap_files: std::env::temp_dir().join(format!(
                 "backup_stream::tempfiles::test::{}",
                 std::process::id()
             )),
-            artificate_compression: CompressionType::Unknown,
+            content_compression: CompressionType::Unknown,
             minimal_swap_out_file_size: 8192,
             write_buffer_size: 4096,
         };
@@ -626,7 +630,7 @@ mod test {
 
     fn simple_pool_with_soft_max(soft_max: usize) -> Arc<TempFilePool> {
         simple_pool_with_modify(|cfg| {
-            cfg.soft_max = soft_max;
+            cfg.cache_size = soft_max;
             cfg.minimal_swap_out_file_size = 8192.min(soft_max)
         })
     }
@@ -699,8 +703,8 @@ mod test {
     #[test]
     fn test_compression() {
         let pool = simple_pool_with_modify(|cfg| {
-            cfg.artificate_compression = CompressionType::Zstd;
-            cfg.soft_max = 15;
+            cfg.content_compression = CompressionType::Zstd;
+            cfg.cache_size = 15;
             cfg.minimal_swap_out_file_size = 15;
         });
         let file_name = "compression.bin";
@@ -733,7 +737,7 @@ mod test {
     #[test]
     fn test_write_many_times() {
         let mut pool = simple_pool_with_modify(|cfg| {
-            cfg.soft_max = 15;
+            cfg.cache_size = 15;
             cfg.minimal_swap_out_file_size = 15;
         });
         Arc::get_mut(&mut pool).unwrap().override_swapout = Some(Box::new(|p| {
@@ -791,7 +795,7 @@ mod test {
     #[test]
     fn test_read_many_times() {
         let pool = simple_pool_with_modify(|cfg| {
-            cfg.soft_max = 15;
+            cfg.cache_size = 15;
             cfg.minimal_swap_out_file_size = 15;
         });
         let file_name = "read many times.txt";
@@ -818,12 +822,21 @@ mod test {
         }
     }
 
+    fn assert_dir_empty(p: &Path) {
+        for file in WalkDir::new(p) {
+            let file = file.unwrap();
+            if file.depth() > 0 {
+                panic!("file leaked: {}", file.path().display());
+            }
+        }
+    }
+
     #[test]
     fn test_not_leaked() {
         // Open a distinct dir for this case.
         let tmp = tempdir().unwrap();
         let pool = simple_pool_with_modify(|cfg| {
-            cfg.soft_max = 15;
+            cfg.cache_size = 15;
             cfg.minimal_swap_out_file_size = 15;
             cfg.swap_files = tmp.path().to_owned();
         });
@@ -852,11 +865,43 @@ mod test {
             assert!(pool.remove(file_name.as_ref()));
         }
         assert_eq!(pool.current.load(Ordering::SeqCst), 0);
-        for file in WalkDir::new(&pool.cfg.swap_files) {
-            let file = file.unwrap();
-            if file.depth() > 0 {
-                panic!("file leaked: {}", file.path().display());
-            }
+        assert_dir_empty(tmp.path());
+    }
+
+    #[test]
+    fn test_panic_not_leaked() {
+        let tmp = tempdir().unwrap();
+        let pool = simple_pool_with_modify(|cfg| {
+            cfg.cache_size = 15;
+            cfg.minimal_swap_out_file_size = 15;
+            cfg.swap_files = tmp.path().to_owned();
+        });
+        let rt = rt_for_test();
+        let content_to_write: [&[u8]; 4] = [
+            b"This case is pretty like the previous case, the different is in this case...",
+            b"We are going to simulating TiKV panic. That will be implemented by leak the pool itself.",
+            b"Emm, is there information need to be added? Nope. Well let me write you a random string.",
+            b"A cat in my dream, leaps across the fence around the yard.",
+        ];
+        let mut f = pool.open_for_write("delete-me.txt".as_ref()).unwrap();
+        for content in content_to_write {
+            assert_eq!(rt.block_on(f.write(content)).unwrap(), content.len());
         }
+        drop(f);
+        // TiKV panicked!
+        let _ = ManuallyDrop::new(pool);
+
+        let pool = simple_pool_with_modify(|cfg| {
+            cfg.swap_files = tmp.path().to_owned();
+        });
+        assert_dir_empty(tmp.path());
+        let mut f = pool.open_for_write("delete-me.txt".as_ref()).unwrap();
+        for content in content_to_write {
+            assert_eq!(rt.block_on(f.write(content)).unwrap(), content.len());
+        }
+        drop(f);
+        // Happy path.
+        drop(pool);
+        assert_dir_empty(tmp.path());
     }
 }

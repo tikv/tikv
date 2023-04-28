@@ -18,7 +18,7 @@ use backup_stream::{
         MetadataClient, StreamTask,
     },
     observer::BackupStreamObserver,
-    router::Router,
+    router::{Router, TaskSelector},
     utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
     RegionSet, Service, Task,
 };
@@ -776,25 +776,32 @@ impl Suite {
     }
 
     pub fn wait_for_flush(&self) {
-        use std::ffi::OsString;
-        std::fs::File::open(&self.temp_files)
-            .unwrap()
-            .sync_all()
-            .unwrap();
-        for _ in 0..100 {
-            if !walkdir::WalkDir::new(&self.temp_files)
-                .into_iter()
-                .any(|x| x.unwrap().path().extension() == Some(&OsString::from("log")))
-            {
-                return;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.run({
+            || {
+                let tx = tx.clone();
+                Task::Sync(
+                    Box::new(move || {
+                        tx.send(()).unwrap();
+                    }),
+                    Box::new(move |r| {
+                        let task_names = block_on(r.select_task(TaskSelector::All.reference()));
+                        for task_name in task_names {
+                            let tsk = block_on(r.get_task_info(&task_name));
+                            if tsk.unwrap().is_flushing() {
+                                return false;
+                            }
+                        }
+                        true
+                    }),
+                )
             }
-            std::thread::sleep(Duration::from_secs(1));
-        }
-        let v = walkdir::WalkDir::new(&self.temp_files)
-            .into_iter()
-            .collect::<Vec<_>>();
-        if !v.is_empty() {
-            panic!("the temp isn't empty after the deadline ({:?})", v)
+        });
+        for _ in self.endpoints.iter() {
+            // Receive messages from each store.
+            if rx.recv_timeout(Duration::from_secs(30)).is_err() {
+                panic!("the temp isn't empty after the deadline");
+            }
         }
     }
 
@@ -856,10 +863,10 @@ mod test {
         run_async_test(async {
             // write data before the task starting, for testing incremental scanning.
             let round1 = suite.write_records(0, 128, 1).await;
-            suite.must_register_task(1, "test_basic");
+            suite.must_register_task(1, "basic");
             suite.sync();
             let round2 = suite.write_records(256, 128, 1).await;
-            suite.force_flush_files("test_basic");
+            suite.force_flush_files("basic");
             suite.wait_for_flush();
             suite
                 .check_for_write_records(

@@ -447,10 +447,9 @@ impl RouterInner {
 
     fn tempfile_config_for_task(&self, task: &StreamTask) -> tempfiles::Config {
         tempfiles::Config {
-            soft_max: ReadableSize::mb(512).0 as _,
-            hard_max: ReadableSize::gb(4).0 as _,
+            cache_size: ReadableSize::mb(512).0 as _,
             swap_files: self.prefix.join(task.info.get_name()),
-            artificate_compression: task.info.get_compression_type(),
+            content_compression: task.info.get_compression_type(),
             minimal_swap_out_file_size: ReadableSize::mb(8).0 as _,
             write_buffer_size: ReadableSize::kb(4).0 as _,
         }
@@ -1347,7 +1346,7 @@ impl DataFile {
             resolved_ts: TimeStamp::zero(),
             min_begin_ts: None,
             inner,
-            compression_type: files.config().artificate_compression,
+            compression_type: files.config().content_compression,
             sha256,
             number_of_entries: 0,
             file_size: 0,
@@ -1505,10 +1504,9 @@ mod tests {
 
     fn make_tempfiles_cfg(p: &Path) -> tempfiles::Config {
         tempfiles::Config {
-            soft_max: ReadableSize::mb(512).0 as _,
-            hard_max: ReadableSize::gb(4).0 as _,
+            cache_size: ReadableSize::mb(512).0 as _,
             swap_files: p.to_owned(),
-            artificate_compression: CompressionType::Zstd,
+            content_compression: CompressionType::Zstd,
             minimal_swap_out_file_size: 0,
             write_buffer_size: 0,
         }
