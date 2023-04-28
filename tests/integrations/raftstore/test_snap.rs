@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
 use engine_traits::{Checkpointer, KvEngine, Peekable, RaftEngineReadOnly, SyncMutable, LARGE_CFS};
 use file_system::{IoOp, IoType};
@@ -19,6 +20,7 @@ use grpcio::Environment;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{
+    coprocessor::{ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost},
     store::{snap::TABLET_SNAPSHOT_VERSION, *},
     Result,
 };
@@ -747,10 +749,14 @@ fn generate_snap<EK: KvEngine>(
     let tablet = engine.get_tablet_by_id(region_id).unwrap();
     let region_state = engine.region_local_state(region_id).unwrap().unwrap();
     let apply_state = engine.raft_apply_state(region_id).unwrap().unwrap();
+    let raft_state = engine.raft_local_state(region_id).unwrap().unwrap();
 
     // Construct snapshot by hand
     let mut snapshot = Snapshot::default();
-    snapshot.mut_metadata().set_term(apply_state.commit_term);
+    // use commit term for simplicity
+    snapshot
+        .mut_metadata()
+        .set_term(raft_state.get_hard_state().term + 1);
     snapshot.mut_metadata().set_index(apply_state.applied_index);
     let conf_state = raftstore::store::util::conf_state_from_region(region_state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
@@ -771,6 +777,8 @@ fn generate_snap<EK: KvEngine>(
     msg.region_id = region_id;
     msg.set_to_peer(new_peer(1, 1));
     msg.mut_message().set_snapshot(snapshot);
+    msg.mut_message()
+        .set_term(raft_state.get_hard_state().commit + 1);
     msg.mut_message().set_msg_type(MessageType::MsgSnapshot);
     msg.set_region_epoch(region_state.get_region().get_region_epoch().clone());
 
@@ -784,11 +792,7 @@ fn test_v1_receive_snap_from_v2() {
         let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
         let mut cluster_v1_tikv = test_raftstore::new_server_cluster(1, 1);
 
-        cluster_v1
-            .cfg
-            .server
-            .labels
-            .insert(String::from("engine"), String::from("tiflash"));
+        cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
 
         cluster_v1.run();
         cluster_v2.run();
@@ -839,7 +843,10 @@ fn test_v1_receive_snap_from_v2() {
 
         // The snapshot has been received by cluster v1, so check it's completeness
         let snap_mgr = cluster_v1.get_snap_mgr(1);
-        let path = snap_mgr.tablet_snap_manager().final_recv_path(&snap_key);
+        let path = snap_mgr
+            .tablet_snap_manager()
+            .unwrap()
+            .final_recv_path(&snap_key);
         let rocksdb = engine_rocks::util::new_engine_opt(
             path.as_path().to_str().unwrap(),
             RocksDbOptions::default(),
