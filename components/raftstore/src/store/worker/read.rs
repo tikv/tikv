@@ -846,15 +846,14 @@ where
                 Error::FlashbackNotPrepared(_) => {
                     TLS_LOCAL_READ_METRICS
                         .with(|m| m.borrow_mut().reject_reason.flashback_not_prepared.inc());
-                    return Err(Error::FlashbackNotPrepared(region_id));
                 }
                 Error::FlashbackInProgress(..) => {
                     TLS_LOCAL_READ_METRICS
                         .with(|m| m.borrow_mut().reject_reason.flashback_in_progress.inc());
-                    return Err(Error::FlashbackInProgress(region_id, flashback_start_ts));
                 }
                 _ => unreachable!("{:?}", e),
             };
+            return Err(e);
         }
 
         Ok(Some(delegate))

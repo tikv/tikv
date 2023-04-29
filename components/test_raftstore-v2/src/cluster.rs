@@ -1674,10 +1674,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
     }
 
     pub fn must_send_wait_flashback_msg(&mut self, region_id: u64, cmd_type: AdminCmdType) {
-        let resp = self.must_send_flashback_msg(
-            region_id,
-            cmd_type,
-        );
+        let resp = self.must_send_flashback_msg(region_id, cmd_type);
         block_on(async {
             let resp = resp.await;
             if resp.get_header().has_error() {
@@ -1688,27 +1685,6 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
                 );
             }
         });
-    }
-
-    pub fn wait_applied_to_current_term(&mut self, region_id: u64, timeout: Duration) {
-        let mut now = Instant::now();
-        let deadline = now + timeout;
-        while now < deadline {
-            if let Some(leader) = self.leader_of_region(region_id) {
-                let raft_apply_state = self.apply_state(region_id, leader.get_store_id());
-                let raft_local_state = self.raft_local_state(region_id, leader.get_store_id());
-                // If term matches and apply to commit index, then it must apply to current
-                // term.
-                if raft_apply_state.applied_index == raft_apply_state.commit_index
-                    && raft_apply_state.commit_term == raft_local_state.get_hard_state().get_term()
-                {
-                    return;
-                }
-            }
-            thread::sleep(Duration::from_millis(10));
-            now = Instant::now();
-        }
-        panic!("region {} is not applied to current term", region_id,);
     }
 }
 
