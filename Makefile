@@ -137,6 +137,7 @@ export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/
 
 export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
 export DOCKER_IMAGE_TAG ?= "latest"
+export DEV_DOCKER_IMAGE_NAME ?= "pingcap/tikv_dev"
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
@@ -396,6 +397,17 @@ docker:
 		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
 		.
 
+docker_test:
+	docker build -f Dockerfile.test \
+		-t ${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
+		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
+		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
+		. 
+	docker run -i -v $(shell pwd):/tikv \
+		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		make test
+	
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
 
