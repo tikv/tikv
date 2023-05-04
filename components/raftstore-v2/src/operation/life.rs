@@ -467,6 +467,8 @@ impl Store {
             message.set_to_peer(peer);
             message.set_region_epoch(region.get_region_epoch().clone());
             let mut msg = ExtraMessage::default();
+            // TODO: HibernateRegion feature is ignored in raftstore-v2, handle
+            // MsgRegionWakeUp if necessary.
             msg.set_type(ExtraMessageType::MsgRegionWakeUp);
             msg.forcely_awaken = true;
             message.set_extra_msg(msg);
