@@ -23,7 +23,7 @@ use slog::{error, warn, Logger};
 use tikv_util::{
     config::VersionTrack,
     time::{Instant as TiInstant, UnixSecs},
-    worker::{Runnable, RunnableWithTimer, Scheduler},
+    worker::{Runnable, Scheduler},
 };
 use yatp::{task::future::TaskCell, Remote};
 
@@ -88,6 +88,10 @@ pub enum Task {
         min_resolved_ts: u64,
     },
     // In slowness.rs
+    InspectLatency {
+        inspector: LatencyInspector,
+    },
+    TickSlownessStats,
     UpdateSlownessStats {
         tick_id: u64,
         duration: RaftstoreDuration,
@@ -156,7 +160,12 @@ impl Display for Task {
                 "report min resolved ts: store {}, resolved ts {}",
                 store_id, min_resolved_ts,
             ),
-            Task::UpdateSlownessStats { tick_id, duration } => write!(
+            Task::InspectLatency { ref inspector } => write!(f, "inspect latency {:?}", inspector),
+            Task::TickSlownessStats => write!(f, "tick slowness statistics"),
+            Task::UpdateSlownessStats {
+                tick_id,
+                ref duration,
+            } => write!(
                 f,
                 "update slowness statistics: tick_id {}, duration {:?}",
                 tick_id, duration
@@ -233,6 +242,7 @@ where
         let mut stats_monitor = PdStatsMonitor::new(
             store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().report_min_resolved_ts_interval.0,
+            cfg.value().inspect_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
         );
         stats_monitor.start(
@@ -241,6 +251,7 @@ where
             collector_reg_handle,
             store_id,
         )?;
+        let slowness_stats = slowness::SlownessStatistics::new(&cfg.value());
         Ok(Self {
             store_id,
             pd_client,
@@ -259,7 +270,7 @@ where
             is_hb_receiver_scheduled: false,
             concurrency_manager,
             causal_ts_provider,
-            slowness_stats: slowness::SlownessStatistics::new(&cfg.value()),
+            slowness_stats,
             logger,
             shutdown,
             cfg,
@@ -309,60 +320,21 @@ where
                 store_id,
                 min_resolved_ts,
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
+            Task::InspectLatency { inspector } => {
+                let msg = StoreMsg::LatencyInspect {
+                    send_time: TiInstant::now(),
+                    inspector,
+                };
+                if let Err(e) = self.router.send_control(msg) {
+                    warn!(self.logger, "pd worker send latency inspecter failed";
+                            "err" => ?e);
+                }
+            }
+            Task::TickSlownessStats => self.handle_slowness_stats_timeout(),
             Task::UpdateSlownessStats { tick_id, duration } => {
                 self.handle_update_slowness_stats(tick_id, duration)
             }
         }
-    }
-}
-
-impl<EK, ER, T> RunnableWithTimer for Runner<EK, ER, T>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-    T: PdClient + 'static,
-{
-    fn on_timeout(&mut self) {
-        self.handle_slowness_stats_timeout();
-        // Tick a new latency inspector.
-        let scheduler = self.scheduler.clone();
-        let tick_id = self.slowness_stats.get_latest_tick();
-
-        let inspector = LatencyInspector::new(
-            tick_id,
-            Box::new(move |tick_id, duration| {
-                let dur = duration.sum();
-
-                STORE_INSPECT_DURTION_HISTOGRAM
-                    .with_label_values(&["store_process"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.store_process_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURTION_HISTOGRAM
-                    .with_label_values(&["store_wait"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.store_wait_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURTION_HISTOGRAM
-                    .with_label_values(&["all"])
-                    .observe(tikv_util::time::duration_to_sec(dur));
-                if let Err(e) = scheduler.schedule(Task::UpdateSlownessStats { tick_id, duration })
-                {
-                    warn!(self.logger, "schedule pd UpdateSlownessStats task failed"; "err" => ?e);
-                }
-            }),
-        );
-        let msg = StoreMsg::LatencyInspect {
-            send_time: TiInstant::now(),
-            inspector,
-        };
-        if let Err(e) = self.router.send_control(msg) {
-            warn!(self.logger, "pd worker send latency inspecter failed"; "err" => ?e);
-        }
-    }
-
-    fn get_interval(&self) -> std::time::Duration {
-        self.slowness_stats.get_inspect_interval()
     }
 }
 
@@ -443,6 +415,58 @@ impl StoreStatsReporter for PdReporter {
                 "failed to send split infos to pd worker";
                 "err" => ?e,
             );
+        }
+    }
+
+    fn update_latency_stats(&self, timer_tick: u64) {
+        // Tick slowness statistics.
+        {
+            if let Err(e) = self.scheduler.schedule(Task::TickSlownessStats) {
+                error!(
+                    self.logger,
+                    "failed to send tick slowness statistics to pd worker";
+                    "err" => ?e,
+                );
+            }
+        }
+        // Tick a new latency inspector.
+        {
+            let scheduler = self.scheduler.clone();
+            let logger = self.logger.clone();
+            let tick_id = timer_tick;
+
+            let inspector = LatencyInspector::new(
+                tick_id,
+                Box::new(move |tick_id, duration| {
+                    let dur = duration.sum();
+
+                    STORE_INSPECT_DURTION_HISTOGRAM
+                        .with_label_values(&["store_process"])
+                        .observe(tikv_util::time::duration_to_sec(
+                            duration.store_process_duration.unwrap(),
+                        ));
+                    STORE_INSPECT_DURTION_HISTOGRAM
+                        .with_label_values(&["store_wait"])
+                        .observe(tikv_util::time::duration_to_sec(
+                            duration.store_wait_duration.unwrap(),
+                        ));
+                    STORE_INSPECT_DURTION_HISTOGRAM
+                        .with_label_values(&["all"])
+                        .observe(tikv_util::time::duration_to_sec(dur));
+                    if let Err(e) =
+                        scheduler.schedule(Task::UpdateSlownessStats { tick_id, duration })
+                    {
+                        warn!(logger, "schedule pd UpdateSlownessStats task failed"; "err" => ?e);
+                    }
+                }),
+            );
+            if let Err(e) = self.scheduler.schedule(Task::InspectLatency { inspector }) {
+                error!(
+                    self.logger,
+                    "failed to send inspect latency to pd worker";
+                    "err" => ?e,
+                );
+            }
         }
     }
 }

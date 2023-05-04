@@ -486,6 +486,7 @@ pub trait StoreStatsReporter: Send + Clone + Sync + 'static + Collector {
     );
     fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64);
     fn auto_split(&self, split_infos: Vec<SplitInfo>);
+    fn update_latency_stats(&self, timer_tick: u64);
 }
 
 impl<EK, ER> StoreStatsReporter for WrappedScheduler<EK, ER>
@@ -534,6 +535,11 @@ where
             );
         }
     }
+
+    fn update_latency_stats(&self, timer_tick: u64) {
+        debug!("update latency statistics not implemented for raftstore-v1";
+                "tick" => timer_tick);
+    }
 }
 
 pub struct StatsMonitor<T>
@@ -549,13 +555,19 @@ where
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
     report_min_resolved_ts_interval: Duration,
+    inspect_latency_interval: Duration,
 }
 
 impl<T> StatsMonitor<T>
 where
     T: StoreStatsReporter,
 {
-    pub fn new(interval: Duration, report_min_resolved_ts_interval: Duration, reporter: T) -> Self {
+    pub fn new(
+        interval: Duration,
+        report_min_resolved_ts_interval: Duration,
+        inspect_latency_interval: Duration,
+        reporter: T,
+    ) -> Self {
         StatsMonitor {
             reporter,
             handle: None,
@@ -569,6 +581,10 @@ where
             ),
             report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
             collect_tick_interval: cmp::min(default_collect_tick_interval(), interval),
+            inspect_latency_interval: cmp::max(
+                default_collect_tick_interval(),
+                inspect_latency_interval,
+            ),
         }
     }
 
@@ -597,6 +613,9 @@ where
             .div_duration_f64(tick_interval) as u64;
         let report_min_resolved_ts_interval = self
             .report_min_resolved_ts_interval
+            .div_duration_f64(tick_interval) as u64;
+        let update_latency_stats_interval = self
+            .inspect_latency_interval
             .div_duration_f64(tick_interval) as u64;
 
         let (timer_tx, timer_rx) = mpsc::channel();
@@ -658,6 +677,9 @@ where
                             store_id,
                             region_read_progress.get_min_resolved_ts(),
                         );
+                    }
+                    if is_enable_tick(timer_cnt, update_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt);
                     }
                     timer_cnt += 1;
                 }
@@ -779,6 +801,8 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
+/// Default monitoring label of SlowTrend in raftstore-v1.
+const STORE_SLOW_TREND_REPORT_LABEL: [&str; 1] = ["disk-io"];
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
@@ -952,6 +976,7 @@ where
         let mut stats_monitor = StatsMonitor::new(
             interval,
             cfg.report_min_resolved_ts_interval.0,
+            cfg.inspect_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(
@@ -984,9 +1009,9 @@ where
                 // Disable SpikeFilter for now
                 Duration::from_secs(0),
                 STORE_SLOW_TREND_MISC_GAUGE_VEC
-                    .with_label_values(&["disk-io", "spike_filter_value"]),
+                    .with_label_values(&[STORE_SLOW_TREND_REPORT_LABEL[0], "spike_filter_value"]),
                 STORE_SLOW_TREND_MISC_GAUGE_VEC
-                    .with_label_values(&["disk-io", "spike_filter_count"]),
+                    .with_label_values(&[STORE_SLOW_TREND_REPORT_LABEL[0], "spike_filter_count"]),
                 Duration::from_secs(180),
                 Duration::from_secs(30),
                 Duration::from_secs(120),
@@ -994,9 +1019,9 @@ where
                 1,
                 tikv_util::time::duration_to_us(Duration::from_micros(500)),
                 STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
-                    .with_label_values(&["disk-io", "L1"]),
+                    .with_label_values(&[STORE_SLOW_TREND_REPORT_LABEL[0], "L1"]),
                 STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
-                    .with_label_values(&["disk-io", "L2"]),
+                    .with_label_values(&[STORE_SLOW_TREND_REPORT_LABEL[0], "L2"]),
                 cfg.slow_trend_unsensitive_cause,
             ),
             slow_trend_result: Trend::new(
@@ -1423,7 +1448,7 @@ where
     ) {
         let slow_trend_cause_rate = self.slow_trend_cause.increasing_rate();
         STORE_SLOW_TREND_GAUGE
-            .with_label_values(&["disk-io"])
+            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
             .set(slow_trend_cause_rate);
         let mut slow_trend = pdpb::SlowTrend::default();
         slow_trend.set_cause_rate(slow_trend_cause_rate);
@@ -1445,27 +1470,26 @@ where
     }
 
     fn write_slow_trend_metrics(&mut self) {
-        let label = ["disk-io"];
         STORE_SLOW_TREND_L0_GAUGE
-            .with_label_values(&label)
+            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
             .set(self.slow_trend_cause.l0_avg());
         STORE_SLOW_TREND_L1_GAUGE
-            .with_label_values(&label)
+            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
             .set(self.slow_trend_cause.l1_avg());
         STORE_SLOW_TREND_L2_GAUGE
-            .with_label_values(&label)
+            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
             .set(self.slow_trend_cause.l2_avg());
         STORE_SLOW_TREND_L0_L1_GAUGE
-            .with_label_values(&label)
+            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
             .set(self.slow_trend_cause.l0_l1_rate());
         STORE_SLOW_TREND_L1_L2_GAUGE
-            .with_label_values(&label)
+            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
             .set(self.slow_trend_cause.l1_l2_rate());
         STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE
-            .with_label_values(&label)
+            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
             .set(self.slow_trend_cause.l1_margin_error_base());
         STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE
-            .with_label_values(&label)
+            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
             .set(self.slow_trend_cause.l2_margin_error_base());
         // Report results of all slow Trends.
         STORE_SLOW_TREND_RESULT_L0_GAUGE.set(self.slow_trend_result.l0_avg());

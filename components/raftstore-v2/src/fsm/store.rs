@@ -298,6 +298,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     // self.ctx.raft_metrics.stat_commit_log.reset();
                     self.store_ctx.pending_latency_inspect.push(inspector);
                 }
+                StoreMsg::AwakenRegions { abnormal_stores } => {
+                    self.fsm
+                        .store
+                        .on_wake_up_regions(self.store_ctx, abnormal_stores);
+                }
             }
         }
     }

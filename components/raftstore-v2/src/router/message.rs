@@ -10,11 +10,8 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{
-    fsm::ChangeObserver,
-    metrics::RaftEventDurationType,
-    simple_write::SimpleWriteBinary,
-    util::{LatencyInspector, RaftstoreDuration},
-    FetchedLogs, GenSnapRes,
+    fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
+    util::LatencyInspector, FetchedLogs, GenSnapRes,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;

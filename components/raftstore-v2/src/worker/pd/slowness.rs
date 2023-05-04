@@ -1,27 +1,12 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cmp,
-    f32::MAX,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use fail::fail_point;
 use kvproto::pdpb;
-use pd_client::{metrics::*, PdClient};
-use prometheus::local::LocalHistogram;
+use pd_client::PdClient;
 use raftstore::store::{metrics::*, util::RaftstoreDuration, Config};
-use slog::{error, warn};
-use tikv_util::{
-    metrics::RecordPairVec,
-    store::QueryStats,
-    time::UnixSecs,
-    topn::TopN,
-    trend::{RequestPerSecRecorder, Trend},
-    worker::RunnableWithTimer,
-};
+use tikv_util::trend::{RequestPerSecRecorder, Trend};
 
 use super::Runner;
 
@@ -44,7 +29,6 @@ impl SlowCauseType {
 }
 
 pub struct SlownessStatistics {
-    inspect_interval: Duration,
     slow_causes: [Trend; 2],
     slow_result: Trend,
     slow_result_recorder: RequestPerSecRecorder,
@@ -60,7 +44,6 @@ impl SlownessStatistics {
             SlowCauseType::NetworkIo.as_str(),
         );
         Self {
-            inspect_interval: cfg.inspect_interval.0,
             slow_causes: [
                 // Disk IO jitters detective
                 Trend::new(
@@ -127,16 +110,6 @@ impl SlownessStatistics {
     }
 
     #[inline]
-    pub fn get_latest_tick(&self) -> u64 {
-        self.last_tick_id
-    }
-
-    #[inline]
-    pub fn get_inspect_interval(&self) -> Duration {
-        self.inspect_interval
-    }
-
-    #[inline]
     fn slow_cause(&self, t: SlowCauseType) -> &Trend {
         &self.slow_causes[t as usize]
     }
@@ -164,8 +137,9 @@ impl SlownessStatistics {
     #[inline]
     fn get_cause_value(&self) -> f64 {
         let mut max = std::f64::MIN;
+        // TODO: should be optimized, `max` maybe ignore some corner cases.
         for cause_type in [SlowCauseType::DiskIo, SlowCauseType::NetworkIo] {
-            max = std::cmp::max(max, self.slow_causes[cause_type as usize].l0_avg());
+            max = f64::max(max, self.slow_causes[cause_type as usize].l0_avg());
         }
         max
     }
@@ -173,8 +147,9 @@ impl SlownessStatistics {
     #[inline]
     fn get_cause_rate(&self) -> f64 {
         let mut max = std::f64::MIN;
+        // TODO: should be optimized, `max` maybe ignore some corner cases.
         for cause_type in [SlowCauseType::DiskIo, SlowCauseType::NetworkIo] {
-            max = std::cmp::max(max, self.slow_causes[cause_type as usize].increasing_rate());
+            max = f64::max(max, self.slow_causes[cause_type as usize].increasing_rate());
         }
         max
     }
@@ -186,7 +161,7 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
-    pub fn handle_update_slowness_stats(&mut self, tick_id: u64, duration: RaftstoreDuration) {
+    pub fn handle_update_slowness_stats(&mut self, _tick: u64, duration: RaftstoreDuration) {
         self.slowness_stats.last_tick_finished = true;
         // Record IO latency on Disk.
         self.slowness_stats

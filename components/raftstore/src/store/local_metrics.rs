@@ -8,7 +8,6 @@ use prometheus::local::LocalHistogram;
 use raft::eraftpb::MessageType;
 use tikv_util::time::{Duration, Instant};
 use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
-use yatp::pool::Local;
 
 use super::metrics::*;
 

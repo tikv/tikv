@@ -14,7 +14,7 @@ use pd_client::{
     PdClient,
 };
 use prometheus::local::LocalHistogram;
-use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyInspector};
+use raftstore::store::metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC;
 use slog::{error, warn};
 use tikv_util::{metrics::RecordPairVec, store::QueryStats, time::UnixSecs, topn::TopN};
 
@@ -22,6 +22,9 @@ use super::Runner;
 use crate::router::StoreMsg;
 
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
+
+/// Max limitation of delayed store_heartbeat.
+const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
 fn hotspot_key_report_threshold() -> u64 {
     const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
@@ -217,6 +220,7 @@ where
             .store_stat
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
+        let last_query_sum = res.get_all_query_num();
         stats.set_query_stats(res.0);
 
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
@@ -232,7 +236,8 @@ where
             .engine_last_query_num
             .fill_query_stats(&self.store_stat.engine_total_query_num);
         self.store_stat.last_report_ts =
-            if self.store_stat.last_report_ts == UnixSecs::new(stats.get_start_time()) {
+            if self.store_stat.last_report_ts.clone().into_inner() as u32 == stats.get_start_time()
+            {
                 // The given Task::StoreHeartbeat should be a fake heartbeat to PD, we won't
                 // update the last_report_ts to avoid incorrectly marking current TiKV node in
                 // normal state.
@@ -256,7 +261,7 @@ where
             .set(used_size as i64);
 
         // Update slowness statistics
-        self.update_slowness_in_store_stats(&mut stats, res.get_all_query_num());
+        self.update_slowness_in_store_stats(&mut stats, last_query_sum);
 
         let resp = self.pd_client.store_heartbeat(stats, None, None);
         let router = self.router.clone();
@@ -303,8 +308,8 @@ where
         // This calling means that the current node cannot report heartbeat in normaly
         // scheduler. That is, the current node must in `busy` state. Meanwhile, mark
         // this fake `StoreStats.start_time` == `store_stat.last_report_ts` to reveal
-        // that current heartbeat is fake for forcely reporting slowness.
-        stats.set_start_time(self.store_stat.last_report_ts.into_inner() as u32);
+        // that current heartbeat is fake and used for reporting slowness forcely.
+        stats.set_start_time(self.store_stat.last_report_ts.clone().into_inner() as u32);
         stats.set_is_busy(true);
 
         // We do not need to report store_info, so we just set `None` here.
