@@ -276,27 +276,16 @@ impl TimeTracker {
         }
     }
 
-    #[inline]
     pub fn observe(
         &self,
         now: std::time::Instant,
         local_metric: &LocalHistogram,
         tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
-    ) {
-        let _ = self.observe_and_return(now, local_metric, tracker_metric);
-    }
-
-    #[inline]
-    pub fn observe_and_return(
-        &self,
-        now: std::time::Instant,
-        local_metric: &LocalHistogram,
-        tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
-    ) -> Duration {
+    ) -> u64 {
         let dur = now.saturating_duration_since(self.start);
         local_metric.observe(dur.as_secs_f64());
         if self.token == INVALID_TRACKER_TOKEN {
-            return Duration::ZERO;
+            return 0;
         }
         GLOBAL_TRACKERS.with_tracker(self.token, |tracker| {
             let metric = tracker_metric(tracker);
@@ -304,7 +293,7 @@ impl TimeTracker {
                 *metric = dur.as_nanos() as u64;
             }
         });
-        dur
+        dur.as_nanos() as u64
     }
 
     #[inline]

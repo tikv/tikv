@@ -46,7 +46,7 @@ use tikv_util::{
     log::SlogFormat,
     slog_panic,
     store::find_peer,
-    time::{duration_to_sec, monotonic_raw_now},
+    time::{duration_to_sec, monotonic_raw_now, Duration},
 };
 
 pub use self::{
@@ -57,6 +57,7 @@ pub use self::{
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsmDelegate, Store},
+    operation::life::is_empty_split_message,
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
     worker::tablet,
@@ -289,10 +290,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
         let from_peer_id = from_peer.get_id();
-        if self.is_leader() && from_peer.get_id() != INVALID_ID {
-            self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
+        if from_peer_id != INVALID_ID {
+            if self.is_leader() {
+                self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
+            }
+            // We only cache peer with an vaild ID.
+            // It prevents cache peer(0,0) which is sent by region split.
+            self.insert_peer_cache(from_peer);
         }
-        self.insert_peer_cache(from_peer);
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
@@ -304,6 +309,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.peer_id())
             {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+            // As this peer is already created, the empty split message is meaningless.
+            if is_empty_split_message(&msg) {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
@@ -389,7 +399,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Filling start and end key is only needed for being compatible with
-        // raftstore v1 tiflash engine.
+        // raftstore v1 learners (e.g. tiflash engine).
         //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
@@ -800,10 +810,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     for tracker in trackers {
                         // Collect the metrics related to commit_log
                         // durations.
-                        stat_raft_commit_log.record(tracker.observe_and_return(now, hist, |t| {
-                            t.metrics.commit_not_persisted = !commit_persisted;
-                            &mut t.metrics.wf_commit_log_nanos
-                        }));
+                        stat_raft_commit_log.record(Duration::from_nanos(tracker.observe(
+                            now,
+                            hist,
+                            |t| {
+                                t.metrics.commit_not_persisted = !commit_persisted;
+                                &mut t.metrics.wf_commit_log_nanos
+                            },
+                        )));
                     }
                 }
             }

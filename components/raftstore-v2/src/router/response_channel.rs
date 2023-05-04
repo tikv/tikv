@@ -273,6 +273,14 @@ impl<Res> BaseChannel<Res> {
     pub fn set_result(self, res: Res) {
         self.core.set_result(res);
     }
+
+    pub fn with_callback(f: Box<dyn FnOnce(&mut Res) + Send>) -> (Self, BaseSubscriber<Res>) {
+        let (c, s) = pair();
+        unsafe {
+            *c.core.before_set.get() = Some(f);
+        }
+        (c, s)
+    }
 }
 
 impl<Res> Drop for BaseChannel<Res> {
@@ -615,16 +623,6 @@ impl QueryResChannel {
     #[inline]
     pub fn pair() -> (Self, QueryResSubscriber) {
         pair()
-    }
-
-    pub fn with_callback(
-        f: Box<dyn FnOnce(&mut QueryResult) + Send>,
-    ) -> (Self, QueryResSubscriber) {
-        let (c, s) = pair();
-        unsafe {
-            *c.core.before_set.get() = Some(f);
-        }
-        (c, s)
     }
 }
 
