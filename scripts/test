@@ -30,6 +30,6 @@ export RUST_BACKTRACE=full
 
 echo ${TIKV_ENABLE_FEATURES}
 cargo $CUSTOM_TEST_COMMAND --workspace \
-    --release --exclude fuzz --exclude fuzzer-afl --exclude fuzzer-honggfuzz \
+    --exclude fuzz --exclude fuzzer-afl --exclude fuzzer-honggfuzz \
     --exclude fuzzer-libfuzzer --exclude fuzz-targets \
     --features "${TIKV_ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} "$@"
