@@ -13,10 +13,10 @@
 //! be used as the start state.
 
 use std::{
-    collections::LinkedList,
+    collections::{HashMap, LinkedList},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
 };
 
@@ -59,29 +59,31 @@ struct FlushProgress {
 /// raftstore will update state changes and corresponding sst apply index, when
 /// apply ingest sst request, it should ensure the sst can be deleted
 /// if the flushed index greater than it .
-#[derive(Debug)]
-pub struct SSTState {
-    sst_applied_index: AtomicU64,
+#[derive(Debug, Clone)]
+pub struct SstApplyState {
+    sst_map: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
 }
 
-impl SSTState {
-    pub fn new(sst_applied_index: u64) -> Self {
+impl SstApplyState {
+    pub fn new() -> Self {
         Self {
-            sst_applied_index: AtomicU64::new(sst_applied_index),
+            sst_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Set the latest sst applied index.
     #[inline]
-    pub fn set_sst_applied_index(&self, sst_applied_index: u64) {
-        self.sst_applied_index
-            .store(sst_applied_index, Ordering::Release);
+    pub fn registe_ssts(&self, uuids: Vec<Vec<u8>>, sst_applied_index: u64) {
+        let mut map = self.sst_map.write().unwrap();
+        for uuid in uuids {
+            map.insert(uuid, sst_applied_index);
+        }
     }
 
     /// Query the sst applied index.
     #[inline]
-    pub fn sst_applied_index(&self) -> u64 {
-        self.sst_applied_index.load(Ordering::Acquire)
+    pub fn sst_applied_index(&self, uuid: &Vec<u8>) -> Option<u64> {
+        self.sst_map.read().unwrap().get(uuid).copied()
     }
 }
 
