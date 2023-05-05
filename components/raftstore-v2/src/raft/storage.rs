@@ -398,7 +398,8 @@ mod tests {
     fn test_apply_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
-        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
+        let mgr =
+            TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap(), None).unwrap();
         let engines = engine_test::new_temp_engine(&path);
         let raft_engine = engines.raft.clone();
         let mut wb = raft_engine.log_batch(10);
@@ -437,7 +438,7 @@ mod tests {
             .unwrap();
         let snapshot = new_empty_snapshot(region.clone(), snap_index, snap_term, false);
         let mut task = WriteTask::new(region.get_id(), 5, 1);
-        s.apply_snapshot(&snapshot, &mut task, mgr, reg.clone())
+        s.apply_snapshot(&snapshot, &mut task, &mgr, &reg, None)
             .unwrap();
         // Add more entries to check if old entries are cleared. If not, it should panic
         // with memtable hole when using raft engine.
@@ -481,7 +482,8 @@ mod tests {
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
-        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
+        let mgr =
+            TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap(), None).unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
