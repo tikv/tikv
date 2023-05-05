@@ -236,8 +236,7 @@ where
             .engine_last_query_num
             .fill_query_stats(&self.store_stat.engine_total_query_num);
         self.store_stat.last_report_ts =
-            if self.store_stat.last_report_ts.clone().into_inner() as u32 == stats.get_start_time()
-            {
+            if self.store_stat.last_report_ts.into_inner() as u32 == stats.get_start_time() {
                 // The given Task::StoreHeartbeat should be a fake heartbeat to PD, we won't
                 // update the last_report_ts to avoid incorrectly marking current TiKV node in
                 // normal state.
@@ -309,7 +308,7 @@ where
         // scheduler. That is, the current node must in `busy` state. Meanwhile, mark
         // this fake `StoreStats.start_time` == `store_stat.last_report_ts` to reveal
         // that current heartbeat is fake and used for reporting slowness forcely.
-        stats.set_start_time(self.store_stat.last_report_ts.clone().into_inner() as u32);
+        stats.set_start_time(self.store_stat.last_report_ts.into_inner() as u32);
         stats.set_is_busy(true);
 
         // We do not need to report store_info, so we just set `None` here.
