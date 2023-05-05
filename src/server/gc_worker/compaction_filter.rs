@@ -45,6 +45,9 @@ pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 // other replicas by Raft.
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
+// default mvcc delete threshhold for compaction filter
+const COMPACT_DELETES_THRESHOLD: f64 = 0.2;
+
 // Global context to create a compaction filter for write CF. It's necessary as
 // these fields are not available when constructing
 // `WriteCompactionFilterFactory`.
@@ -770,7 +773,8 @@ pub fn check_need_gc(
             // to avoid garbage accumulation.
             return (true, true);
         }
-        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
+        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold || 
+            props.num_deletes as f64 > props.num_entires as f64 * COMPACT_DELETES_THRESHOLD {
             // When comparing `num_versions` with `num_rows`, it's unnecessary to
             // treat internal levels specially.
             return (true, false);
