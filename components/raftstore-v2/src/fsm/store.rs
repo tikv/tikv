@@ -290,14 +290,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 }
                 StoreMsg::LatencyInspect {
                     send_time,
-                    mut inspector,
-                } => {
-                    // Record the last statistics of commit-log-duration and store-write-duration.
-                    inspector.record_store_wait(send_time.saturating_elapsed());
-                    // inspector.record_store_commit(self.ctx.raft_metrics.stat_commit_log.avg());
-                    // self.ctx.raft_metrics.stat_commit_log.reset();
-                    self.store_ctx.pending_latency_inspect.push(inspector);
-                }
+                    inspector,
+                } => self.fsm.store.on_update_latency_inspectors(
+                    self.store_ctx,
+                    send_time,
+                    inspector,
+                ),
                 StoreMsg::AwakenRegions { abnormal_stores } => {
                     self.fsm
                         .store

@@ -472,6 +472,24 @@ impl Store {
         }
     }
 
+    pub fn on_update_latency_inspectors<EK, ER, T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        start_ts: Instant,
+        mut inspector: util::LatencyInspector,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+        T: Transport,
+    {
+        // Record the last statistics of commit-log-duration and store-write-duration.
+        inspector.record_store_wait(start_ts.saturating_elapsed());
+        inspector.record_store_commit(ctx.raft_metrics.stat_commit_log.avg());
+        // Reset the stat_commit_log and wait it to be refreshed in the next tick.
+        ctx.raft_metrics.stat_commit_log.reset();
+        ctx.pending_latency_inspect.push(inspector);
+    }
+
     /// Awaken hibernated regions on specific stores, already abnormal or
     /// hanging on IO operations.
     #[inline]

@@ -164,19 +164,25 @@ where
     pub fn handle_update_slowness_stats(&mut self, _tick: u64, duration: RaftstoreDuration) {
         self.slowness_stats.last_tick_finished = true;
         // Record IO latency on Disk.
-        self.slowness_stats
-            .slow_cause_mut(SlowCauseType::DiskIo)
-            .record(
-                tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()),
-                Instant::now(),
-            );
+        // The `None`, means that `RaftStoreDuration::store_wait_duration` is abnormal,
+        // should be skipped.
+        if let Some(store_write_duration) = duration.store_wait_duration {
+            self.slowness_stats
+                .slow_cause_mut(SlowCauseType::DiskIo)
+                .record(
+                    tikv_util::time::duration_to_us(store_wait_duration),
+                    Instant::now(),
+                );
+        }
         // Record IO latency on network
-        self.slowness_stats
-            .slow_cause_mut(SlowCauseType::NetworkIo)
-            .record(
-                tikv_util::time::duration_to_us(duration.store_commit_duration.unwrap()),
-                Instant::now(),
-            );
+        if let Some(store_commit_duration) = duration.store_commit_duration {
+            self.slowness_stats
+                .slow_cause_mut(SlowCauseType::NetworkIo)
+                .record(
+                    tikv_util::time::duration_to_us(store_commit_duration),
+                    Instant::now(),
+                );
+        }
     }
 
     pub fn handle_slowness_stats_timeout(&mut self) {
