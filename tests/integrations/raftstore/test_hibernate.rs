@@ -199,9 +199,9 @@ fn test_transfer_leader_delay() {
     );
 
     cluster.clear_send_filters();
-    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(
-        MessageType::MsgTimeoutNow,
-    )));
+    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(Arc::new(|m| {
+        m.get_message().get_msg_type() != MessageType::MsgTimeoutNow
+    }))));
     let router = cluster.sim.wl().get_router(1).unwrap();
     router
         .send_raft_message(messages.lock().unwrap().pop().unwrap())

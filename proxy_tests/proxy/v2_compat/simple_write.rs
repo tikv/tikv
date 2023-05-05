@@ -64,11 +64,6 @@ fn test_write_simple() {
     );
     cluster_v1.add_recv_filter_on_node(2, filter11);
 
-    // TODO remove this when simple write is supported
-    cluster_v1.shutdown();
-    cluster_v2.shutdown();
-    return;
-
     cluster_v2.must_put(b"k1", b"v1");
     assert_eq!(
         cluster_v2.must_get(b"k1").unwrap(),

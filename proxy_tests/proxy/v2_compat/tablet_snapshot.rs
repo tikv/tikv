@@ -79,11 +79,6 @@ fn test_parse_tablet_snapshot() {
     let test_parse_snap = |key_num| {
         let mut cluster_v1 = new_server_cluster(1, 1);
         let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
-        cluster_v1
-            .cfg
-            .server
-            .labels
-            .insert(String::from("engine"), String::from("tiflash"));
         cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
         cluster_v1.run();
         cluster_v2.run();
@@ -157,6 +152,8 @@ fn test_parse_tablet_snapshot() {
         validate(ColumnFamilyType::Default);
         validate(ColumnFamilyType::Write);
         validate(ColumnFamilyType::Lock);
+        cluster_v1.shutdown();
+        cluster_v2.shutdown();
     };
 
     test_parse_snap(20);
@@ -230,6 +227,7 @@ fn test_v1_apply_snap_from_v2() {
     cluster_v2.run();
 
     let region = cluster_v2.get_region(b"");
+    let region_id = region.get_id();
     cluster_v2.must_split(&region, b"k0010");
 
     let s1_addr = cluster_v1.get_addr(1);
@@ -244,34 +242,10 @@ fn test_v1_apply_snap_from_v2() {
 
     let tablet_snap_mgr = cluster_v2.get_snap_mgr(1);
     let security_mgr = cluster_v2.get_security_mgr();
-    let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
     let cfg = tikv::server::Config::default();
     let limit = Limiter::new(f64::INFINITY);
     let env = Arc::new(Environment::new(1));
-    let _ = block_on(async {
-        send_snap_v2(
-            env.clone(),
-            tablet_snap_mgr.clone(),
-            security_mgr.clone(),
-            &cfg,
-            &s1_addr,
-            msg,
-            limit.clone(),
-        )
-        .unwrap()
-        .await
-    });
 
-    let snap_mgr = cluster_v1.get_snap_mgr(region_id);
-    let path = snap_mgr
-        .tablet_snap_manager()
-        .as_ref()
-        .unwrap()
-        .final_recv_path(&snap_key);
-    let path_str = path.as_path().to_str().unwrap();
-
-    let region = cluster_v2.get_region(b"k0011");
-    let region_id = region.get_id();
     let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
     let _ = block_on(async {
         send_snap_v2(
@@ -295,17 +269,26 @@ fn test_v1_apply_snap_from_v2() {
         .final_recv_path(&snap_key);
     let path_str = path.as_path().to_str().unwrap();
 
+    for i in 11..50 {
+        let k = format!("k{:04}", i);
+        check_key(
+            &cluster_v1,
+            k.as_bytes(),
+            b"val",
+            None,
+            Some(true),
+            Some(vec![1]),
+        );
+    }
+
     // Verify that the tablet snap will be gced
     for _ in 0..10 {
         if !path.exists() {
+            cluster_v1.shutdown();
+            cluster_v2.shutdown();
             return;
         }
         std::thread::sleep(Duration::from_millis(200));
-    }
-
-    for i in 0..50 {
-        let k = format!("k{:04}", i);
-        check_key(&cluster_v1, b"k1", b"val", Some(true), None, None);
     }
 
     panic!("tablet snap {:?} still exists", path_str);
