@@ -157,10 +157,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         assert!(self.applied_merge_state().is_some());
         // Target already committed `CommitMerge`.
         if let Some(c) = &self.merge_context().unwrap().catch_up_logs {
-            if self.catch_up_logs_ready(c) {
-                let c = self.merge_context_mut().catch_up_logs.take().unwrap();
-                self.finish_catch_up_logs(store_ctx, c);
-            }
+            assert!(self.catch_up_logs_ready(c));
+            let c = self.merge_context_mut().catch_up_logs.take().unwrap();
+            self.finish_catch_up_logs(store_ctx, c);
         } else {
             self.on_check_merge(store_ctx);
         }
@@ -276,6 +275,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // If target caught up by snapshot, the source checkpoint hasn't been used.
             let source_path =
                 merge_source_path(&store_ctx.tablet_registry, source_region.get_id(), index);
+            assert!(source_path.exists());
             self.record_tombstone_tablet_path(store_ctx, source_path, r.get_index());
             let _ = store_ctx.router.force_send(
                 source_region.get_id(),
@@ -291,14 +291,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "current_epoch" => ?region.get_region_epoch(),
                 "expected_epoch" => ?expected_epoch,
             );
-            let commit_merge = req.get_admin_request().get_commit_merge();
-            let source_id = commit_merge.get_source_state().get_region().get_id();
-            let _ = store_ctx.router.force_send(
-                source_id,
-                PeerMsg::RejectCommitMerge {
-                    index: commit_of_merge(commit_merge),
-                },
-            );
+            let index = commit_of_merge(req.get_admin_request().get_commit_merge());
+            let _ = store_ctx
+                .router
+                .force_send(source_region.get_id(), PeerMsg::RejectCommitMerge { index });
         } else if expected_epoch == region.get_region_epoch() {
             assert!(
                 util::is_sibling_regions(source_region, region),
@@ -503,6 +499,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         merged_record.set_target_epoch(region.get_region_epoch().clone());
         merged_record.set_target_peers(region.get_peers().into());
         merged_record.set_index(index);
+        merged_record.set_source_index(merge_commit);
         state.mut_merged_records().push(merged_record);
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();

@@ -20,7 +20,7 @@ use merge::{
 };
 pub use merge::{
     commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
-    MergeContext, MERGE_SOURCE_PREFIX,
+    merge_source_path, MergeContext, MERGE_SOURCE_PREFIX,
 };
 use protobuf::Message;
 use raftstore::{

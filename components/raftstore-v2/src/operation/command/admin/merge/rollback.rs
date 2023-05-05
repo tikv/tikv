@@ -17,6 +17,7 @@ use raftstore::{
 use slog::{error, info};
 use tikv_util::slog_panic;
 
+use super::merge_source_path;
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
@@ -140,7 +141,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 reader,
                 res.region.clone(),
                 RegionChangeReason::RollbackMerge,
-                res.commit,
+                self.storage().region_state().get_tablet_index(),
             );
         }
         let region_state = self.storage().region_state().clone();
@@ -161,6 +162,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .and_then(|c| c.prepare_merge_index())
             .unwrap_or_else(|| slog_panic!(self.logger, "no applied prepare merge to rollback"));
         // Clear merge releted data
+        let checkpoint_path =
+            merge_source_path(&store_ctx.tablet_registry, self.region_id(), index);
+        if checkpoint_path.exists() {
+            // Don't remove it immediately so that next restart we don't need to waste time
+            // making the checkpoint again. We double check in `clean_up_tablets` to ensure
+            // this checkpoint isn't leaked.
+            self.record_tombstone_tablet_path(store_ctx, checkpoint_path, index);
+        }
         self.proposal_control_mut().leave_prepare_merge(index);
         self.take_merge_context();
 

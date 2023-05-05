@@ -24,7 +24,7 @@ pub const MERGE_SOURCE_PREFIX: &str = "merge-source";
 
 // `index` is the commit index of `PrepareMergeRequest`, `commit` field of
 // `CommitMergeRequest`.
-fn merge_source_path<EK>(
+pub fn merge_source_path<EK>(
     registry: &TabletRegistry<EK>,
     source_region_id: u64,
     index: u64,

@@ -109,6 +109,7 @@ impl DestroyProgress {
 
 #[derive(Default)]
 pub struct GcPeerContext {
+    // Peers that are confirmed to be deleted.
     confirmed_ids: Vec<u64>,
 }
 
@@ -497,18 +498,55 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// A peer confirms it's destroyed.
-    pub fn on_gc_peer_response(&mut self, msg: &RaftMessage) {
+    pub fn on_gc_peer_response<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage) {
         let gc_peer_id = msg.get_from_peer().get_id();
         let state = self.storage().region_state();
-        if state
-            .get_removed_records()
-            .iter()
-            .all(|p| p.get_id() != gc_peer_id)
-            && state.get_merged_records().iter().all(|p| {
-                p.get_source_peers()
-                    .iter()
-                    .all(|p| p.get_id() != gc_peer_id)
-            })
+
+        let mut has_merged = false;
+        for r in state.get_merged_records().iter() {
+            if r.get_source_peers()
+                .iter()
+                .any(|p| p.get_id() == gc_peer_id)
+            {
+                has_merged = true;
+                let source_checkpoint = super::merge_source_path(
+                    &ctx.tablet_registry,
+                    r.get_source_region_id(),
+                    r.get_source_index(),
+                );
+                // Source checkpoint may be leaked if target region used snapshot and skipped
+                // applying `CommitMerge`. We need to check them until the checkpoint is
+                // physically deleted.
+                if source_checkpoint.exists() {
+                    let mut req = RaftCmdRequest::default();
+                    let header = req.mut_header();
+                    header.set_region_id(self.region_id());
+                    header.set_peer(self.peer().clone());
+                    let admin = req.mut_admin_request();
+                    admin.set_cmd_type(AdminCmdType::UpdateGcPeer);
+                    let gc_peer = admin.mut_update_gc_peers();
+                    gc_peer.set_peer_id(vec![gc_peer_id]);
+
+                    let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
+                    self.record_tombstone_tablet_path_callback(
+                        ctx,
+                        source_checkpoint,
+                        r.get_index(),
+                        move || {
+                            // It's OK to fail as we will retry by tick.
+                            let _ = mailbox.force_send(PeerMsg::admin_command(req).0);
+                        },
+                    );
+                    return;
+                }
+            }
+        }
+
+        if !has_merged
+            && state
+                .get_removed_records()
+                .iter()
+                .all(|p| p.get_id() != gc_peer_id)
         {
             return;
         }
@@ -519,6 +557,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx.confirmed_ids.push(gc_peer_id);
     }
 
+    // Removes deleted peers from region state by proposing a `UpdateGcPeer`
+    // command.
     pub fn on_gc_peer_tick<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if !self.is_leader() {
             return;

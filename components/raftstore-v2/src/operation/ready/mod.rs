@@ -206,7 +206,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // checks.
             match msg.get_extra_msg().get_type() {
                 ExtraMessageType::MsgGcPeerResponse => {
-                    self.on_gc_peer_response(&msg);
+                    self.on_gc_peer_response(ctx, &msg);
                     return;
                 }
                 ExtraMessageType::MsgGcPeerRequest => {
