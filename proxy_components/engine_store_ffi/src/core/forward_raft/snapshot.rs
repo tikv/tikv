@@ -11,7 +11,7 @@ type SSTInfo = (String, ColumnFamilyType);
 fn retrieve_sst_files(peer_id: u64, snap: &store::Snapshot) -> Vec<SSTInfo> {
     let mut sst_views: Vec<SSTInfo> = vec![];
     let mut ssts = vec![];
-    let v2_db_path = snap.snapshot_meta().as_ref().map_or(None, |m| {
+    let v2_db_path = snap.snapshot_meta().as_ref().and_then(|m| {
         if m.get_tablet_snap_path().is_empty() {
             None
         } else {

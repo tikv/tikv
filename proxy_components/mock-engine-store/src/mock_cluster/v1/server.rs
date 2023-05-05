@@ -834,6 +834,7 @@ impl Cluster<ServerCluster> {
         self.sim.rl().get_addr(node_id)
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn register_hook(
         &self,
         node_id: u64,
