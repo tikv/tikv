@@ -166,7 +166,7 @@ where
         // Record IO latency on Disk.
         // The `None`, means that `RaftStoreDuration::store_wait_duration` is abnormal,
         // should be skipped.
-        if let Some(store_write_duration) = duration.store_wait_duration {
+        if let Some(store_wait_duration) = duration.store_wait_duration {
             self.slowness_stats
                 .slow_cause_mut(SlowCauseType::DiskIo)
                 .record(
