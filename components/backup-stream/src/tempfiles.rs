@@ -169,7 +169,7 @@ impl TempFilePool {
             rel_path: p.to_owned(),
             done: false,
         };
-        let refc = f.writer_count.fetch_add(1, Ordering::SeqCst);
+        f.writer_count.fetch_add(1, Ordering::SeqCst);
         match self.cfg.content_compression {
             CompressionType::Unknown => Ok(ForWrite::Plain(fr)),
             CompressionType::Zstd => Ok(ForWrite::ZstdCompressed(ZstdCompressionWriter::new(fr))),
