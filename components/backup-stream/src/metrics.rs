@@ -172,11 +172,13 @@ lazy_static! {
     pub static ref TEMP_FILE_MEMORY_USAGE: IntGauge = register_int_gauge!(
         "tikv_log_backup_temp_file_memory_usage",
         "The total memory usage of temporary files."
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref TEMP_FILE_COUNT: IntGauge = register_int_gauge!(
         "tikv_log_backup_temp_file_count",
         "The number of temporary files."
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 make_static_metric! {

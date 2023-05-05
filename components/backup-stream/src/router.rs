@@ -1713,9 +1713,11 @@ mod tests {
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
         let mut meta = files
             .move_to_flushing_files()
-            .await.unwrap()
+            .await
+            .unwrap()
             .generate_metadata(1)
-            .await.unwrap();
+            .await
+            .unwrap();
 
         assert!(
             meta.file_groups
@@ -1735,9 +1737,11 @@ mod tests {
         // we may run `generate_metadata` again with same files.
         let mut another_meta = files
             .move_to_flushing_files()
-            .await.unwrap()
+            .await
+            .unwrap()
             .generate_metadata(1)
-            .await.unwrap();
+            .await
+            .unwrap();
 
         files.flush_log(&mut meta).await.unwrap();
         files.flush_log(&mut another_meta).await.unwrap();
