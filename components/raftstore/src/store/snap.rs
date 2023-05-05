@@ -1040,6 +1040,10 @@ impl Snapshot {
     pub fn tablet_snap_path(&self) -> Option<String> {
         Some(self.meta_file.meta.as_ref()?.tablet_snap_path.clone())
     }
+
+    pub fn snapshot_meta(&self) -> &Option<SnapshotMeta> {
+        &self.meta_file.meta
+    }
 }
 
 impl fmt::Debug for Snapshot {
