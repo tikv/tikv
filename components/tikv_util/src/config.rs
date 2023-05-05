@@ -255,7 +255,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub struct ReadableDuration(pub Duration);
 
 impl Add for ReadableDuration {
