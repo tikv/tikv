@@ -95,8 +95,7 @@ struct FileCore {
 
     /// self.mem[0..written] has been written to out file.
     written: usize,
-    /// For managing the memory usage.
-    shared: Arc<TempFilePool>,
+    the_pool: Arc<TempFilePool>,
     rel_path: PathBuf,
 }
 
@@ -107,7 +106,7 @@ pub enum ForWrite {
 
 #[derive(Debug)]
 pub struct ForWriteCore {
-    content: Arc<BlockMutex<FileCore>>,
+    core: Arc<BlockMutex<FileCore>>,
 
     rel_path: PathBuf,
     ref_counter: Arc<AtomicU8>,
@@ -165,12 +164,12 @@ impl TempFilePool {
             ));
         }
         let fr = ForWriteCore {
-            content: Arc::clone(&f.content),
+            core: Arc::clone(&f.content),
             ref_counter: Arc::clone(&f.writer_count),
             rel_path: p.to_owned(),
             done: false,
         };
-        f.writer_count.fetch_add(1, Ordering::SeqCst);
+        let refc = f.writer_count.fetch_add(1, Ordering::SeqCst);
         match self.cfg.content_compression {
             CompressionType::Unknown => Ok(ForWrite::Plain(fr)),
             CompressionType::Zstd => Ok(ForWrite::ZstdCompressed(ZstdCompressionWriter::new(fr))),
@@ -203,7 +202,8 @@ impl TempFilePool {
             ));
         }
         let f = f.unwrap();
-        if f.writer_count.load(Ordering::SeqCst) > 0 {
+        let refc = f.writer_count.load(Ordering::SeqCst);
+        if refc > 0 {
             // NOTE: the current implementation doesn't allow us to write when there are
             // readers, because once the writter swapped out the file, the reader may not
             // notice that. Perhaps in the future, we can implement something
@@ -212,7 +212,11 @@ impl TempFilePool {
             // to the file. But that isn't needed for now.
             return Err(Error::new(
                 ErrorKind::Other,
-                "open_for_read isn't allowed when there are concurrent writing.",
+                format!(
+                    "open_for_read isn't allowed when there are concurrent writing (there are still {} reads for file {}.).",
+                    refc,
+                    p.display()
+                ),
             ));
         }
         let st = f.content.lock().unwrap();
@@ -305,16 +309,21 @@ impl ForWriteCore {
     }
 
     pub async fn done(&mut self) -> Result<()> {
+        // Given we have blocked new writes after we have `done`, it is safe to skip
+        // flushing here.
+        if self.done {
+            return Ok(());
+        }
         self.done = true;
         self.ref_counter.fetch_sub(1, Ordering::SeqCst);
-        let st_lock = self.content.clone();
+        let core_lock = self.core.clone();
         // FIXME: For now, it cannot be awaited directly because `content` should be
         // guarded by a sync mutex. Given the `sync_all` is an async function,
         // it is almost impossible to implement some `poll` like things based on
         // it. We also cannot use an async mutex to guard the `content` : that will
         // make implementing `AsyncRead` and `AsyncWrite` become very very hard.
         tokio::task::spawn_blocking(move || {
-            let mut st = st_lock.lock().unwrap();
+            let mut st = core_lock.lock().unwrap();
             if let Some(PersistentFile::Plain(c)) = &mut st.external_file {
                 tokio::runtime::Handle::current().block_on(async { c.sync_all().await })?;
             }
@@ -330,9 +339,9 @@ impl FileCore {
     fn poll_swap_out_unpin(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         loop {
             let to_write = &self.in_mem[self.written..];
-            let buf_size = self.shared.cfg.write_buffer_size;
+            let buf_size = self.the_pool.cfg.write_buffer_size;
             if to_write.is_empty() {
-                modify_and_update_cap_diff(&mut self.in_mem, &self.shared.current, |v| {
+                modify_and_update_cap_diff(&mut self.in_mem, &self.the_pool.current, |v| {
                     v.clear();
                     v.shrink_to(buf_size);
                 });
@@ -340,7 +349,7 @@ impl FileCore {
                 return Ok(()).into();
             }
             if self.external_file.is_none() {
-                self.external_file = Some(self.shared.create_relative(&self.rel_path)?);
+                self.external_file = Some(self.the_pool.create_relative(&self.rel_path)?);
             }
             let ext_file = Pin::new(self.external_file.as_mut().unwrap());
             let n = ready!(ext_file.poll_write(cx, to_write))?;
@@ -356,17 +365,17 @@ impl FileCore {
     }
 
     fn append_to_buffer(&mut self, bs: &[u8]) {
-        modify_and_update_cap_diff(&mut self.in_mem, &self.shared.current, |v| {
+        modify_and_update_cap_diff(&mut self.in_mem, &self.the_pool.current, |v| {
             v.extend_from_slice(bs);
         })
     }
 
     fn should_swap_out(&self) -> bool {
-        let mem_use = self.shared.current.load(Ordering::SeqCst);
-        let in_mem_exceeds_quota = self.in_mem.len() > self.shared.cfg.minimal_swap_out_file_size
-            && mem_use > self.shared.cfg.cache_size;
+        let mem_use = self.the_pool.current.load(Ordering::SeqCst);
+        let in_mem_exceeds_quota = self.in_mem.len() > self.the_pool.cfg.minimal_swap_out_file_size
+            && mem_use > self.the_pool.cfg.cache_size;
         let already_exist =
-            self.in_mem.len() > self.shared.cfg.write_buffer_size && self.external_file.is_some();
+            self.in_mem.len() > self.the_pool.cfg.write_buffer_size && self.external_file.is_some();
         let swapping = self.written > 0;
         in_mem_exceeds_quota || already_exist || swapping
     }
@@ -379,7 +388,7 @@ impl FileCore {
             in_mem: v,
             external_file: None,
             written: 0,
-            shared: pool,
+            the_pool: pool,
             rel_path,
         }
     }
@@ -400,7 +409,7 @@ impl AsyncWrite for ForWriteCore {
             .into();
         }
 
-        let mut stat = self.content.lock().unwrap();
+        let mut stat = self.core.lock().unwrap();
 
         if stat.should_swap_out() {
             ready!(stat.poll_swap_out_unpin(cx))?;
@@ -414,7 +423,7 @@ impl AsyncWrite for ForWriteCore {
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-        let mut stat = self.content.lock().unwrap();
+        let mut stat = self.core.lock().unwrap();
         if let Some(f) = &mut stat.external_file {
             ready!(Pin::new(f).poll_flush(cx))?;
         }
@@ -425,7 +434,7 @@ impl AsyncWrite for ForWriteCore {
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-        let mut stat = self.content.lock().unwrap();
+        let mut stat = self.core.lock().unwrap();
         if let Some(f) = &mut stat.external_file {
             ready!(Pin::new(f).poll_shutdown(cx))?;
         }
@@ -435,11 +444,11 @@ impl AsyncWrite for ForWriteCore {
 
 impl Drop for FileCore {
     fn drop(&mut self) {
-        self.shared
+        self.the_pool
             .current
             .fetch_sub(self.in_mem.capacity(), Ordering::SeqCst);
         if self.external_file.is_some() {
-            if let Err(err) = self.shared.delete_relative(&self.rel_path) {
+            if let Err(err) = self.the_pool.delete_relative(&self.rel_path) {
                 warn!("failed to remove the file."; "file" => %self.rel_path.display(), "err" => %err);
             }
         }

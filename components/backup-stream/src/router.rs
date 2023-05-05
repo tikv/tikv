@@ -1487,6 +1487,7 @@ mod tests {
     use futures::AsyncReadExt;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use online_config::{ConfigManager, OnlineConfig};
+    use tempdir::TempDir;
     use tikv_util::{
         codec::number::NumberEncoder,
         config::ReadableDuration,
@@ -1699,10 +1700,10 @@ mod tests {
     #[tokio::test]
     async fn test_basic_file() -> Result<()> {
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&tmp).await?;
+        tokio::fs::create_dir_all(&tmp).await.unwrap();
         let (tx, rx) = dummy_scheduler();
         let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
-        let (stream_task, storage_path) = task("dummy".to_owned()).await?;
+        let (stream_task, storage_path) = task("dummy".to_owned()).await.unwrap();
         must_register_table(&router, stream_task, 1).await;
 
         let start_ts = write_simple_data(&router).await;
@@ -1712,9 +1713,9 @@ mod tests {
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
         let mut meta = files
             .move_to_flushing_files()
-            .await?
+            .await.unwrap()
             .generate_metadata(1)
-            .await?;
+            .await.unwrap();
 
         assert!(
             meta.file_groups
@@ -1734,12 +1735,12 @@ mod tests {
         // we may run `generate_metadata` again with same files.
         let mut another_meta = files
             .move_to_flushing_files()
-            .await?
+            .await.unwrap()
             .generate_metadata(1)
-            .await?;
+            .await.unwrap();
 
-        files.flush_log(&mut meta).await?;
-        files.flush_log(&mut another_meta).await?;
+        files.flush_log(&mut meta).await.unwrap();
+        files.flush_log(&mut another_meta).await.unwrap();
         // meta updated
         let files_num = meta
             .file_groups
@@ -1760,7 +1761,7 @@ mod tests {
             }
         }
 
-        files.flush_meta(meta).await?;
+        files.flush_meta(meta).await.unwrap();
         files.clear_flushing_files().await;
 
         drop(router);
@@ -2269,16 +2270,19 @@ mod tests {
 
         let file_name = format!("{}", uuid::Uuid::new_v4());
         let file_path = Path::new(&file_name);
-        let cfg = make_tempfiles_cfg(&std::env::temp_dir());
+        let tempfile = TempDir::new("test_est_len_in_flush").unwrap();
+        let cfg = make_tempfiles_cfg(tempfile.path());
         let pool = Arc::new(TempFilePool::new(cfg).unwrap());
         let mut f = pool.open_for_write(file_path).unwrap();
         f.write_all(b"test-data").await?;
-        let data_file = DataFile::new(&file_path, &pool).await.unwrap();
+        f.done().await?;
+        let mut data_file = DataFile::new(&file_path, &pool).await.unwrap();
         let info = DataFileInfo::new();
 
         let mut meta = MetadataInfo::with_capacity(1);
         let kv_event = build_kv_event(1, 1);
         let tmp_key = TempFileKey::of(&kv_event.events[0], 1);
+        data_file.inner.done().await?;
         let mut files = vec![(tmp_key, data_file, info)];
         let result = StreamTaskInfo::merge_and_flush_log_files_to(
             Arc::new(ms),
@@ -2288,7 +2292,7 @@ mod tests {
             pool.clone(),
         )
         .await;
-        assert_eq!(result.is_ok(), true);
+        result.unwrap();
         Ok(())
     }
 
