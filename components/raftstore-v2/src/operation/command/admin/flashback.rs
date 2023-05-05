@@ -85,7 +85,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 &store_ctx.coprocessor_host,
                 reader,
                 res.region_state.take_region(),
-                RegionChangeReason::ChangePeer,
+                RegionChangeReason::Flashback,
                 res.region_state.get_tablet_index(),
             );
         }
