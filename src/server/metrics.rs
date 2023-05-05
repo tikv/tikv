@@ -77,6 +77,7 @@ make_auto_flush_static_metric! {
     pub label_enum SnapTask {
         send,
         recv,
+        recv_v2,
     }
 
     pub label_enum ResolveStore {

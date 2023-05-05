@@ -8,8 +8,8 @@ use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::{metapb, pdpb};
 use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, Transport};
-use slog::error;
-use tikv_util::slog_panic;
+use slog::{debug, error};
+use tikv_util::{slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -46,8 +46,8 @@ impl Store {
 
         let snap_stats = ctx.snap_mgr.stats();
         // todo: imple snapshot status report
-        stats.set_sending_snap_count(0);
-        stats.set_receiving_snap_count(0);
+        stats.set_sending_snap_count(snap_stats.sending_count as u32);
+        stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
         stats.set_snapshot_stats(snap_stats.stats.into());
 
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
@@ -122,7 +122,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    fn collect_pending_peers<T>(&self, ctx: &StoreContext<EK, ER, T>) -> Vec<metapb::Peer> {
+    fn collect_pending_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group().status();
         let truncated_idx = self
@@ -135,9 +135,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return pending_peers;
         }
 
-        // TODO: update `peers_start_pending_time`.
+        self.abnormal_peer_context().flush_metrics();
 
         let progresses = status.progress.unwrap().iter();
+        let mut peers_start_pending_time = Vec::with_capacity(self.region().get_peers().len());
         for (&id, progress) in progresses {
             if id == self.peer_id() {
                 continue;
@@ -156,6 +157,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if progress.matched < truncated_idx {
                 if let Some(p) = self.peer_from_cache(id) {
                     pending_peers.push(p);
+                    if !self
+                        .abnormal_peer_context()
+                        .pending_peers()
+                        .iter()
+                        .any(|p| p.0 == id)
+                    {
+                        let now = Instant::now();
+                        peers_start_pending_time.push((id, now));
+                        debug!(
+                            self.logger,
+                            "peer start pending";
+                            "get_peer_id" => id,
+                            "time" => ?now,
+                        );
+                    }
                 } else {
                     if ctx.cfg.dev_assert {
                         slog_panic!(
@@ -172,6 +188,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
+        self.abnormal_peer_context_mut()
+            .pending_peers_mut()
+            .append(&mut peers_start_pending_time);
         pending_peers
     }
 

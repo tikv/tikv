@@ -246,7 +246,7 @@ pub(crate) fn make_txn_error(
 ) -> crate::storage::mvcc::ErrorInner {
     use kvproto::kvrpcpb::WriteConflictReason;
 
-    use crate::storage::mvcc::ErrorInner;
+    use crate::storage::mvcc::{ErrorInner, PessimisticLockNotFoundReason};
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {
@@ -306,6 +306,7 @@ pub(crate) fn make_txn_error(
             "pessimisticlocknotfound" => ErrorInner::PessimisticLockNotFound {
                 start_ts,
                 key: key.to_raw().unwrap(),
+                reason: PessimisticLockNotFoundReason::FailpointInjected,
             },
             _ => ErrorInner::Other(box_err!("unexpected error string")),
         }
@@ -815,6 +816,7 @@ pub(crate) mod tests {
             Mutation::make_put(key.clone(), v.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -859,6 +861,7 @@ pub(crate) mod tests {
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap_err();
 
@@ -872,6 +875,7 @@ pub(crate) mod tests {
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             &None,
             SkipPessimisticCheck,
+            None,
         )
         .unwrap();
     }
@@ -1234,7 +1238,7 @@ pub(crate) mod tests {
         must_acquire_pessimistic_lock(&mut engine, k, k, 10, 10);
         must_commit_err(&mut engine, k, 20, 30);
         must_commit(&mut engine, k, 10, 20);
-        must_seek_write(&mut engine, k, 30, 10, 20, WriteType::Lock);
+        must_seek_write_none(&mut engine, k, 30);
     }
 
     #[test]
@@ -1312,6 +1316,7 @@ pub(crate) mod tests {
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 SkipPessimisticCheck,
+                None,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1370,6 +1375,7 @@ pub(crate) mod tests {
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 DoPessimisticCheck,
+                None,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1439,6 +1445,7 @@ pub(crate) mod tests {
             mutation,
             &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
             DoPessimisticCheck,
+            None,
         )
         .unwrap();
         assert_eq!(min_commit_ts.into_inner(), 100);

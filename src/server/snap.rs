@@ -13,11 +13,12 @@ use std::{
 
 use file_system::{IoType, WithIoType};
 use futures::{
-    future::{Future, FutureExt, TryFutureExt},
+    future::{Future, TryFutureExt},
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
     task::{Context, Poll},
 };
+use futures_util::FutureExt;
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, DuplexSink, Environment, RequestStream, RpcStatus,
     RpcStatusCode, WriteFlags,
@@ -43,7 +44,7 @@ use tikv_util::{
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{metrics::*, Config, Error, Result};
-use crate::tikv_util::sys::thread::ThreadBuildWrapper;
+use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -342,7 +343,6 @@ fn recv_snap<R: RaftExtension + 'static>(
         }
         context.finish(raft_router)
     };
-
     async move {
         match recv_task.await {
             Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
@@ -367,6 +367,9 @@ pub struct Runner<R: RaftExtension> {
 }
 
 impl<R: RaftExtension + 'static> Runner<R> {
+    // `can_receive_tablet_snapshot` being true means we are using tiflash engine
+    // within a raft group with raftstore-v2. It is set be true to enable runner
+    // to receive tablet snapshot from v2.
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
@@ -375,6 +378,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
         cfg: Arc<VersionTrack<Config>>,
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
+        let config = cfg.value().clone();
         let snap_worker = Runner {
             env,
             snap_mgr,
@@ -388,7 +392,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             raft_router: r,
             security_mgr,
             cfg_tracker,
-            cfg: cfg.value().clone(),
+            cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
         };
@@ -415,6 +419,22 @@ impl<R: RaftExtension + 'static> Runner<R> {
             self.cfg = incoming.clone();
         }
     }
+
+    fn receiving_busy(&self) -> Option<RpcStatus> {
+        let task_num = self.recving_count.load(Ordering::SeqCst);
+        if task_num >= self.cfg.concurrent_recv_snap_limit {
+            warn!("too many recving snapshot tasks, ignore");
+            return Some(RpcStatus::with_message(
+                RpcStatusCode::RESOURCE_EXHAUSTED,
+                format!(
+                    "the number of received snapshot tasks {} exceeded the limitation {}",
+                    task_num, self.cfg.concurrent_recv_snap_limit
+                ),
+            ));
+        }
+
+        None
+    }
 }
 
 impl<R: RaftExtension + 'static> Runnable for Runner<R> {
@@ -423,19 +443,11 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {
-                let task_num = self.recving_count.load(Ordering::SeqCst);
-                if task_num >= self.cfg.concurrent_recv_snap_limit {
-                    warn!("too many recving snapshot tasks, ignore");
-                    let status = RpcStatus::with_message(
-                        RpcStatusCode::RESOURCE_EXHAUSTED,
-                        format!(
-                            "the number of received snapshot tasks {} exceeded the limitation {}",
-                            task_num, self.cfg.concurrent_recv_snap_limit
-                        ),
-                    );
+                if let Some(status) = self.receiving_busy() {
                     self.pool.spawn(sink.fail(status));
                     return;
                 }
+
                 SNAP_TASK_COUNTER_STATIC.recv.inc();
 
                 let snap_mgr = self.snap_mgr.clone();
@@ -451,12 +463,48 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 };
                 self.pool.spawn(task);
             }
-            Task::RecvTablet { sink, .. } => {
-                let status = RpcStatus::with_message(
-                    RpcStatusCode::UNIMPLEMENTED,
-                    "tablet snap is not supported".to_string(),
-                );
-                self.pool.spawn(sink.fail(status).map(|_| ()));
+            Task::RecvTablet { stream, sink } => {
+                let tablet_snap_mgr = match self.snap_mgr.tablet_snap_manager() {
+                    Some(s) => s.clone(),
+                    None => {
+                        let status = RpcStatus::with_message(
+                            RpcStatusCode::UNIMPLEMENTED,
+                            "tablet snap is not supported".to_string(),
+                        );
+                        self.pool.spawn(sink.fail(status).map(|_| ()));
+                        return;
+                    }
+                };
+
+                if let Some(status) = self.receiving_busy() {
+                    self.pool.spawn(sink.fail(status));
+                    return;
+                }
+
+                SNAP_TASK_COUNTER_STATIC.recv_v2.inc();
+
+                let raft_router = self.raft_router.clone();
+                let recving_count = self.recving_count.clone();
+                recving_count.fetch_add(1, Ordering::SeqCst);
+                let limiter = self.snap_mgr.limiter().clone();
+                let snap_mgr_v1 = self.snap_mgr.clone();
+                let task = async move {
+                    let result = crate::server::tablet_snap::recv_snap(
+                        stream,
+                        sink,
+                        tablet_snap_mgr,
+                        raft_router,
+                        NoSnapshotCache, // do not use cache in v1
+                        limiter,
+                        Some(snap_mgr_v1),
+                    )
+                    .await;
+                    recving_count.fetch_sub(1, Ordering::SeqCst);
+                    if let Err(e) = result {
+                        error!("failed to recv snapshot"; "err" => %e);
+                    }
+                };
+                self.pool.spawn(task);
             }
             Task::Send { addr, msg, cb } => {
                 fail_point!("send_snapshot");

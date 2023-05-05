@@ -62,7 +62,7 @@ use crate::{
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
-    worker::tablet_gc,
+    worker::tablet,
     Error,
 };
 
@@ -132,8 +132,8 @@ pub fn report_split_init_finish<EK, ER, T>(
 
     if let Err(e) = ctx
         .schedulers
-        .tablet_gc
-        .schedule(tablet_gc::Task::direct_destroy_path(temp_split_path(
+        .tablet
+        .schedule(tablet::Task::direct_destroy_path(temp_split_path(
             &ctx.tablet_registry,
             finish_region_id,
         )))
@@ -641,16 +641,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         };
         let tablet_index = res.tablet_index;
-        let _ = store_ctx
-            .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::trim(
-                self.tablet().unwrap().clone(),
-                derived,
-                move || {
-                    let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
-                },
-            ));
+        let _ = store_ctx.schedulers.tablet.schedule(tablet::Task::trim(
+            self.tablet().unwrap().clone(),
+            derived,
+            move || {
+                let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+            },
+        ));
 
         let last_region_id = res.regions.last().unwrap().get_id();
         let mut new_ids = HashSet::default();
@@ -771,16 +768,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.storage().has_dirty_data() {
             let tablet_index = self.storage().tablet_index();
             if let Some(mailbox) = store_ctx.router.mailbox(region_id) {
-                let _ = store_ctx
-                    .schedulers
-                    .tablet_gc
-                    .schedule(tablet_gc::Task::trim(
-                        self.tablet().unwrap().clone(),
-                        self.region(),
-                        move || {
-                            let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
-                        },
-                    ));
+                let _ = store_ctx.schedulers.tablet.schedule(tablet::Task::trim(
+                    self.tablet().unwrap().clone(),
+                    self.region(),
+                    move || {
+                        let _ = mailbox.force_send(PeerMsg::TabletTrimmed { tablet_index });
+                    },
+                ));
             } else {
                 // None means the node is shutdown concurrently and thus the
                 // mailboxes in router have been cleared
@@ -878,7 +872,10 @@ mod test {
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
         raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raftstore::store::{cmd_resp::new_error, Config};
+    use raftstore::{
+        coprocessor::CoprocessorHost,
+        store::{cmd_resp::new_error, Config},
+    };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
@@ -1026,6 +1023,7 @@ mod test {
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let (_tmp_dir, importer) = create_tmp_importer();
+        let host = CoprocessorHost::<KvTestEngine>::default();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -1043,6 +1041,7 @@ mod test {
             5,
             None,
             importer,
+            host,
             logger.clone(),
         );
 
