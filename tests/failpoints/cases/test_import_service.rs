@@ -5,13 +5,16 @@ use std::{
     time::Duration,
 };
 
+use engine_rocks::RocksEngine;
 use file_system::calc_crc32;
 use futures::{executor::block_on, stream, SinkExt};
-use grpcio::{Result, WriteFlags};
-use kvproto::import_sstpb::*;
+use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
+use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
+use security::SecurityConfig;
 use tempfile::Builder;
-use test_raftstore::Simulator;
+use test_raftstore::{Config, Simulator};
 use test_sst_importer::*;
+use tikv::config::TikvConfig;
 use tikv_util::HandyRwLock;
 
 #[allow(dead_code)]
@@ -247,4 +250,121 @@ fn test_ingest_file_twice_and_conflict() {
         "The file which would be ingested doest not exist.",
         resp.get_error().get_message()
     );
+}
+
+#[test]
+fn test_ingest_sst_v2() {
+    let (tx1, rx1) = channel::<()>();
+    let tx1 = Arc::new(Mutex::new(tx1));
+    let latch_fp = "on_cleanup_import_sst";
+    fail::cfg_callback(latch_fp, move || {
+        tx1.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    let (cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None);
+
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
+
+    // No region id and epoch.
+    send_upload_sst(&import, &meta, &data).unwrap();
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx.clone());
+    ingest.set_sst(meta.clone());
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    send_upload_sst(&import, &meta, &data).unwrap();
+    ingest.set_sst(meta);
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
+    rx1.recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    println!("import sst:{:?}", &cluster.paths);
+    for path in &cluster.paths {
+        let sst_dir = path.path().join("import-sst");
+        println!("import sst:{:?}", sst_dir);
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        let read_dir = std::fs::read_dir(sst_dir).unwrap();
+        assert_ne!(0, read_dir.count());
+    }
+}
+
+fn send_upload_sst(
+    client: &ImportSstClient,
+    meta: &SstMeta,
+    data: &[u8],
+) -> Result<UploadResponse> {
+    let mut r1 = UploadRequest::default();
+    r1.set_meta(meta.clone());
+    let mut r2 = UploadRequest::default();
+    r2.set_data(data.to_vec());
+    let reqs: Vec<_> = vec![r1, r2]
+        .into_iter()
+        .map(|r| Result::Ok((r, WriteFlags::default())))
+        .collect();
+    let (mut tx, rx) = client.upload().unwrap();
+    let mut stream = stream::iter(reqs);
+    block_on(async move {
+        tx.send_all(&mut stream).await?;
+        tx.close().await?;
+        rx.await
+    })
+}
+
+fn open_cluster_and_tikv_import_client_v2(
+    cfg: Option<TikvConfig>,
+) -> (
+    test_raftstore_v2::Cluster<test_raftstore_v2::ServerCluster<RocksEngine>, RocksEngine>,
+    Context,
+    TikvClient,
+    ImportSstClient,
+) {
+    let cfg = cfg.unwrap_or_else(|| {
+        let mut config = TikvConfig::default();
+        config.server.addr = "127.0.0.1:0".to_owned();
+        let cleanup_interval = Duration::from_millis(10);
+        config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
+        config.server.grpc_concurrency = 1;
+        config
+    });
+    let mut cluster: test_raftstore_v2::Cluster<
+        test_raftstore_v2::ServerCluster<RocksEngine>,
+        RocksEngine,
+    > = test_raftstore_v2::new_server_cluster(1, 1);
+    cluster.cfg = Config {
+        tikv: cfg.clone(),
+        prefer_mem: true,
+    };
+    cluster.run();
+
+    let region_id = 1;
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(epoch);
+
+    let ch = {
+        let env = Arc::new(Environment::new(1));
+        let node = ctx.get_peer().get_store_id();
+        let builder = ChannelBuilder::new(env)
+            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
+            .keepalive_time(cluster.cfg.server.grpc_keepalive_time.into())
+            .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into());
+
+        if cfg.security != SecurityConfig::default() {
+            let creds = test_util::new_channel_cred();
+            builder.secure_connect(&cluster.sim.rl().get_addr(node), creds)
+        } else {
+            builder.connect(&cluster.sim.rl().get_addr(node))
+        }
+    };
+    let tikv = TikvClient::new(ch.clone());
+    let import = ImportSstClient::new(ch);
+
+    (cluster, ctx, tikv, import)
 }

@@ -302,6 +302,7 @@ impl ApplyTrace {
         for (off, pr) in self.data_cfs.iter().enumerate() {
             flushed_indexes[off] = pr.flushed;
         }
+        fail::fail_point!("on_cleanup_import_sst", |_| Some(Box::new(flushed_indexes)));
         for i in flushed_indexes {
             if i > self.admin.flushed {
                 return Some(Box::new(flushed_indexes));

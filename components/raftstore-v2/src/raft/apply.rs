@@ -3,7 +3,7 @@
 use std::{mem, sync::Arc};
 
 use engine_traits::{
-    FlushState, KvEngine, PerfContextKind, SSTState, TabletRegistry, WriteBatch, DATA_CFS_LEN,
+    FlushState, KvEngine, PerfContextKind, SstApplyState, TabletRegistry, WriteBatch, DATA_CFS_LEN,
 };
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
@@ -56,7 +56,7 @@ pub struct Apply<EK: KvEngine, R> {
     modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
     flush_state: Arc<FlushState>,
-    sst_state: Arc<SSTState>,
+    sst_apply_state: SstApplyState,
     /// The flushed indexes of each column family before being restarted.
     ///
     /// If an apply index is less than the flushed index, the log can be
@@ -90,7 +90,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
         flush_state: Arc<FlushState>,
-        sst_state: Arc<SSTState>,
+        sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         buckets: Option<BucketStat>,
@@ -124,7 +124,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             key_buffer: vec![],
             res_reporter,
             flush_state,
-            sst_state,
+            sst_apply_state,
             log_recovery,
             metrics: ApplyMetrics::default(),
             buckets,
@@ -278,8 +278,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn set_sst_applied_index(&self, index: u64) {
-        self.sst_state.set_sst_applied_index(index);
+    pub fn set_sst_applied_index(&mut self, uuid: Vec<Vec<u8>>, apply_index: u64) {
+        self.sst_apply_state.registe_ssts(uuid, apply_index);
     }
 
     #[inline]
