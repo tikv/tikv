@@ -147,7 +147,7 @@ impl<'k> AesGcmCrypter<'k> {
         let mut tag = AesGcmTag([0u8; GCM_TAG_LEN]);
         let ciphertext = symm::encrypt_aead(
             cipher,
-            &self.key.as_slice(),
+            self.key.as_slice(),
             Some(self.iv.as_slice()),
             &[], // AAD
             pt,
@@ -160,7 +160,7 @@ impl<'k> AesGcmCrypter<'k> {
         let cipher = OCipher::aes_256_gcm();
         let plaintext = symm::decrypt_aead(
             cipher,
-            &self.key.as_slice(),
+            self.key.as_slice(),
             Some(self.iv.as_slice()),
             &[], // AAD
             ct,

@@ -2,11 +2,6 @@
 
 use std::{sync::Mutex, time::Duration};
 
-// use super::{metadata::MetadataKey, Backend, CrypterProvider, State};
-// use crate::{
-//     crypter::{DataKeyPair, EncryptedKey, Iv, PlainKey},
-//     Error, Result,
-// };
 use cloud::crypter::{CryphotographType, CrypterProvider, DataKeyPair, EncryptedKey, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::{
@@ -157,7 +152,8 @@ impl Backend for KmsBackend {
 
 #[cfg(test)]
 mod fake {
-    use cloud::crypter::CrypterProvider;
+    use async_trait::async_trait;
+    use cloud::{crypter::CrypterProvider, error::Result};
 
     use super::*;
 

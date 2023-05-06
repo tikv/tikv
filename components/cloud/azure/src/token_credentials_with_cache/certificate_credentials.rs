@@ -204,7 +204,7 @@ impl TokenCredential for ClientCertificateCredentialWithCache {
         let uuid = uuid::Uuid::new_v4();
         let current_time = OffsetDateTime::now_utc().unix_timestamp();
         let expiry_time = current_time + DEFAULT_REFRESH_TIME;
-        let x5t = base64::encode(&thumbprint);
+        let x5t = base64::encode(thumbprint);
 
         let header = match options.send_certificate_chain {
             true => {
