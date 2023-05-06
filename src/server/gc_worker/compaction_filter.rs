@@ -774,7 +774,7 @@ pub fn check_need_gc(
             props.num_deletes as f64 > props.num_versions as f64 * (ratio_threshold - 1.0) {
             // When comparing `num_versions` with `num_rows`, it's unnecessary to
             // treat internal levels specially.
-            return (true, true);
+            return (true, false);
         }
 
         // When comparing `num_versions` with `num_puts`, trait internal levels
