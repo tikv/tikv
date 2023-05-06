@@ -126,6 +126,8 @@ fn test_default_no_config_item() {
     assert_eq!(config.raft_store.evict_cache_on_memory_ratio, 0.1);
     assert_eq!(config.memory_usage_high_water, 0.1);
     assert_eq!(config.server.reject_messages_on_memory_ratio, 0.05);
+
+    assert_eq!(config.raft_store.enable_v2_compatible_learner, true);
 }
 
 #[test]

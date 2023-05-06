@@ -17,7 +17,7 @@ fn test_write_simple() {
         .server
         .labels
         .insert(String::from("engine"), String::from("tiflash"));
-    // cluster_v1.cfg.tikv.raft_store.enable_v2_compatible_learner = true;
+    cluster_v1.cfg.tikv.raft_store.enable_v2_compatible_learner = true;
     cluster_v1.pd_client.disable_default_operator();
     cluster_v2.pd_client.disable_default_operator();
     let r11 = cluster_v1.run_conf_change();
@@ -63,11 +63,6 @@ fn test_write_simple() {
             .msg_type(MessageType::MsgHeartbeatResponse),
     );
     cluster_v1.add_recv_filter_on_node(2, filter11);
-
-    // TODO remove this when simple write is supported
-    cluster_v1.shutdown();
-    cluster_v2.shutdown();
-    return;
 
     cluster_v2.must_put(b"k1", b"v1");
     assert_eq!(

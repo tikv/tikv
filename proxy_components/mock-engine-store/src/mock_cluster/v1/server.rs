@@ -438,6 +438,7 @@ impl ServerCluster {
             .encryption_key_manager(key_manager)
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
+            .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -831,6 +832,20 @@ impl Cluster<ServerCluster> {
 
     pub fn get_addr(&self, node_id: u64) -> String {
         self.sim.rl().get_addr(node_id)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn register_hook(
+        &self,
+        node_id: u64,
+        register: Box<dyn Fn(&mut CoprocessorHost<TiFlashEngine>)>,
+    ) {
+        self.sim
+            .wl()
+            .coprocessor_hooks
+            .entry(node_id)
+            .or_default()
+            .push(register);
     }
 }
 

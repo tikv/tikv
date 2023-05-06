@@ -30,6 +30,11 @@ pub struct RaftstoreConfig {
     pub region_worker_tick_interval: ReadableDuration,
     pub apply_low_priority_pool_size: usize,
     pub evict_cache_on_memory_ratio: f64,
+
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
+    pub enable_v2_compatible_learner: bool,
 }
 
 impl Default for RaftstoreConfig {
@@ -48,6 +53,7 @@ impl Default for RaftstoreConfig {
             // We want to use as more resource as possible when doing BR restore.
             apply_low_priority_pool_size: std::cmp::max(1, cpu_num as usize),
             evict_cache_on_memory_ratio: 0.1,
+            enable_v2_compatible_learner: true,
         }
     }
 }
@@ -420,6 +426,9 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     config.server.status_thread_pool_size = proxy_config.server.status_thread_pool_size;
     config.server.reject_messages_on_memory_ratio =
         proxy_config.server.reject_messages_on_memory_ratio;
+
+    config.raft_store.enable_v2_compatible_learner =
+        proxy_config.raft_store.enable_v2_compatible_learner;
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
