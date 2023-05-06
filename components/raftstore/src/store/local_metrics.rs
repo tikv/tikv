@@ -276,6 +276,7 @@ impl TimeTracker {
         }
     }
 
+    #[inline]
     pub fn observe(
         &self,
         now: std::time::Instant,
