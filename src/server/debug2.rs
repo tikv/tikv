@@ -10,13 +10,13 @@ use kvproto::{
     debugpb::Db as DbType,
     kvrpcpb::MvccInfo,
     metapb,
-    raft_serverpb::{PeerState, RegionLocalState},
+    raft_serverpb::{PeerState, RegionLocalState, StoreIdent},
 };
 use nom::AsBytes;
 use raft::prelude::Entry;
 use raftstore::store::util::check_key_in_region;
 
-use super::debug::{BottommostLevelCompaction, RegionInfo};
+use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use crate::{
     config::ConfigController,
     server::debug::{Error, Result},
@@ -184,38 +184,29 @@ impl Iterator for MvccInfoIteratorV2 {
 
 // Debugger for raftstore-v2
 #[derive(Clone)]
-pub struct DebuggerV2<ER: RaftEngine> {
+pub struct DebuggerImplV2<ER: RaftEngine> {
     tablet_reg: TabletRegistry<RocksEngine>,
     raft_engine: ER,
     _cfg_controller: ConfigController,
 }
 
-impl<ER: RaftEngine> DebuggerV2<ER> {
+impl<ER: RaftEngine> DebuggerImplV2<ER> {
     pub fn new(
         tablet_reg: TabletRegistry<RocksEngine>,
         raft_engine: ER,
         cfg_controller: ConfigController,
     ) -> Self {
         println!("Debugger for raftstore-v2 is used");
-        DebuggerV2 {
+        DebuggerImplV2 {
             tablet_reg,
             raft_engine,
             _cfg_controller: cfg_controller,
         }
     }
+}
 
-    pub fn get_all_regions_in_store(&self) -> Result<Vec<u64>> {
-        let mut region_ids = vec![];
-        self.raft_engine
-            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
-                region_ids.push(region_id);
-                Ok(())
-            })
-            .unwrap();
-        Ok(region_ids)
-    }
-
-    pub fn get(&self, db: DbType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
+impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
+    fn get(&self, db: DbType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
         validate_db_and_cf(db, cf)?;
         let region_state =
             find_region_state_by_key(&self.raft_engine, &key[DATA_PREFIX_KEY.len()..])?;
@@ -235,7 +226,7 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
         }
     }
 
-    pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
+    fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
         if let Some(log) = box_try!(self.raft_engine.get_entry(region_id, log_index)) {
             return Ok(log);
         }
@@ -245,7 +236,7 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
         )))
     }
 
-    pub fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
+    fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
         let raft_state = box_try!(self.raft_engine.get_raft_state(region_id));
         let apply_state = box_try!(self.raft_engine.get_apply_state(region_id, u64::MAX));
         let region_state = box_try!(self.raft_engine.get_region_state(region_id, u64::MAX));
@@ -258,11 +249,7 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
         }
     }
 
-    pub fn region_size<T: AsRef<str>>(
-        &self,
-        region_id: u64,
-        cfs: Vec<T>,
-    ) -> Result<Vec<(T, usize)>> {
+    fn region_size<T: AsRef<str>>(&self, region_id: u64, cfs: Vec<T>) -> Result<Vec<(T, usize)>> {
         match self.raft_engine.get_region_state(region_id, u64::MAX) {
             Ok(Some(region_state)) => {
                 if region_state.get_state() != PeerState::Normal {
@@ -293,8 +280,12 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
         }
     }
 
-    /// Scan MVCC Infos for given range `[start, end)`.
-    pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIteratorV2> {
+    fn scan_mvcc(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        limit: u64,
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send> {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
@@ -334,8 +325,7 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
         )
     }
 
-    /// Compact the cf[start..end) in the db.
-    pub fn compact(
+    fn compact(
         &self,
         db: DbType,
         cf: &str,
@@ -400,6 +390,49 @@ impl<ER: RaftEngine> DebuggerV2<ER> {
         }
 
         Ok(())
+    }
+
+    fn get_all_regions_in_store(&self) -> Result<Vec<u64>> {
+        let mut region_ids = vec![];
+        self.raft_engine
+            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                region_ids.push(region_id);
+                Ok(())
+            })
+            .unwrap();
+        Ok(region_ids)
+    }
+
+    fn dump_kv_stats(&self) -> Result<String> {
+        unimplemented!()
+    }
+
+    fn dump_raft_stats(&self) -> Result<String> {
+        unimplemented!()
+    }
+
+    fn modify_tikv_config(&self, _config_name: &str, _config_value: &str) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn get_store_ident(&self) -> Result<StoreIdent> {
+        unimplemented!()
+    }
+
+    fn get_region_properties(&self, _region_id: u64) -> Result<Vec<(String, String)>> {
+        unimplemented!()
+    }
+
+    fn reset_to_version(&self, _version: u64) {
+        unimplemented!()
+    }
+
+    fn set_kv_statistics(&mut self, _s: Option<std::sync::Arc<engine_rocks::RocksStatistics>>) {
+        unimplemented!()
+    }
+
+    fn set_raft_statistics(&mut self, _s: Option<std::sync::Arc<engine_rocks::RocksStatistics>>) {
+        unimplemented!()
     }
 }
 
@@ -588,7 +621,7 @@ mod tests {
     const INITIAL_TABLET_INDEX: u64 = 5;
     const INITIAL_APPLY_INDEX: u64 = 5;
 
-    fn new_debugger(path: &Path) -> DebuggerV2<RaftLogEngine> {
+    fn new_debugger(path: &Path) -> DebuggerImplV2<RaftLogEngine> {
         let mut cfg = TikvConfig::default();
         cfg.storage.data_dir = path.to_str().unwrap().to_string();
         cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
@@ -604,7 +637,7 @@ mod tests {
 
         let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
 
-        DebuggerV2::new(reg, raft_engine, ConfigController::default())
+        DebuggerImplV2::new(reg, raft_engine, ConfigController::default())
     }
 
     #[test]
@@ -848,12 +881,13 @@ mod tests {
         assert!(debugger.scan_mvcc(b"z", b"", 0).is_err());
         assert!(debugger.scan_mvcc(b"z", b"x", 3).is_err());
 
-        let verify_scanner = |range, scanner: &mut MvccInfoIteratorV2| {
-            for i in range {
-                let key = format!("k{:02}", i).into_bytes();
-                assert_eq!(key, extract_key(&scanner.next().unwrap().unwrap().0));
-            }
-        };
+        let verify_scanner =
+            |range, scanner: &mut dyn Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>>| {
+                for i in range {
+                    let key = format!("k{:02}", i).into_bytes();
+                    assert_eq!(key, extract_key(&scanner.next().unwrap().unwrap().0));
+                }
+            };
 
         // full scann
         let mut scanner = debugger.scan_mvcc(b"", b"", 100).unwrap();
