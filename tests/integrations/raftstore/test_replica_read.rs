@@ -18,6 +18,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{store::ReadIndexContext, Result};
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::*, time::Instant, timer::GLOBAL_TIMER_HANDLE, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 use uuid::Uuid;
@@ -53,9 +54,10 @@ impl Filter for CommitToFilter {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_replica_read_not_applied() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(30));
