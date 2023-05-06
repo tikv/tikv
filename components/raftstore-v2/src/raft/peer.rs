@@ -148,7 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
 
         let flush_state: Arc<FlushState> = Arc::new(FlushState::new(applied_index));
-        let sst_apply_state = SstApplyState::new();
+        let sst_apply_state = SstApplyState::default();
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.

@@ -30,7 +30,7 @@ use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
 use collections::HashSet;
 use crossbeam::channel::SendError;
 use engine_traits::{
-    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
+    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, SstApplyState, TabletContext, TabletRegistry,
 };
 use fail::fail_point;
 use kvproto::{
@@ -1037,6 +1037,7 @@ mod test {
             reg,
             read_scheduler,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,

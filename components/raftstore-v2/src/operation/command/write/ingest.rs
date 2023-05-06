@@ -86,7 +86,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 if let Some(index) = sst_index {
                     return log_recovery.as_ref()[off] >= index;
                 }
-                return true;
+                true
             });
         }
         if stale_ssts.is_empty() {

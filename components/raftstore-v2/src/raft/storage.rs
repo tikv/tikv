@@ -6,7 +6,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, SstApplyState};
 use kvproto::{
     metapb,
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},
@@ -515,6 +515,7 @@ mod tests {
             reg,
             sched,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,
