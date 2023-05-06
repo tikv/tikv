@@ -6,7 +6,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine, SstApplyState};
+use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},

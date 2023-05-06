@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{KvEngine, RaftEngine, SstApplyState};
+use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raftstore::{
