@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, SstApplyState};
 use fail::fail_point;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raftstore::{
@@ -322,6 +322,7 @@ mod test {
             reg,
             read_scheduler,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,

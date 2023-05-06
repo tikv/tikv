@@ -64,14 +64,15 @@ pub struct SstApplyState {
     sst_map: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
 }
 
-impl SstApplyState {
-    pub fn new() -> Self {
+impl Default for SstApplyState {
+    fn default() -> Self {
         Self {
             sst_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
+}
 
-    /// Set the latest sst applied index.
+impl SstApplyState {
     #[inline]
     pub fn registe_ssts(&self, uuids: Vec<Vec<u8>>, sst_applied_index: u64) {
         let mut map = self.sst_map.write().unwrap();
