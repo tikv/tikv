@@ -266,7 +266,7 @@ fn test_ingest_sst_v2() {
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
 
     // No region id and epoch.
     send_upload_sst(&import, &meta, &data).unwrap();

@@ -175,7 +175,7 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
+        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
     };
     use futures::executor::block_on;
     use kvproto::{

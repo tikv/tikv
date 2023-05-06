@@ -865,7 +865,8 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
+        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT,
+        DATA_CFS,
     };
     use kvproto::{
         metapb::RegionEpoch,
