@@ -68,7 +68,7 @@ pub struct RegionInfo {
 }
 
 impl RegionInfo {
-    fn new(
+    pub fn new(
         raft_local: Option<RaftLocalState>,
         raft_apply: Option<RaftApplyState>,
         region_local: Option<RegionLocalState>,
