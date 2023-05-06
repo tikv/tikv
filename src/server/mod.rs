@@ -5,6 +5,7 @@ mod raft_client;
 
 pub mod config;
 pub mod debug;
+pub mod debug2;
 mod engine_factory;
 pub mod errors;
 pub mod gc_worker;
