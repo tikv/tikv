@@ -1,6 +1,10 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator};
+use std::sync::Arc;
+
+use engine_rocks::{
+    raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator, RocksStatistics,
+};
 use engine_traits::{
     CachedTablet, Iterable, Peekable, RaftEngine, TabletContext, TabletRegistry, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
@@ -187,6 +191,8 @@ impl Iterator for MvccInfoIteratorV2 {
 pub struct DebuggerImplV2<ER: RaftEngine> {
     tablet_reg: TabletRegistry<RocksEngine>,
     raft_engine: ER,
+    kv_statistics: Option<Arc<RocksStatistics>>,
+    raft_statistics: Option<Arc<RocksStatistics>>,
     _cfg_controller: ConfigController,
 }
 
@@ -201,6 +207,8 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             tablet_reg,
             raft_engine,
             _cfg_controller: cfg_controller,
+            kv_statistics: None,
+            raft_statistics: None,
         }
     }
 }
@@ -427,12 +435,12 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         unimplemented!()
     }
 
-    fn set_kv_statistics(&mut self, _s: Option<std::sync::Arc<engine_rocks::RocksStatistics>>) {
-        unimplemented!()
+    fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+        self.kv_statistics = s;
     }
 
-    fn set_raft_statistics(&mut self, _s: Option<std::sync::Arc<engine_rocks::RocksStatistics>>) {
-        unimplemented!()
+    fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+        self.raft_statistics = s;
     }
 }
 
