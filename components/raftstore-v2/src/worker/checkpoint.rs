@@ -121,7 +121,7 @@ impl<EK: KvEngine> Runner<EK> {
         info!(
             self.logger,
             "create checkpoint time consumes";
-            "region" =>  ?self.region(),
+            "region" =>  ?parent_region,
             "duration" => ?elapsed
         );
 
