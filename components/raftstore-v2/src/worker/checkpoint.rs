@@ -6,8 +6,8 @@ use std::{
 use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use futures::channel::oneshot::Sender;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
-use slog::Logger;
-use tikv_util::{slog_panic, worker::Runnable};
+use slog::{info, Logger};
+use tikv_util::{slog_panic, time::Instant, worker::Runnable};
 
 use crate::operation::SPLIT_PREFIX;
 
@@ -65,6 +65,8 @@ impl<EK: KvEngine> Runner<EK> {
         log_index: u64,
         sender: Sender<bool>,
     ) {
+        let now = Instant::now();
+
         let mut cache = self.tablet_registry.get(parent_region).unwrap();
         let tablet = cache.latest().unwrap();
         let (_, _, suffix) = self
@@ -113,6 +115,15 @@ impl<EK: KvEngine> Runner<EK> {
                     )
                 });
         }
+
+        let elapsed = now.saturating_elapsed();
+        // to be removed after when it's stable
+        info!(
+            self.logger,
+            "create checkpoint time consumes";
+            "region" =>  ?self.region(),
+            "duration" => ?elapsed
+        );
 
         sender.send(true).unwrap();
     }

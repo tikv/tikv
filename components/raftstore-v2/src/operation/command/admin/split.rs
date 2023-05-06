@@ -497,7 +497,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // to be removed after when it's stable
         info!(
             self.logger,
-            "create checkpoint time consumes";
+            "checkpoint done and resume batch split execution";
             "region" =>  ?self.region(),
             "duration" => ?elapsed
         );
