@@ -82,7 +82,10 @@ pub struct ProposalControl {
     // should be empty or 1 element. And access speed is not a concern.
     proposed_admin_cmd: LinkedList<ProposedAdminCmd>,
     has_pending_prepare_merge: bool,
-    applied_prepare_merge_index: u64,
+    // Commit index of prepare merge.
+    // None means there is no prepare merge.
+    // Some(0) means there is a prepare merge, and it has applied.
+    applied_prepare_merge_index: Option<u64>,
     term: u64,
 }
 
@@ -91,7 +94,7 @@ impl ProposalControl {
         ProposalControl {
             proposed_admin_cmd: LinkedList::new(),
             has_pending_prepare_merge: false,
-            applied_prepare_merge_index: 0,
+            applied_prepare_merge_index: None,
             term,
         }
     }
@@ -225,20 +228,20 @@ impl ProposalControl {
 
     #[inline]
     pub fn enter_prepare_merge(&mut self, prepare_merge_index: u64) {
-        self.applied_prepare_merge_index = prepare_merge_index;
+        self.applied_prepare_merge_index = Some(prepare_merge_index);
     }
 
     #[inline]
     pub fn leave_prepare_merge(&mut self, prepare_merge_index: u64) {
-        if self.applied_prepare_merge_index != 0 {
-            assert_eq!(self.applied_prepare_merge_index, prepare_merge_index);
-            self.applied_prepare_merge_index = 0;
+        if let Some(index) = self.applied_prepare_merge_index {
+            assert_eq!(index, prepare_merge_index);
         }
+        self.applied_prepare_merge_index = Some(0);
     }
 
     #[inline]
     pub fn has_applied_prepare_merge(&self) -> bool {
-        self.applied_prepare_merge_index != 0
+        self.applied_prepare_merge_index.is_none() || self.applied_prepare_merge_index == Some(0)
     }
 
     /// Check if there is an on-going split command on current term.
@@ -261,7 +264,7 @@ impl ProposalControl {
     /// applied.
     #[inline]
     pub fn is_merging(&self) -> bool {
-        if self.applied_prepare_merge_index != 0 {
+        if let Some(index) = self.applied_prepare_merge_index && index != 0 {
             return true;
         }
         self.proposed_admin_cmd
