@@ -16,7 +16,7 @@ use tokio::runtime::Handle;
 
 use crate::server::debug::{Debugger, Error, Result};
 
-pub(crate) fn error_to_status(e: Error) -> RpcStatus {
+fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
         Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
         Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
@@ -25,11 +25,11 @@ pub(crate) fn error_to_status(e: Error) -> RpcStatus {
     RpcStatus::with_message(code, msg)
 }
 
-pub(crate) fn on_grpc_error(tag: &'static str, e: &GrpcError) {
+fn on_grpc_error(tag: &'static str, e: &GrpcError) {
     error!("{} failed: {:?}", tag, e);
 }
 
-pub(crate) fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
+fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
     let status = error_to_status(e);
     let e = GrpcError::RpcFailure(status);
     on_grpc_error(tag, &e);
