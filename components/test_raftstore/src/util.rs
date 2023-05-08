@@ -646,11 +646,11 @@ pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
-pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_hibernate(config: &mut Config) {
     // Uses long check interval to make leader keep sleeping during tests.
-    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    config.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
+    config.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
