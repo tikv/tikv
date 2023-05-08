@@ -377,6 +377,13 @@ impl RouterInner {
         *self.max_flush_interval.write().unwrap() = config.max_flush_interval.0;
         self.temp_file_size_limit
             .store(config.file_size_limit.0, Ordering::SeqCst);
+        let tasks = self.tasks.blocking_lock();
+        for task in tasks.values() {
+            task.temp_file_pool
+                .config()
+                .cache_size
+                .store(config.file_size_limit.0 as usize * 2, Ordering::Release)
+        }
     }
 
     /// Find the task for a region. If `end_key` is empty, search from start_key
@@ -447,7 +454,11 @@ impl RouterInner {
 
     fn tempfile_config_for_task(&self, task: &StreamTask) -> tempfiles::Config {
         tempfiles::Config {
-            cache_size: ReadableSize::mb(512).0 as _,
+            // 2x of the max pending bytes. The extra buffer make us easier to keep all files in
+            // memory.
+            cache_size: AtomicUsize::new(
+                self.temp_file_size_limit.load(Ordering::Acquire) as usize * 2,
+            ),
             swap_files: self.prefix.join(task.info.get_name()),
             content_compression: task.info.get_compression_type(),
             minimal_swap_out_file_size: ReadableSize::mb(8).0 as _,

@@ -25,13 +25,14 @@ use tokio::{
 use crate::{
     annotate,
     errors::Result,
+    metrics::{TEMP_FILE_COUNT, TEMP_FILE_MEMORY_USAGE, TEMP_FILE_SWAP_OUT_BYTES},
     utils::{CompressionWriter, ZstdCompressionWriter},
 };
 
 #[derive(Debug)]
 pub struct Config {
     /// The max memory usage of the in memory file content.
-    pub cache_size: usize,
+    pub cache_size: AtomicUsize,
     /// The base directory for swapping out files.
     pub swap_files: PathBuf,
     /// The compression type applied for files.
@@ -149,13 +150,16 @@ impl TempFilePool {
     pub fn open_for_write(self: &Arc<Self>, p: &Path) -> std::io::Result<ForWrite> {
         use std::io::{Error, ErrorKind};
         let mut fs = self.files.lock().unwrap();
-        let f = fs.items.entry(p.to_owned()).or_insert_with(|| File {
-            content: Arc::new(BlockMutex::new(FileCore::new(
-                Arc::clone(self),
-                p.to_owned(),
-            ))),
-            writer_count: Arc::default(),
-            reader_count: Arc::default(),
+        let f = fs.items.entry(p.to_owned()).or_insert_with(|| {
+            TEMP_FILE_COUNT.inc();
+            File {
+                content: Arc::new(BlockMutex::new(FileCore::new(
+                    Arc::clone(self),
+                    p.to_owned(),
+                ))),
+                writer_count: Arc::default(),
+                reader_count: Arc::default(),
+            }
         });
         if f.reader_count.load(Ordering::SeqCst) > 0 {
             return Err(Error::new(
@@ -238,7 +242,11 @@ impl TempFilePool {
     /// delaied until all reference to the file drop.
     pub fn remove(&self, p: &Path) -> bool {
         let mut files = self.files.lock().unwrap();
-        files.items.remove(p).is_some()
+        let removed = files.items.remove(p).is_some();
+        if removed {
+            TEMP_FILE_COUNT.dec();
+        }
+        removed
     }
 
     pub fn config(&self) -> &Config {
@@ -360,6 +368,7 @@ impl FileCore {
                 ))
                 .into();
             }
+            TEMP_FILE_SWAP_OUT_BYTES.inc_by(n as _);
             self.written += n;
         }
     }
@@ -370,10 +379,19 @@ impl FileCore {
         })
     }
 
+    #[inline(always)]
+    fn max_cache_size(&self) -> usize {
+        fail::fail_point!("override_log_backup_max_cache_size", |v| {
+            v.and_then(|x| x.parse::<usize>().ok())
+                .unwrap_or_else(|| self.the_pool.cfg.cache_size.load(Ordering::Acquire))
+        });
+        self.the_pool.cfg.cache_size.load(Ordering::Acquire)
+    }
+
     fn should_swap_out(&self) -> bool {
         let mem_use = self.the_pool.current.load(Ordering::SeqCst);
         let in_mem_exceeds_quota = self.in_mem.len() > self.the_pool.cfg.minimal_swap_out_file_size
-            && mem_use > self.the_pool.cfg.cache_size;
+            && mem_use > self.max_cache_size();
         let already_exist =
             self.in_mem.len() > self.the_pool.cfg.write_buffer_size && self.external_file.is_some();
         let swapping = self.written > 0;
@@ -447,6 +465,7 @@ impl Drop for FileCore {
         self.the_pool
             .current
             .fetch_sub(self.in_mem.capacity(), Ordering::SeqCst);
+        TEMP_FILE_MEMORY_USAGE.set(self.the_pool.current.load(Ordering::Acquire) as _);
         if self.external_file.is_some() {
             if let Err(err) = self.the_pool.delete_relative(&self.rel_path) {
                 warn!("failed to remove the file."; "file" => %self.rel_path.display(), "err" => %err);
@@ -593,6 +612,9 @@ fn modify_and_update_cap_diff(v: &mut Vec<u8>, record: &AtomicUsize, f: impl FnO
             record.fetch_sub(cap_old - cap_new, Ordering::SeqCst);
         }
     }
+    // Once the value changed, the previous SeqCst loading will probably fetch the
+    // latest value.
+    TEMP_FILE_MEMORY_USAGE.set(record.load(Ordering::Acquire) as _)
 }
 
 #[cfg(test)]
@@ -602,7 +624,7 @@ mod test {
         mem::ManuallyDrop,
         path::Path,
         pin::Pin,
-        sync::{atomic::Ordering, Arc},
+        sync::{atomic::{Ordering, AtomicUsize}, Arc},
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
@@ -624,7 +646,7 @@ mod test {
 
     fn simple_pool_with_modify(m: impl FnOnce(&mut Config)) -> Arc<TempFilePool> {
         let mut cfg = Config {
-            cache_size: 99999999999,
+            cache_size: AtomicUsize::new(99999999999),
             swap_files: std::env::temp_dir().join(format!(
                 "backup_stream::tempfiles::test::{}",
                 std::process::id()
@@ -639,7 +661,7 @@ mod test {
 
     fn simple_pool_with_soft_max(soft_max: usize) -> Arc<TempFilePool> {
         simple_pool_with_modify(|cfg| {
-            cfg.cache_size = soft_max;
+            cfg.cache_size = AtomicUsize::new(soft_max);
             cfg.minimal_swap_out_file_size = 8192.min(soft_max)
         })
     }
@@ -713,7 +735,7 @@ mod test {
     fn test_compression() {
         let pool = simple_pool_with_modify(|cfg| {
             cfg.content_compression = CompressionType::Zstd;
-            cfg.cache_size = 15;
+            cfg.cache_size = AtomicUsize::new(15);
             cfg.minimal_swap_out_file_size = 15;
         });
         let file_name = "compression.bin";
@@ -746,7 +768,7 @@ mod test {
     #[test]
     fn test_write_many_times() {
         let mut pool = simple_pool_with_modify(|cfg| {
-            cfg.cache_size = 15;
+            cfg.cache_size = AtomicUsize::new(15);
             cfg.minimal_swap_out_file_size = 15;
         });
         Arc::get_mut(&mut pool).unwrap().override_swapout = Some(Box::new(|p| {
@@ -804,7 +826,7 @@ mod test {
     #[test]
     fn test_read_many_times() {
         let pool = simple_pool_with_modify(|cfg| {
-            cfg.cache_size = 15;
+            cfg.cache_size = AtomicUsize::new(15);
             cfg.minimal_swap_out_file_size = 15;
         });
         let file_name = "read many times.txt";
@@ -845,7 +867,7 @@ mod test {
         // Open a distinct dir for this case.
         let tmp = tempdir().unwrap();
         let pool = simple_pool_with_modify(|cfg| {
-            cfg.cache_size = 15;
+            cfg.cache_size = AtomicUsize::new(15);
             cfg.minimal_swap_out_file_size = 15;
             cfg.swap_files = tmp.path().to_owned();
         });
@@ -881,7 +903,7 @@ mod test {
     fn test_panic_not_leaked() {
         let tmp = tempdir().unwrap();
         let pool = simple_pool_with_modify(|cfg| {
-            cfg.cache_size = 15;
+            cfg.cache_size = AtomicUsize::new(15);
             cfg.minimal_swap_out_file_size = 15;
             cfg.swap_files = tmp.path().to_owned();
         });

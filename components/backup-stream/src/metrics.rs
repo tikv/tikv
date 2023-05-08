@@ -179,6 +179,11 @@ lazy_static! {
         "The number of temporary files."
     )
     .unwrap();
+    pub static ref TEMP_FILE_SWAP_OUT_BYTES: IntCounter = register_int_counter!(
+        "tikv_log_backup_temp_file_swap_out_bytes",
+        "The number of total bytes being swapped out to disk."
+    )
+    .unwrap();
 }
 
 make_static_metric! {
