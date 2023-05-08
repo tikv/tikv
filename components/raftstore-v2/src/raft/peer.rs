@@ -14,7 +14,7 @@ use engine_traits::{
 use kvproto::{
     metapb::{self, PeerRole},
     pdpb,
-    raft_serverpb::{RaftMessage, RegionLocalState},
+    raft_serverpb::RaftMessage,
 };
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -261,11 +261,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.leader_lease.expire_remote_lease();
         }
 
-        let mut region_state = RegionLocalState::default();
-        region_state.set_region(region.clone());
-        region_state.set_tablet_index(tablet_index);
-        region_state.set_state(self.storage().region_state().get_state());
-        self.storage_mut().set_region_state(region_state);
+        self.storage_mut()
+            .region_state_mut()
+            .set_region(region.clone());
+        self.storage_mut()
+            .region_state_mut()
+            .set_tablet_index(tablet_index);
 
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a
