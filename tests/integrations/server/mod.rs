@@ -3,6 +3,7 @@
 mod debugger;
 mod gc_worker;
 mod kv_service;
+mod kv_service_v2;
 mod lock_manager;
 mod raft_client;
 mod security;
