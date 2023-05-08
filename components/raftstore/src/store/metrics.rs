@@ -868,4 +868,11 @@ lazy_static! {
         "Total snapshot generate limit used",
     )
     .unwrap();
+
+    pub static ref MESSAGE_RECV_BY_STORE: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_message_recv_by_store",
+        "Messages received by store",
+        &["store"]
+    )
+    .unwrap();
 }
