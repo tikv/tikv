@@ -54,11 +54,4 @@ RUN rustup self update \
 
 RUN cargo install cargo-nextest --locked
 
-ARG GIT_FALLBACK="Unknown (no git or not git repo)"
-ARG GIT_HASH=${GIT_FALLBACK}
-ARG GIT_TAG=${GIT_FALLBACK}
-ARG GIT_BRANCH=${GIT_FALLBACK}
-ENV TIKV_BUILD_GIT_HASH=${GIT_HASH}
-ENV TIKV_BUILD_GIT_TAG=${GIT_TAG}
-ENV TIKV_BUILD_GIT_BRANCH=${GIT_BRANCH}
 ENTRYPOINT ["sh", "-c", "source /opt/rh/devtoolset-8/enable && \"$@\"", "-s"]

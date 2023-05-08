@@ -400,9 +400,6 @@ docker:
 docker_test:
 	docker build -f Dockerfile.test \
 		-t ${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
-		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
-		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
 		. 
 	docker run -i -v $(shell pwd):/tikv \
 		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
