@@ -260,11 +260,12 @@ fn test_read_hibernated_region() {
 }
 
 /// The read index response can advance the commit index.
-/// But in previous implemtation, we forget to set term in read index response
+/// But in previous implementation, we forget to set term in read index response
 /// which causes panic in raft-rs. This test is to reproduce the case.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_replica_read_on_stale_peer() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
 
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(30));
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -293,9 +294,10 @@ fn test_replica_read_on_stale_peer() {
     block_on_timeout(resp1_ch, Duration::from_micros(100)).unwrap_err();
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_out_of_order() {
-    let mut cluster = new_node_cluster(0, 2);
+    let mut cluster = new_cluster(0, 2);
 
     // Use long election timeout and short lease.
     configure_for_lease_read(&mut cluster.cfg, Some(1000), Some(10));
@@ -337,9 +339,10 @@ fn test_read_index_out_of_order() {
         .unwrap();
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_retry_lock_checking() {
-    let mut cluster = new_node_cluster(0, 2);
+    let mut cluster = new_cluster(0, 2);
 
     // Use long election timeout and short lease.
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
@@ -411,11 +414,12 @@ fn test_read_index_retry_lock_checking() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_split_isolation() {
-    let mut cluster = new_node_cluster(0, 2);
+    let mut cluster = new_cluster(0, 2);
     // Use long election timeout and short lease.
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -474,9 +478,10 @@ fn test_split_isolation() {
 /// Testing after applying snapshot, the `ReadDelegate` stored at `StoreMeta`
 /// will be replace with the new `ReadDelegate`, and the `ReadDelegate` stored
 /// at `LocalReader` should also be updated
-#[test]
-fn test_read_local_after_snapshpot_replace_peer() {
-    let mut cluster = new_node_cluster(0, 3);
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_read_local_after_snapshot_replace_peer() {
+    let mut cluster = new_cluster(0, 3);
     configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
@@ -536,7 +541,7 @@ fn test_read_local_after_snapshpot_replace_peer() {
         .unwrap();
     // should not have `mismatch peer id` error
     if resp.get_header().has_error() {
-        panic!("unexpect err: {:?}", resp.get_header().get_error());
+        panic!("unexpected err: {:?}", resp.get_header().get_error());
     }
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v3");
@@ -544,9 +549,10 @@ fn test_read_local_after_snapshpot_replace_peer() {
 
 /// The case checks if a malformed request should not corrupt the leader's read
 /// queue.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_malformed_read_index() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
@@ -600,73 +606,6 @@ fn test_malformed_read_index() {
     // the read queue, the correct request should be responded.
     let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), region, b"k1", true, false);
     cluster.clear_send_filters();
-    let resp = block_on_timeout(resp, Duration::from_secs(10))
-        .unwrap()
-        .unwrap();
-    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
-}
-
-/// The case checks if a malformed request should not corrupt the leader's read
-/// queue.
-#[test]
-fn test_malformed_read_index_v2() {
-    use test_raftstore_v2::*;
-
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
-    cluster.cfg.raft_store.hibernate_regions = true;
-    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    let region_id = cluster.run_conf_change();
-    pd_client.must_add_peer(region_id, new_peer(2, 2));
-    pd_client.must_add_peer(region_id, new_peer(3, 3));
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    cluster.must_put(b"k1", b"v1");
-    for i in 1..=3 {
-        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
-    }
-
-    // Wait till lease expires.
-    std::thread::sleep(
-        cluster
-            .cfg
-            .raft_store
-            .raft_store_max_leader_lease()
-            .to_std()
-            .unwrap(),
-    );
-    let region = cluster.get_region(b"k1");
-    // Send a malformed request to leader
-    let mut raft_msg = raft::eraftpb::Message::default();
-    raft_msg.set_msg_type(MessageType::MsgReadIndex);
-    let rctx = ReadIndexContext {
-        id: Uuid::new_v4(),
-        request: None,
-        locked: None,
-    };
-    let mut e = raft::eraftpb::Entry::default();
-    e.set_data(rctx.to_bytes().into());
-    raft_msg.mut_entries().push(e);
-    raft_msg.from = 1;
-    raft_msg.to = 1;
-    let mut message = RaftMessage::default();
-    message.set_region_id(region_id);
-    message.set_from_peer(new_peer(1, 1));
-    message.set_to_peer(new_peer(1, 1));
-    message.set_region_epoch(region.get_region_epoch().clone());
-    message.set_message(raft_msg);
-    // So the read won't be handled soon.
-    cluster.add_send_filter(IsolationFilterFactory::new(1));
-    cluster.send_raft_msg(message).unwrap();
-    // Also send a correct request. If the malformed request doesn't corrupt
-    // the read queue, the correct request should be responded.
-    let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), region, b"k1", true, false);
-    cluster.clear_send_filters();
-
     let resp = block_on_timeout(resp, Duration::from_secs(10))
         .unwrap()
         .unwrap();
