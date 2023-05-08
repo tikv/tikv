@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::ReadTier;
 use rocksdb::{
     ReadOptions as RawReadOptions, TableFilter, TableProperties, WriteOptions as RawWriteOptions,
 };
@@ -84,6 +85,8 @@ fn build_read_opts(iter_opts: engine_traits::IterOptions) -> RawReadOptions {
         ))
     }
 
+    opts.set_read_tier(read_tier_opt(iter_opts.read_tier()));
+
     let (lower, upper) = iter_opts.build_bounds();
     if let Some(lower) = lower {
         opts.set_iterate_lower_bound(lower);
@@ -142,5 +145,16 @@ impl TableFilter for TsFilter {
         }
 
         true
+    }
+}
+
+// The ReadTier option follows [RocksDB option API](https://github.com/facebook/rocksdb/blob/master/include/rocksdb/options.h)
+#[inline]
+fn read_tier_opt(tier: ReadTier) -> i32 {
+    match tier {
+        ReadTier::ReadAllTier => 0x0,
+        ReadTier::BlockCacheTier => 0x1,
+        ReadTier::PersistedTier => 0x2,
+        ReadTier::MemtableTier => 0x3,
     }
 }

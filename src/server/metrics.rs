@@ -72,6 +72,7 @@ make_auto_flush_static_metric! {
         unsafe_destroy_range,
         validate_config,
         orphan_versions,
+        check_flush_write_cf_memtable,
     }
 
     pub label_enum SnapTask {

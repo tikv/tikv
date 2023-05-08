@@ -65,7 +65,8 @@ pub mod perf_context;
 pub use crate::perf_context::*;
 mod perf_context_impl;
 pub use crate::perf_context_impl::{
-    PerfStatisticsInstant, ReadPerfContext, ReadPerfInstant, WritePerfContext, WritePerfInstant,
+    PerfContextFields, PerfStatisticsInstant, ReadPerfContext, ReadPerfInstant, WritePerfContext,
+    WritePerfInstant,
 };
 mod perf_context_metrics;
 

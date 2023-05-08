@@ -77,6 +77,20 @@ pub enum SeekMode {
     Prefix,
 }
 
+#[derive(Copy, Clone)]
+pub enum ReadTier {
+    ReadAllTier,
+    BlockCacheTier,
+    PersistedTier,
+    MemtableTier,
+}
+
+impl Default for ReadTier {
+    fn default() -> ReadTier {
+        ReadTier::ReadAllTier
+    }
+}
+
 #[derive(Clone)]
 pub struct IterOptions {
     lower_bound: Option<KeyBuilder>,
@@ -95,6 +109,9 @@ pub struct IterOptions {
     // never fail a request as incomplete, even on skipping too many keys.
     // It's used to avoid encountering too many tombstones when seeking.
     max_skippable_internal_keys: u64,
+    // cache level of iteration, can process data only in specified cache levels by setting this.
+    // The default value of 0 means iterate over memtable, block cache, OS cache or storage.
+    read_tier: ReadTier,
 }
 
 impl IterOptions {
@@ -113,6 +130,7 @@ impl IterOptions {
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
             max_skippable_internal_keys: 0,
+            read_tier: ReadTier::ReadAllTier,
         }
     }
 
@@ -158,6 +176,11 @@ impl IterOptions {
     #[inline]
     pub fn hint_max_ts(&self) -> Option<u64> {
         self.hint_max_ts
+    }
+
+    #[inline]
+    pub fn read_tier(&self) -> ReadTier {
+        self.read_tier
     }
 
     #[inline]
@@ -247,6 +270,11 @@ impl IterOptions {
     pub fn set_max_skippable_internal_keys(&mut self, threshold: u64) {
         self.max_skippable_internal_keys = threshold;
     }
+
+    #[inline]
+    pub fn set_read_tier(&mut self, tier: ReadTier) {
+        self.read_tier = tier;
+    }
 }
 
 impl Default for IterOptions {
@@ -261,6 +289,7 @@ impl Default for IterOptions {
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
             max_skippable_internal_keys: 0,
+            read_tier: ReadTier::ReadAllTier,
         }
     }
 }
