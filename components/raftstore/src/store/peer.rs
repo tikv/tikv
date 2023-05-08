@@ -5,6 +5,7 @@ use std::{
     cell::RefCell,
     cmp,
     collections::VecDeque,
+    convert::TryInto,
     fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -50,6 +51,7 @@ use raft::{
     GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
     INVALID_INDEX, NO_LIMIT,
 };
+use raft_proto::eraftpb::EntryType::EntryNormal;
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
@@ -3035,6 +3037,24 @@ where
                 },
                 |_| {}
             );
+
+            if entry.get_entry_type() == EntryNormal {
+                let index = entry.get_index();
+                let data = entry.get_data();
+                let cmd: RaftCmdRequest = util::parse_data_at(data, index, &self.tag);
+                let flag_data = cmd.get_header().get_flag_data();
+                let start_ts = if flag_data.len() == 8 {
+                    u64::from_le_bytes(flag_data.try_into().unwrap())
+                } else {
+                    0
+                };
+                info!("handle raft committed command";
+                    "tag" => &self.tag,
+                    "start_ts" => start_ts,
+                    "cmd" => ?cmd,
+                    "index" => index,
+                );
+            }
         }
         if let Some(last_entry) = committed_entries.last() {
             self.last_applying_idx = last_entry.get_index();
@@ -3337,7 +3357,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         replica_read: bool,
     ) {
-        debug!(
+        info!(
             "handle reads with a read index";
             "request_id" => ?read.id,
             "region_id" => self.region_id,

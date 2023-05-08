@@ -9,6 +9,7 @@ use std::{
         Bound::{Excluded, Unbounded},
         VecDeque,
     },
+    convert::TryInto,
     iter::{FromIterator, Iterator},
     mem,
     sync::{Arc, Mutex},
@@ -5340,8 +5341,23 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
+
+        let flag_data = msg.get_header().get_flag_data();
+        let start_ts = if flag_data.len() == 8 {
+            u64::from_le_bytes(flag_data.try_into().unwrap())
+        } else {
+            0
+        };
+        info!("propose_raft_command_internal, try to propose";
+            "start_ts" => start_ts,
+            "region_id" => self.region_id(),
+            "req" => ?&msg,
+        );
         if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
             self.fsm.has_ready = true;
+            info!("propose_raft_command_internal, command is proposed";
+                "start_ts" => start_ts,
+            );
         }
 
         if self.fsm.peer.should_wake_up {

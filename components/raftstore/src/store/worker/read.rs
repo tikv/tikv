@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
+    convert::TryInto,
     fmt::{self, Display, Formatter},
     ops::Deref,
     sync::{
@@ -950,6 +951,12 @@ where
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
+        let flag_data = req.get_header().get_flag_data();
+        let start_ts = if flag_data.len() == 8 {
+            u64::from_le_bytes(flag_data.try_into().unwrap())
+        } else {
+            0
+        };
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
                 req.get_requests()
@@ -963,6 +970,11 @@ where
                     });
                 let snap_updated;
                 let last_valid_ts = delegate.last_valid_ts;
+                info!("read for req path with local read delegate";
+                    "start_ts" => start_ts,
+                    "req" => ?&req,
+                    "policy" => ?&policy,
+                );
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
@@ -1047,6 +1059,10 @@ where
             }
             // Forward to raftstore.
             Ok(None) => {
+                info!("read for req path redirect to raftstore";
+                    "start_ts" => start_ts,
+                    "req" => ?&req,
+                );
                 req.get_requests()
                     .iter()
                     .filter(|r| r.has_read_index())

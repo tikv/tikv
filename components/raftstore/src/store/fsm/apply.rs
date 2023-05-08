@@ -1739,7 +1739,7 @@ where
             let cmd_type = req.get_cmd_type();
             match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req, start_ts),
-                CmdType::Delete => self.handle_delete(ctx, req),
+                CmdType::Delete => self.handle_delete(ctx, req, start_ts),
                 CmdType::DeleteRange => {
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
@@ -1859,7 +1859,12 @@ where
         Ok(())
     }
 
-    fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+    fn handle_delete(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        req: &Request,
+        start_ts: u64,
+    ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -1870,6 +1875,13 @@ where
 
         keys::data_key_with_buffer(key, &mut ctx.key_buffer);
         let key = ctx.key_buffer.as_slice();
+        let cf = req.get_delete().get_cf();
+
+        info!("handle delete";
+            "cf" => ?cf,
+            "start_ts" => ?start_ts,
+            "key" => log_wrappers::hex_encode_upper(key),
+            "index" => ctx.exec_log_index);
 
         // since size_diff_hint is not accurate, so we just skip calculate the value
         // size.

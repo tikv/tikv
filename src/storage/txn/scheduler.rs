@@ -679,6 +679,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
                 let mut snap_ctx = SnapContext {
                     pb_ctx: task.cmd.ctx(),
+                    start_ts: task.cmd.ts().into(),
                     ..Default::default()
                 };
                 if matches!(
@@ -806,8 +807,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        info!("write command finished";
-            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
+        info!("write command finished, lock guards would be dropped";
+            "cid" => cid,
+            "pipelined" => pipelined,
+            "async_apply_prewrite" => async_apply_prewrite,
+            "process_result" => ?&pr,
+        );
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
@@ -1163,6 +1168,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         sched_details: &mut SchedulerDetails,
     ) {
         fail_point!("txn_before_process_write");
+        let start_ts = task.cmd.ts();
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -1194,6 +1200,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let raw_ext = raw_ext.unwrap();
 
         let deadline = task.cmd.deadline();
+        info!(
+            "scheduler start to process write command";
+            "start_ts" => start_ts,
+            "cmd" => ?&task.cmd,
+        );
         let write_result = {
             let _guard = sample.observe_cpu();
             let context = WriteContext {
@@ -1278,6 +1289,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         let region_id = ctx.get_region_id();
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
+        info!(
+            "write command process successfully";
+            "region_id" => region_id,
+            "start_ts" => start_ts,
+            "process_result" => ?&pr,
+            "lock_guards size" => lock_guards.len(),
+            "encountered lock count" => lock_info.len(),
+            "response_policy" => ?&response_policy,
+        );
 
         let mut pr = Some(pr);
 
