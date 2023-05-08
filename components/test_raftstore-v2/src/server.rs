@@ -273,7 +273,7 @@ pub struct ServerCluster<EK: KvEngine> {
     env: Arc<Environment>,
     pub pending_services: HashMap<u64, PendingServices>,
     // This is used to work around that server cluster is generic over KvEngine while the debug
-    // service is specific overal RocksDB.
+    // service implementation is specific overal RocksDB.
     pub pending_debug_service: Option<PendingDebugService<EK>>,
     pub health_services: HashMap<u64, HealthService>,
     pub security_mgr: Arc<SecurityManager>,
