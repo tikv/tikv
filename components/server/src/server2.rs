@@ -30,7 +30,9 @@ use backup_stream::{
 use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
+use engine_rocks::{
+    from_rocks_compression_type, raw::WriteBufferManager, RocksEngine, RocksStatistics,
+};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
@@ -191,6 +193,7 @@ struct TikvServer<ER: RaftEngine> {
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
+    kv_write_buffer_manager: Option<Arc<WriteBufferManager>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: Option<RegionInfoAccessor>,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
@@ -329,6 +332,7 @@ where
             engines: None,
             kv_statistics: None,
             raft_statistics: None,
+            kv_write_buffer_manager: None,
             servers: None,
             region_info_accessor: None,
             coprocessor_host: None,
@@ -810,6 +814,7 @@ where
                 &state,
                 importer.clone(),
                 self.core.encryption_key_manager.clone(),
+                self.kv_write_buffer_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1272,6 +1277,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         )));
         let factory = Box::new(builder.build());
         self.kv_statistics = Some(factory.rocks_statistics());
+        self.kv_write_buffer_manager = factory.rocks_write_buffer_manager();
         let registry = TabletRegistry::new(factory, self.core.store_path.join("tablets"))
             .unwrap_or_else(|e| fatal!("failed to create tablet registry {:?}", e));
         let cfg_controller = self.cfg_controller.as_mut().unwrap();

@@ -633,6 +633,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             &state,
             importer,
             key_manager,
+            None,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
