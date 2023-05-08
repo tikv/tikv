@@ -7,7 +7,7 @@ use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{CfName, KvEngine, TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
-use futures::Future;
+use futures::future::BoxFuture;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse};
 use raftstore::Result;
 use rand::{prelude::SliceRandom, RngCore};
@@ -222,7 +222,7 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     key: &[u8],
     read_quorum: bool,
     replica_read: bool,
-) -> impl Future<Output = Result<RaftCmdResponse>> {
+) -> BoxFuture<'static, Result<RaftCmdResponse>> {
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -231,7 +231,8 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     );
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
-    cluster.sim.wl().async_read(request)
+    let f = cluster.sim.wl().async_read(request);
+    Box::pin(async move { f.await })
 }
 
 pub fn test_delete_range<T: Simulator<EK>, EK: KvEngine>(cluster: &mut Cluster<T, EK>, cf: CfName) {
