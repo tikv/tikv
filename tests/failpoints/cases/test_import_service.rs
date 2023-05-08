@@ -5,16 +5,14 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use file_system::calc_crc32;
 use futures::{executor::block_on, stream, SinkExt};
-use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
-use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
-use security::SecurityConfig;
+use grpcio::{Result, WriteFlags};
+use kvproto::import_sstpb::*;
 use tempfile::Builder;
-use test_raftstore::{Config, Simulator};
+use test_raftstore::Simulator;
+use test_raftstore_macro::test_case;
 use test_sst_importer::*;
-use tikv::config::TikvConfig;
 use tikv_util::HandyRwLock;
 
 #[allow(dead_code)]
@@ -22,6 +20,7 @@ use tikv_util::HandyRwLock;
 mod util;
 use self::util::{
     check_ingested_kvs, new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
+    open_cluster_and_tikv_import_client_v2, send_upload_sst,
 };
 
 // Opening sst writer involves IO operation, it may block threads for a while.
@@ -252,10 +251,11 @@ fn test_ingest_file_twice_and_conflict() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_ingest_sst_v2() {
     let latch_fp = "on_cleanup_import_sst";
-    let (cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None);
+    let mut cluster = new_cluster(1, 1);
+    let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None, &mut cluster);
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
@@ -286,81 +286,4 @@ fn test_ingest_sst_v2() {
     }
     fail::remove(latch_fp);
     assert_ne!(0, count);
-}
-
-fn send_upload_sst(
-    client: &ImportSstClient,
-    meta: &SstMeta,
-    data: &[u8],
-) -> Result<UploadResponse> {
-    let mut r1 = UploadRequest::default();
-    r1.set_meta(meta.clone());
-    let mut r2 = UploadRequest::default();
-    r2.set_data(data.to_vec());
-    let reqs: Vec<_> = vec![r1, r2]
-        .into_iter()
-        .map(|r| Result::Ok((r, WriteFlags::default())))
-        .collect();
-    let (mut tx, rx) = client.upload().unwrap();
-    let mut stream = stream::iter(reqs);
-    block_on(async move {
-        tx.send_all(&mut stream).await?;
-        tx.close().await?;
-        rx.await
-    })
-}
-
-fn open_cluster_and_tikv_import_client_v2(
-    cfg: Option<TikvConfig>,
-) -> (
-    test_raftstore_v2::Cluster<test_raftstore_v2::ServerCluster<RocksEngine>, RocksEngine>,
-    Context,
-    TikvClient,
-    ImportSstClient,
-) {
-    let cfg = cfg.unwrap_or_else(|| {
-        let mut config = TikvConfig::default();
-        config.server.addr = "127.0.0.1:0".to_owned();
-        let cleanup_interval = Duration::from_millis(10);
-        config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
-        config.server.grpc_concurrency = 1;
-        config
-    });
-    let mut cluster: test_raftstore_v2::Cluster<
-        test_raftstore_v2::ServerCluster<RocksEngine>,
-        RocksEngine,
-    > = test_raftstore_v2::new_server_cluster(1, 1);
-    cluster.cfg = Config {
-        tikv: cfg.clone(),
-        prefer_mem: true,
-    };
-    cluster.run();
-
-    let region_id = 1;
-    let leader = cluster.leader_of_region(region_id).unwrap();
-    let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::default();
-    ctx.set_region_id(region_id);
-    ctx.set_peer(leader);
-    ctx.set_region_epoch(epoch);
-
-    let ch = {
-        let env = Arc::new(Environment::new(1));
-        let node = ctx.get_peer().get_store_id();
-        let builder = ChannelBuilder::new(env)
-            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
-            .keepalive_time(cluster.cfg.server.grpc_keepalive_time.into())
-            .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into());
-
-        if cfg.security != SecurityConfig::default() {
-            let creds = test_util::new_channel_cred();
-            builder.secure_connect(&cluster.sim.rl().get_addr(node), creds)
-        } else {
-            builder.connect(&cluster.sim.rl().get_addr(node))
-        }
-    };
-    let tikv = TikvClient::new(ch.clone());
-    let import = ImportSstClient::new(ch);
-
-    (cluster, ctx, tikv, import)
 }
