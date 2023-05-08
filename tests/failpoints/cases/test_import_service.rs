@@ -254,15 +254,8 @@ fn test_ingest_file_twice_and_conflict() {
 
 #[test]
 fn test_ingest_sst_v2() {
-    let (tx1, rx1) = channel::<()>();
-    let tx1 = Arc::new(Mutex::new(tx1));
     let latch_fp = "on_cleanup_import_sst";
-    fail::cfg_callback(latch_fp, move || {
-        tx1.lock().unwrap().send(()).unwrap();
-    })
-    .unwrap();
     let (cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None);
-
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
@@ -279,17 +272,20 @@ fn test_ingest_sst_v2() {
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
-    rx1.recv_timeout(std::time::Duration::from_secs(20))
-        .unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    println!("import sst:{:?}", &cluster.paths);
+    fail::cfg(latch_fp, "return").unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    let mut count = 0;
     for path in &cluster.paths {
         let sst_dir = path.path().join("import-sst");
-        println!("import sst:{:?}", sst_dir);
-        std::thread::sleep(std::time::Duration::from_secs(20));
-        let read_dir = std::fs::read_dir(sst_dir).unwrap();
-        assert_ne!(0, read_dir.count());
+        for entry in std::fs::read_dir(sst_dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                count += 1;
+            }
+        }
     }
+    fail::remove(latch_fp);
+    assert_ne!(0, count);
 }
 
 fn send_upload_sst(
