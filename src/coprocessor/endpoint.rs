@@ -1,7 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, time::Duration,
+    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, ops::Deref, sync::Arc,
+    time::Duration,
 };
 
 use ::tracker::{
@@ -466,6 +467,11 @@ impl<E: Engine> Endpoint<E> {
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
         resp.set_latest_buckets_version(buckets_version);
+        let item = resp.deref();
+        info!("cop handle_unary_request_impl response";
+            "req_ctx" => ?tracker.req_ctx,
+            "resp" => ?item,
+        );
         Ok(resp)
     }
 

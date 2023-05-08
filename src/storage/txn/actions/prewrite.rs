@@ -551,6 +551,7 @@ impl<'a> PrewriteMutation<'a> {
             lock.secondaries = secondary_keys.to_owned();
         }
 
+        let use_async_commit = lock.use_async_commit;
         let final_min_commit_ts = if lock.use_async_commit || try_one_pc {
             let res = async_commit_timestamps(
                 &self.key,
@@ -559,6 +560,8 @@ impl<'a> PrewriteMutation<'a> {
                 self.txn_props.for_update_ts(),
                 self.txn_props.max_commit_ts(),
                 txn,
+                use_async_commit,
+                try_one_pc,
             );
             fail_point!("after_calculate_min_commit_ts");
             if let Err(Error(box ErrorInner::CommitTsTooLarge { .. })) = &res {
@@ -738,6 +741,8 @@ fn async_commit_timestamps(
     for_update_ts: TimeStamp,
     max_commit_ts: TimeStamp,
     txn: &mut MvccTxn,
+    use_async_commit: bool,
+    try_one_pc: bool,
 ) -> Result<TimeStamp> {
     // This operation should not block because the latch makes sure only one thread
     // is operating on this key.
@@ -777,6 +782,14 @@ fn async_commit_timestamps(
 
         lock.min_commit_ts = min_commit_ts;
         *l = Some(lock.clone());
+        info!("async_commit_timestamps";
+            "start_ts" => start_ts,
+            "key" => log_wrappers::Value::key(key.as_encoded()),
+            "max_ts" => max_ts,
+            "min_commit_ts" => min_commit_ts,
+            "use_async_commit" => use_async_commit,
+            "try_one_pc" => try_one_pc,
+        );
         Ok(min_commit_ts)
     })?;
 

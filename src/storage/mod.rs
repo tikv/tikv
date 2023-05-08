@@ -3022,6 +3022,10 @@ fn prepare_snap_ctx<'a>(
                     )
                 })
                 .map_err(|e| {
+                    info!("prepare_snap_ctx memory lock encountered";
+                        "start_ts" => start_ts,
+                        "key" => ?&key,
+                    );
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                         .get(cmd)
                         .locked

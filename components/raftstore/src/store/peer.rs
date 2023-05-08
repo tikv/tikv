@@ -3489,6 +3489,9 @@ where
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
             let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
+            info!("apply_reads";
+                "read_index_ctx" => ?&read_index_ctx,
+            );
             (read_index_ctx.id, read_index_ctx.locked, state.index)
         });
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
@@ -4121,10 +4124,11 @@ where
         locked: Option<&LockInfo>,
     ) -> (Uuid, bool) {
         let res = propose_read_index(&mut self.raft_group, request, locked);
-        info!("*** propose read index";
+        info!("*** propose read index to the raft group";
             "start_ts" => ?request.map(|r| r.get_start_ts()),
             "uuid" => ?res.0,
-            "dropped" => res.1
+            "dropped" => res.1,
+            "res" => ?&res,
         );
         res
     }

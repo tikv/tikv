@@ -130,6 +130,12 @@ impl MvccTxn {
     }
 
     pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimstic_lock: bool) {
+        info!("put lock for 1PC";
+            "start_ts" => self.start_ts,
+            "key" => log_wrappers::Value::key(key.as_encoded()),
+            "lock" => ?&lock,
+            "remove_pessimstic_lock" => remove_pessimstic_lock,
+        );
         self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 

@@ -220,6 +220,11 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
                 Some(r) if r.id == uuid => {
                     r.read_index = Some(index);
                     self.ready_cnt += 1;
+                    info!("advance_leader_reads";
+                        "uuid" => ?&uuid,
+                        "info" => ?&info,
+                        "index" => index,
+                    );
                     continue;
                 }
                 Some(r) => Some((r.id, r.propose_time)),
