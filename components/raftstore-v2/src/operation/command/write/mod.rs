@@ -292,9 +292,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             tablet
                 .delete_ranges_cf(cf, strategy.clone(), &range)
                 .unwrap_or_else(move |e| fail_f(e, strategy));
-            tablet
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
-                .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteBlobs));
+
+            // to do: support titan?
+            // tablet
+            //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+            //     .unwrap_or_else(move |e| fail_f(e,
+            // DeleteStrategy::DeleteBlobs));
         }
         if index != u64::MAX {
             self.modifications_mut()[off] = index;
