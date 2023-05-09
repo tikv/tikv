@@ -364,6 +364,7 @@ dependencies = [
  "azure_storage_blobs",
  "base64 0.13.0",
  "cloud",
+ "fail",
  "futures 0.3.15",
  "futures-util",
  "kvproto",
