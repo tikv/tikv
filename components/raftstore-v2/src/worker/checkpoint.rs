@@ -1,3 +1,5 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     fmt::Display,
     path::{Path, PathBuf},
@@ -79,6 +81,7 @@ impl<EK: KvEngine> Runner<EK> {
             slog_panic!(
                 self.logger,
                 "fails to create checkpoint object";
+                "region_id" => parent_region,
                 "error" => ?e
             )
         });
@@ -91,6 +94,7 @@ impl<EK: KvEngine> Runner<EK> {
                     slog_panic!(
                         self.logger,
                         "fails to create checkpoint";
+                        "region_id" => parent_region,
                         "path" => %split_temp_path.display(),
                         "error" => ?e
                     )
@@ -110,6 +114,7 @@ impl<EK: KvEngine> Runner<EK> {
                     slog_panic!(
                         self.logger,
                         "fails to create checkpoint";
+                        "region_id" => parent_region,
                         "path" => %derived_path.display(),
                         "error" => ?e
                     )
