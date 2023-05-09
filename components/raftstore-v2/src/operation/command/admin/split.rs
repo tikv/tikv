@@ -30,6 +30,7 @@ use std::{
     borrow::Cow,
     cmp,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use collections::HashSet;
@@ -483,8 +484,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .tablet_registry()
             .parse_tablet_name(Path::new(self.tablet().path()))
             .unwrap();
-        let scheduler = self.checkpoint_scheduler().clone();
-        async_checkpoint(
+        let scheduler: _ = self.checkpoint_scheduler().clone();
+        let checkpoint_duration = async_checkpoint(
             &scheduler,
             region_id,
             split_region_ids,
@@ -493,13 +494,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         )
         .await;
 
+        // It should equal to checkpoint_duration + the duration of rescheduling current
+        // apply peer
         let elapsed = now.saturating_elapsed();
         // to be removed after when it's stable
         info!(
             self.logger,
             "checkpoint done and resume batch split execution";
             "region" =>  ?self.region(),
-            "duration" => ?elapsed
+            "checkpoint_duration" => ?checkpoint_duration,
+            "total_duration" => ?elapsed,
         );
 
         let reg = self.tablet_registry();
@@ -532,13 +536,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 }
 
+// asynchronously execute the checkpoint creation and return the duration spent
+// by it
 async fn async_checkpoint(
     scheduler: &Scheduler<checkpoint::Task>,
     parent_region: u64,
     split_regions: Vec<u64>,
     cur_suffix: u64,
     log_index: u64,
-) {
+) -> Duration {
     let (tx, rx) = oneshot::channel();
     let task = checkpoint::Task::Checkpoint {
         cur_suffix,
@@ -548,7 +554,7 @@ async fn async_checkpoint(
         sender: tx,
     };
     scheduler.schedule_force(task).unwrap();
-    assert!(rx.await.unwrap());
+    rx.await.unwrap()
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {

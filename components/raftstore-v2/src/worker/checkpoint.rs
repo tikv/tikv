@@ -3,12 +3,13 @@
 use std::{
     fmt::Display,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use futures::channel::oneshot::Sender;
 use raftstore::store::RAFT_INIT_LOG_INDEX;
-use slog::{info, Logger};
+use slog::Logger;
 use tikv_util::{slog_panic, time::Instant, worker::Runnable};
 
 use crate::operation::SPLIT_PREFIX;
@@ -20,7 +21,7 @@ pub enum Task {
         log_index: u64,
         parent_region: u64,
         split_regions: Vec<u64>,
-        sender: Sender<bool>,
+        sender: Sender<Duration>,
     },
 }
 
@@ -65,7 +66,7 @@ impl<EK: KvEngine> Runner<EK> {
         split_regions: Vec<u64>,
         cur_suffix: u64,
         log_index: u64,
-        sender: Sender<bool>,
+        sender: Sender<Duration>,
     ) {
         let now = Instant::now();
 
@@ -121,16 +122,7 @@ impl<EK: KvEngine> Runner<EK> {
                 });
         }
 
-        let elapsed = now.saturating_elapsed();
-        // to be removed after when it's stable
-        info!(
-            self.logger,
-            "create checkpoint time consumes";
-            "region" =>  ?parent_region,
-            "duration" => ?elapsed
-        );
-
-        sender.send(true).unwrap();
+        sender.send(now.saturating_elapsed()).unwrap();
     }
 }
 
