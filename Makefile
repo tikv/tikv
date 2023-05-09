@@ -247,6 +247,7 @@ dist_release:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 ifeq ($(shell uname),Linux) # Macs binary isn't elf format
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-server.debug ${CARGO_TARGET_DIR}/release/tikv-ctl.debug ${BIN_PATH}/
 	@python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
 endif
 
@@ -256,13 +257,15 @@ build_dist_release: export TIKV_PROFILE=dist_release
 build_dist_release:
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
-	# Reduce binary size by compressing binaries.
-	# FIXME: Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
-	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
-	# FIXME: https://sourceware.org/bugzilla/show_bug.cgi?id=24764
-	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
-	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-server
-	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-ctl
+	# split the debugging information in separates files
+	# see: https://sourceware.org/gdb/onlinedocs/gdb/Separate-Debug-Files.html
+	objcopy --only-keep-debug ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-server.debug
+	objcopy --strip-debug ${CARGO_TARGET_DIR}/release/tikv-server
+	objcopy --add-gnu-debuglink=${CARGO_TARGET_DIR}/release/tikv-server.debug ${CARGO_TARGET_DIR}/release/tikv-server
+
+	objcopy --only-keep-debug ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-ctl.debug
+	objcopy --strip-debug ${CARGO_TARGET_DIR}/release/tikv-ctl
+	objcopy --add-gnu-debuglink=${CARGO_TARGET_DIR}/release/tikv-ctl.debug ${CARGO_TARGET_DIR}/release/tikv-ctl
 endif
 
 # Distributable bins with SSE4.2 optimizations
@@ -391,6 +394,15 @@ error-code: etc/error_code.toml
 docker:
 	docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
+		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
+		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
+		.
+
+# TiKV debuginfo docker image
+docker-debug:
+	docker build --target debug \
+		-t ${DOCKER_IMAGE_NAME}-debug:${DOCKER_IMAGE_TAG} \
 		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
 		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
 		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
