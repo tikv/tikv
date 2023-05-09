@@ -94,7 +94,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .put_region_state(region_id, res.index, &res.region_state)
             .unwrap();
         self.set_has_extra_write();
-        // Let the leader lease to None to ensure that local reads are not
-        // executed. self.leader_lease_mut().expire_remote_lease();
+
+        // Compares to v1, v2 does not expire remote lease, because only
+        // local reader can serve read requests.
     }
 }
