@@ -11,7 +11,6 @@ use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use tempfile::Builder;
 use test_raftstore::Simulator;
-use test_raftstore_macro::test_case;
 use test_sst_importer::*;
 use tikv_util::HandyRwLock;
 
@@ -251,10 +250,10 @@ fn test_ingest_file_twice_and_conflict() {
     );
 }
 
-#[test_case(test_raftstore_v2::new_server_cluster)]
+#[test]
 fn test_ingest_sst_v2() {
     let latch_fp = "on_cleanup_import_sst";
-    let mut cluster = new_cluster(1, 1);
+    let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
     let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None, &mut cluster);
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
@@ -273,7 +272,14 @@ fn test_ingest_sst_v2() {
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
     fail::cfg(latch_fp, "return").unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("sst_importer_delete_sst", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
     let mut count = 0;
     for path in &cluster.paths {
         let sst_dir = path.path().join("import-sst");
@@ -285,5 +291,6 @@ fn test_ingest_sst_v2() {
         }
     }
     fail::remove(latch_fp);
+    fail::remove("sst_importer_delete_sst");
     assert_ne!(0, count);
 }
