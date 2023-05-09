@@ -3369,6 +3369,8 @@ impl TikvConfig {
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.coprocessor.validate()?;
+        self.split
+            .optimize_for(self.coprocessor.region_split_size());
         self.raft_store.validate(
             self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket(),
@@ -4314,9 +4316,16 @@ mod tests {
     use grpcio::ResourceQuota;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
-    use raftstore::coprocessor::{
-        config::{RAFTSTORE_V2_SPLIT_SIZE, SPLIT_SIZE},
-        region_info_accessor::MockRegionInfoProvider,
+    use raftstore::{
+        coprocessor::{
+            config::{RAFTSTORE_V2_SPLIT_SIZE, SPLIT_SIZE},
+            region_info_accessor::MockRegionInfoProvider,
+        },
+        store::{
+            BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
+            DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
+            REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+        },
     };
     use slog::Level;
     use tempfile::Builder;
@@ -5745,17 +5754,36 @@ mod tests {
     #[test]
     fn test_region_size_config() {
         let mut default_cfg = TikvConfig::default();
-        default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.storage.engine = EngineType::RaftKv;
+        default_cfg.validate().unwrap();
         assert_eq!(default_cfg.coprocessor.region_split_size(), SPLIT_SIZE);
         assert!(!default_cfg.coprocessor.enable_region_bucket());
 
+        assert_eq!(default_cfg.split.qps_threshold, DEFAULT_QPS_THRESHOLD);
+        assert_eq!(
+            default_cfg.split.region_cpu_overload_threshold_ratio,
+            REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+        );
+        assert_eq!(default_cfg.split.byte_threshold, DEFAULT_BYTE_THRESHOLD);
+
         let mut default_cfg = TikvConfig::default();
-        default_cfg.coprocessor.optimize_for(true);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.storage.engine = EngineType::RaftKv2;
+        default_cfg.validate().unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             RAFTSTORE_V2_SPLIT_SIZE
+        );
+        assert_eq!(
+            default_cfg.split.qps_threshold,
+            DEFAULT_BIG_REGION_QPS_THRESHOLD
+        );
+        assert_eq!(
+            default_cfg.split.region_cpu_overload_threshold_ratio,
+            BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+        );
+        assert_eq!(
+            default_cfg.split.byte_threshold,
+            DEFAULT_BIG_REGION_BYTE_THRESHOLD
         );
         assert!(default_cfg.coprocessor.enable_region_bucket());
 
