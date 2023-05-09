@@ -43,7 +43,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // Modify the region meta in memory.
         let region = self.region_state_mut().mut_region();
         region.set_is_in_flashback(is_in_flashback);
-        region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
+        if is_in_flashback {
+            region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
+        } else {
+            region.clear_flashback_start_ts();
+        }
 
         match req.get_cmd_type() {
             AdminCmdType::PrepareFlashback => {

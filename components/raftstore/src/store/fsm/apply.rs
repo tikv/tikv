@@ -2993,7 +2993,11 @@ where
         // Modify the region meta in memory.
         let mut region = self.region.clone();
         region.set_is_in_flashback(is_in_flashback);
-        region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
+        if is_in_flashback {
+            region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
+        } else {
+            region.clear_flashback_start_ts();
+        }
         // Modify the `RegionLocalState` persisted in disk.
         write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
