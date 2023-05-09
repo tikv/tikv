@@ -338,7 +338,7 @@ mod tests {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::Worker;
+    use tikv_util::worker::{dummy_scheduler, Worker};
 
     use super::*;
     use crate::{
@@ -504,6 +504,8 @@ mod tests {
         state.set_region(region.clone());
         let (_tmp_dir, importer) = create_tmp_importer();
         let host = CoprocessorHost::<KvTestEngine>::default();
+
+        let (dummy_scheduler, _) = dummy_scheduler();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -518,6 +520,7 @@ mod tests {
             None,
             importer,
             host,
+            dummy_scheduler,
             logger,
         );
 

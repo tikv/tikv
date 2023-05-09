@@ -309,6 +309,8 @@ mod test {
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         host.registry
             .register_cmd_observer(0, BoxCmdObserver::new(ob));
+
+        let (dummy_scheduler, _) = dummy_scheduler();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -327,6 +329,7 @@ mod test {
             None,
             importer,
             host,
+            dummy_scheduler,
             logger.clone(),
         );
 
