@@ -8,7 +8,6 @@ use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
 use security::SecurityConfig;
 use test_raftstore::*;
-use test_raftstore_v2::WrapFactory;
 use tikv::config::TikvConfig;
 use tikv_util::HandyRwLock;
 use uuid::Uuid;
