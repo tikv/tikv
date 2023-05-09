@@ -40,7 +40,7 @@ pub use split::{
 use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
-use self::flashback::SetFlashbackState;
+use self::flashback::FlashbackResult;
 use crate::{
     batch::StoreContext,
     raft::Peer,
@@ -58,7 +58,7 @@ pub enum AdminCmdResult {
     UpdateGcPeers(UpdateGcPeersResult),
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
-    Flashback(SetFlashbackState),
+    Flashback(FlashbackResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {

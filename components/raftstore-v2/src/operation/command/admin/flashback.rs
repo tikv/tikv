@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct SetFlashbackState {
+pub struct FlashbackResult {
     index: u64,
     region_state: RegionLocalState,
 }
@@ -56,7 +56,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
         Ok((
             AdminResponse::default(),
-            AdminCmdResult::Flashback(SetFlashbackState {
+            AdminCmdResult::Flashback(FlashbackResult {
                 index,
                 region_state: self.region_state().clone(),
             }),
@@ -69,7 +69,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_flashback<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        mut res: SetFlashbackState,
+        mut res: FlashbackResult,
     ) {
         (|| {
             fail_point!("keep_peer_fsm_flashback_state_false", |_| {

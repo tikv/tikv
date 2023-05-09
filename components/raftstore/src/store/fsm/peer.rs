@@ -5012,7 +5012,7 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
+                ExecResult::Flashback { region } => self.on_set_flashback_state(region),
                 ExecResult::BatchSwitchWitness(switches) => {
                     self.on_ready_batch_switch_witness(switches)
                 }

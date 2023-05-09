@@ -306,7 +306,7 @@ pub enum ExecResult<S> {
     TransferLeader {
         term: u64,
     },
-    SetFlashbackState {
+    Flashback {
         region: Region,
     },
     BatchSwitchWitness(SwitchWitness),
@@ -1496,7 +1496,7 @@ where
                 ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
-                ExecResult::SetFlashbackState { ref region } => (Some(region.clone()), None),
+                ExecResult::Flashback { ref region } => (Some(region.clone()), None),
                 _ => (None, None),
             },
             _ => (None, None),
@@ -1565,7 +1565,7 @@ where
                     self.region = region.clone();
                     self.is_merging = false;
                 }
-                ExecResult::SetFlashbackState { ref region } => {
+                ExecResult::Flashback { ref region } => {
                     self.region = region.clone();
                 }
                 ExecResult::BatchSwitchWitness(ref switches) => {
@@ -3013,7 +3013,7 @@ where
         }
         Ok((
             AdminResponse::default(),
-            ApplyResult::Res(ExecResult::SetFlashbackState { region }),
+            ApplyResult::Res(ExecResult::Flashback { region }),
         ))
     }
 
