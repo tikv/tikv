@@ -86,6 +86,13 @@ impl SstApplyState {
     pub fn sst_applied_index(&self, uuid: &Vec<u8>) -> Option<u64> {
         self.sst_map.read().unwrap().get(uuid).copied()
     }
+
+    pub fn delete_ssts(&self, uuids: Vec<Vec<u8>>) {
+        let mut map = self.sst_map.write().unwrap();
+        for uuid in uuids {
+            map.remove(&uuid);
+        }
+    }
 }
 
 /// A share state between raftstore and underlying engine.
