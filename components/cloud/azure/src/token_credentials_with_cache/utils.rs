@@ -3,7 +3,6 @@
 use std::sync::{Arc, Mutex, RwLock};
 
 use azure_core::auth::TokenResponse;
-use fail;
 use time::OffsetDateTime;
 
 /// Refresh time to use in seconds
@@ -111,12 +110,11 @@ mod tests {
             // forcely exit as timeout.
             assert!(token2.need_update_token());
         });
-        let token3 = token_cache.clone();
         let thread3 = thread::spawn(move || {
             thread::sleep(Duration::from_millis(2023)); // sleep enough
             // mock that token is refreshed.
             let _f = fail::FailGuard::new("mock_token_cache::is_fresh", "return").unwrap();
-            assert!(!token3.need_update_token());
+            assert!(!token_cache.need_update_token());
         });
         thread1.join().unwrap();
         thread2.join().unwrap();
