@@ -252,7 +252,6 @@ fn test_ingest_file_twice_and_conflict() {
 
 #[test]
 fn test_ingest_sst_v2() {
-    let latch_fp = "on_cleanup_import_sst";
     let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
     let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None, &mut cluster);
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
@@ -271,10 +270,11 @@ fn test_ingest_sst_v2() {
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
-    fail::cfg(latch_fp, "return").unwrap();
+    fail::cfg("on_cleanup_import_sst", "return").unwrap();
+    fail::cfg("on_log_recovery", "return").unwrap();
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
-    fail::cfg_callback("sst_importer_delete_sst", move || {
+    fail::cfg_callback("on_cleanup_import_sst_schedule", move || {
         tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
@@ -290,7 +290,8 @@ fn test_ingest_sst_v2() {
             }
         }
     }
-    fail::remove(latch_fp);
-    fail::remove("sst_importer_delete_sst");
+    fail::remove("on_cleanup_import_sst");
+    fail::remove("on_log_recovery");
+    fail::remove("on_cleanup_import_sst_schedule");
     assert_ne!(0, count);
 }

@@ -76,7 +76,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let epoch = self.region().get_region_epoch();
             stale_ssts.retain(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch));
         }
-        // some sst needs to be kept if the log didn't flush the dish.
+        // some sst needs to be kept if the log didn't flush the disk.
         if let Some(log_recovery) = self.storage().apply_trace().log_recovery() {
             stale_ssts.retain(|sst| {
                 let off = data_cf_offset(sst.get_cf_name());
@@ -88,10 +88,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 true
             });
         }
-        fail::fail_point!("sst_importer_delete_sst");
+        fail::fail_point!("on_cleanup_import_sst_schedule");
         if stale_ssts.is_empty() {
             return;
         }
+        let uuids = stale_ssts
+            .iter()
+            .map(|sst| sst.get_uuid().to_vec())
+            .collect();
+        self.sst_apply_state().delete_ssts(uuids);
         let _ = ctx
             .schedulers
             .tablet
