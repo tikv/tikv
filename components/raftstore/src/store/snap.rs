@@ -20,8 +20,8 @@ use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK,
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
 use file_system::{
-    calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
-    File, Metadata, OpenOptions,
+    calc_crc32, calc_crc32_and_size, delete_dir_if_exist, delete_file_if_exist, file_exists,
+    get_file_size, sync_dir, File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::{
@@ -1008,10 +1008,41 @@ impl Snapshot {
                 }
             }
         }
+        if let Some(ref meta) = self.meta_file.meta {
+            if !meta.tablet_snap_path.is_empty() {
+                delete_dir_if_exist(&meta.tablet_snap_path).unwrap();
+            }
+        }
         delete_file_if_exist(&self.meta_file.path).unwrap();
         if self.hold_tmp_files {
             delete_file_if_exist(&self.meta_file.tmp_path).unwrap();
         }
+    }
+
+    // This is only used for v2 compatibility.
+    fn new_for_tablet_snapshot<T: Into<PathBuf>>(
+        dir: T,
+        key: &SnapKey,
+        mgr: &SnapManagerCore,
+        tablet_snapshot_path: &str,
+        for_balance: bool,
+    ) -> RaftStoreResult<Self> {
+        let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
+        s.init_for_building()?;
+        let mut meta = gen_snapshot_meta(&s.cf_files[..], for_balance)?;
+        meta.tablet_snap_path = tablet_snapshot_path.to_string();
+        s.meta_file.meta = Some(meta);
+        s.save_meta_file()?;
+        Ok(s)
+    }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn tablet_snap_path(&self) -> Option<String> {
+        Some(self.meta_file.meta.as_ref()?.tablet_snap_path.clone())
+    }
+
+    pub fn snapshot_meta(&self) -> &Option<SnapshotMeta> {
+        &self.meta_file.meta
     }
 }
 
@@ -1604,6 +1635,38 @@ impl SnapManager {
         let base = &self.core.base;
         let f = Snapshot::new_for_receiving(base, key, &self.core, snapshot_meta)?;
         Ok(Box::new(f))
+    }
+
+    // Tablet snapshot is the snapshot sent from raftstore-v2.
+    // We enable v1 to receive it to enable tiflash node to receive and apply
+    // snapshot from raftstore-v2.
+    // To make it easy, we maintain an empty `store::snapshot` with tablet snapshot
+    // path storing in it. So tiflash node can detect it and apply properly.
+    pub fn gen_empty_snapshot_for_tablet_snapshot(
+        &self,
+        tablet_snap_key: &TabletSnapKey,
+        for_balance: bool,
+    ) -> RaftStoreResult<()> {
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        let tablet_snap_path = self
+            .tablet_snap_manager
+            .as_ref()
+            .unwrap()
+            .final_recv_path(tablet_snap_key);
+        let snap_key = SnapKey::new(
+            tablet_snap_key.region_id,
+            tablet_snap_key.term,
+            tablet_snap_key.idx,
+        );
+        let _ = Snapshot::new_for_tablet_snapshot(
+            base,
+            &snap_key,
+            &self.core,
+            tablet_snap_path.to_str().unwrap(),
+            for_balance,
+        )?;
+        Ok(())
     }
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
@@ -3212,6 +3275,28 @@ pub mod tests {
                 .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
+    }
+
+    #[test]
+    fn test_generate_snap_for_tablet_snapshot() {
+        let snap_dir = Builder::new().prefix("test_snapshot").tempdir().unwrap();
+        let snap_mgr = SnapManagerBuilder::default()
+            .enable_receive_tablet_snapshot(true)
+            .build(snap_dir.path().to_str().unwrap());
+        snap_mgr.init().unwrap();
+        let tablet_snap_key = TabletSnapKey::new(1, 2, 3, 4);
+        snap_mgr
+            .gen_empty_snapshot_for_tablet_snapshot(&tablet_snap_key, false)
+            .unwrap();
+
+        let snap_key = SnapKey::new(1, 3, 4);
+        let s = snap_mgr.get_snapshot_for_applying(&snap_key).unwrap();
+        let expect_path = snap_mgr
+            .tablet_snap_manager()
+            .as_ref()
+            .unwrap()
+            .final_recv_path(&tablet_snap_key);
+        assert_eq!(expect_path.to_str().unwrap(), s.tablet_snap_path().unwrap());
     }
 
     #[test]

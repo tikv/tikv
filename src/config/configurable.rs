@@ -14,6 +14,8 @@ pub trait ConfigurableDb {
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> ConfigRes;
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> ConfigRes;
     fn set_rate_limiter_auto_tuned(&self, auto_tuned: bool) -> ConfigRes;
+    fn set_flush_size(&self, f: usize) -> ConfigRes;
+    fn set_flush_oldest_first(&self, f: bool) -> ConfigRes;
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes;
 }
 
@@ -47,6 +49,16 @@ impl ConfigurableDb for RocksEngine {
             )
             .into())
         }
+    }
+
+    fn set_flush_size(&self, f: usize) -> ConfigRes {
+        let mut opt = self.get_db_options();
+        opt.set_flush_size(f).map_err(Box::from)
+    }
+
+    fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
+        let mut opt = self.get_db_options();
+        opt.set_flush_oldest_first(f).map_err(Box::from)
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes {
@@ -113,18 +125,44 @@ impl ConfigurableDb for TabletRegistry<RocksEngine> {
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> ConfigRes {
         loop_registry(self, |cache| {
             if let Some(latest) = cache.latest() {
-                latest.set_rate_bytes_per_sec(rate_bytes_per_sec)?
+                latest.set_rate_bytes_per_sec(rate_bytes_per_sec)?;
+                Ok(false)
+            } else {
+                Ok(true)
             }
-            Ok(true)
         })
     }
 
     fn set_rate_limiter_auto_tuned(&self, auto_tuned: bool) -> ConfigRes {
         loop_registry(self, |cache| {
             if let Some(latest) = cache.latest() {
-                latest.set_rate_limiter_auto_tuned(auto_tuned)?
+                latest.set_rate_limiter_auto_tuned(auto_tuned)?;
+                Ok(false)
+            } else {
+                Ok(true)
             }
-            Ok(true)
+        })
+    }
+
+    fn set_flush_size(&self, f: usize) -> ConfigRes {
+        loop_registry(self, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_flush_size(f)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        })
+    }
+
+    fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
+        loop_registry(self, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_flush_oldest_first(f)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
         })
     }
 
