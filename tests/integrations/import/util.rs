@@ -69,6 +69,7 @@ pub fn open_cluster_and_tikv_import_client(
     (cluster, ctx, tikv, import)
 }
 
+#[allow(dead_code)]
 pub fn open_cluster_and_tikv_import_client_v2(
     cfg: Option<TikvConfig>,
     cluster: &mut test_raftstore_v2::Cluster<
