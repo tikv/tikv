@@ -88,10 +88,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 true
             });
         }
+        fail::fail_point!("sst_importer_delete_sst");
         if stale_ssts.is_empty() {
             return;
         }
-        fail::fail_point!("sst_importer_delete_sst");
         let _ = ctx
             .schedulers
             .tablet

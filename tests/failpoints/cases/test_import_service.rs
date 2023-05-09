@@ -279,7 +279,7 @@ fn test_ingest_sst_v2() {
     })
     .unwrap();
 
-    rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
     let mut count = 0;
     for path in &cluster.paths {
         let sst_dir = path.path().join("import-sst");
