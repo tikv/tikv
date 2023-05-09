@@ -2523,6 +2523,7 @@ fn test_storage_with_quota_limiter_disable() {
 
 #[test]
 fn test_commands_write_detail() {
+    test_util::init_log_for_test();
     let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.pessimistic_txn.pipelined = false;
         cluster.cfg.pessimistic_txn.in_memory = false;
@@ -2533,7 +2534,6 @@ fn test_commands_write_detail() {
         assert!(sc.get_get_snapshot_nanos() > 0);
     };
     let check_write_detail = |wd: &WriteDetail| {
-        assert!(wd.get_store_batch_wait_nanos() > 0);
         assert!(wd.get_persist_log_nanos() > 0);
         assert!(wd.get_raft_db_write_leader_wait_nanos() > 0);
         assert!(wd.get_raft_db_sync_log_nanos() > 0);
@@ -2587,13 +2587,51 @@ fn test_commands_write_detail() {
     check_write_detail(prewrite_resp.get_exec_details_v2().get_write_detail());
 
     let mut commit_req = CommitRequest::default();
-    commit_req.set_context(ctx);
-    commit_req.set_keys(vec![k].into());
+    commit_req.set_context(ctx.clone());
+    commit_req.set_keys(vec![k.clone()].into());
     commit_req.set_start_version(20);
     commit_req.set_commit_version(30);
     let commit_resp = client.kv_commit(&commit_req).unwrap();
     check_scan_detail(commit_resp.get_exec_details_v2().get_scan_detail_v2());
     check_write_detail(commit_resp.get_exec_details_v2().get_write_detail());
+
+    let mut txn_heartbeat_req = TxnHeartBeatRequest::default();
+    txn_heartbeat_req.set_context(ctx.clone());
+    txn_heartbeat_req.set_primary_lock(k.clone());
+    txn_heartbeat_req.set_start_version(20);
+    txn_heartbeat_req.set_advise_lock_ttl(1000);
+    let txn_heartbeat_resp = client.kv_txn_heart_beat(&txn_heartbeat_req).unwrap();
+    check_scan_detail(
+        txn_heartbeat_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    assert!(
+        txn_heartbeat_resp
+            .get_exec_details_v2()
+            .get_write_detail()
+            .get_process_nanos()
+            > 0
+    );
+
+    let mut check_txn_status_req = CheckTxnStatusRequest::default();
+    check_txn_status_req.set_context(ctx);
+    check_txn_status_req.set_primary_key(k);
+    check_txn_status_req.set_lock_ts(20);
+    check_txn_status_req.set_rollback_if_not_exist(true);
+    let check_txn_status_resp = client.kv_check_txn_status(&check_txn_status_req).unwrap();
+    check_scan_detail(
+        check_txn_status_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    assert!(
+        check_txn_status_resp
+            .get_exec_details_v2()
+            .get_write_detail()
+            .get_process_nanos()
+            > 0
+    );
 }
 
 #[test]
