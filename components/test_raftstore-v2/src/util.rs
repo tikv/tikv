@@ -5,12 +5,12 @@ use std::{fmt::Write, sync::Arc, thread, time::Duration};
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, TabletRegistry, CF_DEFAULT};
+use engine_traits::{CfName, KvEngine, TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
 use futures::Future;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse};
 use raftstore::Result;
-use rand::RngCore;
+use rand::{prelude::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
@@ -232,4 +232,37 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
     cluster.sim.wl().async_read(request)
+}
+
+pub fn test_delete_range<T: Simulator<EK>, EK: KvEngine>(cluster: &mut Cluster<T, EK>, cf: CfName) {
+    let data_set: Vec<_> = (1..500)
+        .map(|i| {
+            (
+                format!("key{:08}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
+    }
+
+    // delete_range request with notify_only set should not actually delete data.
+    cluster.must_notify_delete_range_cf(cf, b"", b"");
+
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let (k, v) = data_set.choose(&mut rng).unwrap();
+        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
+    }
+
+    // Empty keys means the whole range.
+    cluster.must_delete_range_cf(cf, b"", b"");
+
+    for _ in 0..50 {
+        let k = &data_set.choose(&mut rng).unwrap().0;
+        assert!(cluster.get_cf(cf, k).is_none());
+    }
 }
