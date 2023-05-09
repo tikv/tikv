@@ -68,14 +68,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ssts: Box<[SstMeta]>,
     ) {
         let mut stale_ssts = Vec::from(ssts);
-        let check_epoch = (|| {
-            fail::fail_point!("on_cleanup_import_sst", |_| false);
-            true
-        })();
-        if check_epoch {
-            let epoch = self.region().get_region_epoch();
-            stale_ssts.retain(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch));
-        }
+        let epoch = self.region().get_region_epoch();
+        stale_ssts.retain(|sst| {
+            fail::fail_point!("on_cleanup_import_sst", |_| true);
+            util::is_epoch_stale(sst.get_region_epoch(), epoch)
+        });
+
         // some sst needs to be kept if the log didn't flush the disk.
         if let Some(log_recovery) = self.storage().apply_trace().log_recovery() {
             stale_ssts.retain(|sst| {
