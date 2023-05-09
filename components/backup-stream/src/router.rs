@@ -461,7 +461,7 @@ impl RouterInner {
             ),
             swap_files: self.prefix.join(task.info.get_name()),
             content_compression: task.info.get_compression_type(),
-            minimal_swap_out_file_size: ReadableSize::mb(8).0 as _,
+            minimal_swap_out_file_size: ReadableSize::mb(1).0 as _,
             write_buffer_size: ReadableSize::kb(4).0 as _,
         }
     }
@@ -1516,7 +1516,7 @@ mod tests {
 
     fn make_tempfiles_cfg(p: &Path) -> tempfiles::Config {
         tempfiles::Config {
-            cache_size: ReadableSize::mb(512).0 as _,
+            cache_size: AtomicUsize::new(ReadableSize::mb(512).0 as _),
             swap_files: p.to_owned(),
             content_compression: CompressionType::Zstd,
             minimal_swap_out_file_size: 0,

@@ -25,7 +25,9 @@ use tokio::{
 use crate::{
     annotate,
     errors::Result,
-    metrics::{TEMP_FILE_COUNT, TEMP_FILE_MEMORY_USAGE, TEMP_FILE_SWAP_OUT_BYTES},
+    metrics::{
+        IN_DISK_TEMP_FILE_SIZE, TEMP_FILE_COUNT, TEMP_FILE_MEMORY_USAGE, TEMP_FILE_SWAP_OUT_BYTES,
+    },
     utils::{CompressionWriter, ZstdCompressionWriter},
 };
 
@@ -332,8 +334,18 @@ impl ForWriteCore {
         // make implementing `AsyncRead` and `AsyncWrite` become very very hard.
         tokio::task::spawn_blocking(move || {
             let mut st = core_lock.lock().unwrap();
-            if let Some(PersistentFile::Plain(c)) = &mut st.external_file {
-                tokio::runtime::Handle::current().block_on(async { c.sync_all().await })?;
+            if let Some(PersistentFile::Plain(c)) = st.external_file.take() {
+                // The current `sync` implementation of tokio file is spawning a new blocking
+                // thread. When we are spawning many blocking operations in the
+                // blocking threads, it is possible to dead lock (The current
+                // thread waiting for a thread that will be spawned after the
+                // current thread exits.)
+                // So we convert it to the std file and using the block version call.
+                let std_file = tokio::runtime::Handle::current().block_on(c.into_std());
+                let res = std_file.sync_all();
+                // Fillback the file so once the sync_all call failed, we are able to retry.
+                st.external_file = Some(PersistentFile::Plain(OsFile::from_std(std_file)));
+                res?;
             }
             Result::Ok(())
         })
@@ -353,6 +365,7 @@ impl FileCore {
                     v.clear();
                     v.shrink_to(buf_size);
                 });
+                IN_DISK_TEMP_FILE_SIZE.observe(self.written as _);
                 self.written = 0;
                 return Ok(()).into();
             }
@@ -388,14 +401,24 @@ impl FileCore {
         self.the_pool.cfg.cache_size.load(Ordering::Acquire)
     }
 
-    fn should_swap_out(&self) -> bool {
-        let mem_use = self.the_pool.current.load(Ordering::SeqCst);
-        let in_mem_exceeds_quota = self.in_mem.len() > self.the_pool.cfg.minimal_swap_out_file_size
-            && mem_use > self.max_cache_size();
-        let already_exist =
-            self.in_mem.len() > self.the_pool.cfg.write_buffer_size && self.external_file.is_some();
+    fn should_swap_out(&self, new_data_size: usize) -> bool {
+        let mem_use = self.the_pool.current.load(Ordering::Acquire);
+        // If this write will trigger a reallocation...
+        let realloc_exceeds_quota = self.in_mem.len() + new_data_size > self.in_mem.capacity()
+            // And the allocation will exceed the memory quota.
+            && mem_use + self.in_mem.capacity() > self.max_cache_size();
+        // If the current file is large enough to be swapped out.
+        // (For now, We don't want to swap out small files. That may consume many IO
+        // operations.)
+        let file_large_enough = self.in_mem.len() > self.the_pool.cfg.minimal_swap_out_file_size;
+        // If a file has already been swapped out, after filling a tiny buffer in
+        // memory, append new content to that file directly.
+        let already_swapped_out =
+            self.external_file.is_some() && self.in_mem.len() > self.the_pool.cfg.write_buffer_size;
+        // If there is pending swapping operation (Say, we have done some partial
+        // write.), always trigger swap out for releasing the in memory buffer.
         let swapping = self.written > 0;
-        in_mem_exceeds_quota || already_exist || swapping
+        (realloc_exceeds_quota && file_large_enough) || already_swapped_out || swapping
     }
 
     fn new(pool: Arc<TempFilePool>, rel_path: PathBuf) -> Self {
@@ -429,7 +452,7 @@ impl AsyncWrite for ForWriteCore {
 
         let mut stat = self.core.lock().unwrap();
 
-        if stat.should_swap_out() {
+        if stat.should_swap_out(buf.len()) {
             ready!(stat.poll_swap_out_unpin(cx))?;
         }
 
@@ -602,19 +625,20 @@ fn modify_and_update_cap_diff(v: &mut Vec<u8>, record: &AtomicUsize, f: impl FnO
     let cap_old = v.capacity();
     f(v);
     let cap_new = v.capacity();
-    use std::cmp::Ordering::*;
-    match cap_old.cmp(&cap_new) {
-        Less => {
-            record.fetch_add(cap_new - cap_old, Ordering::SeqCst);
-        }
-        Equal => {}
-        Greater => {
-            record.fetch_sub(cap_old - cap_new, Ordering::SeqCst);
-        }
+    // when cap_new less than cap_old, the `diff` should be:
+    // `usize::MAX - (cap_old - cap_new)`.
+    // Then,
+    // `(record + diff) % usize::MAX` =
+    // `(record - (cap_old - cap_new)) + usize::MAX` =
+    // record - (cap_old - cap_new).
+    let diff = cap_new.wrapping_sub(cap_old);
+    if diff > 0 {
+        // `fetch_add` will wrap around when overflowing (instead of panicking).
+        record.fetch_add(diff, Ordering::Release);
+        // We are not going to use `AcqRel` at previous read, because there may be
+        // concurrent write to the variable and we may upload stale data.
+        TEMP_FILE_MEMORY_USAGE.set(record.load(Ordering::Acquire) as _)
     }
-    // Once the value changed, the previous SeqCst loading will probably fetch the
-    // latest value.
-    TEMP_FILE_MEMORY_USAGE.set(record.load(Ordering::Acquire) as _)
 }
 
 #[cfg(test)]
@@ -624,7 +648,10 @@ mod test {
         mem::ManuallyDrop,
         path::Path,
         pin::Pin,
-        sync::{atomic::{Ordering, AtomicUsize}, Arc},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
@@ -646,7 +673,7 @@ mod test {
 
     fn simple_pool_with_modify(m: impl FnOnce(&mut Config)) -> Arc<TempFilePool> {
         let mut cfg = Config {
-            cache_size: AtomicUsize::new(99999999999),
+            cache_size: AtomicUsize::new(100000),
             swap_files: std::env::temp_dir().join(format!(
                 "backup_stream::tempfiles::test::{}",
                 std::process::id()
@@ -692,7 +719,11 @@ mod test {
 
     #[test]
     fn test_swapout() {
-        let pool = simple_pool_with_soft_max(30);
+        let pool = simple_pool_with_modify(|cfg| {
+            cfg.cache_size = AtomicUsize::new(30);
+            cfg.minimal_swap_out_file_size = 30;
+            cfg.write_buffer_size = 30;
+        });
         let mut f = pool.open_for_write("world.txt".as_ref()).unwrap();
         let rt = rt_for_test();
         rt.block_on(f.write(b"Once the word count...")).unwrap();
