@@ -74,6 +74,9 @@ pub struct Apply<EK: KvEngine, R> {
 
     checkpoint_scheduler: Scheduler<checkpoint::Task>,
 
+    // Whether to use the delete range API instead of deleting one by one.
+    use_delete_range: bool,
+
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -128,6 +131,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             buckets,
             sst_importer,
             checkpoint_scheduler,
+            use_delete_range: cfg.use_delete_range,
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,
@@ -317,5 +321,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task> {
         &self.checkpoint_scheduler
+    }
+
+    #[inline]
+    pub fn use_delete_range(&self) -> bool {
+        self.use_delete_range
     }
 }
