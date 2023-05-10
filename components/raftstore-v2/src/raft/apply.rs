@@ -72,7 +72,7 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
-    checkpoint_scheduler: Scheduler<checkpoint::Task>,
+    checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
 
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
@@ -94,7 +94,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
         coprocessor_host: CoprocessorHost<EK>,
-        checkpoint_scheduler: Scheduler<checkpoint::Task>,
+        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -315,7 +315,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task> {
+    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
         &self.checkpoint_scheduler
     }
 }

@@ -25,13 +25,7 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{
-    any::Any,
-    borrow::Cow,
-    cmp,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{any::Any, borrow::Cow, cmp, path::PathBuf, time::Duration};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
@@ -480,19 +474,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .map(|r| r.get_id())
             .filter(|id| id != &region_id)
             .collect::<Vec<_>>();
-        let (_, _, cur_suffix) = self
-            .tablet_registry()
-            .parse_tablet_name(Path::new(self.tablet().path()))
-            .unwrap();
         let scheduler: _ = self.checkpoint_scheduler().clone();
-        let checkpoint_duration = async_checkpoint(
-            &scheduler,
-            region_id,
-            split_region_ids,
-            cur_suffix,
-            log_index,
-        )
-        .await;
+        let tablet = self.tablet().clone();
+        let checkpoint_duration =
+            async_checkpoint(tablet, &scheduler, region_id, split_region_ids, log_index).await;
 
         // It should equal to checkpoint_duration + the duration of rescheduling current
         // apply peer
@@ -538,16 +523,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
 // asynchronously execute the checkpoint creation and return the duration spent
 // by it
-async fn async_checkpoint(
-    scheduler: &Scheduler<checkpoint::Task>,
+async fn async_checkpoint<EK: KvEngine>(
+    tablet: EK,
+    scheduler: &Scheduler<checkpoint::Task<EK>>,
     parent_region: u64,
     split_regions: Vec<u64>,
-    cur_suffix: u64,
     log_index: u64,
 ) -> Duration {
     let (tx, rx) = oneshot::channel();
     let task = checkpoint::Task::Checkpoint {
-        cur_suffix,
+        tablet,
         log_index,
         parent_region,
         split_regions,
