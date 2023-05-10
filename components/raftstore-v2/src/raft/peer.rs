@@ -7,13 +7,14 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
+use encryption_export::DataKeyManager;
 use engine_traits::{
     CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
 };
 use kvproto::{
     metapb::{self, PeerRole},
     pdpb,
-    raft_serverpb::{RaftMessage, RegionLocalState},
+    raft_serverpb::RaftMessage,
 };
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -128,6 +129,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_registry: &TabletRegistry<EK>,
+        key_manager: Option<&DataKeyManager>,
         snap_mgr: &TabletSnapManager,
         storage: Storage<EK, ER>,
     ) -> Result<Self> {
@@ -149,7 +151,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
         if tablet_index != 0 {
-            raft_group.store().recover_tablet(tablet_registry, snap_mgr);
+            raft_group
+                .store()
+                .recover_tablet(tablet_registry, key_manager, snap_mgr);
             let mut ctx = TabletContext::new(&region, Some(tablet_index));
             ctx.flush_state = Some(flush_state.clone());
             // TODO: Perhaps we should stop create the tablet automatically.
@@ -257,11 +261,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.leader_lease.expire_remote_lease();
         }
 
-        let mut region_state = RegionLocalState::default();
-        region_state.set_region(region.clone());
-        region_state.set_tablet_index(tablet_index);
-        region_state.set_state(self.storage().region_state().get_state());
-        self.storage_mut().set_region_state(region_state);
+        self.storage_mut()
+            .region_state_mut()
+            .set_region(region.clone());
+        self.storage_mut()
+            .region_state_mut()
+            .set_tablet_index(tablet_index);
 
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a

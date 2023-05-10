@@ -132,6 +132,9 @@ pub mod kv {
             let tombstone_path = path.with_extension(TOMBSTONE_SUFFIX);
             let _ = std::fs::remove_dir_all(&tombstone_path);
             std::fs::rename(path, &tombstone_path)?;
+            if let Some(m) = &self.db_opt.key_manager {
+                m.remove_dir(path, Some(&tombstone_path))?;
+            }
             std::fs::remove_dir_all(tombstone_path)?;
             Ok(())
         }
@@ -207,7 +210,7 @@ pub mod ctor {
 
     #[derive(Clone, Default)]
     pub struct DbOptions {
-        key_manager: Option<Arc<DataKeyManager>>,
+        pub(crate) key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
         state_storage: Option<Arc<dyn StateStorage>>,
         enable_multi_batch_write: bool,

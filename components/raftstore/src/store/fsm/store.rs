@@ -78,6 +78,7 @@ use crate::{
         config::Config,
         fsm::{
             create_apply_batch_system,
+            life::handle_tombstone_message_on_learner,
             metrics::*,
             peer::{
                 maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -678,7 +679,12 @@ struct Store {
     stopped: bool,
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
-    last_unreachable_report: HashMap<u64, Instant>,
+    store_reachability: HashMap<u64, StoreReachability>,
+}
+
+struct StoreReachability {
+    last_broadcast: Instant,
+    received_message_count: u64,
 }
 
 pub struct StoreFsm<EK>
@@ -702,7 +708,7 @@ where
                 stopped: false,
                 start_time: None,
                 consistency_check_time: HashMap::default(),
-                last_unreachable_report: HashMap::default(),
+                store_reachability: HashMap::default(),
             },
             receiver: rx,
         });
@@ -2067,6 +2073,23 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .inc();
             return Ok(());
         }
+
+        // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
+        // it needs to response GcPeerResponse.
+        if msg.get_is_tombstone() && self.ctx.cfg.enable_v2_compatible_learner {
+            if let Some(msg) =
+                handle_tombstone_message_on_learner(&self.ctx.engines.kv, self.fsm.store.id, msg)
+            {
+                let _ = self.ctx.trans.send(msg);
+            }
+            // else {
+            // TODO: we should create the peer and destroy immediately to leave
+            //       a tombstone record, otherwise it leaks removed_record
+            //       and merged_record.
+            // }
+            return Ok(());
+        }
+
         if msg.get_is_tombstone() || msg.has_merge_target() {
             // Target tombstone peer doesn't exist, so ignore it.
             return Ok(());
@@ -2876,22 +2899,35 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_store_unreachable(&mut self, store_id: u64) {
         let now = Instant::now();
         let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
-        if self
-            .fsm
-            .store
-            .last_unreachable_report
-            .get(&store_id)
-            .map_or(unreachable_backoff, |t| now.saturating_duration_since(*t))
-            < unreachable_backoff
-        {
-            return;
-        }
+        let new_messages = MESSAGE_RECV_BY_STORE
+            .with_label_values(&[&format!("{}", store_id)])
+            .get();
+        match self.fsm.store.store_reachability.entry(store_id) {
+            HashMapEntry::Vacant(x) => {
+                x.insert(StoreReachability {
+                    last_broadcast: now,
+                    received_message_count: new_messages,
+                });
+            }
+            HashMapEntry::Occupied(x) => {
+                let ob = x.into_mut();
+                if now.saturating_duration_since(ob.last_broadcast) < unreachable_backoff
+                    // If there are no new messages come from `store_id`, it's not
+                    // necessary to do redundant broadcasts.
+                    || (new_messages <= ob.received_message_count && new_messages > 0)
+                {
+                    return;
+                }
+                ob.last_broadcast = now;
+                ob.received_message_count = new_messages;
+            }
+        };
+
         info!(
             "broadcasting unreachable";
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        self.fsm.store.last_unreachable_report.insert(store_id, now);
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.

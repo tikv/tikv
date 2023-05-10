@@ -5,6 +5,7 @@
 //! stores. They are mixed for now, will be separated in the future.
 
 pub mod apply;
+pub mod life;
 mod metrics;
 mod peer;
 pub mod store;
