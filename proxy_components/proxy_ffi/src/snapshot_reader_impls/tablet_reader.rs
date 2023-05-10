@@ -2,7 +2,7 @@
 use std::{cell::RefCell, sync::Arc};
 
 use encryption::DataKeyManager;
-use engine_rocks::{RocksCfOptions, RocksDbOptions};
+use engine_rocks::{get_env, RocksCfOptions, RocksDbOptions};
 use engine_traits::{Iterable, Iterator};
 
 use crate::{
@@ -23,10 +23,13 @@ impl TabletReader {
     pub fn ffi_get_cf_file_reader(
         path: &str,
         cf: ColumnFamilyType,
-        _key_manager: Option<Arc<DataKeyManager>>,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> SSTReaderPtr {
-        let db_opts = RocksDbOptions::default();
-        let cfopt = RocksCfOptions::default();
+        let env = get_env(key_manager, None).unwrap();
+        let mut db_opts = RocksDbOptions::default();
+        let mut cfopt = RocksCfOptions::default();
+        db_opts.set_env(env.clone());
+        cfopt.set_env(env);
 
         let cf_opts = vec![(cf_to_name(cf), cfopt)];
         let cfds: Vec<_> = cf_opts

@@ -954,6 +954,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                     .feature_gate()
                     .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
             )
+            .enable_receive_tablet_snapshot(
+                self.core.config.raft_store.enable_v2_compatible_learner,
+            )
             .build(snap_path);
 
         // Create coprocessor endpoint.
