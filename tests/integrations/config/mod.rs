@@ -260,6 +260,7 @@ fn test_serde_custom_tikv_config() {
         check_request_snapshot_interval: ReadableDuration::minutes(1),
         slow_trend_unsensitive_cause: 10.0,
         slow_trend_unsensitive_result: 0.5,
+        enable_v2_compatible_learner: false,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -329,9 +330,11 @@ fn test_serde_custom_tikv_config() {
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
             optimize_filters_for_hits: false,
+            optimize_filters_for_memory: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            ribbon_filter_above_level: Some(1),
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -384,9 +387,11 @@ fn test_serde_custom_tikv_config() {
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
             optimize_filters_for_hits: true,
+            optimize_filters_for_memory: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            ribbon_filter_above_level: Some(1),
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -453,9 +458,11 @@ fn test_serde_custom_tikv_config() {
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
             optimize_filters_for_hits: true,
+            optimize_filters_for_memory: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            ribbon_filter_above_level: Some(1),
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -522,9 +529,11 @@ fn test_serde_custom_tikv_config() {
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
             optimize_filters_for_hits: false,
+            optimize_filters_for_memory: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            ribbon_filter_above_level: Some(1),
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -620,9 +629,11 @@ fn test_serde_custom_tikv_config() {
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
             optimize_filters_for_hits: false,
+            optimize_filters_for_memory: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            ribbon_filter_above_level: Some(1),
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,

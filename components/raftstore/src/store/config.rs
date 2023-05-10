@@ -334,6 +334,14 @@ pub struct Config {
     #[online_config(hidden)]
     // Interval to check if need to request snapshot.
     pub check_request_snapshot_interval: ReadableDuration,
+
+    /// Make raftstore v1 learners compatible with raftstore v2 by:
+    /// * Recving tablet snapshot from v2.
+    /// * Responsing GcPeerRequest from v2.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
+    pub enable_v2_compatible_learner: bool,
 }
 
 impl Default for Config {
@@ -449,6 +457,7 @@ impl Default for Config {
             check_peers_availability_interval: ReadableDuration::secs(30),
             // TODO: make its value reasonable
             check_request_snapshot_interval: ReadableDuration::minutes(1),
+            enable_v2_compatible_learner: false,
         }
     }
 }
