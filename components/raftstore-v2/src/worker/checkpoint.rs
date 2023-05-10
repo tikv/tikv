@@ -1,10 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    fmt::Display,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fmt::Display, path::PathBuf, time::Duration};
 
 use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use futures::channel::oneshot::Sender;
@@ -14,18 +10,18 @@ use tikv_util::{slog_panic, time::Instant, worker::Runnable};
 
 use crate::operation::SPLIT_PREFIX;
 
-pub enum Task {
+pub enum Task<EK: KvEngine> {
     Checkpoint {
         // it is only used to assert
-        cur_suffix: u64,
         log_index: u64,
         parent_region: u64,
         split_regions: Vec<u64>,
+        tablet: EK,
         sender: Sender<Duration>,
     },
 }
 
-impl Display for Task {
+impl<EK: KvEngine> Display for Task<EK> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Task::Checkpoint {
@@ -64,20 +60,11 @@ impl<EK: KvEngine> Runner<EK> {
         &self,
         parent_region: u64,
         split_regions: Vec<u64>,
-        cur_suffix: u64,
         log_index: u64,
+        tablet: EK,
         sender: Sender<Duration>,
     ) {
         let now = Instant::now();
-
-        let mut cache = self.tablet_registry.get(parent_region).unwrap();
-        let tablet = cache.latest().unwrap();
-        let (_, _, suffix) = self
-            .tablet_registry
-            .parse_tablet_name(Path::new(tablet.path()))
-            .unwrap();
-        assert_eq!(cur_suffix, suffix);
-
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
             slog_panic!(
                 self.logger,
@@ -127,18 +114,18 @@ impl<EK: KvEngine> Runner<EK> {
 }
 
 impl<EK: KvEngine> Runnable for Runner<EK> {
-    type Task = Task;
+    type Task = Task<EK>;
 
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::Checkpoint {
-                cur_suffix,
                 log_index,
                 parent_region,
                 split_regions,
+                tablet,
                 sender,
             } => {
-                self.checkpoint(parent_region, split_regions, cur_suffix, log_index, sender);
+                self.checkpoint(parent_region, split_regions, log_index, tablet, sender);
             }
         }
     }
