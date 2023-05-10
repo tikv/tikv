@@ -142,6 +142,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             mailbox,
             store_ctx.tablet_registry.clone(),
             read_scheduler,
+            store_ctx.schedulers.checkpoint.clone(),
             self.flush_state().clone(),
             self.storage().apply_trace().log_recovery(),
             self.entry_storage().applied_term(),
@@ -485,6 +486,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         dr.start_key,
                         dr.end_key,
                         dr.notify_only,
+                        self.use_delete_range(),
                     );
                 }
                 SimpleWrite::Ingest(_) => {
@@ -594,6 +596,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
+                                    self.use_delete_range(),
                                 )?;
                             }
                             SimpleWrite::Ingest(ssts) => {
@@ -628,8 +631,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
-                AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
-                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
+                AdminCmdType::Split => self.apply_split(admin_req, log_index).await?,
+                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index).await?,
                 AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
                 AdminCmdType::CommitMerge => self.apply_commit_merge(admin_req, log_index).await?,
                 AdminCmdType::RollbackMerge => unimplemented!(),
@@ -681,6 +684,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
+                            self.use_delete_range(),
                         )?;
                     }
                     _ => unimplemented!(),
