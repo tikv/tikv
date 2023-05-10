@@ -78,7 +78,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
-        checkpoint_scheduler: Scheduler<checkpoint::Task>,
+        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
