@@ -53,6 +53,7 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
+        debug::DebuggerImpl,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
@@ -487,15 +488,10 @@ impl ServerCluster {
                 .build()
                 .unwrap(),
         );
+
+        let debugger = DebuggerImpl::new(engines.clone(), ConfigController::default());
         let debug_thread_handle = debug_thread_pool.handle().clone();
-        let debug_service = DebugService::new(
-            engines.clone(),
-            None,
-            None,
-            debug_thread_handle,
-            extension,
-            ConfigController::default(),
-        );
+        let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
 
         let apply_router = system.apply_router();
         // Create node.
