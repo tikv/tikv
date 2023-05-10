@@ -485,6 +485,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         dr.start_key,
                         dr.end_key,
                         dr.notify_only,
+                        self.use_delete_range(),
                     );
                 }
                 SimpleWrite::Ingest(_) => {
@@ -594,6 +595,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
+                                    self.use_delete_range(),
                                 )?;
                             }
                             SimpleWrite::Ingest(ssts) => {
@@ -681,6 +683,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
+                            self.use_delete_range(),
                         )?;
                     }
                     _ => unimplemented!(),
