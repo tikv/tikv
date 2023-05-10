@@ -1,7 +1,7 @@
 [package]
 name = "tidb_query_datatype"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 description = "Data type of a query engine to run TiDB pushed down executors"
 
