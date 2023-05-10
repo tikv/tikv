@@ -44,7 +44,7 @@ use tikv::{
         gc_worker::sync_gc,
         service::{batch_commands_request, batch_commands_response},
     },
-    storage::txn::FLASHBACK_BATCH_SIZE,
+    storage::{config::EngineType, txn::FLASHBACK_BATCH_SIZE},
 };
 use tikv_util::{
     config::ReadableSize,
@@ -53,9 +53,10 @@ use tikv_util::{
 };
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_rawkv() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let v0 = b"v0".to_vec();
     let v1 = b"v1".to_vec();
     let (k, v) = (b"key".to_vec(), b"v2".to_vec());
@@ -123,9 +124,10 @@ fn test_rawkv() {
     assert!(delete_resp.error.is_empty());
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_and_configure_cluster)]
+#[test_case(test_raftstore_v2::must_new_and_configure_cluster)]
 fn test_rawkv_ttl() {
-    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
+    let (cluster, leader, ctx) = new_cluster(|cluster| {
         cluster.cfg.storage.enable_ttl = true;
     });
 
@@ -271,9 +273,10 @@ fn test_rawkv_ttl() {
     assert!(!prewrite_resp.get_errors().is_empty());
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_basic() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -336,9 +339,10 @@ fn test_mvcc_basic() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_rollback_and_cleanup() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -551,10 +555,10 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     assert!(del_resp.error.is_empty());
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 #[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_failed_after_first_batch() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let mut ts = 0;
     for i in 0..FLASHBACK_BATCH_SIZE * 2 {
         // Meet the constraints of the alphabetical order for test
@@ -672,9 +676,9 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let mut ts = 0;
     // Need to write many batches.
     for i in 0..2000 {
@@ -714,9 +718,9 @@ fn test_mvcc_flashback() {
     must_kv_read_equal(&client, ctx, b"key@1".to_vec(), b"value@1".to_vec(), ts);
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_rw() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
     must_prepare_flashback(&client, ctx.clone(), 1, 2);
     // Try to read version 3 (after flashback, FORBIDDEN).
@@ -772,9 +776,9 @@ fn test_mvcc_flashback_block_rw() {
     must_finish_flashback(&client, ctx, 1, 2, 3);
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_scheduling() {
-    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (mut cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
     must_prepare_flashback(&client, ctx.clone(), 0, 1);
     // Try to transfer leader.
@@ -789,9 +793,9 @@ fn test_mvcc_flashback_block_scheduling() {
     must_finish_flashback(&client, ctx, 0, 1, 2);
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_unprepared() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let mut ts = 0;
     write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
@@ -825,9 +829,9 @@ fn test_mvcc_flashback_unprepared() {
     assert_eq!(get_resp.value, b"".to_vec());
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_with_unlimited_range() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let mut ts = 0;
     write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
@@ -865,9 +869,10 @@ fn test_mvcc_flashback_with_unlimited_range() {
 
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_coprocessor() {
-    let (_cluster, client, _) = must_new_cluster_and_kv_client();
+    let (_cluster, client, _) = new_cluster();
     // SQL push down commands
     let mut req = Request::default();
     req.set_tp(REQ_TYPE_DAG);
@@ -1238,9 +1243,10 @@ fn test_double_run_node() {
     cluster.shutdown();
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_pessimistic_lock() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     // Prewrite
@@ -1294,9 +1300,10 @@ fn test_pessimistic_lock() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_pessimistic_lock_resumable() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
 
     // Resumable pessimistic lock request with multi-key is not supported yet.
     let resp = kv_pessimistic_lock_resumable(
@@ -1516,9 +1523,10 @@ fn test_pessimistic_lock_resumable() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_check_txn_status_with_max_ts() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let lock_ts = 10;
 
@@ -1538,29 +1546,10 @@ fn test_check_txn_status_with_max_ts() {
     must_kv_commit(&client, ctx, vec![k], lock_ts, lock_ts + 1, lock_ts + 1);
 }
 
-fn build_client(cluster: &Cluster<ServerCluster>) -> (TikvClient, Context) {
-    let region = cluster.get_region(b"");
-    let leader = region.get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
-
-    let mut ctx = Context::default();
-    ctx.set_region_id(leader.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader);
-
-    (client, ctx)
-}
-
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_batch_commands() {
-    let mut cluster = new_server_cluster(0, 1);
-    cluster.run();
-
-    let (client, _) = build_client(&cluster);
+    let (_cluster, client, _ctx) = new_cluster();
     let (mut sender, receiver) = client.batch_commands().unwrap();
     for _ in 0..1000 {
         let mut batch_req = BatchCommandsRequest::default();
@@ -1591,12 +1580,10 @@ fn test_batch_commands() {
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_empty_commands() {
-    let mut cluster = new_server_cluster(0, 1);
-    cluster.run();
-
-    let (client, _) = build_client(&cluster);
+    let (_cluster, client, _ctx) = new_cluster();
     let (mut sender, receiver) = client.batch_commands().unwrap();
     for _ in 0..1000 {
         let mut batch_req = BatchCommandsRequest::default();
@@ -1631,12 +1618,10 @@ fn test_empty_commands() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_async_commit_check_txn_status() {
-    let mut cluster = new_server_cluster(0, 1);
-    cluster.run();
-
-    let (client, ctx) = build_client(&cluster);
+    let (cluster, client, ctx) = new_cluster();
 
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
     let mut req = PrewriteRequest::default();
@@ -1661,15 +1646,13 @@ fn test_async_commit_check_txn_status() {
     assert_ne!(resp.get_action(), Action::MinCommitTsPushed);
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_prewrite_check_max_commit_ts() {
-    let mut cluster = new_server_cluster(0, 1);
-    cluster.run();
+    let (cluster, client, ctx) = new_cluster();
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
     cm.update_max_ts(100.into());
-
-    let (client, ctx) = build_client(&cluster);
 
     let mut req = PrewriteRequest::default();
     req.set_context(ctx.clone());
@@ -1732,9 +1715,10 @@ fn test_prewrite_check_max_commit_ts() {
     cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_txn_heart_beat() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let mut req = TxnHeartBeatRequest::default();
     let k = b"k".to_vec();
     let start_ts = 10;
@@ -1754,9 +1738,11 @@ fn test_txn_heart_beat() {
     );
 }
 
-fn test_with_memory_lock_cluster(f: impl FnOnce(TikvClient, Context, /* raw_key */ Vec<u8>, Lock)) {
-    let (cluster, client, ctx) = must_new_cluster_and_kv_client();
-    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+fn test_with_memory_lock_cluster(
+    cm: ConcurrencyManager,
+    client: TikvClient,
+    f: impl FnOnce(TikvClient, /* raw_key */ Vec<u8>, Lock),
+) {
     let raw_key = b"key".to_vec();
     let key = Key::from_raw(&raw_key);
     let guard = block_on(cm.lock_key(&key));
@@ -1774,12 +1760,15 @@ fn test_with_memory_lock_cluster(f: impl FnOnce(TikvClient, Context, /* raw_key 
     guard.with_lock(|l| {
         *l = Some(lock.clone());
     });
-    f(client, ctx, raw_key, lock);
+    f(client, raw_key, lock);
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_batch_get_memory_lock() {
-    test_with_memory_lock_cluster(|client, ctx, raw_key, lock| {
+    let (cluster, client, ctx) = new_cluster();
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    test_with_memory_lock_cluster(cm, client, |client, raw_key, lock| {
         let mut req = BatchGetRequest::default();
         req.set_context(ctx);
         req.set_keys(vec![b"unlocked".to_vec(), raw_key.clone()].into());
@@ -1791,9 +1780,12 @@ fn test_batch_get_memory_lock() {
     });
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_kv_scan_memory_lock() {
-    test_with_memory_lock_cluster(|client, ctx, raw_key, lock| {
+    let (cluster, client, ctx) = new_cluster();
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    test_with_memory_lock_cluster(cm, client, |client, raw_key, lock| {
         let mut req = ScanRequest::default();
         req.set_context(ctx);
         req.set_start_key(b"a".to_vec());
@@ -1847,51 +1839,12 @@ macro_rules! test_func_init {
     }};
 }
 
-fn setup_cluster() -> (Cluster<ServerCluster>, TikvClient, CallOption, Context) {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
-
-    let region_id = 1;
-    let leader = cluster.leader_of_region(region_id).unwrap();
-    let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
-    let region = cluster.get_region(b"k1");
-    let follower = region
-        .get_peers()
-        .iter()
-        .find(|p| **p != leader)
-        .unwrap()
-        .clone();
-    let follower_addr = cluster.sim.rl().get_addr(follower.get_store_id());
-    let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::default();
-    ctx.set_region_id(region_id);
-    ctx.set_peer(leader);
-    ctx.set_region_epoch(epoch);
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&follower_addr);
-    let client = TikvClient::new(channel);
-
-    // Verify not setting forwarding header will result in store not match.
-    let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx.clone());
-    let put_resp = client.raw_put(&put_req).unwrap();
-    assert!(
-        put_resp.get_region_error().has_store_not_match(),
-        "{:?}",
-        put_resp
-    );
-    assert!(put_resp.error.is_empty(), "{:?}", put_resp);
-
-    let call_opt = server::build_forward_option(&leader_addr).timeout(Duration::from_secs(3));
-    (cluster, client, call_opt, ctx)
-}
-
 /// Check all supported requests can go through proxy correctly.
-#[test]
+#[test_case(test_raftstore::setup_cluster)]
+#[test_case(test_raftstore_v2::setup_cluster)]
 fn test_tikv_forwarding() {
-    let (_cluster, client, call_opt, ctx) = setup_cluster();
-
+    let (_cluster, client, leader_addr, ctx) = new_cluster();
+    let call_opt = server::build_forward_option(&leader_addr).timeout(Duration::from_secs(3));
     // Verify not setting forwarding header will result in store not match.
     let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
@@ -2049,9 +2002,11 @@ fn test_tikv_forwarding() {
 
 /// Test if forwarding works correctly if the target node is shutdown and
 /// restarted.
-#[test]
+#[test_case(test_raftstore::setup_cluster)]
+#[test_case(test_raftstore_v2::setup_cluster)]
 fn test_forwarding_reconnect() {
-    let (mut cluster, client, call_opt, ctx) = setup_cluster();
+    let (mut cluster, client, leader_addr, ctx) = new_cluster();
+    let call_opt = server::build_forward_option(&leader_addr).timeout(Duration::from_secs(3));
     let leader = cluster.leader_of_region(1).unwrap();
     cluster.stop_node(leader.get_store_id());
 
@@ -2074,11 +2029,10 @@ fn test_forwarding_reconnect() {
     assert!(!resp.get_region_error().has_store_not_match(), "{:?}", resp);
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_health_check() {
-    let mut cluster = new_server_cluster(0, 1);
-    cluster.run();
-
+    let (mut cluster, _client, _ctx) = new_cluster();
     let addr = cluster.sim.rl().get_addr(1);
 
     let env = Arc::new(Environment::new(1));
@@ -2095,9 +2049,10 @@ fn test_health_check() {
     client.check(&req).unwrap_err();
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_get_lock_wait_info_api() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let client2 = client.clone();
 
     let mut ctx1 = ctx.clone();
@@ -2139,7 +2094,8 @@ fn test_get_lock_wait_info_api() {
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
 //   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
 //     enum APIVersion.
-#[test]
+#[test_case(test_raftstore::must_new_and_configure_cluster)]
+#[test_case(test_raftstore_v2::must_new_and_configure_cluster)]
 fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
     const TXN_KEY_CASE: &[u8] = b"x\0a";
@@ -2198,9 +2154,8 @@ fn test_txn_api_version() {
     for (i, (storage_api_version, req_api_version, key, errcode)) in
         test_data.into_iter().enumerate()
     {
-        let (cluster, leader, mut ctx) = must_new_and_configure_cluster(|cluster| {
-            cluster.cfg.storage.set_api_version(storage_api_version)
-        });
+        let (cluster, leader, mut ctx) =
+            new_cluster(|cluster| cluster.cfg.storage.set_api_version(storage_api_version));
         let env = Arc::new(Environment::new(1));
         let channel =
             ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
@@ -2339,9 +2294,10 @@ fn test_txn_api_version() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_and_configure_cluster)]
+#[test_case(test_raftstore_v2::must_new_and_configure_cluster)]
 fn test_storage_with_quota_limiter_enable() {
-    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
+    let (cluster, leader, ctx) = new_cluster(|cluster| {
         // write_bandwidth is limited to 1, which means that every write request will
         // trigger the limit.
         let quota_config = QuotaConfig {
@@ -2375,9 +2331,10 @@ fn test_storage_with_quota_limiter_enable() {
     assert!(begin.elapsed() > Duration::from_millis(500));
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_and_configure_cluster)]
+#[test_case(test_raftstore_v2::must_new_and_configure_cluster)]
 fn test_storage_with_quota_limiter_disable() {
-    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
+    let (cluster, leader, ctx) = new_cluster(|cluster| {
         // all limit set to 0, which means quota limiter not work.
         let quota_config = QuotaConfig::default();
         cluster.cfg.quota = quota_config;
@@ -2405,9 +2362,15 @@ fn test_storage_with_quota_limiter_disable() {
     assert!(begin.elapsed() < Duration::from_millis(500));
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_and_configure_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_and_configure_cluster_and_kv_client)]
 fn test_commands_write_detail() {
+<<<<<<< HEAD
     let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+=======
+    test_util::init_log_for_test();
+    let (cluster, client, ctx) = new_cluster(|cluster| {
+>>>>>>> 8aa8f5480d (raftstore-v2: add raftstore-v2's test cases under kv_service (#14719))
         cluster.cfg.pessimistic_txn.pipelined = false;
         cluster.cfg.pessimistic_txn.in_memory = false;
     });
@@ -2428,7 +2391,11 @@ fn test_commands_write_detail() {
         // Mutex has been removed from write path.
         // Ref https://github.com/facebook/rocksdb/pull/7516
         // assert!(wd.get_apply_mutex_lock_nanos() > 0);
-        assert!(wd.get_apply_write_wal_nanos() > 0);
+
+        // MultiRocksDB does not have wal
+        if cluster.cfg.storage.engine == EngineType::RaftKv {
+            assert!(wd.get_apply_write_wal_nanos() > 0);
+        }
         assert!(wd.get_apply_write_memtable_nanos() > 0);
         assert!(wd.get_process_nanos() > 0);
     };
@@ -2480,12 +2447,10 @@ fn test_commands_write_detail() {
     check_write_detail(commit_resp.get_exec_details_v2().get_write_detail());
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_rpc_wall_time() {
-    let mut cluster = new_server_cluster(0, 1);
-    cluster.run();
-
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let k = b"key".to_vec();
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx);
@@ -2546,9 +2511,10 @@ fn test_rpc_wall_time() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_pessimistic_lock_execution_tracking() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"k1".to_vec(), b"k2".to_vec());
 
     // Add a prewrite lock.
