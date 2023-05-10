@@ -15,6 +15,7 @@ use raftstore::{
     },
     Error, Result,
 };
+use slog::info;
 use tikv_util::{box_err, slog_panic};
 
 use crate::{
@@ -264,6 +265,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
 
         let start_key = keys::data_key(start_key);
+
+        info!(
+            self.logger,
+            "execute delete range";
+            "range_start" => log_wrappers::Value::key(&start_key),
+            "range_end" => log_wrappers::Value::key(&end_key),
+            "notify_only" => notify_only,
+            "use_delete_range" => use_delete_range,
+        );
+
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
