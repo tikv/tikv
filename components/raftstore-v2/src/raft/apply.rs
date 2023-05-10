@@ -71,6 +71,9 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
+    // Whether to use the delete range API instead of deleting one by one.
+    use_delete_range: bool,
+
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -123,6 +126,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
+            use_delete_range: cfg.use_delete_range,
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,
@@ -307,5 +311,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn coprocessor_host(&self) -> &CoprocessorHost<EK> {
         &self.coprocessor_host
+    }
+
+    #[inline]
+    pub fn use_delete_range(&self) -> bool {
+        self.use_delete_range
     }
 }
