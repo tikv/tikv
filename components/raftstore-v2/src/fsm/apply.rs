@@ -27,6 +27,7 @@ use crate::{
     operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
+    worker::checkpoint,
 };
 
 /// A trait for reporting apply result.
@@ -77,6 +78,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         flush_state: Arc<FlushState>,
         sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
@@ -101,6 +103,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             buckets,
             sst_importer,
             coprocessor_host,
+            checkpoint_scheduler,
             logger,
         );
         (
