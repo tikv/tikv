@@ -1074,3 +1074,46 @@ pub fn must_new_cluster_and_debug_client() -> (
 
     (cluster, client, leader.get_store_id())
 }
+
+pub fn setup_cluster() -> (
+    Cluster<ServerCluster<RocksEngine>, RocksEngine>,
+    TikvClient,
+    String,
+    Context,
+) {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let region_id = 1;
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let region = cluster.get_region(b"k1");
+    let follower = region
+        .get_peers()
+        .iter()
+        .find(|p| **p != leader)
+        .unwrap()
+        .clone();
+    let follower_addr = cluster.sim.rl().get_addr(follower.get_store_id());
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(epoch);
+
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&follower_addr);
+    let client = TikvClient::new(channel);
+
+    // Verify not setting forwarding header will result in store not match.
+    let mut put_req = kvproto::kvrpcpb::RawPutRequest::default();
+    put_req.set_context(ctx.clone());
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(
+        put_resp.get_region_error().has_store_not_match(),
+        "{:?}",
+        put_resp
+    );
+    assert!(put_resp.error.is_empty(), "{:?}", put_resp);
+    (cluster, client, leader_addr, ctx)
+}
