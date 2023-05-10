@@ -45,7 +45,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::{debug, error, warn};
+use slog::{debug, error, info, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -57,7 +57,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel},
+    router::{ApplyRes, ApplyTask, CmdResChannel, PeerTick},
 };
 
 mod admin;
@@ -404,7 +404,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
-      
+
         if self.pause_for_replay()
             && self.storage().entry_storage().commit_index() <= apply_res.applied_index
         {
@@ -412,7 +412,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.set_replay_watch(None);
             // Flush to avoid replay again and again.
             if let Some(scheduler) = self.apply_scheduler() {
-                scheduler.send(ApplyTask::ManualFlush);
+                scheduler.send(ApplyTask::ManualFlush(vec![].into()));
             }
             self.add_pending_tick(PeerTick::Raft);
         }

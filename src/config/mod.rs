@@ -378,7 +378,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub checksum: ChecksumType,
             #[online_config(skip)]
-            pub max_compactions: u32,
+            pub max_compactions: i32,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }

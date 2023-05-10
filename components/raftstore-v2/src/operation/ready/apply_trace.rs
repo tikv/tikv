@@ -55,7 +55,7 @@ use crate::{
     Result, StoreRouter,
 };
 
-const FLUSH_LAG_THRESHOLD: u64 = 20480;
+const FLUSH_LAG_THRESHOLD: u64 = 40480;
 // The records in default cf and write cf are probaby valid during flush, use
 // large threshold to avoid frequent flush.
 const FLUSH_LAG_THRESHOLD_PER_CF: &[u64] = &[

@@ -23,12 +23,10 @@ use super::response_channel::{
     QueryResSubscriber,
 };
 use crate::{
-    operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SplitInit},
+    operation::{
+        CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit,
+    },
     router::ApplyRes,
-};
-
-use crate::operation::{
-    CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SimpleWriteBinary, SplitInit,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]

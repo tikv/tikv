@@ -482,19 +482,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // between commit index and apply index. We should scheduling it when raft log
     // apply catches up.
     pub fn try_compelete_recovery(&mut self) {
-        if self.pause_for_recovery()
-            && self.storage().entry_storage().commit_index()
-                <= self.storage().entry_storage().applied_index()
+        if self.pause_for_replay()
+            && self.storage().entry_storage().commit_index() <= self.storage().entry_storage().applied_index()
         {
-            info!(
-                self.logger,
-                "recovery completed";
-                "apply_index" =>  self.storage().entry_storage().applied_index()
-            );
-            self.set_pause_for_recovery(false);
+            info!(self.logger, "replay completed"; "apply_index" => self.storage().entry_storage().applied_index());
+            self.set_replay_watch(None);
+          
             // Flush to avoid recover again and again.
             if let Some(scheduler) = self.apply_scheduler() {
-                scheduler.send(ApplyTask::ManualFlush);
+                scheduler.send(ApplyTask::ManualFlush(vec![].into()));
             }
             self.add_pending_tick(PeerTick::Raft);
         }

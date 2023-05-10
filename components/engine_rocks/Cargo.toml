@@ -57,7 +57,7 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dependencies.rocksdb]
-git = "https://github.com/busyjay/rust-rocksdb.git"
+git = "https://github.com/tonyxuqqi/rust-rocksdb.git"
 branch = "limit-compaction-concurrency"
 package = "rocksdb"
 features = ["encryption"]
