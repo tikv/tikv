@@ -75,17 +75,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         });
 
         // some sst needs to be kept if the log didn't flush the disk.
-        if let Some(log_recovery) = self.storage().apply_trace().log_recovery() {
-            stale_ssts.retain(|sst| {
-                let off = data_cf_offset(sst.get_cf_name());
-                let uuid = sst.get_uuid().to_vec();
-                let sst_index = self.sst_apply_state().sst_applied_index(&uuid);
-                if let Some(index) = sst_index {
-                    return log_recovery.as_ref()[off] >= index;
-                }
-                true
-            });
-        }
+        let flushed_indexes = self.storage().apply_trace().flushed_indexes();
+        stale_ssts.retain(|sst| {
+            let off = data_cf_offset(sst.get_cf_name());
+            let uuid = sst.get_uuid().to_vec();
+            let sst_index = self.sst_apply_state().sst_applied_index(&uuid);
+            if let Some(index) = sst_index {
+                return flushed_indexes.as_ref()[off] >= index;
+            }
+            true
+        });
+
         fail::fail_point!("on_cleanup_import_sst_schedule");
         if stale_ssts.is_empty() {
             return;
