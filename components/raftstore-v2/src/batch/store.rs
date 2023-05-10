@@ -496,6 +496,10 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
     pub tablet: Scheduler<tablet::Task<EK>>,
+<<<<<<< HEAD
+=======
+    pub checkpoint: Scheduler<checkpoint::Task<EK>>,
+>>>>>>> 657f70c0cc (raftstore-v2: send tablet when offload checkpoint (#14720))
     pub write: WriteSenders<EK, ER>,
 
     // Following is not maintained by raftstore itself.

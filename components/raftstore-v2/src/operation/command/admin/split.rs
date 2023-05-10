@@ -25,7 +25,11 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
+<<<<<<< HEAD
 use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
+=======
+use std::{any::Any, borrow::Cow, cmp, path::PathBuf, time::Duration};
+>>>>>>> 657f70c0cc (raftstore-v2: send tablet when offload checkpoint (#14720))
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
@@ -469,6 +473,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // write batch
         self.flush();
 
+<<<<<<< HEAD
         // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
         // clone new tablets. It may cause large jitter as we need to flush the
         // memtable. And more what is more important is that after removing WAL, the API
@@ -482,6 +487,18 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 "error" => ?e
             )
         });
+=======
+        let now = Instant::now();
+        let split_region_ids = regions
+            .iter()
+            .map(|r| r.get_id())
+            .filter(|id| id != &region_id)
+            .collect::<Vec<_>>();
+        let scheduler: _ = self.checkpoint_scheduler().clone();
+        let tablet = self.tablet().clone();
+        let checkpoint_duration =
+            async_checkpoint(tablet, &scheduler, region_id, split_region_ids, log_index).await;
+>>>>>>> 657f70c0cc (raftstore-v2: send tablet when offload checkpoint (#14720))
 
         let now = Instant::now();
         let reg = self.tablet_registry();
@@ -560,6 +577,30 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 }
 
+<<<<<<< HEAD
+=======
+// asynchronously execute the checkpoint creation and return the duration spent
+// by it
+async fn async_checkpoint<EK: KvEngine>(
+    tablet: EK,
+    scheduler: &Scheduler<checkpoint::Task<EK>>,
+    parent_region: u64,
+    split_regions: Vec<u64>,
+    log_index: u64,
+) -> Duration {
+    let (tx, rx) = oneshot::channel();
+    let task = checkpoint::Task::Checkpoint {
+        tablet,
+        log_index,
+        parent_region,
+        split_regions,
+        sender: tx,
+    };
+    scheduler.schedule_force(task).unwrap();
+    rx.await.unwrap()
+}
+
+>>>>>>> 657f70c0cc (raftstore-v2: send tablet when offload checkpoint (#14720))
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_split<T>(
         &mut self,

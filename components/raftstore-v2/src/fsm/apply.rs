@@ -77,6 +77,10 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+<<<<<<< HEAD
+=======
+        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+>>>>>>> 657f70c0cc (raftstore-v2: send tablet when offload checkpoint (#14720))
         flush_state: Arc<FlushState>,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,

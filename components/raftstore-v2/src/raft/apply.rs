@@ -71,6 +71,14 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
+<<<<<<< HEAD
+=======
+    checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+
+    // Whether to use the delete range API instead of deleting one by one.
+    use_delete_range: bool,
+
+>>>>>>> 657f70c0cc (raftstore-v2: send tablet when offload checkpoint (#14720))
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -91,6 +99,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
         coprocessor_host: CoprocessorHost<EK>,
+<<<<<<< HEAD
+=======
+        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+>>>>>>> 657f70c0cc (raftstore-v2: send tablet when offload checkpoint (#14720))
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -308,4 +320,17 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn coprocessor_host(&self) -> &CoprocessorHost<EK> {
         &self.coprocessor_host
     }
+<<<<<<< HEAD
+=======
+
+    #[inline]
+    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
+        &self.checkpoint_scheduler
+    }
+
+    #[inline]
+    pub fn use_delete_range(&self) -> bool {
+        self.use_delete_range
+    }
+>>>>>>> 657f70c0cc (raftstore-v2: send tablet when offload checkpoint (#14720))
 }
