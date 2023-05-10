@@ -321,7 +321,8 @@ mod tests {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
+        FlushState, RaftEngine, RaftLogBatch, SstApplyState, TabletContext, TabletRegistry,
+        DATA_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -517,6 +518,7 @@ mod tests {
             reg,
             sched,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,

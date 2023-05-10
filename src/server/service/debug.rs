@@ -1,9 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
-use engine_rocks::{RocksEngine, RocksStatistics};
-use engine_traits::{Engines, RaftEngine};
 use futures::{
     future::{Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -18,10 +14,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::metrics;
 use tokio::runtime::Handle;
 
-use crate::{
-    config::ConfigController,
-    server::debug::{Debugger, Error, Result},
-};
+use crate::server::debug::{Debugger, Error, Result};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -45,26 +38,24 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<ER: RaftEngine, T: RaftExtension> {
+pub struct Service<T, D>
+where
+    T: RaftExtension,
+    D: Debugger,
+{
     pool: Handle,
-    debugger: Debugger<ER>,
+    debugger: D,
     raft_router: T,
 }
 
-impl<ER: RaftEngine, T: RaftExtension> Service<ER, T> {
+impl<T, D> Service<T, D>
+where
+    T: RaftExtension,
+    D: Debugger,
+{
     /// Constructs a new `Service` with `Engines`, a `RaftExtension` and a
     /// `GcWorker`.
-    pub fn new(
-        engines: Engines<RocksEngine, ER>,
-        kv_statistics: Option<Arc<RocksStatistics>>,
-        raft_statistics: Option<Arc<RocksStatistics>>,
-        pool: Handle,
-        raft_router: T,
-        cfg_controller: ConfigController,
-    ) -> Self {
-        let mut debugger = Debugger::new(engines, cfg_controller);
-        debugger.set_kv_statistics(kv_statistics);
-        debugger.set_raft_statistics(raft_statistics);
+    pub fn new(debugger: D, pool: Handle, raft_router: T) -> Self {
         Service {
             pool,
             debugger,
@@ -93,7 +84,11 @@ impl<ER: RaftEngine, T: RaftExtension> Service<ER, T> {
     }
 }
 
-impl<ER: RaftEngine, T: RaftExtension + 'static> debugpb::Debug for Service<ER, T> {
+impl<T, D> debugpb::Debug for Service<T, D>
+where
+    T: RaftExtension + 'static,
+    D: Debugger + Clone + Send + 'static,
+{
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
