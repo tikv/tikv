@@ -20,7 +20,9 @@ pub use txn_types::{
 };
 
 pub use self::{
-    consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator},
+    consistency_check::{
+        Mvcc as MvccConsistencyCheckObserver, MvccInfoCollector, MvccInfoIterator, MvccInfoScanner,
+    },
     metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
     reader::*,
     txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE},
