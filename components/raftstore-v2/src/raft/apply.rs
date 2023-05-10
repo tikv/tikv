@@ -71,6 +71,14 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
+<<<<<<< HEAD
+=======
+    checkpoint_scheduler: Scheduler<checkpoint::Task>,
+
+    // Whether to use the delete range API instead of deleting one by one.
+    use_delete_range: bool,
+
+>>>>>>> aa82f08c5a (raftstore-v2: implement delete range (#14714))
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -123,6 +131,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
+<<<<<<< HEAD
+=======
+            checkpoint_scheduler,
+            use_delete_range: cfg.use_delete_range,
+>>>>>>> aa82f08c5a (raftstore-v2: implement delete range (#14714))
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,
@@ -308,4 +321,17 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn coprocessor_host(&self) -> &CoprocessorHost<EK> {
         &self.coprocessor_host
     }
+<<<<<<< HEAD
+=======
+
+    #[inline]
+    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task> {
+        &self.checkpoint_scheduler
+    }
+
+    #[inline]
+    pub fn use_delete_range(&self) -> bool {
+        self.use_delete_range
+    }
+>>>>>>> aa82f08c5a (raftstore-v2: implement delete range (#14714))
 }
