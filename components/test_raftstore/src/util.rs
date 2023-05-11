@@ -509,7 +509,7 @@ pub fn async_read_index_on_peer<T: Simulator>(
     region: metapb::Region,
     key: &[u8],
     read_quorum: bool,
-) -> mpsc::Receiver<RaftCmdResponse> {
+) -> BoxFuture<'static, StdResult<RaftCmdResponse, oneshot::Canceled>> {
     let node_id = peer.get_store_id();
     let mut cmd = new_read_index_cmd();
     cmd.mut_read_index().set_start_ts(u64::MAX);
@@ -523,10 +523,10 @@ pub fn async_read_index_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, rx) = oneshot::channel();
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
     cluster.sim.wl().async_read(node_id, None, request, cb);
-    rx
+    Box::pin(async move { rx.await })
 }
 
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {

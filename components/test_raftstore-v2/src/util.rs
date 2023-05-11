@@ -19,10 +19,11 @@ use tikv::{
     storage::{
         config::EngineType,
         kv::{SnapContext, SnapshotExt},
-        Engine, Snapshot,
+        point_key_range, Engine, Snapshot,
     },
 };
 use tikv_util::{config::ReadableDuration, worker::LazyWorker, HandyRwLock};
+use txn_types::Key;
 
 use crate::{bootstrap_store, cluster::Cluster, ServerCluster, Simulator};
 
@@ -231,7 +232,34 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     );
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
-    let f = cluster.sim.wl().async_read(request);
+    let node_id = request.get_header().get_peer().get_store_id();
+    let f = cluster.sim.wl().async_read(node_id, request);
+    Box::pin(async move { f.await })
+}
+
+pub fn async_read_index_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+) -> BoxFuture<'static, Result<RaftCmdResponse>> {
+    let mut cmd = new_get_cmd(key);
+    cmd.mut_read_index().set_start_ts(u64::MAX);
+    cmd.mut_read_index()
+        .mut_key_ranges()
+        .push(point_key_range(Key::from_raw(key)));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        read_quorum,
+    );
+    // Use replica read to issue a read index.
+    request.mut_header().set_replica_read(true);
+    request.mut_header().set_peer(peer);
+    let node_id = request.get_header().get_peer().get_store_id();
+    let f = cluster.sim.wl().async_read(node_id, request);
     Box::pin(async move { f.await })
 }
 

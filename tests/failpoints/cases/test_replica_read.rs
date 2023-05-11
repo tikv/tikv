@@ -570,8 +570,10 @@ fn test_read_index_after_transfer_leader() {
         router.send_raft_message(msg.clone()).unwrap();
     }
 
-    for resp in responses {
-        resp.recv_timeout(Duration::from_millis(200)).unwrap();
+    for mut resp in responses {
+        block_on_timeout(resp.as_mut(), Duration::from_millis(200))
+            .unwrap()
+            .unwrap();
     }
 
     cluster.sim.wl().clear_recv_filters(2);
@@ -679,7 +681,7 @@ fn test_read_index_lock_checking_on_follower() {
     fail::cfg("before_propose_readindex", "1*pause").unwrap();
     let mut resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
     for i in 0..=20 {
-        let res = resp.recv_timeout(Duration::from_millis(500));
+        let res = block_on_timeout(resp.as_mut(), Duration::from_millis(500));
         if res.is_err() {
             break;
         }
@@ -721,7 +723,9 @@ fn test_read_index_lock_checking_on_follower() {
     // We must make sure the lock check is done on peer 3.
 
     fail::remove("before_propose_readindex");
-    let resp = resp.recv_timeout(Duration::from_millis(2000)).unwrap();
+    let resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         &lock.into_lock_info(b"k1".to_vec()),
         resp.get_responses()[0].get_read_index().get_locked(),
@@ -797,8 +801,8 @@ fn test_read_index_lock_checking_on_false_leader() {
     // Read index from peer 2, the read index message will be sent to the old leader
     // peer 1. But the lease of peer 1 has expired and it cannot get majority of
     // heartbeat. So, we cannot get the result here.
-    let resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true);
-    resp.recv_timeout(Duration::from_millis(300)).unwrap_err();
+    let mut resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true);
+    block_on_timeout(resp.as_mut(), Duration::from_millis(300)).unwrap_err();
 
     // Now, restore the network partition. Peer 1 should now become follower and
     // drop its pending read index request. Peer 2 cannot get the result now.
@@ -809,10 +813,12 @@ fn test_read_index_lock_checking_on_false_leader() {
     );
     cluster.sim.wl().add_recv_filter(2, recv_filter);
     cluster.clear_send_filters();
-    resp.recv_timeout(Duration::from_millis(300)).unwrap_err();
+    block_on_timeout(resp.as_mut(), Duration::from_millis(300)).unwrap_err();
 
     // After cleaning all filters, peer 2 will retry and will get error.
     cluster.sim.wl().clear_recv_filters(2);
-    let resp = resp.recv_timeout(Duration::from_millis(2000)).unwrap();
+    let resp = block_on_timeout(resp.as_mut(), Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
     assert!(resp.get_header().has_error());
 }

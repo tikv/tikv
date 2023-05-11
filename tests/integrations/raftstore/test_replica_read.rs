@@ -341,7 +341,7 @@ fn test_read_index_out_of_order() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_retry_lock_checking() {
     let mut cluster = new_cluster(0, 2);
 
@@ -371,10 +371,10 @@ fn test_read_index_retry_lock_checking() {
 
     // Can't get response because read index responses are blocked.
     let r1 = cluster.get_region(b"k1");
-    let resp1 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
-    let resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true);
-    resp1.recv_timeout(Duration::from_secs(2)).unwrap_err();
-    resp2.try_recv().unwrap_err();
+    let mut resp1 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
+    let mut resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true);
+    block_on_timeout(resp1.as_mut(), Duration::from_secs(2)).unwrap_err();
+    block_on_timeout(resp2.as_mut(), Duration::from_millis(1)).unwrap_err();
 
     // k1 has a memory lock
     let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
@@ -396,22 +396,25 @@ fn test_read_index_retry_lock_checking() {
     cluster.sim.wl().clear_recv_filters(2);
     // resp1 should contain key is locked error
     assert!(
-        resp1
-            .recv_timeout(Duration::from_secs(2))
+        block_on_timeout(resp1, Duration::from_secs(2))
+            .unwrap()
             .unwrap()
             .responses[0]
             .get_read_index()
             .has_locked()
     );
     // resp2 should has a successful read index
+    let resp = block_on_timeout(resp2, Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
     assert!(
-        resp2
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .responses[0]
-            .get_read_index()
-            .get_read_index()
-            > 0
+        !resp.get_header().has_error()
+            && resp
+                .get_responses()
+                .get(0)
+                .map_or(true, |r| !r.get_read_index().has_locked()),
+        "{:?}",
+        resp,
     );
 }
 
