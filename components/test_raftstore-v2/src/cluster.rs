@@ -54,7 +54,7 @@ use test_raftstore::{
     new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
     RawEngine,
 };
-use tikv::server::Result as ServerResult;
+use tikv::{server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
     box_err, box_try, debug, error, safe_panic,
     thread_group::GroupProperties,
@@ -256,7 +256,13 @@ pub trait Simulator<EK: KvEngine> {
                         write_encoder.delete(delete.get_cf(), delete.get_key());
                     }
                     CmdType::DeleteRange => {
-                        unimplemented!()
+                        let delete_range = req.get_delete_range();
+                        write_encoder.delete_range(
+                            delete_range.get_cf(),
+                            delete_range.get_start_key(),
+                            delete_range.get_end_key(),
+                            delete_range.get_notify_only(),
+                        );
                     }
                     _ => unreachable!(),
                 }
@@ -376,9 +382,11 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             ),
         >,
     ) -> Cluster<T, EK> {
+        let mut tikv_cfg = new_tikv_config_with_api_ver(id, api_version);
+        tikv_cfg.storage.engine = EngineType::RaftKv2;
         Cluster {
             cfg: Config {
-                tikv: new_tikv_config_with_api_ver(id, api_version),
+                tikv: tikv_cfg,
                 prefer_mem: true,
             },
             count,

@@ -17,7 +17,7 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
+    CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
     CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
@@ -43,7 +43,7 @@ use raftstore::{
     store::{fsm::RaftRouter, *},
     RaftRouterCompactedEventSender, Result,
 };
-use rand::RngCore;
+use rand::{seq::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -1430,4 +1430,37 @@ pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, regio
         thread::sleep(Duration::from_millis(1 << retry));
     }
     assert!(snapshot.ext().is_max_ts_synced());
+}
+
+pub fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
+    let data_set: Vec<_> = (1..500)
+        .map(|i| {
+            (
+                format!("key{:08}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
+    }
+
+    // delete_range request with notify_only set should not actually delete data.
+    cluster.must_notify_delete_range_cf(cf, b"", b"");
+
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let (k, v) = data_set.choose(&mut rng).unwrap();
+        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
+    }
+
+    // Empty keys means the whole range.
+    cluster.must_delete_range_cf(cf, b"", b"");
+
+    for _ in 0..50 {
+        let k = &data_set.choose(&mut rng).unwrap().0;
+        assert!(cluster.get_cf(cf, k).is_none());
+    }
 }
