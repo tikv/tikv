@@ -285,7 +285,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Some(progress) = self
                 .leader_lease
                 .maybe_new_remote_lease(self.term())
-                .map(ReadProgress::leader_lease)
+                .map(ReadProgress::set_leader_lease)
             {
                 self.maybe_update_read_progress(reader, progress);
             }
