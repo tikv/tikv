@@ -192,7 +192,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ch: QueryResChannel,
     ) {
         if let Err(e) = self.pre_read_index() {
-            debug!(
+            info!(
                 self.logger,
                 "prevents unsafe read index";
                 "err" => ?e,
