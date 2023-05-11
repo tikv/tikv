@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::sync::Arc;
 
 use kvproto::{
     import_sstpb::SstMeta,
@@ -21,7 +22,7 @@ use super::response_channel::{
     QueryResSubscriber,
 };
 use crate::{
-    operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SplitInit},
+    operation::{CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit},
     router::ApplyRes,
 };
 
@@ -169,7 +170,7 @@ pub enum PeerMsg {
     LogsFetched(FetchedLogs),
     SnapshotGenerated(GenSnapRes),
     /// Start the FSM.
-    Start,
+    Start(Option<Arc<ReplayWatch>>),
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
     SplitInitFinish(u64),

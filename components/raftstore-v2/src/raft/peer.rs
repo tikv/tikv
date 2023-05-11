@@ -35,8 +35,8 @@ use crate::{
     fsm::ApplyScheduler,
     operation::{
         AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
-        GcPeerContext, MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
-        TxnContext,
+        GcPeerContext, MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder,
+        SplitFlowControl, TxnContext,
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -76,7 +76,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     /// Sometimes there is no ready at all, but we need to trigger async write.
     has_extra_write: bool,
-    pause_for_recovery: bool,
+    replay_watch: Option<Arc<ReplayWatch>>,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -179,7 +179,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_scheduler: None,
             has_ready: false,
             has_extra_write: false,
-            pause_for_recovery: false,
+            replay_watch: None,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -473,13 +473,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn set_pause_for_recovery(&mut self, pause: bool) {
-        self.pause_for_recovery = pause;
+    pub fn set_replay_watch(&mut self, watch: Option<Arc<ReplayWatch>>) {
+        self.replay_watch = watch;
     }
 
     #[inline]
-    pub fn pause_for_recovery(&self) -> bool {
-        self.pause_for_recovery
+    pub fn pause_for_replay(&self) -> bool {
+        self.replay_watch.is_some()
     }
 
     #[inline]
@@ -487,7 +487,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // between commit index and apply index. We should scheduling it when raft log
     // apply catches up.
     pub fn try_compelete_recovery(&mut self) {
-        if self.pause_for_recovery()
+        if self.pause_for_replay()
             && self.storage().entry_storage().commit_index()
                 <= self.storage().entry_storage().applied_index()
         {
@@ -496,7 +496,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "recovery completed";
                 "apply_index" =>  self.storage().entry_storage().applied_index()
             );
-            self.set_pause_for_recovery(false);
+            self.set_replay_watch(None);
             // Flush to avoid recover again and again.
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
