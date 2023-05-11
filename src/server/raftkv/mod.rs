@@ -735,7 +735,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     start_key.as_ref(),
                     end_key.as_ref(),
                     |key, lock| {
-                        txn_types::Lock::check_ts_conflict(
+                        txn_types::Lock::check_ts_conflict_for_replica_read(
                             Cow::Borrowed(lock),
                             key,
                             start_ts,
