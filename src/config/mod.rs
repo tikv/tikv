@@ -3300,10 +3300,17 @@ impl TikvConfig {
             if !self.raft_engine.enable {
                 return Err("partitioned-raft-kv only supports raft log engine.".into());
             }
+            let recovery_threads = cmp::min((SysQuota::cpu_cores_quota() * 1.5) as usize, 16);
+            if self.raft_engine.config.recovery_threads < recovery_threads {
+                info!(
+                    "raft-engine.recovery-threads is too small. Set it to {} instead.",
+                    recovery_threads,
+                );
+                self.raft_engine.config.recovery_threads = recovery_threads;
+            }
             if self.rocksdb.titan.enabled {
                 return Err("partitioned-raft-kv doesn't support titan.".into());
             }
-
             if self.raft_store.enable_v2_compatible_learner {
                 self.raft_store.enable_v2_compatible_learner = false;
                 warn!(
