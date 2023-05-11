@@ -405,7 +405,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             progress_to_be_updated,
         );
         self.try_compelete_recovery();
-        if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
+        if !self.pause_for_replay() && self.storage_mut().apply_trace_mut().should_flush() {
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
             }
