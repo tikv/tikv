@@ -6,7 +6,6 @@ use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use tikv_util::config::{ReadableSize, VersionTrack};
 
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
-const DEFAULT_GC_FLUSH_WRITE_CF_DELETE_RATIO_THRESHOLD: f64 = 0.2;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
@@ -23,9 +22,6 @@ pub struct GcConfig {
     /// greater than 5.0.0. Change `compaction_filter_skip_version_check`
     /// can enable it by force.
     pub compaction_filter_skip_version_check: bool,
-    /// When safepoint is updated, check if there are too many expired deletes
-    /// in write CF's memtable, trigger flush if there is.
-    pub flush_write_cf_delete_ratio_threshold: f64,
 }
 
 impl Default for GcConfig {
@@ -36,7 +32,6 @@ impl Default for GcConfig {
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
             enable_compaction_filter: true,
             compaction_filter_skip_version_check: false,
-            flush_write_cf_delete_ratio_threshold: DEFAULT_GC_FLUSH_WRITE_CF_DELETE_RATIO_THRESHOLD,
         }
     }
 }

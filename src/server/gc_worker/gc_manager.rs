@@ -20,7 +20,7 @@ use txn_types::{Key, TimeStamp};
 use super::{
     compaction_filter::is_compaction_filter_allowed,
     config::GcWorkerConfigManager,
-    gc_worker::{schedule_check_flush_write_cf_memtable, sync_gc, GcSafePointProvider, GcTask},
+    gc_worker::{sync_gc, GcSafePointProvider, GcTask},
     Result,
 };
 use crate::{server::metrics::*, tikv_util::sys::thread::StdThreadBuildWrapper};
@@ -319,7 +319,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                 .set(0);
 
             set_status_metrics(GcManagerState::Idle);
-            let _safe_point = self.wait_for_next_safe_point()?;
+            self.wait_for_next_safe_point()?;
 
             // Don't need to run GC any more if compaction filter is enabled.
             if !is_compaction_filter_allowed(&self.cfg_tracker.value(), &self.feature_gate) {
@@ -328,12 +328,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                 if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
                     on_finished();
                 }
-                continue;
             }
-            // need to check if memtable need flush when using compaction filter,
-            // flush to clean up the deletes and tombstones in it.
-            // disable it for test.
-            // self.check_flush_write_cf_memtable(safe_point)?;
         }
     }
 
@@ -625,13 +620,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             }
         }
     }
-
-    /// schedule GcTask::CheckFlushWriteCfMemTable
-    #[allow(dead_code)]
-    fn check_flush_write_cf_memtable(&mut self, safe_point: TimeStamp) -> GcManagerResult<()> {
-        schedule_check_flush_write_cf_memtable(&self.worker_scheduler, safe_point).unwrap();
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -667,7 +655,6 @@ mod tests {
             GcTask::RawGcKeys { .. } => unreachable!(),
             GcTask::OrphanVersions { .. } => unreachable!(),
             GcTask::Validate(_) => unreachable!(),
-            GcTask::CheckFlushWriteCfMemTable { .. } => unreachable!(),
         };
         mem::replace(callback, Box::new(|_| {}))
     }

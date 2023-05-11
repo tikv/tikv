@@ -153,7 +153,7 @@ pub trait Iterable {
     }
 }
 
-pub fn scan_impl<Iter, F>(mut it: Iter, start_key: &[u8], mut f: F) -> Result<()>
+fn scan_impl<Iter, F>(mut it: Iter, start_key: &[u8], mut f: F) -> Result<()>
 where
     Iter: Iterator,
     F: FnMut(&[u8], &[u8]) -> Result<bool>,

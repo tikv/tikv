@@ -15,11 +15,10 @@ use std::{
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{FlowInfo, PerfContext as RawPerfContext, PerfContextFields, ReadPerfContext};
+use engine_rocks::FlowInfo;
 use engine_traits::{
-    iter_option, raw_ttl::ttl_current_ts, scan_impl, DeleteStrategy, Error as EngineError,
-    Iterable, KvEngine, MiscExt, Range, ReadTier, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt,
+    Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -34,7 +33,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
     Either,
 };
-use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp};
 
 use super::{
     check_need_gc,
@@ -126,9 +125,6 @@ where
     },
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
-    CheckFlushWriteCfMemTable {
-        safe_point: TimeStamp,
-    },
 }
 
 impl<E> GcTask<E>
@@ -144,9 +140,6 @@ where
             GcTask::OrphanVersions { .. } => GcCommandKind::orphan_versions,
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => GcCommandKind::validate_config,
-            GcTask::CheckFlushWriteCfMemTable { .. } => {
-                GcCommandKind::check_flush_write_cf_memtable
-            }
         }
     }
 }
@@ -180,10 +173,6 @@ where
                 .finish(),
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => write!(f, "Validate gc worker config"),
-            GcTask::CheckFlushWriteCfMemTable { safe_point } => f
-                .debug_struct("CheckFlushWriteCfMemTable")
-                .field("safe_point", safe_point)
-                .finish(),
         }
     }
 }
@@ -926,65 +915,6 @@ impl<E: Engine> GcRunner<E> {
             error!("failed to flush deletes, will leave garbage"; "err" => ?e);
         }
     }
-
-    fn check_flush_write_cf_memtable(
-        &mut self,
-        safe_point: TimeStamp,
-        wait_flush: bool,
-    ) -> Result<bool> {
-        let now = tikv_util::time::Instant::now();
-        let kv_engine = match self.engine.kv_engine() {
-            Some(kv_engine) => kv_engine,
-            None => return Ok(false),
-        };
-        // if the max_ts of props > safe_point,
-        // for all the entries in memtable, ts > safe_point,
-        // skip check for saving CPU.
-        if let Some((_, props)) =
-            kv_engine.get_range_entries_and_properties(CF_WRITE, keys::MIN_KEY, keys::MAX_KEY)?
-        {
-            if props.max_ts > safe_point {
-                return Ok(false);
-            }
-        };
-        let mut iter_opts = iter_option(keys::MIN_KEY, keys::MAX_KEY, false);
-        iter_opts.set_read_tier(ReadTier::MemtableTier);
-        let iterator = kv_engine.iterator_opt(CF_WRITE, iter_opts)?;
-        let (mut num_puts, mut num_deletes) = (0, 0);
-        let mut ctx = RawPerfContext::get();
-        ctx.reset();
-        scan_impl(iterator, keys::MIN_KEY, |key, value| {
-            let ts = Key::decode_ts_from(key)?;
-            // skip the keys which cannot be GC.
-            if ts > safe_point {
-                return Ok(true);
-            }
-            let write = WriteRef::parse(value).unwrap();
-            match write.write_type {
-                WriteType::Put => num_puts += 1,
-                WriteType::Delete => num_deletes += 1,
-                _ => (),
-            }
-            Ok(true)
-        })?;
-        let perf_context = ReadPerfContext::capture();
-        let tombstones = perf_context.internal_delete_skipped_count;
-        let num_entries = num_puts + num_deletes + tombstones;
-        let flush_write_cf = (num_deletes + tombstones) as f64
-            > num_entries as f64 * self.cfg.flush_write_cf_delete_ratio_threshold;
-        info!(
-            "gc check write cf memtable, entries: {}, delete: {}, tombstone: {}, flush: {}, elapsed: {:?}",
-            num_entries,
-            num_deletes,
-            tombstones,
-            flush_write_cf,
-            now.saturating_elapsed(),
-        );
-        if flush_write_cf {
-            kv_engine.flush_cf(CF_WRITE, wait_flush)?;
-        }
-        Ok(flush_write_cf)
-    }
 }
 
 impl<E: Engine> Runnable for GcRunner<E> {
@@ -1125,17 +1055,6 @@ impl<E: Engine> Runnable for GcRunner<E> {
             GcTask::Validate(f) => {
                 f(&self.cfg, &self.limiter);
             }
-            GcTask::CheckFlushWriteCfMemTable { safe_point } => {
-                match self.check_flush_write_cf_memtable(safe_point, false) {
-                    Ok(true) => {
-                        info!("flush write cf memtable when gc");
-                    }
-                    Err(e) => {
-                        warn!("check flush write cf memtable fail"; "err" => ?e);
-                    }
-                    _ => {}
-                }
-            }
         };
     }
 }
@@ -1151,10 +1070,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
         }
         // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a
         // callback.
-        GcTask::GcKeys { .. }
-        | GcTask::RawGcKeys { .. }
-        | GcTask::OrphanVersions { .. }
-        | GcTask::CheckFlushWriteCfMemTable { .. } => {}
+        GcTask::GcKeys { .. } | GcTask::RawGcKeys { .. } | GcTask::OrphanVersions { .. } => {}
         #[cfg(any(test, feature = "testexport"))]
         GcTask::Validate(_) => {}
     }
@@ -1187,16 +1103,6 @@ pub fn sync_gc(
         error!("failed to receive result of gc");
         Err(box_err!("gc_worker: failed to receive result of gc"))
     })
-}
-
-/// Schedules a `GcTask::CheckFlushWriteCfMemTable` to the `GcRunner`.
-pub fn schedule_check_flush_write_cf_memtable(
-    scheduler: &Scheduler<GcTask<impl KvEngine>>,
-    safe_point: TimeStamp,
-) -> Result<()> {
-    scheduler
-        .schedule(GcTask::CheckFlushWriteCfMemTable { safe_point })
-        .or_else(handle_gc_task_schedule_error)
 }
 
 /// Used to schedule GC operations.
@@ -2839,73 +2745,5 @@ mod tests {
         // Cover two regions
         test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k195", vec![1, 2]);
         test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k25", vec![2, 3]);
-    }
-
-    #[test]
-    fn flush_write_cf_memtable() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
-        for i in 0..100 {
-            let key = keys::data_key(&format!("key_{}", i).into_bytes());
-            let value = format!("value_{}", i).into_bytes();
-            must_prewrite_put(&mut engine, &key, &value, &key, 10);
-            must_commit(&mut engine, &key, 10, 20);
-            if i != 0 {
-                must_prewrite_delete(&mut engine, &key, &key, 30);
-                must_commit(&mut engine, &key, 30, 40);
-            }
-        }
-
-        let gate = FeatureGate::default();
-        gate.set_version("6.0.0").unwrap();
-        let (tx, _rx) = mpsc::channel();
-        let cfg = GcConfig::default();
-        let mut gc_runner = GcRunner::new(
-            1,
-            engine.clone(),
-            RaftStoreBlackHole,
-            tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
-                .0
-                .tracker("gc-worker".to_owned()),
-            cfg,
-        );
-
-        assert!(
-            !gc_runner
-                .check_flush_write_cf_memtable(TimeStamp::new(39), true)
-                .unwrap()
-        );
-        assert!(
-            gc_runner
-                .check_flush_write_cf_memtable(TimeStamp::new(41), true)
-                .unwrap()
-        );
-        assert!(
-            !gc_runner
-                .check_flush_write_cf_memtable(TimeStamp::new(41), true)
-                .unwrap()
-        );
-
-        for i in 0..100 {
-            let key = keys::data_key(&format!("other_{}", i).into_bytes());
-            let value = format!("value_{}", i).into_bytes();
-            must_prewrite_put(&mut engine, &key, &value, &key, 5);
-            must_commit(&mut engine, &key, 5, 15);
-            if i != 0 {
-                must_prewrite_delete(&mut engine, &key, &key, 25);
-                must_commit(&mut engine, &key, 25, 35);
-            }
-        }
-        // if mvcc properties' max_ts > safepoint, skip check for saving CPU.
-        assert!(
-            !gc_runner
-                .check_flush_write_cf_memtable(TimeStamp::new(39), true)
-                .unwrap()
-        );
-        assert!(
-            gc_runner
-                .check_flush_write_cf_memtable(TimeStamp::new(40), true)
-                .unwrap()
-        );
     }
 }
