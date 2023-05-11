@@ -16,7 +16,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's
@@ -500,8 +500,10 @@ fn test_read_index_stale_in_suspect_lease() {
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Ensure peer 3 is ready to become leader.
-    let rx = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
-    let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
+    let resp = block_on_timeout(resp_ch, Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_eq!(
         resp.get_responses()[0].get_get().get_value(),
