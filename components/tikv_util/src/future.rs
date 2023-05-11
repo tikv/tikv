@@ -212,7 +212,16 @@ pub fn try_poll<T>(f: impl Future<Output = T>) -> Option<T> {
 
 // Run a future with a timeout on the current thread. Returns Err if times out.
 #[allow(clippy::result_unit_err)]
-pub fn block_on_timeout<B, F, I>(mut fut: B, dur: std::time::Duration) -> Result<I, ()>
+pub fn block_on_timeout<B, F, I>(fut: B, dur: std::time::Duration) -> Result<I, ()>
+where
+    F: std::future::Future<Output = I> + Unpin,
+    B: BorrowMut<F>,
+{
+    futures::executor::block_on(async { timeout(fut, dur).await })
+}
+
+#[allow(clippy::result_unit_err)]
+pub async fn timeout<B, F, I>(mut fut: B, dur: std::time::Duration) -> Result<I, ()>
 where
     F: std::future::Future<Output = I> + Unpin,
     B: BorrowMut<F>,
@@ -224,12 +233,10 @@ where
         .compat()
         .fuse();
     let mut f = fut.borrow_mut().fuse();
-    futures::executor::block_on(async {
-        futures::select! {
-            _ = timeout => Err(()),
-            item = f => Ok(item),
-        }
-    })
+    futures::select! {
+        _ = timeout => Err(()),
+        item = f => Ok(item),
+    }
 }
 
 #[cfg(test)]

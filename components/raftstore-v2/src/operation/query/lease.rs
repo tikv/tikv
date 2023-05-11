@@ -12,7 +12,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::debug;
+use slog::{debug, info};
 use tikv_util::time::monotonic_raw_now;
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
@@ -99,7 +99,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut read = ReadIndexRequest::with_command(id, req, ch, now);
         read.addition_request = request.map(Box::new);
         self.pending_reads_mut().push_back(read, true);
-        debug!(
+        info!(
             self.logger,
             "request to get a read index";
             "request_id" => ?id,
@@ -135,7 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self,
         read_index_req: &mut ReadIndexRequest<QueryResChannel>,
     ) {
-        debug!(
+        info!(
             self.logger,
             "handle reads with a read index";
             "request_id" => ?read_index_req.id,

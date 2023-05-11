@@ -5,6 +5,7 @@ use std::{
     num::NonZeroU64,
     ops::Deref,
     sync::{atomic, Arc, Mutex},
+    time::Duration,
 };
 
 use batch_system::Router;
@@ -327,26 +328,41 @@ where
 
         worker_metrics::maybe_tls_local_read_metrics_flush();
 
+        let logger = self.logger.clone();
         async move {
             let (mut fut, mut reader) = match res {
                 Either::Left(Ok(snap)) => return Ok(snap),
                 Either::Left(Err(e)) => return Err(e),
-                Either::Right((fut, reader)) => (fut, reader),
+                Either::Right((fut, reader)) => (Box::pin(fut), reader),
             };
 
             let mut tried_cnt = 0;
             loop {
-                match fut.await? {
-                    Some(query_res) => {
-                        if query_res.read().is_none() {
-                            let QueryResult::Response(res) = query_res else { unreachable!() };
-                            assert!(res.get_header().has_error(), "{:?}", res);
-                            return Err(res);
+                match tikv_util::future::timeout(fut.as_mut(), Duration::from_secs(10)).await {
+                    Ok(res) => match res? {
+                        Some(query_res) => {
+                            if QueryResult::read(&query_res).is_none() {
+                                let QueryResult::Response(res) = query_res else { unreachable!() };
+                                assert!(res.get_header().has_error(), "{:?}", res);
+                                return Err(res);
+                            }
                         }
-                    }
-                    None => {
+                        None => {
+                            return Err(fail_resp(format!(
+                                "internal error: failed to extend lease: canceled: {}",
+                                region_id
+                            )));
+                        }
+                    },
+                    Err(()) => {
+                        slog::info!(
+                            logger,
+                            "failed to extend lease: timeout";
+                            "region" => region_id,
+                            "request" => ?req
+                        );
                         return Err(fail_resp(format!(
-                            "internal error: failed to extend lease: canceled: {}",
+                            "internal error: failed to extend lease: timeout: {}",
                             region_id
                         )));
                     }
@@ -362,7 +378,7 @@ where
                         ReadResult::Redirect => {
                             tried_cnt += 1;
                             if tried_cnt < 10 {
-                                fut = reader.try_to_renew_lease(region_id, &req);
+                                fut = Box::pin(reader.try_to_renew_lease(region_id, &req));
                                 break;
                             }
                             return Err(fail_resp(format!(
