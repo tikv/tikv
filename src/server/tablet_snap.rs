@@ -888,15 +888,10 @@ where
                 }
                 SNAP_TASK_COUNTER_STATIC.recv.inc();
 
-                recving_count.fetch_add(1, Ordering::SeqCst);
-
                 let snap_mgr = self.snap_mgr.clone();
                 let raft_router = self.raft_router.clone();
-<<<<<<< HEAD
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
-=======
->>>>>>> 761de11487 (server: pass encryption key with tablet snapshot (#14097))
                 let limiter = self.limiter.clone();
                 let cache_builder = self.cache_builder.clone();
 
@@ -936,15 +931,8 @@ where
                 }
                 SNAP_TASK_COUNTER_STATIC.send.inc();
 
-<<<<<<< HEAD
-                let env = Arc::clone(&self.env);
-                let mgr = self.snap_mgr.clone();
-                let security_mgr = Arc::clone(&self.security_mgr);
                 let sending_count = Arc::clone(&self.sending_count);
-=======
->>>>>>> 761de11487 (server: pass encryption key with tablet snapshot (#14097))
                 sending_count.fetch_add(1, Ordering::SeqCst);
-
                 let snap_mgr = self.snap_mgr.clone();
                 let security_mgr = Arc::clone(&self.security_mgr);
                 let limiter = self.limiter.clone();
