@@ -96,7 +96,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     /// Raft relies on periodic ticks to keep the state machine sync with other
     /// peers.
     pub fn on_raft_tick(&mut self) {
-        if self.fsm.peer_mut().tick() {
+        if self.fsm.peer_mut().tick(self.store_ctx) {
             self.fsm.peer_mut().set_has_ready();
         }
         self.fsm.peer_mut().maybe_clean_up_stale_merge_context();
@@ -152,11 +152,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn tick(&mut self) -> bool {
+    fn tick<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) -> bool {
         // When it's handling snapshot, it's pointless to tick as all the side
         // affects have to wait till snapshot is applied. On the other hand, ticking
         // will bring other corner cases like elections.
-        !self.is_handling_snapshot() && self.serving() && self.raft_group_mut().tick()
+        if self.is_handling_snapshot() || !self.serving() {
+            return false;
+        }
+        self.retry_pending_reads(&store_ctx.cfg);
+        self.raft_group_mut().tick()
     }
 
     pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
@@ -1035,7 +1039,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 write_task,
                 &ctx.snap_mgr,
                 &ctx.tablet_registry,
-                ctx.key_manager.as_ref(),
             ) {
                 SNAP_COUNTER.apply.fail.inc();
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)

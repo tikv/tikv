@@ -4,10 +4,13 @@ use std::sync::Mutex;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use raftstore::store::{
-    can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
-    msg::ReadCallback, propose_read_index, should_renew_lease, util::LeaseState, ReadDelegate,
-    ReadIndexRequest, ReadProgress, Transport,
+use raftstore::{
+    store::{
+        can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
+        msg::ReadCallback, propose_read_index, should_renew_lease, util::LeaseState, ReadDelegate,
+        ReadIndexRequest, ReadProgress, Transport,
+    },
+    Error, Result,
 };
 use slog::debug;
 use tikv_util::time::monotonic_raw_now;
@@ -22,6 +25,35 @@ use crate::{
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn pre_read_index(&self) -> Result<()> {
+        fail::fail_point!("before_propose_readindex", |s| if s
+            .map_or(true, |s| s.parse().unwrap_or(true))
+        {
+            Ok(())
+        } else {
+            Err(tikv_util::box_err!(
+                "[{}] {} can not read due to injected failure",
+                self.region_id(),
+                self.peer_id()
+            ))
+        });
+
+        // See more in ready_to_handle_read().
+        if self.proposal_control().is_splitting() {
+            return Err(Error::ReadIndexNotReady {
+                reason: "can not read index due to split",
+                region_id: self.region_id(),
+            });
+        }
+        if self.proposal_control().is_merging() {
+            return Err(Error::ReadIndexNotReady {
+                reason: "can not read index due to merge",
+                region_id: self.region_id(),
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn read_index_leader<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,

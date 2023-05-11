@@ -15,7 +15,7 @@ pub fn create_test_key_file(path: &str) {
         .unwrap();
 }
 
-fn new_test_file_master_key(tmp: &Path) -> MasterKeyConfig {
+pub fn new_test_file_master_key(tmp: &Path) -> MasterKeyConfig {
     let key_path = tmp.join("test_key").to_str().unwrap().to_owned();
     create_test_key_file(&key_path);
     MasterKeyConfig::File {

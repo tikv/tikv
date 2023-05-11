@@ -321,7 +321,8 @@ mod tests {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
+        FlushState, RaftEngine, RaftLogBatch, SstApplyState, TabletContext, TabletRegistry,
+        DATA_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -438,8 +439,7 @@ mod tests {
             .unwrap();
         let snapshot = new_empty_snapshot(region.clone(), snap_index, snap_term, false);
         let mut task = WriteTask::new(region.get_id(), 5, 1);
-        s.apply_snapshot(&snapshot, &mut task, &mgr, &reg, None)
-            .unwrap();
+        s.apply_snapshot(&snapshot, &mut task, &mgr, &reg).unwrap();
         // Add more entries to check if old entries are cleared. If not, it should panic
         // with memtable hole when using raft engine.
         let entries = (snap_index + 1..=snap_index + 10)
@@ -517,6 +517,7 @@ mod tests {
             reg,
             sched,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,

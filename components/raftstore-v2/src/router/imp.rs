@@ -159,8 +159,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
     pub fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
-    {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
+    + Send
+    + 'static {
         self.local_reader.snapshot(req)
     }
 
