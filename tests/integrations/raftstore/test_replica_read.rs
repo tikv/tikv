@@ -111,6 +111,7 @@ fn test_replica_read_not_applied() {
     // entry.
     let router = cluster.sim.wl().get_router(2).unwrap();
     for raft_msg in mem::take::<Vec<_>>(dropped_msgs.lock().unwrap().as_mut()) {
+        #[allow(clippy::useless_conversion)]
         router.send_raft_message(raft_msg.into()).unwrap();
     }
 
