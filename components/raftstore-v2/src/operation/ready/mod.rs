@@ -1039,7 +1039,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 write_task,
                 &ctx.snap_mgr,
                 &ctx.tablet_registry,
-                ctx.key_manager.as_ref(),
             ) {
                 SNAP_COUNTER.apply.fail.inc();
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)

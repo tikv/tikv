@@ -80,7 +80,7 @@ pub trait Simulator<EK: KvEngine> {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
-        key_mgr: Option<Arc<DataKeyManager>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<EK>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -515,6 +515,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         debug!("starting node {}", node_id);
         let tablet_registry = self.tablet_registries[&node_id].clone();
         let raft_engine = self.raft_engines[&node_id].clone();
+        let key_mgr = self.key_managers_map[&node_id].clone();
         let cfg = self.cfg.clone();
 
         // if let Some(labels) = self.labels.get(&node_id) {
@@ -536,7 +537,6 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
-        let key_mgr = self.key_managers_map.get(&node_id).unwrap().clone();
         self.sim.wl().run_node(
             node_id,
             cfg,

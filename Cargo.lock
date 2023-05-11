@@ -2797,7 +2797,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#0af0becd87ae89dfd48ef313a4fca7e04688b2b2"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#2475f5bed8c358e9e9942546007b962f4530a1a6"
+>>>>>>> 761de11487 (server: pass encryption key with tablet snapshot (#14097))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4465,6 +4469,7 @@ dependencies = [
  "time",
  "tracker",
  "txn_types",
+ "walkdir",
  "yatp",
 ]
 
