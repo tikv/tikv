@@ -618,6 +618,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             |entry| entry.index == self.raft_group().raft.raft_log.last_index()
         ));
 
+        fail::fail_point!(
+            "before_handle_snapshot_ready_3",
+            self.peer_id() == 3 && self.get_pending_snapshot().is_some(),
+            |_| ()
+        );
+
         self.on_role_changed(ctx, &ready);
 
         if let Some(hs) = ready.hs() {
