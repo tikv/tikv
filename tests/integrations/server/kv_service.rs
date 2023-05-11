@@ -556,6 +556,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 #[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_failed_after_first_batch() {
     let (_cluster, client, ctx) = new_cluster();
@@ -677,6 +678,7 @@ fn test_mvcc_flashback_failed_after_first_batch() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback() {
     let (_cluster, client, ctx) = new_cluster();
     let mut ts = 0;
@@ -719,6 +721,7 @@ fn test_mvcc_flashback() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_rw() {
     let (_cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
@@ -777,6 +780,7 @@ fn test_mvcc_flashback_block_rw() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_scheduling() {
     let (mut cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
@@ -794,6 +798,7 @@ fn test_mvcc_flashback_block_scheduling() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_unprepared() {
     let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
@@ -830,6 +835,7 @@ fn test_mvcc_flashback_unprepared() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_with_unlimited_range() {
     let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
