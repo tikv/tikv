@@ -16,9 +16,9 @@ use engine_rocks::{
     RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
 };
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, MiscExt, Mutable, MvccProperties,
-    Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    Engines, Error as EngineTraitError, IterOptions, Iterable, Iterator as EngineIterator, MiscExt,
+    Mutable, MvccProperties, Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt,
+    SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
     debugpb::{self, Db as DbType},
@@ -58,6 +58,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
+
+    #[error("Engine error {0}")]
+    EngineTrait(#[from] EngineTraitError),
 }
 
 /// Describes the meta information of a Region.
@@ -168,6 +171,8 @@ pub trait Debugger {
     fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>>;
 
     fn reset_to_version(&self, version: u64);
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>>;
 
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
 
@@ -744,21 +749,6 @@ impl<ER: RaftEngine> DebuggerImpl<ER> {
             None => Err(Error::NotFound(format!("region {}", region_id))),
         }
     }
-
-    pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
-        let mut props = dump_write_cf_properties(
-            &self.engines.kv,
-            &keys::data_key(start),
-            &keys::data_end_key(end),
-        )?;
-        let mut props1 = dump_default_cf_properties(
-            &self.engines.kv,
-            &keys::data_key(start),
-            &keys::data_end_key(end),
-        )?;
-        props.append(&mut props1);
-        Ok(props)
-    }
 }
 
 impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
@@ -967,7 +957,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
             "region.middle_key_by_approximate_size".to_owned(),
             hex::encode(middle_key),
         ));
-
         Ok(res)
     }
 
@@ -982,9 +971,24 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.raft_statistics = s;
     }
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        let mut props = dump_write_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        let mut props1 = dump_default_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        props.append(&mut props1);
+        Ok(props)
+    }
 }
 
-fn dump_default_cf_properties(
+pub fn dump_default_cf_properties(
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],
@@ -1017,7 +1021,7 @@ fn dump_default_cf_properties(
     Ok(res)
 }
 
-fn dump_write_cf_properties(
+pub fn dump_write_cf_properties(
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],

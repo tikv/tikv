@@ -947,6 +947,46 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
 
 #[test_case(test_raftstore::must_new_cluster_and_debug_client)]
 #[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
+fn test_debug_store() {
+    let (mut cluster, debug_client, store_id) = new_cluster();
+    let cluster_id = cluster.id();
+    let req = debugpb::GetClusterInfoRequest::default();
+    let resp = debug_client.get_cluster_info(&req).unwrap();
+    assert_eq!(resp.get_cluster_id(), cluster_id);
+
+    let req = debugpb::GetStoreInfoRequest::default();
+    let resp = debug_client.get_store_info(&req).unwrap();
+    assert_eq!(store_id, resp.get_store_id());
+
+    cluster.must_put_cf(CF_DEFAULT, b"1", b"val");
+    cluster.must_put_cf(CF_DEFAULT, b"2", b"val");
+    cluster.flush_data();
+    thread::sleep(Duration::from_millis(25));
+    let mut req = debugpb::GetMetricsRequest::default();
+    req.set_all(true);
+    let resp = debug_client.get_metrics(&req).unwrap();
+    assert_eq!(store_id, resp.get_store_id());
+    assert!(!resp.get_rocksdb_kv().is_empty());
+    assert!(resp.get_rocksdb_raft().is_empty());
+
+    let mut req = debugpb::GetRegionPropertiesRequest::default();
+    req.set_region_id(1);
+    let resp = debug_client.get_region_properties(&req).unwrap();
+    resp.get_props()
+        .iter()
+        .find(|p| p.get_name() == "mvcc.min_ts")
+        .unwrap();
+
+    let req = debugpb::GetRangePropertiesRequest::default();
+    let resp = debug_client.get_range_properties(&req).unwrap();
+    resp.get_properties()
+        .iter()
+        .find(|p| p.get_key() == "mvcc.min_ts")
+        .unwrap();
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_debug_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
 fn test_debug_get() {
     let (cluster, debug_client, store_id) = new_cluster();
     let (k, v) = (b"key", b"value");
