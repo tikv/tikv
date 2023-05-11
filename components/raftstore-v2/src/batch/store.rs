@@ -47,7 +47,7 @@ use tikv_util::{
     sys::SysQuota,
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{Builder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
@@ -58,7 +58,7 @@ use crate::{
     operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{pd, tablet},
+    worker::{checkpoint, pd, tablet},
     Error, Result,
 };
 
@@ -497,6 +497,7 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
     pub tablet: Scheduler<tablet::Task<EK>>,
+    pub checkpoint: Scheduler<checkpoint::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
 
     // Following is not maintained by raftstore itself.
@@ -519,6 +520,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     async_read: Worker,
     pd: LazyWorker<pd::Task>,
     tablet: Worker,
+    checkpoint: Worker,
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
 
@@ -528,10 +530,12 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
     fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
+        let checkpoint = Builder::new("checkpoint-worker").thread_count(2).create();
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet: Worker::new("tablet-worker"),
+            checkpoint,
             async_write: StoreWriters::new(None),
             purge,
             background,
@@ -543,6 +547,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         self.async_read.stop();
         self.pd.stop();
         self.tablet.stop();
+        self.checkpoint.stop();
         if let Some(w) = self.purge {
             w.stop();
         }
@@ -665,7 +670,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let tablet_gc_scheduler = workers.tablet.start_with_timer(
+        let tablet_scheduler = workers.tablet.start_with_timer(
             "tablet-worker",
             tablet::Runner::new(
                 tablet_registry.clone(),
@@ -674,10 +679,16 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
+        let checkpoint_scheduler = workers.checkpoint.start(
+            "checkpoint-worker",
+            checkpoint::Runner::new(self.logger.clone(), tablet_registry.clone()),
+        );
+
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
-            tablet: tablet_gc_scheduler,
+            tablet: tablet_scheduler,
+            checkpoint: checkpoint_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
         };
