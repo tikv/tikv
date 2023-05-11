@@ -365,16 +365,13 @@ where
                         }
                     },
                     Err(()) => {
-                        slog::info!(
+                        slog::error!(
                             logger,
-                            "failed to extend lease: timeout";
+                            "failed to extend lease: timeout, retry";
                             "region" => region_id,
                             "request" => ?req
                         );
-                        return Err(fail_resp(format!(
-                            "internal error: failed to extend lease: timeout: {}",
-                            region_id
-                        )));
+                        continue;
                     }
                 }
 
