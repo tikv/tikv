@@ -175,7 +175,7 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
+        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
     };
     use futures::executor::block_on;
     use kvproto::{
@@ -309,6 +309,8 @@ mod test {
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         host.registry
             .register_cmd_observer(0, BoxCmdObserver::new(ob));
+
+        let (dummy_scheduler, _) = dummy_scheduler();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -322,11 +324,13 @@ mod test {
             reg,
             read_scheduler,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,
             importer,
             host,
+            dummy_scheduler,
             logger.clone(),
         );
 
