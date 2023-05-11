@@ -2055,6 +2055,39 @@ fn test_buckets() {
 }
 
 #[test]
+fn test_select_v2_format_with_checksum() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+        (9, Some("name:8"), 7),
+        (10, Some("name:6"), 8),
+    ];
+
+    let product = ProductTable::new();
+    for extra_checksum in [None, Some(132423)] {
+        // The row value encoded with checksum bytes should have no impact on cop task
+        // processing and related result chunk filling.
+        let (_, endpoint) =
+            init_data_with_commit_v2_checksum(&product, &data, true, extra_checksum);
+        let req = DagSelect::from(&product).build();
+        let mut resp = handle_select(&endpoint, req);
+        let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+        for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
+            let name_datum = name.map(|s| s.as_bytes()).into();
+            let expected_encoded = datum::encode_value(
+                &mut EvalContext::default(),
+                &[Datum::I64(id), name_datum, cnt.into()],
+            )
+            .unwrap();
+            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+        }
+    }
+}
+
+#[test]
 fn test_batch_request() {
     let data = vec![
         (1, Some("name:0"), 2),

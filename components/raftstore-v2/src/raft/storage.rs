@@ -321,7 +321,8 @@ mod tests {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
+        FlushState, RaftEngine, RaftLogBatch, SstApplyState, TabletContext, TabletRegistry,
+        DATA_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
@@ -338,7 +339,7 @@ mod tests {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::Worker;
+    use tikv_util::worker::{dummy_scheduler, Worker};
 
     use super::*;
     use crate::{
@@ -505,6 +506,8 @@ mod tests {
         state.set_region(region.clone());
         let (_tmp_dir, importer) = create_tmp_importer();
         let host = CoprocessorHost::<KvTestEngine>::default();
+
+        let (dummy_scheduler, _) = dummy_scheduler();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -514,11 +517,13 @@ mod tests {
             reg,
             sched,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,
             importer,
             host,
+            dummy_scheduler,
             logger,
         );
 

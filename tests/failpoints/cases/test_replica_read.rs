@@ -12,7 +12,7 @@ use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{config::ReadableDuration, future::block_on_timeout, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 
 #[test]
@@ -400,7 +400,9 @@ fn test_new_split_learner_can_not_find_leader() {
     let new_region = cluster.get_region(b"k2");
     let learner_peer = find_peer(&new_region, 3).unwrap().clone();
     let resp_ch = async_read_on_peer(&mut cluster, learner_peer, new_region, b"k2", true, true);
-    let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
+    let resp = block_on_timeout(resp_ch, Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 }
@@ -476,7 +478,9 @@ fn test_replica_read_after_transfer_leader() {
 
     fail::remove(on_peer_collect_message_2);
 
-    let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
+    let resp = block_on_timeout(resp_ch, Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 }
