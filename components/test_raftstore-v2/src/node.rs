@@ -356,8 +356,9 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
     fn async_snapshot(
         &mut self,
         request: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
-    {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
+    + Send
+    + 'static {
         let node_id = request.get_header().get_peer().get_store_id();
         if !self
             .trans
