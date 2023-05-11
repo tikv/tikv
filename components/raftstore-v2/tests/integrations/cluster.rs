@@ -15,12 +15,13 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{self, Receiver, Sender, TrySendError};
+use encryption_export::{data_key_manager_from_config, DataKeyImporter};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
+use engine_traits::{EncryptionKeyManager, TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::ApiVersion,
@@ -262,14 +263,12 @@ impl RunningState {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, Self) {
-        // TODO(tabokie): Enable encryption by default. (after snapshot encryption)
-        // let encryption_cfg = test_util::new_file_security_config(path);
-        // let key_manager = Some(Arc::new(
-        //     data_key_manager_from_config(&encryption_cfg, path.to_str().unwrap())
-        //         .unwrap()
-        //         .unwrap(),
-        // ));
-        let key_manager = None;
+        let encryption_cfg = test_util::new_file_security_config(path);
+        let key_manager = Some(Arc::new(
+            data_key_manager_from_config(&encryption_cfg, path.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        ));
 
         let mut opts = engine_test::ctor::RaftDbOptions::default();
         opts.set_key_manager(key_manager.clone());
@@ -633,7 +632,24 @@ impl Cluster {
                     let gen_path = from_snap_mgr.tablet_gen_path(&key);
                     let recv_path = to_snap_mgr.final_recv_path(&key);
                     assert!(gen_path.exists());
-                    std::fs::rename(gen_path, recv_path.clone()).unwrap();
+                    if let Some(m) = from_snap_mgr.key_manager() {
+                        let mut importer =
+                            DataKeyImporter::new(to_snap_mgr.key_manager().as_deref().unwrap());
+                        for e in walkdir::WalkDir::new(&gen_path).into_iter() {
+                            let e = e.unwrap();
+                            let new_path = recv_path.join(e.path().file_name().unwrap());
+                            if let Some((iv, key)) =
+                                m.get_file_internal(e.path().to_str().unwrap()).unwrap()
+                            {
+                                importer.add(new_path.to_str().unwrap(), iv, key).unwrap();
+                            }
+                        }
+                        importer.commit().unwrap();
+                    }
+                    std::fs::rename(&gen_path, &recv_path).unwrap();
+                    if let Some(m) = from_snap_mgr.key_manager() {
+                        m.delete_file(gen_path.to_str().unwrap()).unwrap();
+                    }
                     assert!(recv_path.exists());
                 }
                 regions.insert(msg.get_region_id());
