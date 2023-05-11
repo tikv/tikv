@@ -17,7 +17,9 @@ use engine_traits::{
     TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
-use futures::{compat::Future01CompatExt, executor::block_on, select, Future, FutureExt};
+use futures::{
+    compat::Future01CompatExt, executor::block_on, future::BoxFuture, select, Future, FutureExt,
+};
 use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
@@ -48,11 +50,11 @@ use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
-    is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
-    new_peer, new_prepare_merge, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd,
-    new_request, new_status_request, new_store, new_tikv_config_with_api_ver,
-    new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
-    RawEngine,
+    check_raft_cmd_request, is_error_response, new_admin_request, new_delete_cmd,
+    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd,
+    new_region_detail_cmd, new_region_leader_cmd, new_request, new_status_request, new_store,
+    new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
+    PartitionFilterFactory, RawEngine,
 };
 use tikv::{server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
@@ -292,10 +294,20 @@ pub trait Simulator<EK: KvEngine> {
         })
     }
 
-    fn async_command_on_node(&self, node_id: u64, mut request: RaftCmdRequest) {
+    fn async_command_on_node(
+        &mut self,
+        node_id: u64,
+        mut request: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
 
-        let (msg, _sub) = if request.has_admin_request() {
+        let is_read = check_raft_cmd_request(&request);
+        if is_read {
+            let fut = self.async_read(node_id, request);
+            return Box::pin(async move { fut.await.unwrap() });
+        }
+
+        let (msg, sub) = if request.has_admin_request() {
             PeerMsg::admin_command(request)
         } else {
             let requests = request.get_requests();
@@ -321,6 +333,7 @@ pub trait Simulator<EK: KvEngine> {
 
         self.async_peer_msg_on_node(node_id, region_id, msg)
             .unwrap();
+        Box::pin(async move { sub.result().await.unwrap() })
     }
 }
 
@@ -1496,8 +1509,9 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         let mut req = self.new_prepare_merge(source, target);
         let leader = self.leader_of_region(source).unwrap();
         req.mut_header().set_peer(leader.clone());
-        self.sim
-            .rl()
+        let _ = self
+            .sim
+            .wl()
             .async_command_on_node(leader.get_store_id(), req);
     }
 

@@ -16,7 +16,7 @@ use kvproto::{
     pdpb,
     raft_serverpb::RaftMessage,
 };
-use raft::{RawNode, StateRole};
+use raft::{eraftpb, RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
@@ -430,6 +430,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn persisted_index(&self) -> u64 {
         self.raft_group.raft.raft_log.persisted
+    }
+
+    #[inline]
+    pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
+        self.raft_group.snap()
     }
 
     #[inline]

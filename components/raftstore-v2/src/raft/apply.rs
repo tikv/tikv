@@ -211,6 +211,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         self.region().get_id()
     }
 
+    pub fn peer_id(&self) -> u64 {
+        self.peer.get_id()
+    }
+
     /// The tablet can't be public yet, otherwise content of latest tablet
     /// doesn't matches its epoch in both readers and peer fsm.
     #[inline]
