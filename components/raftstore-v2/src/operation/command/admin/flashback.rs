@@ -80,6 +80,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 res.region_state.mut_region().set_is_in_flashback(false);
             })
         })();
+        slog::debug!(self.logger,
+            "flashback update region";
+            "region" => ?res.region_state.get_region());
         let region_id = self.region_id();
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
@@ -88,7 +91,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.set_region(
                 &store_ctx.coprocessor_host,
                 reader,
-                res.region_state.take_region(),
+                res.region_state.get_region().clone(),
                 RegionChangeReason::Flashback,
                 res.region_state.get_tablet_index(),
             );

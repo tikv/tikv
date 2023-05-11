@@ -726,6 +726,7 @@ fn test_mvcc_flashback_block_rw() {
     let (_cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
     must_prepare_flashback(&client, ctx.clone(), 1, 2);
+
     // Try to read version 3 (after flashback, FORBIDDEN).
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     // Get
@@ -734,7 +735,11 @@ fn test_mvcc_flashback_block_rw() {
     get_req.key = k.clone();
     get_req.version = 3;
     let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(get_resp.get_region_error().has_flashback_in_progress());
+    assert!(
+        get_resp.get_region_error().has_flashback_in_progress(),
+        "{:?}",
+        get_resp
+    );
     assert!(!get_resp.has_error());
     assert!(get_resp.value.is_empty());
     // Scan
@@ -791,7 +796,9 @@ fn test_mvcc_flashback_block_scheduling() {
         transfer_leader_resp
             .get_header()
             .get_error()
-            .has_flashback_in_progress()
+            .has_flashback_in_progress(),
+        "{:?}",
+        transfer_leader_resp
     );
     // Finish the flashback.
     must_finish_flashback(&client, ctx, 0, 1, 2);

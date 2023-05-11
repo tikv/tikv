@@ -15,7 +15,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use futures::{executor::block_on, Future};
+use futures::{executor::block_on, Future, future::BoxFuture};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use kvproto::{
@@ -164,6 +164,14 @@ impl<EK: KvEngine> Engine for TestRaftKv2<EK> {
     #[inline]
     fn schedule_txn_extra(&self, txn_extra: txn_types::TxnExtra) {
         self.raftkv.schedule_txn_extra(txn_extra)
+    }
+
+    fn start_flashback(&self, ctx: &Context, start_ts: u64) -> BoxFuture<'static, storage::kv::Result<()>> {
+        self.raftkv.start_flashback(ctx, start_ts)
+    }
+
+    fn end_flashback(&self, ctx: &Context) -> BoxFuture<'static, storage::kv::Result<()>> {
+        self.raftkv.end_flashback(ctx)
     }
 }
 
