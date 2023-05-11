@@ -211,6 +211,7 @@ pub fn try_poll<T>(f: impl Future<Output = T>) -> Option<T> {
 }
 
 // Run a future with a timeout on the current thread. Returns Err if times out.
+#[allow(clippy::result_unit_err)]
 pub fn block_on_timeout<B, F, I>(mut fut: B, dur: std::time::Duration) -> Result<I, ()>
 where
     F: std::future::Future<Output = I> + Unpin,
