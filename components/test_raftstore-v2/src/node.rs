@@ -305,7 +305,6 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             &state,
             importer,
             key_manager,
-            None,
         )?;
         assert!(
             raft_engine

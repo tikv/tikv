@@ -352,7 +352,6 @@ impl RunningState {
                 pd_worker,
                 importer,
                 key_manager,
-                None,
             )
             .unwrap();
 

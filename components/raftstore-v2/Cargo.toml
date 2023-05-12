@@ -36,7 +36,6 @@ collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
 encryption_export = { workspace = true }
-engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
@@ -67,6 +66,7 @@ txn_types = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
+engine_rocks = { workspace = true }
 engine_test = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"

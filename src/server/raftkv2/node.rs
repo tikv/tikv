@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::raw::WriteBufferManager;
 use engine_traits::{KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{metapb, replication_modepb::ReplicationStatus};
 use pd_client::PdClient;
@@ -107,7 +106,6 @@ where
         state: &Mutex<GlobalReplicationState>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
-        write_buffer_manager: Option<Arc<WriteBufferManager>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -148,7 +146,6 @@ where
             store_cfg,
             sst_importer,
             key_manager,
-            write_buffer_manager,
         )?;
 
         Ok(())
@@ -212,7 +209,6 @@ where
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
-        write_buffer_manager: Option<Arc<WriteBufferManager>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -246,7 +242,6 @@ where
             pd_worker,
             sst_importer,
             key_manager,
-            write_buffer_manager,
         )?;
         Ok(())
     }

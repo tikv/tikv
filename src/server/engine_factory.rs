@@ -4,7 +4,7 @@ use std::{path::Path, sync::Arc};
 
 use encryption_export::DataKeyManager;
 use engine_rocks::{
-    raw::{Cache, Env, WriteBufferManager},
+    raw::{Cache, Env},
     util::RangeCompactionFilterFactory,
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
@@ -142,10 +142,6 @@ impl KvEngineFactory {
 
     pub fn rocks_statistics(&self) -> Arc<RocksStatistics> {
         self.inner.db_resources.statistics.clone()
-    }
-
-    pub fn rocks_write_buffer_manager(&self) -> Option<Arc<WriteBufferManager>> {
-        self.inner.db_resources.write_buffer_manager.clone()
     }
 
     fn db_opts(&self, for_engine: EngineType) -> RocksDbOptions {

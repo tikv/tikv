@@ -19,7 +19,6 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::raw::WriteBufferManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType, WithIoType};
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
@@ -584,7 +583,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         pd_worker: LazyWorker<pd::Task>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
-        write_buffer_manager: Option<Arc<WriteBufferManager>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -605,28 +603,18 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
             let router = router.clone();
-            let mut avg_score = 0;
-            if write_buffer_manager.is_none() {
-                avg_score = 100;
-            }
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
                 let _guard = WithIoType::new(IoType::RewriteLog);
-                if avg_score > 90 {
-                    match raft_clone.manual_purge() {
-                        Ok(regions) => {
-                            for r in regions {
-                                let _ = router.send(r, PeerMsg::ForceCompactLog);
-                            }
+                match raft_clone.manual_purge() {
+                    Ok(regions) => {
+                        for r in regions {
+                            let _ = router.send(r, PeerMsg::ForceCompactLog);
                         }
-                        Err(e) => {
-                            warn!(logger, "purge expired files"; "err" => %e);
-                        }
-                    };
-                }
-                if let Some(m) = write_buffer_manager.as_ref() {
-                    avg_score =
-                        (avg_score * 70 + m.memory_usage() * 100 / m.flush_size() * 30) / 100;
-                }
+                    }
+                    Err(e) => {
+                        warn!(logger, "purge expired files"; "err" => %e);
+                    }
+                };
             });
             Some(worker)
         } else {
