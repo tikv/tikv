@@ -521,9 +521,9 @@ where
 
     fn get_range_properties(
         &mut self,
-        ctx: ::grpcio::RpcContext,
+        ctx: RpcContext<'_>,
         req: GetRangePropertiesRequest,
-        sink: ::grpcio::UnarySink<GetRangePropertiesResponse>,
+        sink: UnarySink<GetRangePropertiesResponse>,
     ) {
         const TAG: &str = "debug_get_range_properties";
         let debugger = self.debugger.clone();

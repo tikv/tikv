@@ -315,7 +315,7 @@ impl MiscExt for RocksEngine {
         if let Some(v) = self.as_inner().get_property_value(ROCKSDB_DB_STATS_KEY) {
             s.extend_from_slice(v.as_bytes());
         }
-        
+
         Ok(box_try!(String::from_utf8(s)))
     }
 
