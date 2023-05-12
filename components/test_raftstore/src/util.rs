@@ -3,6 +3,7 @@
 use std::{
     fmt::Write,
     path::Path,
+    result::Result as StdResult,
     str::FromStr,
     sync::{mpsc, Arc, Mutex},
     thread,
@@ -20,7 +21,7 @@ use engine_traits::{
     CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::executor::block_on;
+use futures::{channel::oneshot, executor::block_on, future::BoxFuture};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     encryptionpb::EncryptionMethod,
@@ -435,7 +436,7 @@ pub fn async_read_on_peer<T: Simulator>(
     key: &[u8],
     read_quorum: bool,
     replica_read: bool,
-) -> mpsc::Receiver<RaftCmdResponse> {
+) -> BoxFuture<'static, StdResult<RaftCmdResponse, oneshot::Canceled>> {
     let node_id = peer.get_store_id();
     let mut request = new_request(
         region.get_id(),
@@ -445,10 +446,10 @@ pub fn async_read_on_peer<T: Simulator>(
     );
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, rx) = oneshot::channel();
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
     cluster.sim.wl().async_read(node_id, None, request, cb);
-    rx
+    Box::pin(async move { rx.await })
 }
 
 pub fn batch_read_on_peer<T: Simulator>(
@@ -645,11 +646,11 @@ pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
-pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_hibernate(config: &mut Config) {
     // Uses long check interval to make leader keep sleeping during tests.
-    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    config.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
+    config.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {

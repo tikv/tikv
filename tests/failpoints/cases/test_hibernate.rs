@@ -23,7 +23,7 @@ fn test_break_leadership_on_restart() {
     // stable.
     cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     cluster.pd_client.must_add_peer(r, new_peer(2, 2));
@@ -105,7 +105,7 @@ fn test_store_disconnect_with_hibernate() {
     // stable.
     cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     cluster.pd_client.must_add_peer(r, new_peer(2, 2));
