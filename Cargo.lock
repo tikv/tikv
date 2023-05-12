@@ -3059,7 +3059,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#13968d766d2fb5c70d8d6c7e06eab362fffa6896"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -3078,7 +3078,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#13968d766d2fb5c70d8d6c7e06eab362fffa6896"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4430,7 +4430,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/tabokie/raft-engine?branch=230506-light-purge#50ce94be629ae478c18b08cbbc517010a33c88eb"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5029,7 +5029,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#13968d766d2fb5c70d8d6c7e06eab362fffa6896"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

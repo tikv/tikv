@@ -31,6 +31,10 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn flush_oldest_cf(&self, wait: bool, age_threshold: std::time::Duration) -> Result<()> {
+        panic!()
+    }
+
     fn delete_ranges_cf(
         &self,
         cf: &str,

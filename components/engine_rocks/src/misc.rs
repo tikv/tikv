@@ -146,6 +146,23 @@ impl MiscExt for RocksEngine {
         self.as_inner().flush_cf(handle, wait).map_err(r2e)
     }
 
+    fn flush_oldest_cf(&self, wait: bool, age_threshold: std::time::Duration) -> Result<()> {
+        let cfs = self.cf_names();
+        let mut handles = Vec::with_capacity(cfs.len());
+        for cf in cfs {
+            handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        }
+        if let Some((handle, age)) = handles.into_iter().filter_map(|handle| {
+           self.as_inner().get_approximate_active_memtable_stats_cf(handle).map(|(_, time)| (handle, time))
+        }).max_by(|(_, a), (_, b)| a.cmp(b))
+            && let Ok(elapsed) = age.elapsed()
+            && elapsed >= age_threshold {
+            self.as_inner().flush_cf(handle, wait).map_err(r2e)
+        } else {
+            Ok(())
+        }
+    }
+
     fn delete_ranges_cf(
         &self,
         cf: &str,
