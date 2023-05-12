@@ -510,6 +510,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.maybe_reschedule(written_bytes).await
     }
 
+    pub fn on_flush_oldest(&mut self, threshold: Duration) {
+        if let Err(e) = self.tablet().flush_oldest_cf(false, threshold) {
+            warn!(self.logger, "failed to flush oldest cf: {:?}", e);
+        }
+    }
+
     pub fn on_refresh_buckets(&mut self, meta: Arc<BucketMeta>) {
         let mut new = BucketStat::from_meta(meta);
         if let Some(origin) = self.buckets.as_ref() {

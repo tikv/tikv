@@ -13,6 +13,7 @@ pub enum ApplyTask {
     /// Writes that doesn't care consistency.
     UnsafeWrite(Box<[u8]>),
     ManualFlush,
+    FlushOldest(std::time::Duration),
     RefreshBucketStat(std::sync::Arc<BucketMeta>),
     CaptureApply(CaptureChange),
 }

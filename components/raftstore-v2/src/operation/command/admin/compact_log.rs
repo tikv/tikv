@@ -13,7 +13,7 @@
 //! Updates truncated index, and compacts logs if the corresponding changes have
 //! been persisted in kvdb.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
@@ -33,9 +33,11 @@ use crate::{
     fsm::{ApplyResReporter, PeerFsmDelegate},
     operation::AdminCmdResult,
     raft::{Apply, Peer},
-    router::{CmdResChannel, PeerTick},
+    router::{ApplyTask, CmdResChannel, PeerTick},
     worker::tablet,
 };
+
+const FORCE_COMPACT_FLUSH_THRESHOLD: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 pub struct CompactLogContext {
@@ -109,6 +111,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             if !self.fsm.peer().entry_storage().is_entry_cache_empty() {
                 self.schedule_tick(PeerTick::EntryCacheEvict);
             }
+        }
+    }
+
+    pub fn on_force_compact(&mut self) {
+        self.on_compact_log_tick(true);
+        if let Some(scheduler) = self.fsm.peer_mut().apply_scheduler() {
+            scheduler.send(ApplyTask::FlushOldest(FORCE_COMPACT_FLUSH_THRESHOLD));
         }
     }
 }
