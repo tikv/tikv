@@ -3,6 +3,7 @@
 use std::{
     fmt::Write,
     path::Path,
+    result::Result as StdResult,
     str::FromStr,
     sync::{mpsc, Arc, Mutex},
     thread,
@@ -16,11 +17,11 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
+    CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
     CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::executor::block_on;
+use futures::{channel::oneshot, executor::block_on, future::BoxFuture};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     encryptionpb::EncryptionMethod,
@@ -42,7 +43,7 @@ use raftstore::{
     store::{fsm::RaftRouter, *},
     RaftRouterCompactedEventSender, Result,
 };
-use rand::RngCore;
+use rand::{seq::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -435,7 +436,7 @@ pub fn async_read_on_peer<T: Simulator>(
     key: &[u8],
     read_quorum: bool,
     replica_read: bool,
-) -> mpsc::Receiver<RaftCmdResponse> {
+) -> BoxFuture<'static, StdResult<RaftCmdResponse, oneshot::Canceled>> {
     let node_id = peer.get_store_id();
     let mut request = new_request(
         region.get_id(),
@@ -445,10 +446,10 @@ pub fn async_read_on_peer<T: Simulator>(
     );
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, rx) = oneshot::channel();
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
     cluster.sim.wl().async_read(node_id, None, request, cb);
-    rx
+    Box::pin(async move { rx.await })
 }
 
 pub fn batch_read_on_peer<T: Simulator>(
@@ -645,11 +646,11 @@ pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
-pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_hibernate(config: &mut Config) {
     // Uses long check interval to make leader keep sleeping during tests.
-    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    config.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
+    config.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
@@ -1429,4 +1430,37 @@ pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, regio
         thread::sleep(Duration::from_millis(1 << retry));
     }
     assert!(snapshot.ext().is_max_ts_synced());
+}
+
+pub fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
+    let data_set: Vec<_> = (1..500)
+        .map(|i| {
+            (
+                format!("key{:08}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
+    }
+
+    // delete_range request with notify_only set should not actually delete data.
+    cluster.must_notify_delete_range_cf(cf, b"", b"");
+
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let (k, v) = data_set.choose(&mut rng).unwrap();
+        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
+    }
+
+    // Empty keys means the whole range.
+    cluster.must_delete_range_cf(cf, b"", b"");
+
+    for _ in 0..50 {
+        let k = &data_set.choose(&mut rng).unwrap().0;
+        assert!(cluster.get_cf(cf, k).is_none());
+    }
 }
