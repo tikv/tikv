@@ -13,8 +13,6 @@ use tikv_util::{box_try, error, info, time::Instant, warn, worker::Runnable};
 
 use super::metrics::COMPACT_RANGE_CF;
 
-const COMPACT_DELETES_THRESHOLD: f64 = 0.2;
-
 type Key = Vec<u8>;
 
 pub enum Task {
@@ -185,7 +183,8 @@ fn need_compact(
 ) -> bool {
     // When MVCC deletes exceed the threshold,
     // we need to compact and let compaction filter clear them.
-    if num_deletes as f64 > num_entires as f64 * COMPACT_DELETES_THRESHOLD {
+    if num_deletes > tombstones_num_threshold
+        && num_deletes as f64 > num_entires as f64 * tombstones_percent_threshold {
         return true;
     }
 
