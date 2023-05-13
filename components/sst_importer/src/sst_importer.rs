@@ -1276,7 +1276,7 @@ impl SstImporter {
     }
 
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
-        self.dir.list_ssts()
+        self.dir.list_ssts(self.key_manager.as_deref())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
@@ -1460,7 +1460,7 @@ mod tests {
             ingested.push(meta);
         }
 
-        let ssts = dir.list_ssts().unwrap();
+        let ssts = dir.list_ssts(key_manager.as_deref()).unwrap();
         assert_eq!(ssts.len(), ingested.len());
         for sst in &ssts {
             ingested
@@ -1469,7 +1469,7 @@ mod tests {
                 .unwrap();
             dir.delete(sst, key_manager.as_deref()).unwrap();
         }
-        assert!(dir.list_ssts().unwrap().is_empty());
+        assert!(dir.list_ssts(key_manager.as_deref()).unwrap().is_empty());
     }
 
     #[test]
@@ -1487,6 +1487,7 @@ mod tests {
             save: temp_dir.path().join("save"),
             temp: temp_dir.path().join("temp"),
             clone: temp_dir.path().join("clone"),
+            meta: temp_dir.path().join("meta"),
         };
 
         let data = b"test_data";

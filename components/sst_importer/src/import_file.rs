@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     fmt,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -17,6 +17,7 @@ use engine_traits::{
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use keys::data_key;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
+use protobuf::Message;
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
@@ -48,6 +49,8 @@ pub struct ImportPath {
     pub temp: PathBuf,
     // The path of the file that is going to be ingested.
     pub clone: PathBuf,
+    // The path of the origin `SstMeta` (encoded in wire) of the file.
+    pub meta: PathBuf,
 }
 
 impl ImportPath {
@@ -86,6 +89,7 @@ impl fmt::Debug for ImportPath {
             .field("save", &self.save)
             .field("temp", &self.temp)
             .field("clone", &self.clone)
+            .field("meta", &self.meta)
             .finish()
     }
 }
@@ -217,16 +221,19 @@ pub struct ImportDir {
     root_dir: PathBuf,
     temp_dir: PathBuf,
     clone_dir: PathBuf,
+    meta_dir: PathBuf,
 }
 
 impl ImportDir {
     const TEMP_DIR: &'static str = ".temp";
     const CLONE_DIR: &'static str = ".clone";
+    const META_DIR: &'static str = ".meta";
 
     pub fn new<P: AsRef<Path>>(root: P) -> Result<ImportDir> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
         let clone_dir = root_dir.join(Self::CLONE_DIR);
+        let meta_dir = root_dir.join(Self::META_DIR);
         if temp_dir.exists() {
             file_system::remove_dir_all(&temp_dir)?;
         }
@@ -235,10 +242,13 @@ impl ImportDir {
         }
         file_system::create_dir_all(&temp_dir)?;
         file_system::create_dir_all(&clone_dir)?;
+        // TODO: GC content in the meta dir.
+        file_system::create_dir_all(&meta_dir)?;
         Ok(ImportDir {
             root_dir,
             temp_dir,
             clone_dir,
+            meta_dir,
         })
     }
 
@@ -251,10 +261,12 @@ impl ImportDir {
         let save_path = self.root_dir.join(file_name);
         let temp_path = self.temp_dir.join(file_name);
         let clone_path = self.clone_dir.join(file_name);
+        let meta_path = self.meta_dir.join(self.get_meta_file_name(file_name));
         Ok(ImportPath {
             save: save_path,
             temp: temp_path,
             clone: clone_path,
+            meta: meta_path,
         })
     }
 
@@ -268,9 +280,20 @@ impl ImportDir {
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<ImportFile> {
+        use std::io::{Error as IoErr, ErrorKind as IoErrs};
         let path = self.join(meta)?;
         if path.save.exists() {
             return Err(Error::FileExists(path.save, "create SST upload cache"));
+        }
+        let write_meta_res = meta
+            .write_to_bytes()
+            .map_err(|err| Error::from(IoErr::new(IoErrs::InvalidInput, err)))
+            .and_then(|v| write_bytes(&path.meta, v, key_manager.as_deref()));
+        if let Err(err) = write_meta_res {
+            warn!(
+                "failed to encode and save the sst meta, skipping.";
+                "err" => %err
+            );
         }
         ImportFile::create(meta.clone(), path, key_manager)
     }
@@ -413,7 +436,62 @@ impl ImportDir {
         Ok(())
     }
 
-    pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
+    fn fill_by_persisted_meta(
+        &self,
+        p: &Path,
+        sc: Option<&DataKeyManager>,
+        m0: &mut SstMeta,
+    ) -> Result<()> {
+        use std::io::{Error as IoErr, ErrorKind as IoErrs};
+        let fname = p
+            .file_name()
+            .ok_or_else(|| Error::InvalidSstPath(p.to_owned()))?;
+        let meta_path = self
+            .meta_dir
+            .join(self.get_meta_file_name(&fname.to_string_lossy()));
+
+        let meta_bytes = match sc {
+            None => file_system::read(&meta_path)?,
+            Some(s) => {
+                let mut v = Vec::new();
+                s.open_file_for_read(&meta_path)?.read_to_end(&mut v)?;
+                v
+            }
+        };
+        let old_uuid = m0.get_uuid().to_owned();
+        let backup = m0.clone();
+        m0.merge_from_bytes(&meta_bytes)
+            .map_err(|err| IoErr::new(IoErrs::InvalidData, err))?;
+        if old_uuid != m0.get_uuid() {
+            // The meta might be modified by the `merge_from_bytes`, let's
+            // restore it.
+            *m0 = backup;
+            return Err(Error::FileCorrupted(
+                meta_path,
+                format!(
+                    "the meta file uuid doesn't match the filename: {:?} vs {:?}",
+                    old_uuid,
+                    m0.get_uuid()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn get_meta_file_name(&self, n: &str) -> String {
+        format!("{n}.meta.wire")
+    }
+
+    fn get_meta_by_path(&self, p: &Path, km: Option<&DataKeyManager>) -> Result<SstMeta> {
+        let mut m0 = parse_meta_from_path(p)?;
+        if let Err(err) = self.fill_by_persisted_meta(p, km, &mut m0) {
+            info!("failed to load sst meta from .meta dir, maybe upgrade from old versions."; "err" => %err, "path" => %p.display());
+        }
+
+        Ok(m0)
+    }
+
+    pub fn list_ssts(&self, km: Option<&DataKeyManager>) -> Result<Vec<SstMeta>> {
         let mut ssts = Vec::new();
         for e in file_system::read_dir(&self.root_dir)? {
             let e = e?;
@@ -421,9 +499,9 @@ impl ImportDir {
                 continue;
             }
             let path = e.path();
-            match path_to_sst_meta(&path) {
+            match self.get_meta_by_path(&path, km) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.to_str().unwrap(),),
+                Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.display(),),
             }
         }
         Ok(ssts)
@@ -431,6 +509,14 @@ impl ImportDir {
 }
 
 const SST_SUFFIX: &str = ".sst";
+
+fn write_bytes(p: impl AsRef<Path>, content: Vec<u8>, km: Option<&DataKeyManager>) -> Result<()> {
+    match km {
+        Some(sc) => sc.create_file_for_write(p)?.write_all(&content)?,
+        None => file_system::write(p, content)?,
+    };
+    Ok(())
+}
 
 pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
@@ -444,7 +530,7 @@ pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     )))
 }
 
-pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
+pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
@@ -479,6 +565,8 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 #[cfg(test)]
 mod test {
     use engine_traits::CF_DEFAULT;
+    use tempfile::TempDir;
+    use test_util::new_test_key_manager;
 
     use super::*;
 
@@ -496,7 +584,7 @@ mod test {
         let expected_path = format!("{}_1_2_3_default.sst", uuid);
         assert_eq!(path.to_str().unwrap(), &expected_path);
 
-        let new_meta = path_to_sst_meta(path).unwrap();
+        let new_meta = parse_meta_from_path(path).unwrap();
         assert_eq!(meta, new_meta);
     }
 
@@ -516,7 +604,41 @@ mod test {
             meta.get_region_epoch().get_version(),
             SST_SUFFIX,
         ));
-        let new_meta = path_to_sst_meta(path).unwrap();
+        let new_meta = parse_meta_from_path(path).unwrap();
         assert_eq!(meta, new_meta);
+    }
+
+    fn test_path_with_range_and_km(km: Option<DataKeyManager>) {
+        test_util::init_log_for_test();
+        let arcmgr = km.map(Arc::new);
+        let tmp = TempDir::new().unwrap();
+        let dir = ImportDir::new(tmp.path()).unwrap();
+        let mut meta = SstMeta::default();
+        let mut rng = Range::new();
+        rng.set_start(b"hello".to_vec());
+        rng.set_end(b"hello".to_vec());
+        let uuid = Uuid::new_v4();
+        meta.set_uuid(uuid.as_bytes().to_vec());
+        meta.set_region_id(1);
+        meta.set_range(rng);
+        meta.mut_region_epoch().set_conf_ver(222);
+        meta.mut_region_epoch().set_version(333);
+        let f = dir.create(&meta, arcmgr.clone()).unwrap();
+        std::fs::rename(&f.path.temp, &f.path.save).unwrap();
+        assert_eq!(dir.list_ssts(arcmgr.as_deref()).unwrap(), vec![meta]);
+    }
+
+    #[test]
+    fn test_path_with_range() {
+        test_path_with_range_and_km(None)
+    }
+
+    #[test]
+    fn test_path_with_range_encrypted() {
+        let dir = TempDir::new().unwrap();
+        let enc = new_test_key_manager(&dir, None, None, None)
+            .unwrap()
+            .unwrap();
+        test_path_with_range_and_km(Some(enc));
     }
 }
