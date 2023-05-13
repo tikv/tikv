@@ -184,7 +184,7 @@ fn need_compact(
     // When MVCC deletes exceed the threshold,
     // we need to compact and let compaction filter clear them.
     if num_deletes > tombstones_num_threshold
-        && num_deletes as f64 > num_entires as f64 * tombstones_percent_threshold {
+        && num_deletes * 100 >= num_entires * tombstones_percent_threshold {
         return true;
     }
 
