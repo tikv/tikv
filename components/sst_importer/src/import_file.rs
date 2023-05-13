@@ -80,6 +80,13 @@ impl ImportPath {
         sync_dir(&self.save)?;
         Ok(())
     }
+
+    pub fn save_meta(&self, km: Option<&DataKeyManager>, meta: &SstMeta) -> Result<()> {
+        use std::io::{Error as IoErr, ErrorKind as IoErrs};
+        meta.write_to_bytes()
+            .map_err(|err| Error::from(IoErr::new(IoErrs::InvalidInput, err)))
+            .and_then(|v| write_bytes(&self.meta, v, km))
+    }
 }
 
 impl fmt::Debug for ImportPath {
@@ -279,16 +286,11 @@ impl ImportDir {
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<ImportFile> {
-        use std::io::{Error as IoErr, ErrorKind as IoErrs};
         let path = self.join(meta)?;
         if path.save.exists() {
             return Err(Error::FileExists(path.save, "create SST upload cache"));
         }
-        let write_meta_res = meta
-            .write_to_bytes()
-            .map_err(|err| Error::from(IoErr::new(IoErrs::InvalidInput, err)))
-            .and_then(|v| write_bytes(&path.meta, v, key_manager.as_deref()));
-        if let Err(err) = write_meta_res {
+        if let Err(err) = path.save_meta(key_manager.as_deref(), meta) {
             warn!(
                 "failed to encode and save the sst meta, skipping.";
                 "err" => %err
