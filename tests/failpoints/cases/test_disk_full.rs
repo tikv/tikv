@@ -11,7 +11,7 @@ use kvproto::{
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, time::Instant};
+use tikv_util::{config::ReadableDuration, future::block_on_timeout, time::Instant};
 
 fn assert_disk_full(resp: &RaftCmdResponse) {
     assert!(resp.get_header().get_error().has_disk_full());
@@ -67,7 +67,9 @@ fn ensure_disk_usage_is_reported<T: Simulator>(
     let peer = new_peer(store_id, peer_id);
     let key = region.get_start_key();
     let ch = async_read_on_peer(cluster, peer, region.clone(), key, true, true);
-    ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    block_on_timeout(ch, Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
 }
 
 fn test_disk_full_leader_behaviors(usage: DiskUsage) {

@@ -24,7 +24,7 @@ pub use self::{
     io::{
         create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
-    manager::{DataKeyManager, DataKeyManagerArgs},
+    manager::{DataKeyImporter, DataKeyManager, DataKeyManagerArgs},
     master_key::{
         Backend, DataKeyPair, EncryptedKey, FileBackend, KmsBackend, KmsProvider, PlaintextBackend,
     },

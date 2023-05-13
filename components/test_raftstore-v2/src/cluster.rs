@@ -54,7 +54,7 @@ use test_raftstore::{
     new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
     RawEngine,
 };
-use tikv::server::Result as ServerResult;
+use tikv::{server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
     box_err, box_try, debug, error, safe_panic,
     thread_group::GroupProperties,
@@ -80,7 +80,7 @@ pub trait Simulator<EK: KvEngine> {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
-        key_mgr: Option<Arc<DataKeyManager>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<EK>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -117,7 +117,7 @@ pub trait Simulator<EK: KvEngine> {
     fn async_read(
         &mut self,
         request: RaftCmdRequest,
-    ) -> impl Future<Output = Result<RaftCmdResponse>> + Send {
+    ) -> impl Future<Output = Result<RaftCmdResponse>> + Send + 'static {
         let mut req_clone = request.clone();
         req_clone.clear_requests();
         req_clone.mut_requests().push(new_snap_cmd());
@@ -174,7 +174,10 @@ pub trait Simulator<EK: KvEngine> {
 
                     Ok(response)
                 }
-                Err(e) => Ok(e),
+                Err(e) => {
+                    error!("cluster.async_read fails"; "error" => ?e);
+                    Ok(e)
+                }
             }
         }
     }
@@ -182,7 +185,9 @@ pub trait Simulator<EK: KvEngine> {
     fn async_snapshot(
         &mut self,
         request: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send;
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
+    + Send
+    + 'static;
 
     fn async_peer_msg_on_node(&self, node_id: u64, region_id: u64, msg: PeerMsg) -> Result<()>;
 
@@ -251,7 +256,13 @@ pub trait Simulator<EK: KvEngine> {
                         write_encoder.delete(delete.get_cf(), delete.get_key());
                     }
                     CmdType::DeleteRange => {
-                        unimplemented!()
+                        let delete_range = req.get_delete_range();
+                        write_encoder.delete_range(
+                            delete_range.get_cf(),
+                            delete_range.get_start_key(),
+                            delete_range.get_end_key(),
+                            delete_range.get_notify_only(),
+                        );
                     }
                     _ => unreachable!(),
                 }
@@ -371,9 +382,11 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             ),
         >,
     ) -> Cluster<T, EK> {
+        let mut tikv_cfg = new_tikv_config_with_api_ver(id, api_version);
+        tikv_cfg.storage.engine = EngineType::RaftKv2;
         Cluster {
             cfg: Config {
-                tikv: new_tikv_config_with_api_ver(id, api_version),
+                tikv: tikv_cfg,
                 prefer_mem: true,
             },
             count,
@@ -504,6 +517,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         debug!("starting node {}", node_id);
         let tablet_registry = self.tablet_registries[&node_id].clone();
         let raft_engine = self.raft_engines[&node_id].clone();
+        let key_mgr = self.key_managers_map[&node_id].clone();
         let cfg = self.cfg.clone();
 
         // if let Some(labels) = self.labels.get(&node_id) {
@@ -525,7 +539,6 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
-        let key_mgr = self.key_managers_map.get(&node_id).unwrap().clone();
         self.sim.wl().run_node(
             node_id,
             cfg,
