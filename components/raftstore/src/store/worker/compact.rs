@@ -181,22 +181,19 @@ fn need_compact(
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
 ) -> bool {
-    // When MVCC deletes exceed the threshold,
-    // we need to compact and let compaction filter clear them.
-    if num_deletes > tombstones_num_threshold
-        && num_deletes * 100 >= num_entires * tombstones_percent_threshold {
-        return true;
-    }
-
     if num_entires <= num_versions {
         return false;
     }
 
     // When the number of tombstones exceed threshold and ratio, this range need
     // compacting.
+    // When MVCC deletes exceed the threshold,
+    // we need to compact and let compaction filter clear them.
     let estimate_num_del = num_entires - num_versions;
     estimate_num_del >= tombstones_num_threshold
         && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
+        || num_deletes > tombstones_num_threshold
+        && num_deletes * 100 >= num_entires * tombstones_percent_threshold
 }
 
 fn collect_ranges_need_compact(
