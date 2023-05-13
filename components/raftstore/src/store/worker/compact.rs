@@ -193,7 +193,7 @@ fn need_compact(
     estimate_num_del >= tombstones_num_threshold
         && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
         || num_deletes > tombstones_num_threshold
-        && num_deletes * 100 >= num_entires * tombstones_percent_threshold
+            && num_deletes * 100 >= num_entires * tombstones_percent_threshold
 }
 
 fn collect_ranges_need_compact(
