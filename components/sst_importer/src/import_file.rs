@@ -267,7 +267,7 @@ impl ImportDir {
         let save_path = self.root_dir.join(file_name);
         let temp_path = self.temp_dir.join(file_name);
         let clone_path = self.clone_dir.join(file_name);
-        let meta_path = self.meta_dir.join(self.get_meta_file_name(file_name));
+        let meta_path = self.meta_dir.join(file_name);
         Ok(ImportPath {
             save: save_path,
             temp: temp_path,
@@ -449,7 +449,7 @@ impl ImportDir {
             .ok_or_else(|| Error::InvalidSstPath(p.to_owned()))?;
         let meta_path = self
             .meta_dir
-            .join(self.get_meta_file_name(&fname.to_string_lossy()));
+            .join(fname);
 
         let meta_bytes = match sc {
             None => file_system::read(&meta_path)?,
@@ -479,20 +479,15 @@ impl ImportDir {
         Ok(())
     }
 
-    fn get_meta_file_name(&self, n: &str) -> String {
-        format!("{n}.meta.wire")
+    pub fn try_fetch_full_meta(&self, meta: &SstMeta, km: Option<&DataKeyManager>) -> Result<SstMeta> {
+        let path = sst_meta_to_path(meta)?;
+        let meta_path = self.meta_dir.join(path);
+        let mut m1 = meta.clone();
+        self.fill_by_persisted_meta(&meta_path, km, &mut m1)?;
+        Ok(m1)
     }
 
-    fn get_meta_by_path(&self, p: &Path, km: Option<&DataKeyManager>) -> Result<SstMeta> {
-        let mut m0 = parse_meta_from_path(p)?;
-        if let Err(err) = self.fill_by_persisted_meta(p, km, &mut m0) {
-            info!("failed to load sst meta from .meta dir, maybe upgrade from old versions."; "err" => %err, "path" => %p.display());
-        }
-
-        Ok(m0)
-    }
-
-    pub fn list_ssts(&self, km: Option<&DataKeyManager>) -> Result<Vec<SstMeta>> {
+    pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         let mut ssts = Vec::new();
         for e in file_system::read_dir(&self.root_dir)? {
             let e = e?;
@@ -500,7 +495,7 @@ impl ImportDir {
                 continue;
             }
             let path = e.path();
-            match self.get_meta_by_path(&path, km) {
+            match parse_meta_from_path(&path) {
                 Ok(sst) => ssts.push(sst),
                 Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.display(),),
             }
@@ -626,7 +621,11 @@ mod test {
         meta.mut_region_epoch().set_version(333);
         let f = dir.create(&meta, arcmgr.clone()).unwrap();
         std::fs::rename(&f.path.temp, &f.path.save).unwrap();
-        assert_eq!(dir.list_ssts(arcmgr.as_deref()).unwrap(), vec![meta]);
+        let mut ssts = dir.list_ssts().unwrap();
+        ssts.iter_mut().for_each(|meta| {
+            *meta = dir.try_fetch_full_meta(&meta, arcmgr.as_deref()).unwrap()
+        });
+        assert_eq!(ssts, vec![meta]);
     }
 
     #[test]
