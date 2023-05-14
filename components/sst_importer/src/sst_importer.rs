@@ -1291,7 +1291,7 @@ impl SstImporter {
     /// Try to fetch the full metadata from the disk.
     pub fn try_fetch_full_meta(&self, meta: &SstMeta) -> Result<SstMeta> {
         self.dir
-            .try_fetch_full_meta(&meta, self.key_manager.as_deref())
+            .try_fetch_full_meta(meta, self.key_manager.as_deref())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {

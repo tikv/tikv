@@ -3,11 +3,10 @@
 use std::{error::Error, fmt, marker::PhantomData, sync::Arc};
 
 use engine_traits::KvEngine;
-use futures::executor::block_on;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use pd_client::PdClient;
 use sst_importer::SstImporter;
-use tikv_util::{box_err, error, worker::Runnable};
+use tikv_util::{error, worker::Runnable};
 
 use crate::store::{util::is_epoch_stale, StoreMsg, StoreRouter};
 
@@ -77,11 +76,12 @@ where
         }
         // Once there isn't range provided.
         let query_by_start_key_of_full_meta = || {
-            let meta = self.importer.try_fetch_full_meta(&sst)?;
+            let meta = self.importer.try_fetch_full_meta(sst)?;
             let region = self.pd_client.get_region(meta.get_range().get_start())?;
             Result::Ok(region)
         };
-        query_by_start_key_of_full_meta().map_err(|err| 
+        query_by_start_key_of_full_meta()
+        .map_err(|err|
             format!("failed to load full sst meta from disk for {:?} and there isn't extra information provided: {err}", sst.get_uuid()).into()
         )
     }

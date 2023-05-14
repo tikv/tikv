@@ -182,7 +182,7 @@ impl ImportFile {
                 if let Some(ref manager) = self.key_manager {
                     manager.delete_file(path.to_str().unwrap())?;
                 }
-                file_system::remove_file(&path)?;
+                file_system::remove_file(path)?;
             }
             Result::Ok(())
         };
