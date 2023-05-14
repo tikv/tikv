@@ -1275,8 +1275,18 @@ impl SstImporter {
         }
     }
 
+    /// List the basic information of the current SST files.
+    /// The information contains UUID, region ID, region Epoch.
+    /// Other fields may be left blank. They can be fetched via
+    /// [`Self::try_fetch_full_meta`].
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
-        self.dir.list_ssts(self.key_manager.as_deref())
+        self.dir.list_ssts()
+    }
+
+    /// Try to fetch the full metadata from the disk.
+    pub fn try_fetch_full_meta(&self, meta: &SstMeta) -> Result<SstMeta> {
+        self.dir
+            .try_fetch_full_meta(&meta, self.key_manager.as_deref())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
@@ -1460,7 +1470,7 @@ mod tests {
             ingested.push(meta);
         }
 
-        let ssts = dir.list_ssts(key_manager.as_deref()).unwrap();
+        let ssts = dir.list_ssts().unwrap();
         assert_eq!(ssts.len(), ingested.len());
         for sst in &ssts {
             ingested
@@ -1469,7 +1479,7 @@ mod tests {
                 .unwrap();
             dir.delete(sst, key_manager.as_deref()).unwrap();
         }
-        assert!(dir.list_ssts(key_manager.as_deref()).unwrap().is_empty());
+        assert!(dir.list_ssts().unwrap().is_empty());
     }
 
     #[test]
