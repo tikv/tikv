@@ -199,8 +199,13 @@ impl SstImporter {
             "size" => ?memory_limit,
         );
 
+        let dir = ImportDir::new(root)?;
+        if let Err(err) = dir.clean_unused_meta(key_manager.as_deref()) {
+            warn!("failed to gc the metadata of SSTs to be imported."; "err" => %err);
+        };
+
         Ok(SstImporter {
-            dir: ImportDir::new(root)?,
+            dir,
             key_manager,
             switcher,
             api_version,

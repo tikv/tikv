@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -177,12 +177,17 @@ impl ImportFile {
 
     fn cleanup(&mut self) -> Result<()> {
         self.file.take();
-        if self.path.temp.exists() {
-            if let Some(ref manager) = self.key_manager {
-                manager.delete_file(self.path.temp.to_str().unwrap())?;
+        let delete_file_if_exist = |path: &Path| {
+            if path.exists() {
+                if let Some(ref manager) = self.key_manager {
+                    manager.delete_file(path.to_str().unwrap())?;
+                }
+                file_system::remove_file(&path)?;
             }
-            file_system::remove_file(&self.path.temp)?;
-        }
+            Result::Ok(())
+        };
+        delete_file_if_exist(&self.path.temp)?;
+        delete_file_if_exist(&self.path.meta)?;
         Ok(())
     }
 
@@ -249,7 +254,6 @@ impl ImportDir {
         }
         file_system::create_dir_all(&temp_dir)?;
         file_system::create_dir_all(&clone_dir)?;
-        // TODO: GC content in the meta dir.
         file_system::create_dir_all(&meta_dir)?;
         Ok(ImportDir {
             root_dir,
@@ -291,12 +295,6 @@ impl ImportDir {
         if path.save.exists() {
             return Err(Error::FileExists(path.save, "create SST upload cache"));
         }
-        if let Err(err) = path.save_meta(key_manager.as_deref(), meta) {
-            warn!(
-                "failed to encode and save the sst meta, skipping.";
-                "err" => %err
-            );
-        }
         ImportFile::create(meta.clone(), path, key_manager)
     }
 
@@ -316,6 +314,7 @@ impl ImportDir {
         self.delete_file(&path.save, manager)?;
         self.delete_file(&path.temp, manager)?;
         self.delete_file(&path.clone, manager)?;
+        self.delete_file(&path.meta, manager)?;
         Ok(path)
     }
 
@@ -448,9 +447,7 @@ impl ImportDir {
         let fname = p
             .file_name()
             .ok_or_else(|| Error::InvalidSstPath(p.to_owned()))?;
-        let meta_path = self
-            .meta_dir
-            .join(fname);
+        let meta_path = self.meta_dir.join(fname);
 
         let meta_bytes = match sc {
             None => file_system::read(&meta_path)?,
@@ -480,7 +477,34 @@ impl ImportDir {
         Ok(())
     }
 
-    pub fn try_fetch_full_meta(&self, meta: &SstMeta, km: Option<&DataKeyManager>) -> Result<SstMeta> {
+    pub fn clean_unused_meta(&self, km: Option<&DataKeyManager>) -> Result<()> {
+        let start = Instant::now_coarse();
+        let ssts = self.list_ssts()?;
+        let sst_set = ssts
+            .iter()
+            .filter_map(|m| {
+                let p: PathBuf = sst_meta_to_path(m).ok()?;
+                let file_name = p.file_name()?.to_owned();
+                Some(file_name)
+            })
+            .collect::<HashSet<_>>();
+        let mut cleaned = 0;
+        for e in file_system::read_dir(&self.meta_dir)? {
+            let e = e?;
+            if !sst_set.contains(&e.file_name()) {
+                self.delete_file(&e.path(), km)?;
+                cleaned += 1;
+            }
+        }
+        info!("SST metadata dir cleaned."; "removed_stale_meta" => %cleaned, "take" => ?start.saturating_elapsed());
+        Ok(())
+    }
+
+    pub fn try_fetch_full_meta(
+        &self,
+        meta: &SstMeta,
+        km: Option<&DataKeyManager>,
+    ) -> Result<SstMeta> {
         let path = sst_meta_to_path(meta)?;
         let meta_path = self.meta_dir.join(path);
         let mut m1 = meta.clone();
@@ -561,6 +585,8 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 
 #[cfg(test)]
 mod test {
+    use std::mem::ManuallyDrop;
+
     use engine_traits::CF_DEFAULT;
     use tempfile::TempDir;
     use test_util::new_test_key_manager;
@@ -606,7 +632,6 @@ mod test {
     }
 
     fn test_path_with_range_and_km(km: Option<DataKeyManager>) {
-        test_util::init_log_for_test();
         let arcmgr = km.map(Arc::new);
         let tmp = TempDir::new().unwrap();
         let dir = ImportDir::new(tmp.path()).unwrap();
@@ -621,11 +646,12 @@ mod test {
         meta.mut_region_epoch().set_conf_ver(222);
         meta.mut_region_epoch().set_version(333);
         let f = dir.create(&meta, arcmgr.clone()).unwrap();
-        std::fs::rename(&f.path.temp, &f.path.save).unwrap();
+        let dp = f.path.clone();
+        dp.save_meta(None, &meta).unwrap();
+        dp.save(None).unwrap();
         let mut ssts = dir.list_ssts().unwrap();
-        ssts.iter_mut().for_each(|meta| {
-            *meta = dir.try_fetch_full_meta(&meta, arcmgr.as_deref()).unwrap()
-        });
+        ssts.iter_mut()
+            .for_each(|meta| *meta = dir.try_fetch_full_meta(&meta, arcmgr.as_deref()).unwrap());
         assert_eq!(ssts, vec![meta]);
     }
 
@@ -641,5 +667,51 @@ mod test {
             .unwrap()
             .unwrap();
         test_path_with_range_and_km(Some(enc));
+    }
+
+    #[test]
+    fn test_cleanup_meta_dir() {
+        test_util::init_log_for_test();
+        let tmp = TempDir::new().unwrap();
+        let dir = ImportDir::new(tmp.path()).unwrap();
+        let gen_file = || {
+            let uuid = Uuid::new_v4();
+            let mut meta = SstMeta::default();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_region_id(1);
+            meta.mut_region_epoch().set_conf_ver(222);
+            meta.mut_region_epoch().set_version(333);
+            let d = dir.create(&meta, None).unwrap();
+            let dp = d.path.clone();
+            dp.save_meta(None, &meta).unwrap();
+            dp.save(None).unwrap();
+            d
+        };
+        let count_meta_dir = || {
+            file_system::read_dir(&dir.meta_dir)
+                .unwrap()
+                .filter_map(|e| {
+                    let e = e.unwrap();
+                    e.metadata().unwrap().is_file().then_some(())
+                })
+                .count()
+        };
+
+        let mut files = std::iter::repeat_with(gen_file).take(8).collect::<Vec<_>>();
+        dir.clean_unused_meta(None).unwrap();
+        assert_eq!(count_meta_dir(), 8);
+        drop(files.drain(..4));
+        assert_eq!(count_meta_dir(), 4);
+        dir.clean_unused_meta(None).unwrap();
+        assert_eq!(count_meta_dir(), 4);
+
+        // simulating the case that we have created the meta but not the real file.
+        files.drain(..3).for_each(|f| {
+            assert!(file_system::delete_file_if_exist(&f.path.save).unwrap());
+            let _ = ManuallyDrop::new(f);
+        });
+        assert_eq!(count_meta_dir(), 4);
+        dir.clean_unused_meta(None).unwrap();
+        assert_eq!(count_meta_dir(), 1);
     }
 }
