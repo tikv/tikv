@@ -272,7 +272,10 @@ impl<E: KvEngine> RawSstWriter<E> {
         }
 
         self.default.finish()?;
-        if let Err(err) = self.default_path.save_meta(self.key_manager.as_deref(), &self.default_meta) {
+        if let Err(err) = self
+            .default_path
+            .save_meta(self.key_manager.as_deref(), &self.default_meta)
+        {
             info!("failed to save meta for raw KV"; "err" => %err);
         }
         self.default_path.save(self.key_manager.as_deref())?;
