@@ -58,7 +58,9 @@ use test_raftstore::{
 };
 use tikv::{server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
-    box_err, box_try, debug, error, safe_panic,
+    box_err, box_try, debug, error,
+    future::block_on_timeout,
+    safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     timer::GLOBAL_TIMER_HANDLE,
@@ -208,7 +210,7 @@ pub trait Simulator<EK: KvEngine> {
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
-        let (msg, sub) = PeerMsg::raft_query(request);
+        let (msg, sub) = PeerMsg::raft_query(request.clone());
         match self.async_peer_msg_on_node(node_id, region_id, msg) {
             Ok(()) => {}
             Err(e) => {
@@ -218,17 +220,17 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + timeout);
-        // todo: unwrap?
-        match block_on(async move {
-            select! {
-                res = sub.result().fuse() => Ok(res.unwrap()),
-                _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
-
+        let mut fut = Box::pin(sub.result());
+        match block_on_timeout(fut.as_mut(), timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
+        {
+            Some(QueryResult::Read(_)) => unreachable!(),
+            Some(QueryResult::Response(resp)) => Ok(resp),
+            None => {
+                error!("call_query_on_node receives none response"; "request" => ?request);
+                // Do not unwrap here, sometimes raftstore v2 may return none.
+                return Err(box_err!("receives none response {:?}", request));
             }
-        }).unwrap() {
-            QueryResult::Read(_) => unreachable!(),
-            QueryResult::Response(resp) => Ok(resp),
         }
     }
 

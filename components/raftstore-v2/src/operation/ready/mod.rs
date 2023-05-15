@@ -298,7 +298,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if self.is_leader() {
                 self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
             }
-            // We only cache peer with an vaild ID.
+            // We only cache peer with an valid ID.
             // It prevents cache peer(0,0) which is sent by region split.
             self.insert_peer_cache(from_peer);
         }
@@ -316,11 +316,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex && self.is_leader() {
-                if self.on_step_read_index(ctx, msg.mut_message()) {
-                    // Read index has respond.
-                    return;
-                }
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.is_leader()
+                && self.on_step_read_index(ctx, msg.mut_message())
+            {
+                // Read index has respond in `on_step_read_index`.
+                return;
             }
 
             // As this peer is already created, the empty split message is meaningless.

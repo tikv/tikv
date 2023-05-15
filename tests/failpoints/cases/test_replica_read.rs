@@ -350,9 +350,10 @@ fn test_read_after_cleanup_range_for_snap() {
 /// slowly and drops the no-op entry from the new leader, and it had to wait for
 /// a heartbeat timeout to know its leader before that it can't handle any read
 /// request.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_new_split_learner_can_not_find_leader() {
-    let mut cluster = new_node_cluster(0, 4);
+    let mut cluster = new_cluster(0, 4);
     configure_for_lease_read(&mut cluster.cfg, Some(5000), None);
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -395,9 +396,10 @@ fn test_new_split_learner_can_not_find_leader() {
 
 /// Test if the read index request can get a correct response when the commit
 /// index of leader if not up-to-date after transferring leader.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_replica_read_after_transfer_leader() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
 
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(100));
 
@@ -454,7 +456,8 @@ fn test_replica_read_after_transfer_leader() {
 
     let router = cluster.sim.wl().get_router(2).unwrap();
     for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
-        router.send_raft_message(raft_msg).unwrap();
+        #[allow(clippy::useless_conversion)]
+        router.send_raft_message(raft_msg.into()).unwrap();
     }
 
     let new_region = cluster.get_region(b"k1");
@@ -471,9 +474,10 @@ fn test_replica_read_after_transfer_leader() {
 
 // This test is for reproducing the bug that some replica reads was sent to a
 // leader and shared a same read index because of the optimization on leader.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_after_transfer_leader() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(100));
@@ -532,10 +536,12 @@ fn test_read_index_after_transfer_leader() {
     // Send heartbeat and append responses to advance read index.
     let router = cluster.sim.wl().get_router(2).unwrap();
     for msg in append_msgs {
-        router.send_raft_message(msg.clone()).unwrap();
+        #[allow(clippy::useless_conversion)]
+        router.send_raft_message(msg.clone().into()).unwrap();
     }
     for msg in heartbeat_msgs {
-        router.send_raft_message(msg.clone()).unwrap();
+        #[allow(clippy::useless_conversion)]
+        router.send_raft_message(msg.clone().into()).unwrap();
     }
     fail::remove(on_peer_collect_message_2);
     // Wait for read index has been advanced.
@@ -551,7 +557,8 @@ fn test_read_index_after_transfer_leader() {
         )
     });
     for msg in vote_msgs {
-        router.send_raft_message(msg.clone()).unwrap();
+        #[allow(clippy::useless_conversion)]
+        router.send_raft_message(msg.clone().into()).unwrap();
     }
 
     for mut resp in responses {
@@ -564,7 +571,8 @@ fn test_read_index_after_transfer_leader() {
 
 /// Test if the read index request can get a correct response when the commit
 /// index of leader if not up-to-date after transferring leader.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_batch_read_index_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(100));
@@ -603,7 +611,8 @@ fn test_batch_read_index_after_transfer_leader() {
 
     let router = cluster.sim.wl().get_router(2).unwrap();
     for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
-        router.send_raft_message(raft_msg).unwrap();
+        #[allow(clippy::useless_conversion)]
+        router.send_raft_message(raft_msg.into()).unwrap();
     }
 
     let mut resps = Vec::with_capacity(2);
@@ -641,8 +650,11 @@ fn test_batch_read_index_after_transfer_leader() {
     }
 }
 
+// Read index on follower must also return KeyIsLocked error.
+//
+// Note: this test case does not applicable to raftstore v2, because it no
+// longer support read index from users.
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_lock_checking_on_follower() {
     let mut cluster = new_cluster(0, 3);
 
