@@ -143,7 +143,7 @@ impl MiscExt for RocksEngine {
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        self.as_inner().flush_cf(handle, wait).map_err(r2e)
+        self.as_inner().flush_cf(handle, wait, None).map_err(r2e)
     }
 
     fn flush_oldest_cf(&self, wait: bool, age_threshold: std::time::Duration) -> Result<()> {
@@ -154,10 +154,11 @@ impl MiscExt for RocksEngine {
         }
         if let Some((handle, age)) = handles.into_iter().filter_map(|handle| {
            self.as_inner().get_approximate_active_memtable_stats_cf(handle).map(|(_, time)| (handle, time))
-        }).max_by(|(_, a), (_, b)| a.cmp(b))
+        }).min_by(|(_, a), (_, b)| a.cmp(b))
             && let Ok(elapsed) = age.elapsed()
-            && elapsed >= age_threshold {
-            self.as_inner().flush_cf(handle, wait).map_err(r2e)
+            && elapsed >= age_threshold
+        {
+            self.as_inner().flush_cf(handle, wait, Some(age)).map_err(r2e)
         } else {
             Ok(())
         }
@@ -713,5 +714,34 @@ mod tests {
         let sst_range = db.get_sst_key_ranges(cf, 1).unwrap();
         let expected = vec![(b"k1".to_vec(), b"k8".to_vec())];
         assert_eq!(sst_range, expected);
+    }
+
+    #[test]
+    fn test_flush_oldest() {
+        let path = Builder::new()
+            .prefix("test_flush_oldest")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let mut opts = RocksDbOptions::default();
+        opts.create_if_missing(true);
+
+        let db = new_engine(path_str, ALL_CFS).unwrap();
+        db.put_cf("default", b"k", b"v").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        db.put_cf("write", b"k", b"v").unwrap();
+        db.put_cf("lock", b"k", b"v").unwrap();
+        assert_eq!(
+            db.get_total_sst_files_size_cf("default").unwrap().unwrap(),
+            0
+        );
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        db.flush_oldest_cf(true, std::time::Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        assert!(db.get_total_sst_files_size_cf("default").unwrap().unwrap() > 0);
     }
 }
