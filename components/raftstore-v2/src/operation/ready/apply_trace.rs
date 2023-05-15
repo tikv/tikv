@@ -43,6 +43,7 @@ use raftstore::store::{
     ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{info, trace, Logger};
+use tikv_util::error;
 use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
@@ -189,10 +190,14 @@ impl ApplyTrace {
         // Get all the recorded apply index from data CFs.
         for (off, cf) in DATA_CFS.iter().enumerate() {
             // There should be at least one record.
-            let i = engine.get_flushed_index(region_id, cf)?.unwrap();
-            trace.data_cfs[off].flushed = i;
-            trace.data_cfs[off].last_modified = i;
-            trace.data_cfs[off].last_trigger_flush = i;
+            let i = engine.get_flushed_index(region_id, cf)?;
+            if let Some(i) = i {
+                trace.data_cfs[off].flushed = i;
+                trace.data_cfs[off].last_modified = i;
+                trace.data_cfs[off].last_trigger_flush = i;
+            } else {
+                error!("failed to get region flushed index {}, {}", region_id, *cf);
+            }
         }
         let i = engine.get_flushed_index(region_id, CF_RAFT)?.unwrap();
         // Index of raft CF means all data before that must be persisted.
