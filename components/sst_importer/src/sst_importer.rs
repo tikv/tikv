@@ -1294,6 +1294,11 @@ impl SstImporter {
             .try_fetch_full_meta(meta, self.key_manager.as_deref())
     }
 
+    pub fn load_start_key_by_meta<S: SstExt>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
+        self.dir
+            .load_start_key_by_meta::<S>(meta, self.key_manager.clone())
+    }
+
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
