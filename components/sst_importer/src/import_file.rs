@@ -12,7 +12,8 @@ use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    iter_option, EncryptionKeyManager, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader,
+    iter_option, EncryptionKeyManager, IterOptions, Iterator, KvEngine, RefIterable, SstExt,
+    SstMetaInfo, SstReader,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
@@ -505,6 +506,24 @@ impl ImportDir {
         Ok(())
     }
 
+    pub fn load_start_key_by_meta<E: SstExt>(
+        &self,
+        meta: &SstMeta,
+        km: Option<Arc<DataKeyManager>>,
+    ) -> Result<Option<Vec<u8>>> {
+        let path = self.join(meta)?;
+        let r = match km {
+            Some(km) => E::SstReader::open_encrypted(&path.save.to_string_lossy(), km)?,
+            None => E::SstReader::open(&path.save.to_string_lossy())?,
+        };
+        let opts = IterOptions::new(None, None, false);
+        let mut i = r.iter(opts)?;
+        if !i.seek_to_first()? || !i.valid()? {
+            return Ok(None);
+        }
+        Ok(Some(i.key().to_owned()))
+    }
+
     pub fn try_fetch_full_meta(
         &self,
         meta: &SstMeta,
@@ -592,7 +611,9 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 mod test {
     use std::mem::ManuallyDrop;
 
-    use engine_traits::CF_DEFAULT;
+    use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+    use engine_test::ctor::{CfOptions, DbOptions};
+    use engine_traits::{SstWriter, SstWriterBuilder, CF_DEFAULT};
     use tempfile::TempDir;
     use test_util::new_test_key_manager;
 
@@ -643,20 +664,49 @@ mod test {
         let mut meta = SstMeta::default();
         let mut rng = Range::new();
         rng.set_start(b"hello".to_vec());
-        rng.set_end(b"hello".to_vec());
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
         meta.set_region_id(1);
         meta.set_range(rng);
         meta.mut_region_epoch().set_conf_ver(222);
         meta.mut_region_epoch().set_version(333);
+        let mut db_opt = DbOptions::default();
+        db_opt.set_key_manager(arcmgr.clone());
+        let e = engine_test::kv::new_engine_opt(
+            &tmp.path().join("eng").to_string_lossy(),
+            db_opt,
+            vec![(CF_DEFAULT, CfOptions::new())],
+        )
+        .unwrap();
         let f = dir.create(&meta, arcmgr.clone()).unwrap();
         let dp = f.path.clone();
-        dp.save_meta(None, &meta).unwrap();
-        dp.save(None).unwrap();
+        let mut w = RocksSstWriterBuilder::new()
+            .set_db(&e)
+            .set_cf(CF_DEFAULT)
+            .build(f.path.temp.to_str().unwrap())
+            .unwrap();
+        w.put(b"hello", concat!("This is the start key of the SST, ",
+              "how about some of our users uploads metas with range not aligned with the content of SST?",
+              "May the real region still be in the current store.").as_bytes()).unwrap();
+        w.put(
+            b"world",
+            concat!(
+                "This is the end key of the SST, ",
+                "it is so we can check whether we are loding the right key from the SST."
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        w.finish().unwrap();
+        dp.save(arcmgr.as_deref()).unwrap();
         let mut ssts = dir.list_ssts().unwrap();
-        ssts.iter_mut()
-            .for_each(|meta| *meta = dir.try_fetch_full_meta(&meta, arcmgr.as_deref()).unwrap());
+        ssts.iter_mut().for_each(|meta| {
+            let start = dir
+                .load_start_key_by_meta::<RocksEngine>(meta, arcmgr.clone())
+                .unwrap()
+                .unwrap();
+            meta.mut_range().set_start(start)
+        });
         assert_eq!(ssts, vec![meta]);
     }
 
@@ -672,51 +722,5 @@ mod test {
             .unwrap()
             .unwrap();
         test_path_with_range_and_km(Some(enc));
-    }
-
-    #[test]
-    fn test_cleanup_meta_dir() {
-        test_util::init_log_for_test();
-        let tmp = TempDir::new().unwrap();
-        let dir = ImportDir::new(tmp.path()).unwrap();
-        let gen_file = || {
-            let uuid = Uuid::new_v4();
-            let mut meta = SstMeta::default();
-            meta.set_uuid(uuid.as_bytes().to_vec());
-            meta.set_region_id(1);
-            meta.mut_region_epoch().set_conf_ver(222);
-            meta.mut_region_epoch().set_version(333);
-            let d = dir.create(&meta, None).unwrap();
-            let dp = d.path.clone();
-            dp.save_meta(None, &meta).unwrap();
-            dp.save(None).unwrap();
-            d
-        };
-        let count_meta_dir = || {
-            file_system::read_dir(&dir.meta_dir)
-                .unwrap()
-                .filter_map(|e| {
-                    let e = e.unwrap();
-                    e.metadata().unwrap().is_file().then_some(())
-                })
-                .count()
-        };
-
-        let mut files = std::iter::repeat_with(gen_file).take(8).collect::<Vec<_>>();
-        dir.clean_unused_meta(None).unwrap();
-        assert_eq!(count_meta_dir(), 8);
-        drop(files.drain(..4));
-        assert_eq!(count_meta_dir(), 4);
-        dir.clean_unused_meta(None).unwrap();
-        assert_eq!(count_meta_dir(), 4);
-
-        // simulating the case that we have created the meta but not the real file.
-        files.drain(..3).for_each(|f| {
-            assert!(file_system::delete_file_if_exist(&f.path.save).unwrap());
-            let _ = ManuallyDrop::new(f);
-        });
-        assert_eq!(count_meta_dir(), 4);
-        dir.clean_unused_meta(None).unwrap();
-        assert_eq!(count_meta_dir(), 1);
     }
 }

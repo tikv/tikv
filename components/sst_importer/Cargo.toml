@@ -48,3 +48,4 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 tempfile = "3.0"
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
+engine_test = { workspace = true, features = ["test-engines-rocksdb"] }
