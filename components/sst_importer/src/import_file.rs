@@ -49,7 +49,13 @@ pub struct ImportPath {
     pub temp: PathBuf,
     // The path of the file that is going to be ingested.
     pub clone: PathBuf,
-    // The path of the origin `SstMeta` (encoded in wire) of the file.
+    // The path of the origin `SstMeta` (encoded by wire) of the file.
+    // We have encoded a subset of SstMeta to the file name, but that isn't enough,
+    // for now, we need to get the range of the SST to check whether we are still needing it
+    // (Check it solely by region ID isn't good enough -- regions may be destroyed by merging.).
+    // "But why not directly read the start key from the SST file?"
+    // "Because that couples the `Engine` and `ImportDir` -- In fact, we cannot access `Engine` in
+    // the context of validating the SST."
     pub meta: PathBuf,
 }
 
