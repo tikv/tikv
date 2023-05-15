@@ -426,6 +426,9 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             .get_region_state(region_id, u64::MAX)
             .unwrap()
             .unwrap();
+        if region_state.state != PeerState::Normal {
+            return Err(Error::NotFound(format!("none region {:?}", region_id)));
+        }
         let region = region_state.get_region();
         let start = keys::enc_start_key(region);
         let end = keys::enc_end_key(region);
@@ -477,15 +480,15 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             let talbet = tablet_cache.latest().unwrap();
             let mut prop = dump_write_cf_properties(
                 talbet,
-                start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start),
-                end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
+                &keys::data_key(start_key.as_ref().map(|k| (k.as_bytes())).unwrap_or(start)),
+                &keys::data_key(end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end)),
             )
             .unwrap();
             props.append(&mut prop);
             let mut prop1 = dump_default_cf_properties(
                 talbet,
-                start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start),
-                end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
+                &keys::data_key(start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start)),
+                &keys::data_key(end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end)),
             )?;
             props.append(&mut prop1);
         }
