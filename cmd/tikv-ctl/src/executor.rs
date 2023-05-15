@@ -32,8 +32,8 @@ use slog_global::crit;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
-        debug::{BottommostLevelCompaction, Debugger, RegionInfo},
-        debug2::DebuggerV2,
+        debug::{BottommostLevelCompaction, Debugger, DebuggerImpl, RegionInfo},
+        debug2::DebuggerImplV2,
         KvEngineFactoryBuilder,
     },
     storage::config::EngineType,
@@ -99,7 +99,7 @@ pub fn new_debug_executor(
             Err(e) => handle_engine_error(e),
         };
 
-        let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+        let debugger = DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
         let mut config = cfg.raft_engine.config();
@@ -116,14 +116,14 @@ pub fn new_debug_executor(
                     Err(e) => handle_engine_error(e),
                 };
 
-                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+                let debugger = DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller);
                 Box::new(debugger) as Box<dyn DebugExecutor>
             }
             EngineType::RaftKv2 => {
                 let registry =
                     TabletRegistry::new(Box::new(factory), Path::new(data_dir).join("tablets"))
                         .unwrap_or_else(|e| fatal!("failed to create tablet registry {:?}", e));
-                let debugger = DebuggerV2::new(registry, raft_db, cfg_controller);
+                let debugger = DebuggerImplV2::new(registry, raft_db, cfg_controller);
                 Box::new(debugger) as Box<dyn DebugExecutor>
             }
         }
@@ -894,11 +894,11 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
+impl<ER: RaftEngine> DebugExecutor for DebuggerImpl<ER> {
     fn check_local_mode(&self) {}
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
-        self.get_all_regions_in_store()
+        Debugger::get_all_regions_in_store(self)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_regions_in_store", e))
     }
 
@@ -954,7 +954,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         threads: u32,
         bottommost: BottommostLevelCompaction,
     ) {
-        self.compact(db, cf, from, to, threads, bottommost)
+        Debugger::compact(self, db, cf, from, to, threads, bottommost)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
@@ -998,7 +998,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn recover_all(&self, threads: usize, read_only: bool) {
-        Debugger::recover_all(self, threads, read_only)
+        DebuggerImpl::recover_all(self, threads, read_only)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recover all", e));
     }
 
@@ -1143,11 +1143,11 @@ fn handle_engine_error(err: EngineError) -> ! {
     tikv_util::logger::exit_process_gracefully(-1);
 }
 
-impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
+impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     fn check_local_mode(&self) {}
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
-        self.get_all_regions_in_store()
+        Debugger::get_all_regions_in_store(self)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_regions_in_store", e))
     }
 
@@ -1195,7 +1195,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerV2<ER> {
         threads: u32,
         bottommost: BottommostLevelCompaction,
     ) {
-        self.compact(db, cf, from, to, threads, bottommost)
+        Debugger::compact(self, db, cf, from, to, threads, bottommost)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
