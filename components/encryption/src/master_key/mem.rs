@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cloud::crypter::{CryphotographType, PlainKey};
+use cloud::crypter::{CryptographyType, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::box_err;
 
@@ -16,7 +16,7 @@ pub(crate) struct MemAesGcmBackend {
 impl MemAesGcmBackend {
     pub fn new(key: Vec<u8>) -> Result<MemAesGcmBackend> {
         Ok(MemAesGcmBackend {
-            key: PlainKey::new(key, CryphotographType::default())
+            key: PlainKey::new(key, CryptographyType::AesGcm256)
                 .map_err(cloud_convert_error("new AWS KMS".to_owned()))?,
         })
     }

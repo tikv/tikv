@@ -189,7 +189,7 @@ pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use cloud::crypter::CryphotographType;
+    use cloud::crypter::CryptographyType;
     use hex::FromHex;
 
     use super::*;
@@ -239,7 +239,7 @@ mod tests {
 
         let pt = Vec::from_hex(pt).unwrap();
         let ct = Vec::from_hex(ct).unwrap();
-        let key = PlainKey::new(Vec::from_hex(key).unwrap(), CryphotographType::default()).unwrap();
+        let key = PlainKey::new(Vec::from_hex(key).unwrap(), CryptographyType::AesGcm256).unwrap();
         let iv = Iv::from_slice(Vec::from_hex(iv).unwrap().as_slice()).unwrap();
         let tag = Vec::from_hex(tag).unwrap();
 

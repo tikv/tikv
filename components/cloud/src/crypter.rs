@@ -69,24 +69,18 @@ impl EncryptedKey {
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum CryphotographType {
+pub enum CryptographyType {
     Plain = 0,
     AesGcm256,
     // ..
 }
 
-impl Default for CryphotographType {
-    fn default() -> Self {
-        CryphotographType::AesGcm256
-    }
-}
-
-impl CryphotographType {
+impl CryptographyType {
     #[inline]
     pub fn target_key_size(&self) -> usize {
         match self {
-            CryphotographType::Plain => 0, // Plain text has no limitation
-            CryphotographType::AesGcm256 => 32,
+            CryptographyType::Plain => 0, // Plain text has no limitation
+            CryptographyType::AesGcm256 => 32,
         }
     }
 }
@@ -94,12 +88,12 @@ impl CryphotographType {
 // PlainKey is a newtype used to mark a vector a plaintext key.
 // It requires the vec to be a valid AesGcmCrypter key.
 pub struct PlainKey {
-    tag: CryphotographType,
+    tag: CryptographyType,
     key: Vec<u8>,
 }
 
 impl PlainKey {
-    pub fn new(key: Vec<u8>, t: CryphotographType) -> Result<Self> {
+    pub fn new(key: Vec<u8>, t: CryptographyType) -> Result<Self> {
         let limitation = t.target_key_size();
         if limitation > 0 && key.len() != limitation {
             Err(Error::CrypterError(CrypterError::Other(box_err!(
@@ -113,7 +107,7 @@ impl PlainKey {
         }
     }
 
-    pub fn key_tag(&self) -> CryphotographType {
+    pub fn key_tag(&self) -> CryptographyType {
         self.tag
     }
 }

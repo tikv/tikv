@@ -2,7 +2,7 @@
 
 use std::{sync::Mutex, time::Duration};
 
-use cloud::crypter::{CryphotographType, CrypterProvider, DataKeyPair, EncryptedKey, PlainKey};
+use cloud::crypter::{CrypterProvider, CryptographyType, DataKeyPair, EncryptedKey, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::{
     box_err,
@@ -53,7 +53,7 @@ impl KmsBackend {
                 }))
                 .map_err(cloud_convert_error("get data key failed".into()))?;
             *opt_state = Some(State::new_from_datakey(DataKeyPair {
-                plaintext: PlainKey::new(data_key.plaintext.clone(), CryphotographType::default())
+                plaintext: PlainKey::new(data_key.plaintext.clone(), CryptographyType::AesGcm256)
                     .map_err(cloud_convert_error("invalid plain key".into()))?,
                 encrypted: EncryptedKey::new((*data_key.encrypted).clone())
                     .map_err(cloud_convert_error("invalid encrypted key".into()))?,
@@ -124,7 +124,7 @@ impl KmsBackend {
                     .map_err(cloud_convert_error("decrypt encrypted key failed".into()))?;
                 let data_key = DataKeyPair {
                     encrypted: ciphertext_key,
-                    plaintext: PlainKey::new(plaintext, CryphotographType::default())
+                    plaintext: PlainKey::new(plaintext, CryptographyType::AesGcm256)
                         .map_err(cloud_convert_error("invalid plain key".into()))?,
                 };
                 let state = State::new_from_datakey(data_key)?;
@@ -168,7 +168,7 @@ mod fake {
     impl FakeKms {
         pub fn new(plaintext_key: Vec<u8>) -> Self {
             Self {
-                plaintext_key: PlainKey::new(plaintext_key, CryphotographType::default()).unwrap(),
+                plaintext_key: PlainKey::new(plaintext_key, CryptographyType::AesGcm256).unwrap(),
             }
         }
     }
@@ -178,7 +178,7 @@ mod fake {
         async fn generate_data_key(&self) -> Result<DataKeyPair> {
             Ok(DataKeyPair {
                 encrypted: EncryptedKey::new(FAKE_DATA_KEY_ENCRYPTED.to_vec())?,
-                plaintext: PlainKey::new(self.plaintext_key.clone(), CryphotographType::default())
+                plaintext: PlainKey::new(self.plaintext_key.clone(), CryptographyType::AesGcm256)
                     .unwrap(),
             })
         }
@@ -202,10 +202,10 @@ mod tests {
 
     #[test]
     fn test_state() {
-        let plaintext = PlainKey::new(vec![1u8; 32], CryphotographType::default()).unwrap();
+        let plaintext = PlainKey::new(vec![1u8; 32], CryptographyType::AesGcm256).unwrap();
         let encrypted = EncryptedKey::new(vec![2u8; 32]).unwrap();
         let data_key = DataKeyPair {
-            plaintext: PlainKey::new(plaintext.clone(), CryphotographType::default()).unwrap(),
+            plaintext: PlainKey::new(plaintext.clone(), CryptographyType::AesGcm256).unwrap(),
             encrypted: encrypted.clone(),
         };
         let encrypted2 = EncryptedKey::new(vec![3u8; 32]).unwrap();
