@@ -580,11 +580,12 @@ where
                 interval,
             ),
             report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
-            collect_tick_interval: cmp::min(default_collect_tick_interval(), interval),
-            inspect_latency_interval: cmp::max(
-                default_collect_tick_interval(),
+            // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
+            collect_tick_interval: cmp::min(
                 inspect_latency_interval,
+                cmp::min(default_collect_tick_interval(), interval),
             ),
+            inspect_latency_interval,
         }
     }
 
@@ -597,7 +598,12 @@ where
         collector_reg_handle: CollectorRegHandle,
         store_id: u64,
     ) -> Result<(), io::Error> {
-        if self.collect_tick_interval < default_collect_tick_interval() {
+        if self.collect_tick_interval
+            < cmp::min(
+                self.inspect_latency_interval,
+                default_collect_tick_interval(),
+            )
+        {
             info!(
                 "interval is too small, skip stats monitoring. If we are running tests, it is normal, otherwise a check is needed."
             );
@@ -801,8 +807,6 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
-/// Default monitoring label of SlowTrend in raftstore-v1.
-const STORE_SLOW_TREND_REPORT_LABEL: [&str; 1] = ["disk-io"];
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
@@ -1008,20 +1012,16 @@ where
             slow_trend_cause: Trend::new(
                 // Disable SpikeFilter for now
                 Duration::from_secs(0),
-                STORE_SLOW_TREND_MISC_GAUGE_VEC
-                    .with_label_values(&[STORE_SLOW_TREND_REPORT_LABEL[0], "spike_filter_value"]),
-                STORE_SLOW_TREND_MISC_GAUGE_VEC
-                    .with_label_values(&[STORE_SLOW_TREND_REPORT_LABEL[0], "spike_filter_count"]),
+                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_value"]),
+                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_count"]),
                 Duration::from_secs(180),
                 Duration::from_secs(30),
                 Duration::from_secs(120),
                 Duration::from_secs(600),
                 1,
                 tikv_util::time::duration_to_us(Duration::from_micros(500)),
-                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
-                    .with_label_values(&[STORE_SLOW_TREND_REPORT_LABEL[0], "L1"]),
-                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
-                    .with_label_values(&[STORE_SLOW_TREND_REPORT_LABEL[0], "L2"]),
+                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L1"]),
+                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L2"]),
                 cfg.slow_trend_unsensitive_cause,
             ),
             slow_trend_result: Trend::new(
@@ -1447,9 +1447,7 @@ where
         total_query_num: Option<f64>,
     ) {
         let slow_trend_cause_rate = self.slow_trend_cause.increasing_rate();
-        STORE_SLOW_TREND_GAUGE
-            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
-            .set(slow_trend_cause_rate);
+        STORE_SLOW_TREND_GAUGE.set(slow_trend_cause_rate);
         let mut slow_trend = pdpb::SlowTrend::default();
         slow_trend.set_cause_rate(slow_trend_cause_rate);
         slow_trend.set_cause_value(self.slow_trend_cause.l0_avg());
@@ -1470,27 +1468,13 @@ where
     }
 
     fn write_slow_trend_metrics(&mut self) {
-        STORE_SLOW_TREND_L0_GAUGE
-            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
-            .set(self.slow_trend_cause.l0_avg());
-        STORE_SLOW_TREND_L1_GAUGE
-            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
-            .set(self.slow_trend_cause.l1_avg());
-        STORE_SLOW_TREND_L2_GAUGE
-            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
-            .set(self.slow_trend_cause.l2_avg());
-        STORE_SLOW_TREND_L0_L1_GAUGE
-            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
-            .set(self.slow_trend_cause.l0_l1_rate());
-        STORE_SLOW_TREND_L1_L2_GAUGE
-            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
-            .set(self.slow_trend_cause.l1_l2_rate());
-        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE
-            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
-            .set(self.slow_trend_cause.l1_margin_error_base());
-        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE
-            .with_label_values(&STORE_SLOW_TREND_REPORT_LABEL)
-            .set(self.slow_trend_cause.l2_margin_error_base());
+        STORE_SLOW_TREND_L0_GAUGE.set(self.slow_trend_cause.l0_avg());
+        STORE_SLOW_TREND_L1_GAUGE.set(self.slow_trend_cause.l1_avg());
+        STORE_SLOW_TREND_L2_GAUGE.set(self.slow_trend_cause.l2_avg());
+        STORE_SLOW_TREND_L0_L1_GAUGE.set(self.slow_trend_cause.l0_l1_rate());
+        STORE_SLOW_TREND_L1_L2_GAUGE.set(self.slow_trend_cause.l1_l2_rate());
+        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l1_margin_error_base());
+        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l2_margin_error_base());
         // Report results of all slow Trends.
         STORE_SLOW_TREND_RESULT_L0_GAUGE.set(self.slow_trend_result.l0_avg());
         STORE_SLOW_TREND_RESULT_L1_GAUGE.set(self.slow_trend_result.l1_avg());

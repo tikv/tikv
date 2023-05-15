@@ -29,7 +29,7 @@ use yatp::{task::future::TaskCell, Remote};
 
 use crate::{
     batch::StoreRouter,
-    router::{CmdResChannel, PeerMsg, StoreMsg},
+    router::{CmdResChannel, PeerMsg},
 };
 
 mod misc;
@@ -89,6 +89,7 @@ pub enum Task {
     },
     // In slowness.rs
     InspectLatency {
+        send_time: TiInstant,
         inspector: LatencyInspector,
     },
     TickSlownessStats,
@@ -160,7 +161,14 @@ impl Display for Task {
                 "report min resolved ts: store {}, resolved ts {}",
                 store_id, min_resolved_ts,
             ),
-            Task::InspectLatency { ref inspector } => write!(f, "inspect latency {:?}", inspector),
+            Task::InspectLatency {
+                send_time,
+                ref inspector,
+            } => write!(
+                f,
+                "inspect latency: send_time {:?}, inspector {:?}",
+                send_time, inspector
+            ),
             Task::TickSlownessStats => write!(f, "tick slowness statistics"),
             Task::UpdateSlownessStats {
                 tick_id,
@@ -320,17 +328,11 @@ where
                 store_id,
                 min_resolved_ts,
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
-            Task::InspectLatency { inspector } => {
-                let msg = StoreMsg::LatencyInspect {
-                    send_time: TiInstant::now(),
-                    inspector,
-                };
-                if let Err(e) = self.router.send_control(msg) {
-                    warn!(self.logger, "pd worker send latency inspecter failed";
-                            "err" => ?e);
-                }
-            }
-            Task::TickSlownessStats => self.handle_slowness_stats_timeout(),
+            Task::InspectLatency {
+                send_time,
+                inspector,
+            } => self.handle_inspect_latency(send_time, inspector),
+            Task::TickSlownessStats => self.handle_slowness_stats_tick(),
             Task::UpdateSlownessStats { tick_id, duration } => {
                 self.handle_update_slowness_stats(tick_id, duration)
             }
@@ -451,6 +453,11 @@ impl StoreStatsReporter for PdReporter {
                             duration.store_wait_duration.unwrap(),
                         ));
                     STORE_INSPECT_DURTION_HISTOGRAM
+                        .with_label_values(&["store_commit"])
+                        .observe(tikv_util::time::duration_to_sec(
+                            duration.store_commit_duration.unwrap(),
+                        ));
+                    STORE_INSPECT_DURTION_HISTOGRAM
                         .with_label_values(&["all"])
                         .observe(tikv_util::time::duration_to_sec(dur));
                     if let Err(e) =
@@ -460,7 +467,10 @@ impl StoreStatsReporter for PdReporter {
                     }
                 }),
             );
-            if let Err(e) = self.scheduler.schedule(Task::InspectLatency { inspector }) {
+            if let Err(e) = self.scheduler.schedule(Task::InspectLatency {
+                send_time: TiInstant::now(),
+                inspector,
+            }) {
                 error!(
                     self.logger,
                     "failed to send inspect latency to pd worker";

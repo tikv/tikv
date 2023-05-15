@@ -296,11 +296,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     send_time,
                     inspector,
                 ),
-                StoreMsg::AwakenRegions { abnormal_stores } => {
-                    self.fsm
-                        .store
-                        .on_wake_up_regions(self.store_ctx, abnormal_stores);
-                }
             }
         }
     }

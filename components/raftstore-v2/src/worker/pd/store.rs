@@ -14,9 +14,14 @@ use pd_client::{
     PdClient,
 };
 use prometheus::local::LocalHistogram;
-use raftstore::store::metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC;
-use slog::{error, warn};
-use tikv_util::{metrics::RecordPairVec, store::QueryStats, time::UnixSecs, topn::TopN};
+use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyInspector};
+use slog::{error, info, warn};
+use tikv_util::{
+    metrics::RecordPairVec,
+    store::QueryStats,
+    time::{Instant as TiInstant, UnixSecs},
+    topn::TopN,
+};
 
 use super::Runner;
 use crate::router::StoreMsg;
@@ -263,20 +268,20 @@ where
         self.update_slowness_in_store_stats(&mut stats, last_query_sum);
 
         let resp = self.pd_client.store_heartbeat(stats, None, None);
-        let router = self.router.clone();
         let logger = self.logger.clone();
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
                     // TODO: unsafe recovery
 
-                    // Forcely awaken all hibernated regions if there existed slow stores in this
-                    // cluster.
-                    if let Some(awaken_regions) = resp.awaken_regions.take() {
-                        warn!(logger, "forcely awaken hibernated regions in this store");
-                        let _ = router.send_control(StoreMsg::AwakenRegions {
-                            abnormal_stores: awaken_regions.get_abnormal_stores().to_vec(),
-                        });
+                    // Attention, as Hibernate Region is eliminated in
+                    // raftstore-v2, followings just mock the awaken
+                    // operation.
+                    if resp.awaken_regions.take().is_some() {
+                        info!(
+                            logger,
+                            "Ignored AwakenRegions in raftstore-v2 as no hibernated regions in raftstore-v2"
+                        );
                     }
                 }
                 Err(e) => {
@@ -323,6 +328,17 @@ where
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
         (interval_second >= self.store_heartbeat_interval.as_secs())
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
+    }
+
+    pub fn handle_inspect_latency(&self, send_time: TiInstant, inspector: LatencyInspector) {
+        let msg = StoreMsg::LatencyInspect {
+            send_time,
+            inspector,
+        };
+        if let Err(e) = self.router.send_control(msg) {
+            warn!(self.logger, "pd worker send latency inspecter failed";
+                    "err" => ?e);
+        }
     }
 
     pub fn handle_update_store_infos(

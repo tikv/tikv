@@ -43,7 +43,7 @@ use raftstore::store::{
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{
-    store::{find_peer, region_on_stores},
+    store::find_peer,
     time::{duration_to_sec, Instant},
 };
 
@@ -488,56 +488,6 @@ impl Store {
         // Reset the stat_commit_log and wait it to be refreshed in the next tick.
         ctx.raft_metrics.stat_commit_log.reset();
         ctx.pending_latency_inspect.push(inspector);
-    }
-
-    /// Awaken hibernated regions on specific stores, already abnormal or
-    /// hanging on IO operations.
-    #[inline]
-    pub fn on_wake_up_regions<EK, ER, T>(
-        &self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        abnormal_stores: Vec<u64>,
-    ) where
-        EK: KvEngine,
-        ER: RaftEngine,
-        T: Transport,
-    {
-        info!(self.logger(), "try to wake up all hibernated regions in this store";
-            "to_all" => abnormal_stores.is_empty());
-        let meta = ctx.store_meta.lock().unwrap();
-        for region_id in meta.regions.keys() {
-            let (region, initialized) = &meta.regions[region_id];
-            // Check whether the current region is not found on abnormal stores. If so,
-            // this region is not the target to be awaken.
-            if !initialized || !region_on_stores(region, &abnormal_stores) {
-                continue;
-            }
-            let peer = {
-                match find_peer(region, self.store_id()) {
-                    None => continue,
-                    Some(p) => p.clone(),
-                }
-            };
-            // Send MsgRegionWakeUp to Peer for awakening hibernated regions.
-            let mut message = Box::<RaftMessage>::default();
-            message.set_region_id(*region_id);
-            message.set_from_peer(peer.clone());
-            message.set_to_peer(peer);
-            message.set_region_epoch(region.get_region_epoch().clone());
-            let mut msg = ExtraMessage::default();
-            // TODO: HibernateRegion feature is ignored in raftstore-v2, handle
-            // MsgRegionWakeUp if necessary.
-            msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-            msg.forcely_awaken = true;
-            message.set_extra_msg(msg);
-            if let Err(e) = ctx.router.send_raft_message(message) {
-                error!(self.logger(),
-                    "send awaken region message failed";
-                    "region_id" => region_id,
-                    "err" => ?e
-                );
-            }
-        }
     }
 }
 

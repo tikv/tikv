@@ -317,10 +317,6 @@ pub enum StoreMsg {
         send_time: Instant,
         inspector: LatencyInspector,
     },
-    /// A message that used to awaken all hibernated regions.
-    AwakenRegions {
-        abnormal_stores: Vec<u64>,
-    },
 }
 
 impl ResourceMetered for StoreMsg {}
