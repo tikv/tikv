@@ -561,7 +561,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         task: &mut WriteTask<EK, ER>,
         snap_mgr: &TabletSnapManager,
         reg: &TabletRegistry<EK>,
-        key_manager: Option<&Arc<DataKeyManager>>,
     ) -> Result<()> {
         let region_id = self.region().get_id();
         let peer_id = self.peer().get_id();
@@ -660,7 +659,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.
         let reg = reg.clone();
-        let key_manager = key_manager.cloned();
+        let key_manager = snap_mgr.key_manager().clone();
         let hook = move || {
             if !install_tablet(&reg, key_manager.as_deref(), &path, region_id, last_index) {
                 slog_panic!(
@@ -672,7 +671,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
             if clean_split {
                 let path = temp_split_path(&reg, region_id);
-                // TODO(tabokie)
+                if let Some(m) = key_manager {
+                    let _ = m.remove_dir(&path, None);
+                }
                 let _ = fs::remove_dir_all(path);
             }
         };
