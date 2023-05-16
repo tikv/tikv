@@ -38,8 +38,9 @@ use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
-    diagnosticspb::create_diagnostics, import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion,
-    logbackuppb::create_log_backup, resource_usage_agent::create_resource_metering_pub_sub,
+    debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
+    import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion, logbackuppb::create_log_backup,
+    resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{
     meta_storage::{Checked, Sourced},
@@ -72,11 +73,13 @@ use tikv::{
     },
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
+        debug::Debugger,
+        debug2::DebuggerImplV2,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::DiagnosticsService,
+        service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         KvEngineFactoryBuilder, NodeV2, RaftKv2, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
     },
@@ -530,10 +533,11 @@ where
             .unwrap()
             .to_owned();
 
-        let snap_mgr = match TabletSnapManager::new(&snap_path) {
-            Ok(mgr) => mgr,
-            Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
-        };
+        let snap_mgr =
+            match TabletSnapManager::new(&snap_path, self.core.encryption_key_manager.clone()) {
+                Ok(mgr) => mgr,
+                Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
+            };
 
         // Create coprocessor endpoint.
         let cop_read_pool_handle = if self.core.config.readpool.coprocessor.use_unified_pool() {
@@ -808,6 +812,7 @@ where
                 raft_store,
                 &state,
                 importer.clone(),
+                self.core.encryption_key_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -903,6 +908,28 @@ where
             .as_mut()
             .unwrap()
             .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
+
+        let mut debugger = DebuggerImplV2::new(
+            self.tablet_registry.clone().unwrap(),
+            self.engines.as_ref().unwrap().raft_engine.clone(),
+            self.cfg_controller.as_ref().unwrap().clone(),
+        );
+        debugger.set_kv_statistics(self.kv_statistics.clone());
+        debugger.set_raft_statistics(self.raft_statistics.clone());
+
+        // Debug service.
+        let debug_service = DebugService::new(
+            debugger,
+            servers.server.get_debug_thread_pool().clone(),
+            engines.engine.raft_extension(),
+        );
+        if servers
+            .server
+            .register_service(create_debug(debug_service))
+            .is_some()
+        {
+            fatal!("failed to register debug service");
+        }
 
         let cdc_service = cdc::Service::new(
             self.cdc_scheduler.as_ref().unwrap().clone(),

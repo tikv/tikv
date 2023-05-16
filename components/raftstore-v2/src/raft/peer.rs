@@ -7,13 +7,14 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
+use encryption_export::DataKeyManager;
 use engine_traits::{
-    CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
+    CachedTablet, FlushState, KvEngine, RaftEngine, SstApplyState, TabletContext, TabletRegistry,
 };
 use kvproto::{
     metapb::{self, PeerRole},
     pdpb,
-    raft_serverpb::{RaftMessage, RegionLocalState},
+    raft_serverpb::RaftMessage,
 };
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -106,6 +107,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// advancing apply index.
     state_changes: Option<Box<ER::LogBatch>>,
     flush_state: Arc<FlushState>,
+    sst_apply_state: SstApplyState,
 
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     leader_transferee: u64,
@@ -128,6 +130,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_registry: &TabletRegistry<EK>,
+        key_manager: Option<&DataKeyManager>,
         snap_mgr: &TabletSnapManager,
         storage: Storage<EK, ER>,
     ) -> Result<Self> {
@@ -145,11 +148,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
 
         let flush_state: Arc<FlushState> = Arc::new(FlushState::new(applied_index));
+        let sst_apply_state = SstApplyState::default();
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
         if tablet_index != 0 {
-            raft_group.store().recover_tablet(tablet_registry, snap_mgr);
+            raft_group
+                .store()
+                .recover_tablet(tablet_registry, key_manager, snap_mgr);
             let mut ctx = TabletContext::new(&region, Some(tablet_index));
             ctx.flush_state = Some(flush_state.clone());
             // TODO: Perhaps we should stop create the tablet automatically.
@@ -195,6 +201,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             split_trace: vec![],
             state_changes: None,
             flush_state,
+            sst_apply_state,
             split_flow_control: SplitFlowControl::default(),
             leader_transferee: raft::INVALID_ID,
             long_uncommitted_threshold: cmp::max(
@@ -257,11 +264,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.leader_lease.expire_remote_lease();
         }
 
-        let mut region_state = RegionLocalState::default();
-        region_state.set_region(region.clone());
-        region_state.set_tablet_index(tablet_index);
-        region_state.set_state(self.storage().region_state().get_state());
-        self.storage_mut().set_region_state(region_state);
+        self.storage_mut()
+            .region_state_mut()
+            .set_region(region.clone());
+        self.storage_mut()
+            .region_state_mut()
+            .set_tablet_index(tablet_index);
 
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a
@@ -786,6 +794,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn flush_state(&self) -> &Arc<FlushState> {
         &self.flush_state
+    }
+
+    #[inline]
+    pub fn sst_apply_state(&self) -> &SstApplyState {
+        &self.sst_apply_state
     }
 
     pub fn reset_flush_state(&mut self, index: u64) {

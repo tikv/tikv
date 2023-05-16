@@ -50,7 +50,10 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::store::snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager};
+use raftstore::store::{
+    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
+    SnapManager,
+};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -242,6 +245,7 @@ pub(crate) async fn cleanup_cache(
         let entry = entry?;
         let ft = entry.file_type()?;
         if ft.is_dir() {
+            // TODO(tabokie)
             fs::remove_dir_all(entry.path())?;
             continue;
         }
@@ -406,6 +410,7 @@ pub(crate) async fn recv_snap_files<'a>(
     let path = snap_mgr.tmp_recv_path(&context.key);
     info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
     if path.exists() {
+        // TODO(tabokie)
         fs::remove_dir_all(&path)?;
     }
     let (reused, missing_ssts) = if context.use_cache {
@@ -422,7 +427,9 @@ pub(crate) async fn recv_snap_files<'a>(
     let received = accept_missing(&path, missing_ssts, &mut stream, &limiter).await?;
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
+    // TODO(tabokie)
     fs::rename(&path, final_path)?;
+
     Ok(context)
 }
 
@@ -433,12 +440,24 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
     raft_router: R,
     cache_builder: impl SnapCacheBuilder,
     limiter: Limiter,
+    snap_mgr_v1: Option<SnapManager>,
 ) -> Result<()> {
     let stream = stream.map_err(Error::from);
     let mut sink = sink;
     let res = recv_snap_files(&snap_mgr, cache_builder, stream, &mut sink, limiter)
         .await
-        .and_then(|context| context.finish(raft_router));
+        .and_then(|context| {
+            // some means we are in raftstore-v1 config and received a tablet snapshot from
+            // raftstore-v2. Now, it can only happen in tiflash node within a raftstore-v2
+            // cluster.
+            if let Some(snap_mgr_v1) = snap_mgr_v1 {
+                snap_mgr_v1.gen_empty_snapshot_for_tablet_snapshot(
+                    &context.key,
+                    context.io_type == IoType::LoadBalance,
+                )?;
+            }
+            context.finish(raft_router)
+        });
     match res {
         Ok(()) => sink.close().await.map_err(Error::from),
         Err(e) => {
@@ -791,9 +810,16 @@ where
                 let limiter = self.limiter.clone();
                 let cache_builder = self.cache_builder.clone();
                 let task = async move {
-                    let result =
-                        recv_snap(stream, sink, snap_mgr, raft_router, cache_builder, limiter)
-                            .await;
+                    let result = recv_snap(
+                        stream,
+                        sink,
+                        snap_mgr,
+                        raft_router,
+                        cache_builder,
+                        limiter,
+                        None,
+                    )
+                    .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
                         error!("failed to recv snapshot"; "err" => %e);

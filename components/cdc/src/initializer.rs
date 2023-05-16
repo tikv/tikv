@@ -591,6 +591,7 @@ mod tests {
     use tokio::runtime::{Builder, Runtime};
 
     use super::*;
+    use crate::txn_source::TxnSource;
 
     struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
@@ -786,18 +787,16 @@ mod tests {
         worker.stop();
     }
 
-    #[test]
-    fn test_initializer_filter_loop() {
+    fn test_initializer_txn_source_filter(txn_source: TxnSource, filter_loop: bool) {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
         let mut total_bytes = 0;
-
         for i in 10..100 {
             let (k, v) = (&[b'k', i], &[b'v', i]);
             total_bytes += k.len();
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
-            must_prewrite_put_with_txn_soucre(&mut engine, k, v, k, ts, 1);
+            must_prewrite_put_with_txn_soucre(&mut engine, k, v, k, ts, txn_source.into());
         }
 
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -808,7 +807,7 @@ mod tests {
             buffer,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
-            true,
+            filter_loop,
         );
         let th = pool.spawn(async move {
             initializer
@@ -831,6 +830,34 @@ mod tests {
         }
         block_on(th).unwrap();
         worker.stop();
+    }
+
+    #[test]
+    fn test_initializer_cdc_write_filter() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+        test_initializer_txn_source_filter(txn_source, true);
+    }
+
+    #[test]
+    fn test_initializer_lossy_ddl_filter() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, false);
+
+        // With cdr write source and filter loop is false, we should still ignore lossy
+        // ddl changes.
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, false);
+
+        // With cdr write source and filter loop is true, we should still ignore all
+        // events.
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, true);
     }
 
     // Test `hint_min_ts` works fine with `ExtraOp::ReadOldValue`.

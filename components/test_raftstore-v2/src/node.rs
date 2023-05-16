@@ -231,7 +231,10 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_path = tmp.path().to_str().unwrap().to_owned();
-            (TabletSnapManager::new(snap_path)?, Some(tmp))
+            (
+                TabletSnapManager::new(snap_path, key_manager.clone())?,
+                Some(tmp),
+            )
         } else {
             let trans = self.trans.core.lock().unwrap();
             let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
@@ -273,7 +276,13 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let importer = {
             let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
-                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
+                SstImporter::new(
+                    &cfg.import,
+                    dir,
+                    key_manager.clone(),
+                    cfg.storage.api_version(),
+                )
+                .unwrap(),
             )
         };
 
@@ -295,6 +304,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             Arc::new(VersionTrack::new(raft_store)),
             &state,
             importer,
+            key_manager,
         )?;
         assert!(
             raft_engine
@@ -346,8 +356,9 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
     fn async_snapshot(
         &mut self,
         request: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
-    {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
+    + Send
+    + 'static {
         let node_id = request.get_header().get_peer().get_store_id();
         if !self
             .trans
