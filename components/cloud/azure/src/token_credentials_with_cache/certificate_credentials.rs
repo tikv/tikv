@@ -105,7 +105,7 @@ impl ClientCertificateCredentialWithCache {
         tenant_id: String,
         client_id: String,
         certificate_path: String,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let bytes = std::fs::read(certificate_path)?;
         Ok(ClientCertificateCredentialWithCache::new(
             tenant_id,
