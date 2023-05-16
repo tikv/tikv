@@ -1,10 +1,10 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{str, sync::Arc};
+use std::str;
 
 use azure_core::{
     auth::{TokenCredential, TokenResponse},
-    HttpClient,
+    new_http_client,
 };
 use azure_identity::{ClientSecretCredential, TokenCredentialOptions};
 
@@ -22,20 +22,14 @@ pub struct ClientSecretCredentialWithCache {
 
 impl ClientSecretCredentialWithCache {
     /// Create a new ClientSecretCredential
-    pub fn new(
-        http_client: Arc<dyn HttpClient>,
-        tenant_id: String,
-        client_id: String,
-        client_secret: String,
-        options: TokenCredentialOptions,
-    ) -> Self {
+    pub fn new(tenant_id: String, client_id: String, client_secret: String) -> Self {
         Self {
             credential: ClientSecretCredential::new(
-                http_client,
+                new_http_client(),
                 tenant_id,
                 client_id,
                 client_secret,
-                options,
+                TokenCredentialOptions::default(),
             ),
             cached_token: TokenCache::default(),
         }
