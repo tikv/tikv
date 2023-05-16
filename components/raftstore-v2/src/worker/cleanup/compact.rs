@@ -5,7 +5,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, TabletRegistry, CF_WRITE};
+use engine_traits::{KvEngine, RangeStats, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use slog::{error, info, warn, Logger};
@@ -187,21 +187,24 @@ fn collect_regions_to_compact<E: KvEngine>(
             continue;
         }
 
-        if let Some((num_ent, num_ver, num_rows)) =
-            box_try!(tablet.get_range_entries_and_versions(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
+        if let Some(RangeStats {
+            num_entries,
+            num_versions,
+            num_rows,
+        }) = box_try!(tablet.get_range_stats(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
         {
             info!(
                 logger,
                 "get range entries and versions";
-                "num_entries" => num_ent,
-                "num_versions" => num_ver,
+                "num_entries" => num_entries,
+                "num_versions" => num_versions,
                 "num_rows" => num_rows,
                 "region_id" => id,
             );
             if need_compact(
                 num_rows,
-                num_ent,
-                num_ver,
+                num_entries,
+                num_versions,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
                 redundant_rows_threshold,
@@ -282,13 +285,13 @@ mod tests {
         tablet.flush_cf(CF_WRITE, true).unwrap();
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version, rows) = tablet
-            .get_range_entries_and_versions(CF_WRITE, &start, &end)
+        let range_stats = tablet
+            .get_range_stats(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
-        assert_eq!(entries, 15);
-        assert_eq!(version, 10);
-        assert_eq!(rows, 5);
+        assert_eq!(range_stats.num_entries, 15);
+        assert_eq!(range_stats.num_versions, 10);
+        assert_eq!(range_stats.num_rows, 5);
 
         region.set_id(3);
         let ctx = TabletContext::new(&region, Some(5));
@@ -306,13 +309,10 @@ mod tests {
         tablet.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version, rows) = tablet
-            .get_range_entries_and_versions(CF_WRITE, &s, &e)
-            .unwrap()
-            .unwrap();
-        assert_eq!(entries, 8);
-        assert_eq!(version, 8);
-        assert_eq!(rows, 5);
+        let range_stats = tablet.get_range_stats(CF_WRITE, &s, &e).unwrap().unwrap();
+        assert_eq!(range_stats.num_entries, 8);
+        assert_eq!(range_stats.num_versions, 8);
+        assert_eq!(range_stats.num_rows, 5);
 
         // gc 5..8
         for i in 5..8 {
@@ -322,13 +322,10 @@ mod tests {
         tablet.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version, rows) = tablet
-            .get_range_entries_and_versions(CF_WRITE, &s, &e)
-            .unwrap()
-            .unwrap();
-        assert_eq!(entries, 11);
-        assert_eq!(version, 8);
-        assert_eq!(rows, 5);
+        let range_stats = tablet.get_range_stats(CF_WRITE, &s, &e).unwrap().unwrap();
+        assert_eq!(range_stats.num_entries, 11);
+        assert_eq!(range_stats.num_versions, 8);
+        assert_eq!(range_stats.num_rows, 5);
 
         let logger = slog_global::borrow_global().new(slog::o!());
 
