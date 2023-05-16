@@ -4,6 +4,10 @@ use std::sync::Mutex;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use raft::{
+    eraftpb::{self, MessageType},
+    Storage,
+};
 use raftstore::{
     store::{
         can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
@@ -25,6 +29,43 @@ use crate::{
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_step_read_index<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        m: &mut eraftpb::Message,
+    ) -> bool {
+        assert_eq!(m.get_msg_type(), MessageType::MsgReadIndex);
+
+        fail::fail_point!("on_step_read_index_msg");
+        ctx.coprocessor_host
+            .on_step_read_index(m, self.state_role());
+        // Must use the commit index of `PeerStorage` instead of the commit index
+        // in raft-rs which may be greater than the former one.
+        // For more details, see the annotations above `on_leader_commit_idx_changed`.
+        let index = self.storage().entry_storage().commit_index();
+        // Check if the log term of this index is equal to current term, if so,
+        // this index can be used to reply the read index request if the leader holds
+        // the lease. Please also take a look at raft-rs.
+        if self.storage().term(index).unwrap() == self.term() {
+            let state = self.inspect_lease();
+            if let LeaseState::Valid = state {
+                // If current peer has valid lease, then we could handle the
+                // request directly, rather than send a heartbeat to check quorum.
+                let mut resp = eraftpb::Message::default();
+                resp.set_msg_type(MessageType::MsgReadIndexResp);
+                resp.term = self.term();
+                resp.to = m.from;
+
+                resp.index = index;
+                resp.set_entries(m.take_entries());
+
+                self.raft_group_mut().raft.msgs.push(resp);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn pre_read_index(&self) -> Result<()> {
         fail::fail_point!("before_propose_readindex", |s| if s
             .map_or(true, |s| s.parse().unwrap_or(true))
@@ -88,7 +129,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        let (id, dropped) = propose_read_index(self.raft_group_mut(), request.as_ref(), None);
+        let (id, dropped) = propose_read_index(self.raft_group_mut(), request.as_ref());
         if dropped {
             // The message gets dropped silently, can't be handled anymore.
             notify_stale_req(self.term(), ch);
@@ -198,7 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let term = self.term();
             self.leader_lease_mut()
                 .maybe_new_remote_lease(term)
-                .map(ReadProgress::leader_lease)
+                .map(ReadProgress::set_leader_lease)
         };
         if let Some(progress) = progress {
             let mut meta = store_meta.lock().unwrap();
@@ -209,6 +250,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut meta = store_meta.lock().unwrap();
             let reader = &mut meta.readers.get_mut(&self.region_id()).unwrap().0;
             self.maybe_update_read_progress(reader, progress);
+        }
+    }
+
+    // Expire lease and unset lease in read delegate on role changed to follower.
+    pub(crate) fn expire_lease_on_became_follower(&mut self, store_meta: &Mutex<StoreMeta<EK>>) {
+        self.leader_lease_mut().expire();
+        let mut meta = store_meta.lock().unwrap();
+        if let Some((reader, _)) = meta.readers.get_mut(&self.region_id()) {
+            self.maybe_update_read_progress(reader, ReadProgress::unset_leader_lease());
         }
     }
 
