@@ -38,6 +38,7 @@ use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
     server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
+    storage::config::EngineType,
 };
 use tikv_util::{
     config::VersionTrack,
@@ -242,6 +243,7 @@ impl Simulator for NodeCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
@@ -353,7 +355,12 @@ impl Simulator for NodeCluster {
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg
-            .validate(region_split_size, enable_region_bucket, region_bucket_size)
+            .validate(
+                region_split_size,
+                enable_region_bucket,
+                region_bucket_size,
+                cfg.tikv.storage.engine == EngineType::RaftKv2,
+            )
             .unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
