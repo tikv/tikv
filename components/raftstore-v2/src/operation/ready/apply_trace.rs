@@ -197,6 +197,10 @@ impl ApplyTrace {
                 trace.data_cfs[off].last_trigger_flush = i;
             } else {
                 error!("failed to get region flushed index {}, {}", region_id, *cf);
+                panic!(
+                    "failed to get region flushed index [region_id={}] [cf={}]",
+                    region_id, *cf
+                );
             }
         }
         let i = engine.get_flushed_index(region_id, CF_RAFT)?.unwrap();

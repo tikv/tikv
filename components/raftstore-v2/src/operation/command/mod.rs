@@ -416,11 +416,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.add_pending_tick(PeerTick::Raft);
         }
-        if !self.pause_for_replay() && let Some(cf) = self.storage_mut().apply_trace_mut().pick_cf_to_flush() {
+        /*if !self.pause_for_replay() && let Some(cf) = self.storage_mut().apply_trace_mut().pick_cf_to_flush() {
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush(vec![cf].into()));
             }
-        }
+        }*/
         let last_applying_index = self.compact_log_context().last_applying_index();
         let committed_index = self.entry_storage().commit_index();
         if last_applying_index < committed_index || !self.serving() {
