@@ -603,12 +603,21 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
             let router = router.clone();
+            let registry = tablet_registry.clone();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(regions) => {
+                        warn!(logger, "flushing oldest cf of regions {regions:?}");
                         for r in regions {
                             let _ = router.send(r, PeerMsg::ForceCompactLog);
+                            if let Some(mut t) = registry.get(r)
+                                && let Some(t) = t.latest()
+                            {
+                                if let Err(e) = t.flush_oldest_cf(true, Duration::from_secs(1)) {
+                                    warn!(logger, "failed to flush oldest cf: {:?}", e);
+                                }
+                            }
                         }
                     }
                     Err(e) => {
