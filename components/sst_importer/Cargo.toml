@@ -12,9 +12,6 @@ cloud-azure = ["external_storage_export/cloud-azure"]
 cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
 cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 
-test-engine-raft-raft-engine = [
-  "engine_test/test-engine-raft-raft-engine",
-]
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
 ]
@@ -55,7 +52,7 @@ txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+engine_test = { workspace = true }
 tempfile = "3.0"
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
-engine_test = { workspace = true }
