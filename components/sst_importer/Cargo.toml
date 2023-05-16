@@ -15,9 +15,6 @@ cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
 ]
-test-engines-panic = [
-  "engine_test/test-engines-panic",
-]
 
 [dependencies]
 api_version = { workspace = true }
