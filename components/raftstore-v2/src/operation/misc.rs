@@ -30,10 +30,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             return;
         }
 
-        // Start from last checked key.
+        // Use HashSet here as the region end_keys in store_meta is not unique.
         let mut regions_to_check: HashSet<u64> = HashSet::default();
 
-        let (largest_key, last_check_key) = {
+        let (largest_end_key, last_check_key) = {
+            // Start from last checked key.
             let mut last_check_key = self.fsm.store.last_compact_checked_key();
 
             let meta = self.store_ctx.store_meta.lock().unwrap();
@@ -67,7 +68,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             )
         };
 
-        if last_check_key == largest_key {
+        if largest_end_key == last_check_key {
             // Next task will start from the very beginning.
             self.fsm
                 .store
