@@ -304,9 +304,6 @@ impl SstImporter {
         info!("sst importer memory limit when apply"; "size" => ?memory_limit);
 
         let dir = ImportDir::new(root)?;
-        if let Err(err) = dir.clean_unused_meta(key_manager.as_deref()) {
-            warn!("failed to gc the metadata of SSTs to be imported."; "err" => %err);
-        };
 
         Ok(SstImporter {
             dir,
@@ -1311,12 +1308,6 @@ impl SstImporter {
         self.dir.list_ssts()
     }
 
-    /// Try to fetch the full metadata from the disk.
-    pub fn try_fetch_full_meta(&self, meta: &SstMeta) -> Result<SstMeta> {
-        self.dir
-            .try_fetch_full_meta(meta, self.key_manager.as_deref())
-    }
-
     pub fn load_start_key_by_meta<S: SstExt>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
         self.dir
             .load_start_key_by_meta::<S>(meta, self.key_manager.clone())
@@ -1532,7 +1523,6 @@ mod tests {
             save: temp_dir.path().join("save"),
             temp: temp_dir.path().join("temp"),
             clone: temp_dir.path().join("clone"),
-            meta: temp_dir.path().join("meta"),
         };
 
         let data = b"test_data";

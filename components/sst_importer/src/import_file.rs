@@ -1,9 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt,
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -17,7 +17,6 @@ use engine_traits::{
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
-use protobuf::Message;
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
@@ -49,14 +48,6 @@ pub struct ImportPath {
     pub temp: PathBuf,
     // The path of the file that is going to be ingested.
     pub clone: PathBuf,
-    // The path of the origin `SstMeta` (encoded by wire) of the file.
-    // We have encoded a subset of SstMeta to the file name, but that isn't enough,
-    // for now, we need to get the range of the SST to check whether we are still needing it
-    // (Check it solely by region ID isn't good enough -- regions may be destroyed by merging.).
-    // "But why not directly read the start key from the SST file?"
-    // "Because that couples the `Engine` and `ImportDir` -- In fact, we cannot access `Engine` in
-    // the context of validating the SST."
-    pub meta: PathBuf,
 }
 
 impl ImportPath {
@@ -87,13 +78,6 @@ impl ImportPath {
         sync_dir(&self.save)?;
         Ok(())
     }
-
-    pub fn save_meta(&self, km: Option<&DataKeyManager>, meta: &SstMeta) -> Result<()> {
-        use std::io::{Error as IoErr, ErrorKind as IoErrs};
-        meta.write_to_bytes()
-            .map_err(|err| Error::from(IoErr::new(IoErrs::InvalidInput, err)))
-            .and_then(|v| write_bytes(&self.meta, v, km))
-    }
 }
 
 impl fmt::Debug for ImportPath {
@@ -102,7 +86,6 @@ impl fmt::Debug for ImportPath {
             .field("save", &self.save)
             .field("temp", &self.temp)
             .field("clone", &self.clone)
-            .field("meta", &self.meta)
             .finish()
     }
 }
@@ -183,17 +166,13 @@ impl ImportFile {
 
     fn cleanup(&mut self) -> Result<()> {
         self.file.take();
-        let delete_file_if_exist = |path: &Path| {
-            if path.exists() {
-                if let Some(ref manager) = self.key_manager {
-                    manager.delete_file(path.to_str().unwrap())?;
-                }
-                file_system::remove_file(path)?;
+        let path = &self.path.temp;
+        if path.exists() {
+            if let Some(ref manager) = self.key_manager {
+                manager.delete_file(path.to_str().unwrap())?;
             }
-            Result::Ok(())
-        };
-        delete_file_if_exist(&self.path.temp)?;
-        delete_file_if_exist(&self.path.meta)?;
+            file_system::remove_file(path)?;
+        }
         Ok(())
     }
 
@@ -239,19 +218,16 @@ pub struct ImportDir {
     root_dir: PathBuf,
     temp_dir: PathBuf,
     clone_dir: PathBuf,
-    meta_dir: PathBuf,
 }
 
 impl ImportDir {
     const TEMP_DIR: &'static str = ".temp";
     const CLONE_DIR: &'static str = ".clone";
-    const META_DIR: &'static str = ".meta";
 
     pub fn new<P: AsRef<Path>>(root: P) -> Result<ImportDir> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
         let clone_dir = root_dir.join(Self::CLONE_DIR);
-        let meta_dir = root_dir.join(Self::META_DIR);
         if temp_dir.exists() {
             file_system::remove_dir_all(&temp_dir)?;
         }
@@ -260,12 +236,10 @@ impl ImportDir {
         }
         file_system::create_dir_all(&temp_dir)?;
         file_system::create_dir_all(&clone_dir)?;
-        file_system::create_dir_all(&meta_dir)?;
         Ok(ImportDir {
             root_dir,
             temp_dir,
             clone_dir,
-            meta_dir,
         })
     }
 
@@ -278,12 +252,10 @@ impl ImportDir {
         let save_path = self.root_dir.join(file_name);
         let temp_path = self.temp_dir.join(file_name);
         let clone_path = self.clone_dir.join(file_name);
-        let meta_path = self.meta_dir.join(file_name);
         Ok(ImportPath {
             save: save_path,
             temp: temp_path,
             clone: clone_path,
-            meta: meta_path,
         })
     }
 
@@ -320,7 +292,6 @@ impl ImportDir {
         self.delete_file(&path.save, manager)?;
         self.delete_file(&path.temp, manager)?;
         self.delete_file(&path.clone, manager)?;
-        self.delete_file(&path.meta, manager)?;
         Ok(path)
     }
 
@@ -443,69 +414,6 @@ impl ImportDir {
         Ok(())
     }
 
-    fn fill_by_persisted_meta(
-        &self,
-        p: &Path,
-        sc: Option<&DataKeyManager>,
-        m0: &mut SstMeta,
-    ) -> Result<()> {
-        use std::io::{Error as IoErr, ErrorKind as IoErrs};
-        let fname = p
-            .file_name()
-            .ok_or_else(|| Error::InvalidSstPath(p.to_owned()))?;
-        let meta_path = self.meta_dir.join(fname);
-
-        let meta_bytes = match sc {
-            None => file_system::read(&meta_path)?,
-            Some(s) => {
-                let mut v = Vec::new();
-                s.open_file_for_read(&meta_path)?.read_to_end(&mut v)?;
-                v
-            }
-        };
-        let old_uuid = m0.get_uuid().to_owned();
-        let backup = m0.clone();
-        m0.merge_from_bytes(&meta_bytes)
-            .map_err(|err| IoErr::new(IoErrs::InvalidData, err))?;
-        if old_uuid != m0.get_uuid() {
-            // The meta might be modified by the `merge_from_bytes`, let's
-            // restore it.
-            *m0 = backup;
-            return Err(Error::FileCorrupted(
-                meta_path,
-                format!(
-                    "the meta file uuid doesn't match the filename: {:?} vs {:?}",
-                    old_uuid,
-                    m0.get_uuid()
-                ),
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn clean_unused_meta(&self, km: Option<&DataKeyManager>) -> Result<()> {
-        let start = Instant::now_coarse();
-        let ssts = self.list_ssts()?;
-        let sst_set = ssts
-            .iter()
-            .filter_map(|m| {
-                let p: PathBuf = sst_meta_to_path(m).ok()?;
-                let file_name = p.file_name()?.to_owned();
-                Some(file_name)
-            })
-            .collect::<HashSet<_>>();
-        let mut cleaned = 0;
-        for e in file_system::read_dir(&self.meta_dir)? {
-            let e = e?;
-            if !sst_set.contains(&e.file_name()) {
-                self.delete_file(&e.path(), km)?;
-                cleaned += 1;
-            }
-        }
-        info!("SST metadata dir cleaned."; "removed_stale_meta" => %cleaned, "take" => ?start.saturating_elapsed());
-        Ok(())
-    }
-
     pub fn load_start_key_by_meta<E: SstExt>(
         &self,
         meta: &SstMeta,
@@ -521,19 +429,14 @@ impl ImportDir {
         if !i.seek_to_first()? || !i.valid()? {
             return Ok(None);
         }
-        Ok(Some(i.key().to_owned()))
-    }
-
-    pub fn try_fetch_full_meta(
-        &self,
-        meta: &SstMeta,
-        km: Option<&DataKeyManager>,
-    ) -> Result<SstMeta> {
-        let path = sst_meta_to_path(meta)?;
-        let meta_path = self.meta_dir.join(path);
-        let mut m1 = meta.clone();
-        self.fill_by_persisted_meta(&meta_path, km, &mut m1)?;
-        Ok(m1)
+        // Should we warn if the key doesn't start with the prefix key? (Is that
+        // possible?)
+        // Also note this brings implicit coupling between this and
+        // RocksEngine. Perhaps it is better to make the engine to provide
+        // decode functions. Anyway we have directly used the RocksSstReader
+        // somewhere... This won't make things worse.
+        let real_key = i.key().strip_prefix(keys::DATA_PREFIX_KEY);
+        Ok(real_key.map(ToOwned::to_owned))
     }
 
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
@@ -554,14 +457,6 @@ impl ImportDir {
 }
 
 const SST_SUFFIX: &str = ".sst";
-
-fn write_bytes(p: impl AsRef<Path>, content: Vec<u8>, km: Option<&DataKeyManager>) -> Result<()> {
-    match km {
-        Some(sc) => sc.create_file_for_write(p)?.write_all(&content)?,
-        None => file_system::write(p, content)?,
-    };
-    Ok(())
-}
 
 pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
@@ -609,9 +504,7 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 
 #[cfg(test)]
 mod test {
-    use std::mem::ManuallyDrop;
-
-    use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+    use engine_rocks::{RocksEngine, RocksSstWriterBuilder};
     use engine_test::ctor::{CfOptions, DbOptions};
     use engine_traits::{SstWriter, SstWriterBuilder, CF_DEFAULT};
     use tempfile::TempDir;
@@ -685,14 +578,15 @@ mod test {
             .set_cf(CF_DEFAULT)
             .build(f.path.temp.to_str().unwrap())
             .unwrap();
-        w.put(b"hello", concat!("This is the start key of the SST, ",
+        w.put(b"zhello", concat!("This is the start key of the SST, ",
               "how about some of our users uploads metas with range not aligned with the content of SST?",
-              "May the real region still be in the current store.").as_bytes()).unwrap();
+              "No, at least for now, tidb-lightning won't do so.").as_bytes()).unwrap();
         w.put(
-            b"world",
+            b"zworld",
             concat!(
                 "This is the end key of the SST, ",
-                "it is so we can check whether we are loding the right key from the SST."
+                "you might notice that all keys have a extra prefix 'z', that was appended by the RocksEngine implementation.",
+                "It is a little weird that the user key isn't the same in SST. But anyway reasonable. We have bypassed some layers."
             )
             .as_bytes(),
         )
