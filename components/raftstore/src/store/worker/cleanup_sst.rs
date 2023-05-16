@@ -76,9 +76,12 @@ where
         }
         // Once there isn't range provided.
         let query_by_start_key_of_full_meta = || {
-            let start_key = self.importer.load_start_key_by_meta::<EK>(sst)?.ok_or_else(|| -> Box<dyn Error> {
-                "failed to load start key from sst, the sst might be empty".into()
-            })?;
+            let start_key = self
+                .importer
+                .load_start_key_by_meta::<EK>(sst)?
+                .ok_or_else(|| -> Box<dyn Error> {
+                    "failed to load start key from sst, the sst might be empty".into()
+                })?;
             let region = self.pd_client.get_region(&start_key)?;
             Result::Ok(region)
         };

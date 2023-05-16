@@ -16,10 +16,7 @@ use rocksdb::{
 use tikv_util::box_err;
 
 use crate::{
-    encryption::WrappedEncryptionKeyManager,
-    engine::RocksEngine,
-    options::RocksReadOptions,
-    r2e,
+    encryption::WrappedEncryptionKeyManager, engine::RocksEngine, options::RocksReadOptions, r2e,
 };
 
 impl SstExt for RocksEngine {

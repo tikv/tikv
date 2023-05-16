@@ -21,7 +21,10 @@ impl SstReader for PanicSstReader {
     fn open(path: &str) -> Result<Self> {
         panic!()
     }
-    fn open_encrypted<E: engine_traits::EncryptionKeyManager>(path: &str, mgr: Arc<E>) -> Result<Self> {
+    fn open_encrypted<E: engine_traits::EncryptionKeyManager>(
+        path: &str,
+        mgr: Arc<E>,
+    ) -> Result<Self> {
         panic!()
     }
     fn verify_checksum(&self) -> Result<()> {
