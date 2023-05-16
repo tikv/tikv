@@ -315,8 +315,10 @@ impl SstImporter {
             "size" => ?memory_limit,
         );
 
+        let dir = ImportDir::new(root)?;
+
         Ok(SstImporter {
-            dir: ImportDir::new(root)?,
+            dir,
             key_manager,
             switcher,
             api_version,
@@ -1365,8 +1367,17 @@ impl SstImporter {
         }
     }
 
+    /// List the basic information of the current SST files.
+    /// The information contains UUID, region ID, region Epoch.
+    /// Other fields may be left blank. They can be fetched via
+    /// [`Self::try_fetch_full_meta`].
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         self.dir.list_ssts()
+    }
+
+    pub fn load_start_key_by_meta<S: SstExt>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
+        self.dir
+            .load_start_key_by_meta::<S>(meta, self.key_manager.clone())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
