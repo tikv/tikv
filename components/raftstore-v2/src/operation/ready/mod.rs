@@ -290,7 +290,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             warn!(
                 self.logger,
                 "unimplemented extra msg, ignore it now";
-                "extra_msg_type" => msg.get_extra_msg().get_type(),
+                "extra_msg_type" => ?msg.get_extra_msg().get_type(),
             );
             return;
         }
