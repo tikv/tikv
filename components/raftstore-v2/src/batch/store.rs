@@ -612,15 +612,15 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 match raft_clone.manual_purge() {
                     Ok(mut regions) => {
                         warn!(logger, "flushing oldest cf of regions {regions:?}");
-                        // Refresh the list at least every 15s.
-                        regions.truncate((MAX_MANUAL_FLUSH_RATE * 15.0) as usize);
+                        // Refresh the list at least every 60s.
+                        regions.truncate((MAX_MANUAL_FLUSH_RATE * 60.0) as usize);
                         for r in regions {
                             let _ = router.send(r, PeerMsg::ForceCompactLog);
                             if let Some(mut t) = registry.get(r)
                                 && let Some(t) = t.latest()
                             {
                                 std::thread::sleep(limiter.consume_duration(1));
-                                if let Err(e) = t.flush_oldest_cf(true, Duration::from_secs(1)) {
+                                if let Err(e) = t.flush_oldest_cf(true, Duration::from_secs(60)) {
                                     warn!(logger, "failed to flush oldest cf: {:?}", e);
                                 }
                             }
