@@ -39,22 +39,22 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         index: u64,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
-        let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        // Modify the region meta in memory.
+        // Modify flashback fields in region state.
+        //
+        // Note: region state is persisted by `Peer::on_apply_res_flashback`.
         let region = self.region_state_mut().mut_region();
-        region.set_is_in_flashback(is_in_flashback);
-        if is_in_flashback {
-            region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
-        } else {
-            region.clear_flashback_start_ts();
-        }
-
         match req.get_cmd_type() {
             AdminCmdType::PrepareFlashback => {
                 PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+
+                region.set_is_in_flashback(true);
+                region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
             }
             AdminCmdType::FinishFlashback => {
                 PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+
+                region.set_is_in_flashback(false);
+                region.clear_flashback_start_ts();
             }
             _ => unreachable!(),
         }

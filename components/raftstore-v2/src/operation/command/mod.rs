@@ -213,9 +213,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 Error::FlashbackInProgress(..) => {
                     metrics.invalid_proposal.flashback_in_progress.inc()
                 }
-                Error::FlashbackNotPrepared(_) => {
-                    metrics.invalid_proposal.flashback_not_prepared.inc()
-                }
                 _ => unreachable!("{:?}", e),
             }
             return Err(e);

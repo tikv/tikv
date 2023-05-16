@@ -2989,32 +2989,34 @@ where
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
-        let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        // Modify the region meta in memory.
+        // Modify flashback fields in region state.
         let mut region = self.region.clone();
-        region.set_is_in_flashback(is_in_flashback);
-        if is_in_flashback {
-            region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
-        } else {
-            region.clear_flashback_start_ts();
-        }
-        // Modify the `RegionLocalState` persisted in disk.
-        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
-            panic!(
-                "{} failed to change the flashback state to {} for region {:?}: {:?}",
-                self.tag, is_in_flashback, region, e
-            )
-        });
-
         match req.get_cmd_type() {
             AdminCmdType::PrepareFlashback => {
                 PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+
+                region.set_is_in_flashback(true);
+                region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
             }
             AdminCmdType::FinishFlashback => {
                 PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+
+                region.set_is_in_flashback(false);
+                region.clear_flashback_start_ts();
             }
             _ => unreachable!(),
         }
+
+        // Modify the `RegionLocalState` persisted in disk.
+        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to change the flashback state to {:?} for region {:?}: {:?}",
+                self.tag,
+                req.get_cmd_type(),
+                region,
+                e
+            )
+        });
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::Flashback { region }),
