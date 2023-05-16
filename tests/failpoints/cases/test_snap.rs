@@ -641,33 +641,31 @@ fn test_snapshot_gc_after_failed() {
     cluster.sim.wl().clear_recv_filters(3);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_sending_fail_with_net_error() {
-    let mut cluster = new_server_cluster(1, 2);
+    let mut cluster = new_cluster(1, 2);
     configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
-    // Disable default max peer count check.
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     let (send_tx, send_rx) = mpsc::sync_channel(1);
     // only send one MessageType::MsgSnapshot message
-    cluster.sim.wl().add_send_filter(
-        1,
-        Box::new(
-            RegionPacketFilter::new(r1, 1)
-                .allow(1)
-                .direction(Direction::Send)
-                .msg_type(MessageType::MsgSnapshot)
-                .set_msg_callback(Arc::new(move |m: &RaftMessage| {
-                    if m.get_message().get_msg_type() == MessageType::MsgSnapshot {
-                        let _ = send_tx.send(());
-                    }
-                })),
-        ),
-    );
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 1)
+            .allow(1)
+            .direction(Direction::Send)
+            .msg_type(MessageType::MsgSnapshot)
+            .set_msg_callback(Arc::new(move |m: &RaftMessage| {
+                if m.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                    let _ = send_tx.send(());
+                }
+            })),
+    ));
 
     // peer2 will interrupt in receiving snapshot
     fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
@@ -678,8 +676,8 @@ fn test_sending_fail_with_net_error() {
     // need to wait receiver handle the snapshot request
     sleep_ms(100);
 
-    // peer2 will not become learner so ti will has k1 key and receiving count will
-    // zero
+    // peer2 can't receive any snapshot, so it doesn't have any key valuse.
+    // but the receiving_count should be zero if receiving snapshot is failed.
     let engine2 = cluster.get_engine(2);
     must_get_none(&engine2, b"k1");
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
