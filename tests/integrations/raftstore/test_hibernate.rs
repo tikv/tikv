@@ -62,7 +62,7 @@ fn test_proposal_prevent_sleep() {
         true,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb(&request);
     // send to peer 2
     cluster
         .sim
