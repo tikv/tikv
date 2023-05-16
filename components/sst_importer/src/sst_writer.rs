@@ -120,17 +120,11 @@ impl<E: KvEngine> TxnSstWriter<E> {
 
         if default_entries > 0 {
             w1.finish()?;
-            if let Err(err) = p1.save_meta(key_manager.as_deref(), &default_meta) {
-                info!("failed to save meta for default CF"; "err" => %err);
-            }
             p1.save(key_manager.as_deref())?;
             metas.push(default_meta);
         }
         if write_entries > 0 {
             w2.finish()?;
-            if let Err(err) = p2.save_meta(key_manager.as_deref(), &write_meta) {
-                info!("failed to save meta for write CF"; "err" => %err);
-            }
             p2.save(key_manager.as_deref())?;
             metas.push(write_meta);
         }
@@ -272,12 +266,6 @@ impl<E: KvEngine> RawSstWriter<E> {
         }
 
         self.default.finish()?;
-        if let Err(err) = self
-            .default_path
-            .save_meta(self.key_manager.as_deref(), &self.default_meta)
-        {
-            info!("failed to save meta for raw KV"; "err" => %err);
-        }
         self.default_path.save(self.key_manager.as_deref())?;
 
         info!(
