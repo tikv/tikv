@@ -400,9 +400,11 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             ),
         >,
     ) -> Cluster<T, EK> {
+        let mut tikv_cfg = new_tikv_config_with_api_ver(id, api_version);
+        tikv_cfg.storage.engine = EngineType::RaftKv2;
         Cluster {
             cfg: Config {
-                tikv: new_tikv_config_with_api_ver(id, api_version),
+                tikv: tikv_cfg,
                 prefer_mem: true,
             },
             count,
