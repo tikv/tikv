@@ -100,12 +100,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_range_stats(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<RangeStats>> {
+    fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>> {
         panic!()
     }
 

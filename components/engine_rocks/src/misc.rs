@@ -353,15 +353,8 @@ impl MiscExt for RocksEngine {
         Ok(total)
     }
 
-    fn get_range_stats(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<RangeStats>> {
-        Ok(crate::properties::get_range_stats(
-            self, cf, start, end,
-        ))
+    fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>> {
+        Ok(crate::properties::get_range_stats(self, cf, start, end))
     }
 
     fn is_stalled_or_stopped(&self) -> bool {

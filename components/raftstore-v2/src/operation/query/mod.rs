@@ -186,7 +186,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         req: RaftCmdRequest,
         ch: QueryResChannel,
     ) {
-        // TODO: add pre_read_index to handle splitting or merging
+        if let Err(e) = self.pre_read_index() {
+            debug!(
+                self.logger,
+                "prevents unsafe read index";
+                "err" => ?e,
+            );
+            ctx.raft_metrics.propose.unsafe_read_index.inc();
+            let mut resp = RaftCmdResponse::default();
+            let term = self.term();
+            cmd_resp::bind_term(&mut resp, term);
+            cmd_resp::bind_error(&mut resp, e);
+            ch.report_error(resp);
+            return;
+        }
+
         if self.is_leader() {
             self.read_index_leader(ctx, req, ch);
         } else {
@@ -282,7 +296,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage().apply_state().get_applied_index() >= read_index
             // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
             // TODO: Add a test to cover this case
-            && self.proposal_control().has_applied_prepare_merge()
+            && !self.proposal_control().has_applied_prepare_merge()
     }
 
     #[inline]
