@@ -504,9 +504,6 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 
 #[cfg(test)]
 mod test {
-    use engine_rocks::{RocksEngine, RocksSstWriterBuilder};
-    use engine_test::ctor::{CfOptions, DbOptions};
-    use engine_traits::{SstWriter, SstWriterBuilder, CF_DEFAULT};
     use tempfile::TempDir;
     use test_util::new_test_key_manager;
 
@@ -550,7 +547,11 @@ mod test {
         assert_eq!(meta, new_meta);
     }
 
+    #[cfg(feature = "test-engines-rocksdb")]
     fn test_path_with_range_and_km(km: Option<DataKeyManager>) {
+        use engine_rocks::{RocksEngine, RocksSstWriterBuilder};
+        use engine_test::ctor::{CfOptions, DbOptions};
+        use engine_traits::{SstWriter, SstWriterBuilder, CF_DEFAULT};
         let arcmgr = km.map(Arc::new);
         let tmp = TempDir::new().unwrap();
         let dir = ImportDir::new(tmp.path()).unwrap();
@@ -605,11 +606,13 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "test-engines-rocksdb")]
     fn test_path_with_range() {
         test_path_with_range_and_km(None)
     }
 
     #[test]
+    #[cfg(feature = "test-engines-rocksdb")]
     fn test_path_with_range_encrypted() {
         let dir = TempDir::new().unwrap();
         let enc = new_test_key_manager(&dir, None, None, None)
