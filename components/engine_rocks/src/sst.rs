@@ -16,7 +16,7 @@ use rocksdb::{
 use tikv_util::box_err;
 
 use crate::{
-    encryption::{get_env, WrappedEncryptionKeyManager},
+    encryption::WrappedEncryptionKeyManager,
     engine::RocksEngine,
     options::RocksReadOptions,
     r2e,
