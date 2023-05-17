@@ -68,6 +68,8 @@ where
 
     fn get_region_by_meta(&self, sst: &SstMeta) -> Result<Region> {
         // The SST meta has been delivered with a range, use it directly.
+        // For now, no case will reach this. But this still could be a guard for
+        // reducing the superise in the future...
         if !sst.get_range().get_start().is_empty() || !sst.get_range().get_end().is_empty() {
             return self
                 .pd_client
