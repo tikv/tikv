@@ -12,7 +12,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
@@ -51,6 +51,7 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::server::Result as ServerResult;
 use tikv_util::{
+    mpsc::future,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
@@ -121,7 +122,7 @@ pub trait Simulator {
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
-        let (cb, rx) = make_cb(&request);
+        let (cb, mut rx) = make_cb(&request);
         self.async_read(node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
@@ -141,7 +142,7 @@ pub trait Simulator {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        let (cb, rx) = make_cb(&request);
+        let (cb, mut rx) = make_cb(&request);
 
         match self.async_command_on_node(node_id, request, cb) {
             Ok(()) => {}
@@ -968,7 +969,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn async_request(
         &mut self,
         req: RaftCmdRequest,
-    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+    ) -> Result<future::Receiver<RaftCmdResponse>> {
         self.async_request_with_opts(req, Default::default())
     }
 
@@ -976,7 +977,7 @@ impl<T: Simulator> Cluster<T> {
         &mut self,
         mut req: RaftCmdRequest,
         opts: RaftCmdExtraOpts,
-    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+    ) -> Result<future::Receiver<RaftCmdResponse>> {
         let region_id = req.get_header().get_region_id();
         let leader = self.leader_of_region(region_id).unwrap();
         req.mut_header().set_peer(leader.clone());
@@ -987,7 +988,10 @@ impl<T: Simulator> Cluster<T> {
         Ok(rx)
     }
 
-    pub fn async_exit_joint(&mut self, region_id: u64) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+    pub fn async_exit_joint(
+        &mut self,
+        region_id: u64,
+    ) -> Result<future::Receiver<RaftCmdResponse>> {
         let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
@@ -1003,7 +1007,7 @@ impl<T: Simulator> Cluster<T> {
         &mut self,
         key: &[u8],
         value: &[u8],
-    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+    ) -> Result<future::Receiver<RaftCmdResponse>> {
         let mut region = self.get_region(key);
         let reqs = vec![new_put_cmd(key, value)];
         let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
@@ -1014,7 +1018,7 @@ impl<T: Simulator> Cluster<T> {
         &mut self,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+    ) -> Result<future::Receiver<RaftCmdResponse>> {
         let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
@@ -1027,7 +1031,7 @@ impl<T: Simulator> Cluster<T> {
         &mut self,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+    ) -> Result<future::Receiver<RaftCmdResponse>> {
         let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
@@ -1947,20 +1951,30 @@ impl<T: Simulator> Drop for Cluster<T> {
     }
 }
 
-pub trait RawEngine: Peekable<DbVector = RocksDbVector> + SyncMutable {
+pub trait RawEngine<EK: engine_traits::KvEngine>:
+    Peekable<DbVector = EK::DbVector> + SyncMutable
+{
     fn region_local_state(&self, region_id: u64)
     -> engine_traits::Result<Option<RegionLocalState>>;
 
-    fn raft_apply_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
-        unimplemented!()
-    }
+    fn raft_apply_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftApplyState>>;
+
+    fn raft_local_state(&self, _region_id: u64) -> engine_traits::Result<Option<RaftLocalState>>;
 }
 
-impl RawEngine for RocksEngine {
+impl RawEngine<RocksEngine> for RocksEngine {
     fn region_local_state(
         &self,
         region_id: u64,
     ) -> engine_traits::Result<Option<RegionLocalState>> {
         self.get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
     }
 }

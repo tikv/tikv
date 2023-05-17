@@ -376,7 +376,7 @@ mod tests {
         let mut writer = RocksSstWriterBuilder::new()
             .set_cf(CF_DEFAULT)
             .set_db(&engine)
-            .build(p.as_os_str().to_str().unwrap())
+            .build(p.to_str().unwrap())
             .unwrap();
         writer.put(k, v).unwrap();
         let sst_file = writer.finish().unwrap();
@@ -391,7 +391,7 @@ mod tests {
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(&engine)
-            .build(p.as_os_str().to_str().unwrap())
+            .build(p.to_str().unwrap())
             .unwrap();
         writer.put(k, v).unwrap();
         let mut buf = vec![];

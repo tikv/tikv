@@ -10,23 +10,26 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{mpsc::future, HandyRwLock};
 
 struct CbReceivers {
     proposed: mpsc::Receiver<()>,
     committed: mpsc::Receiver<()>,
-    applied: mpsc::Receiver<RaftCmdResponse>,
+    applied: future::Receiver<RaftCmdResponse>,
 }
 
 impl CbReceivers {
-    fn assert_not_ready(&self) {
+    fn assert_not_ready(&mut self) {
         sleep_ms(100);
         assert_eq!(self.proposed.try_recv().unwrap_err(), TryRecvError::Empty);
         assert_eq!(self.committed.try_recv().unwrap_err(), TryRecvError::Empty);
-        assert_eq!(self.applied.try_recv().unwrap_err(), TryRecvError::Empty);
+        assert_eq!(
+            self.applied.try_recv().unwrap_err(),
+            crossbeam::channel::TryRecvError::Empty
+        );
     }
 
-    fn assert_ok(&self) {
+    fn assert_ok(&mut self) {
         self.assert_applied_ok();
         // proposed and committed should be invoked before applied
         self.proposed.try_recv().unwrap();
@@ -34,14 +37,14 @@ impl CbReceivers {
     }
 
     // When fails to propose, only applied callback will be invoked.
-    fn assert_err(&self) {
+    fn assert_err(&mut self) {
         let resp = self.applied.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(resp.get_header().has_error(), "{:?}", resp);
         self.proposed.try_recv().unwrap_err();
         self.committed.try_recv().unwrap_err();
     }
 
-    fn assert_applied_ok(&self) {
+    fn assert_applied_ok(&mut self) {
         let resp = self.applied.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(
             !resp.get_header().has_error(),
@@ -119,7 +122,7 @@ fn test_reject_proposal_during_region_split() {
             fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"k1");
-        let (cb, cb_receivers) = make_cb(&write_req);
+        let (cb, mut cb_receivers) = make_cb(&write_req);
         cluster
             .sim
             .rl()
@@ -141,13 +144,13 @@ fn test_reject_proposal_during_region_split() {
     );
 
     // The write request fails due to epoch not match.
-    for r in receivers {
+    for mut r in receivers {
         r.assert_err();
     }
 
     // New write request can succeed.
     let write_req = make_write_req(&mut cluster, b"k1");
-    let (cb, cb_receivers) = make_cb(&write_req);
+    let (cb, mut cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -198,7 +201,7 @@ fn test_reject_proposal_during_region_merge() {
             fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"a");
-        let (cb, cb_receivers) = make_cb(&write_req);
+        let (cb, mut cb_receivers) = make_cb(&write_req);
         cluster
             .sim
             .rl()
@@ -222,7 +225,7 @@ fn test_reject_proposal_during_region_merge() {
             .has_error()
     );
     // The write request fails due to epoch not match.
-    for r in receivers {
+    for mut r in receivers {
         r.assert_err();
     }
 
@@ -234,7 +237,7 @@ fn test_reject_proposal_during_region_merge() {
             fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"a");
-        let (cb, cb_receivers) = make_cb(&write_req);
+        let (cb, mut cb_receivers) = make_cb(&write_req);
         cluster
             .sim
             .rl()
@@ -251,7 +254,7 @@ fn test_reject_proposal_during_region_merge() {
             fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"k");
-        let (cb, cb_receivers) = make_cb(&write_req);
+        let (cb, mut cb_receivers) = make_cb(&write_req);
         cluster
             .sim
             .rl()
@@ -266,13 +269,13 @@ fn test_reject_proposal_during_region_merge() {
     fail::remove(commit_merge_fp);
     pd_client.check_merged_timeout(source.get_id(), Duration::from_secs(5));
     // The write request fails due to epoch not match.
-    for r in receivers {
+    for mut r in receivers {
         r.assert_err();
     }
 
     // New write request can succeed.
     let write_req = make_write_req(&mut cluster, b"k");
-    let (cb, cb_receivers) = make_cb(&write_req);
+    let (cb, mut cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -321,7 +324,7 @@ fn test_reject_proposal_during_rollback_region_merge() {
             fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"a");
-        let (cb, cb_receivers) = make_cb(&write_req);
+        let (cb, mut cb_receivers) = make_cb(&write_req);
         cluster
             .sim
             .rl()
@@ -336,7 +339,7 @@ fn test_reject_proposal_during_rollback_region_merge() {
 
     // New write request can succeed.
     let write_req = make_write_req(&mut cluster, b"a");
-    let (cb, cb_receivers) = make_cb(&write_req);
+    let (cb, mut cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -374,7 +377,7 @@ fn test_reject_proposal_during_leader_transfer() {
             fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"k");
-        let (cb, cb_receivers) = make_cb(&write_req);
+        let (cb, mut cb_receivers) = make_cb(&write_req);
         cluster
             .sim
             .rl()
@@ -395,14 +398,14 @@ fn test_accept_proposal_during_conf_change() {
 
     let conf_change_fp = "apply_on_conf_change_all_1";
     fail::cfg(conf_change_fp, "pause").unwrap();
-    let add_peer_rx = cluster.async_add_peer(r, new_peer(2, 2)).unwrap();
+    let mut add_peer_rx = cluster.async_add_peer(r, new_peer(2, 2)).unwrap();
     add_peer_rx
         .recv_timeout(Duration::from_millis(100))
         .unwrap_err();
 
     // Conf change doesn't affect proposals.
     let write_req = make_write_req(&mut cluster, b"k");
-    let (cb, cb_receivers) = make_cb(&write_req);
+    let (cb, mut cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -445,7 +448,7 @@ fn test_not_invoke_committed_cb_when_fail_to_commit() {
     // proposal.
     cluster.partition(vec![1], vec![2, 3]);
     let write_req = make_write_req(&mut cluster, b"k1");
-    let (cb, cb_receivers) = make_cb(&write_req);
+    let (cb, mut cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -489,7 +492,7 @@ fn test_propose_before_transfer_leader() {
     fail::cfg(force_delay_propose_batch_raft_command_fp, "return").unwrap();
 
     let write_req = make_write_req(&mut cluster, b"k1");
-    let (cb, cb_receivers) = make_cb(&write_req);
+    let (cb, mut cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -518,7 +521,7 @@ fn test_propose_before_split_and_merge() {
     fail::cfg(force_delay_propose_batch_raft_command_fp, "return").unwrap();
 
     let write_req = make_write_req(&mut cluster, b"k1");
-    let (cb, cb_receivers) = make_cb(&write_req);
+    let (cb, mut cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -542,7 +545,7 @@ fn test_propose_before_split_and_merge() {
     cluster.must_transfer_leader(right.get_id(), right_peer2);
 
     let write_req = make_write_req(&mut cluster, b"k0");
-    let (cb, cb_receivers) = make_cb(&write_req);
+    let (cb, mut cb_receivers) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -552,7 +555,7 @@ fn test_propose_before_split_and_merge() {
     cb_receivers.assert_proposed_ok();
 
     let write_req2 = make_write_req(&mut cluster, b"k2");
-    let (cb2, cb_receivers2) = make_cb(&write_req2);
+    let (cb2, mut cb_receivers2) = make_cb(&write_req2);
     cluster
         .sim
         .rl()

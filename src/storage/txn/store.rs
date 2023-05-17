@@ -735,6 +735,7 @@ mod tests {
                         Mutation::make_put(Key::from_raw(key), key.to_vec()),
                         &None,
                         SkipPessimisticCheck,
+                        None,
                     )
                     .unwrap();
                 }

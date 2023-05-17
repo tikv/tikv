@@ -10,14 +10,16 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksDbVector, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Iterable, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, ReadOptions,
-    SyncMutable, TabletRegistry, CF_DEFAULT,
+    KvEngine, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, ReadOptions, SyncMutable,
+    TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
-use futures::{compat::Future01CompatExt, executor::block_on, select, Future, FutureExt};
+use futures::{
+    compat::Future01CompatExt, executor::block_on, future::BoxFuture, select, Future, FutureExt,
+};
 use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
@@ -36,7 +38,7 @@ use pd_client::PdClient;
 use raftstore::{
     store::{
         cmd_resp, initial_region, util::check_key_in_region, Bucket, BucketRange, Callback,
-        RegionSnapshot, WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        RegionSnapshot, TabletSnapManager, WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
 };
@@ -48,15 +50,17 @@ use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
-    is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
-    new_peer, new_prepare_merge, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd,
-    new_request, new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
-    new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
-    RawEngine,
+    check_raft_cmd_request, is_error_response, new_admin_request, new_delete_cmd,
+    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd,
+    new_region_detail_cmd, new_region_leader_cmd, new_request, new_status_request, new_store,
+    new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
+    PartitionFilterFactory, RawEngine,
 };
-use tikv::server::Result as ServerResult;
+use tikv::{server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
-    box_err, box_try, debug, error, safe_panic,
+    box_err, box_try, debug, error,
+    future::block_on_timeout,
+    safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     timer::GLOBAL_TIMER_HANDLE,
@@ -65,13 +69,11 @@ use tikv_util::{
     HandyRwLock,
 };
 
-use crate::create_test_engine;
-
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
 // isn't allocated by pd, and node id, store id are same.
 // E,g, for node 1, the node id and store id are both 1.
-pub trait Simulator {
+pub trait Simulator<EK: KvEngine> {
     // Pass 0 to let pd allocate a node id if db is empty.
     // If node id > 0, the node must be created in db already,
     // and the node id must be the same as given argument.
@@ -81,10 +83,10 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: Config,
-        store_meta: Arc<Mutex<StoreMeta<RocksEngine>>>,
-        key_mgr: Option<Arc<DataKeyManager>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
-        tablet_registry: TabletRegistry<RocksEngine>,
+        tablet_registry: TabletRegistry<EK>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64>;
 
@@ -97,17 +99,19 @@ pub trait Simulator {
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_recv_filters(&mut self, node_id: u64);
 
-    fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>>;
+    fn get_router(&self, node_id: u64) -> Option<StoreRouter<EK, RaftTestEngine>>;
     fn get_snap_dir(&self, node_id: u64) -> String;
+    fn get_snap_mgr(&self, node_id: u64) -> &TabletSnapManager;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
+        let node_id = request.get_header().get_peer().get_store_id();
         let timeout_f = GLOBAL_TIMER_HANDLE
             .delay(std::time::Instant::now() + timeout)
             .compat();
         futures::executor::block_on(async move {
             futures::select! {
-                res = self.async_read(request).fuse() => res,
+                res = self.async_read(node_id, request).fuse() => res,
                 e = timeout_f.fuse() => {
                     Err(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e)))
                 },
@@ -117,12 +121,13 @@ pub trait Simulator {
 
     fn async_read(
         &mut self,
+        node_id: u64,
         request: RaftCmdRequest,
-    ) -> impl Future<Output = Result<RaftCmdResponse>> + Send {
+    ) -> impl Future<Output = Result<RaftCmdResponse>> + Send + 'static {
         let mut req_clone = request.clone();
-        req_clone.clear_requests();
-        req_clone.mut_requests().push(new_snap_cmd());
-        let snap = self.async_snapshot(req_clone);
+        // raftstore v2 only supports snap request.
+        req_clone.mut_requests()[0].set_cmd_type(CmdType::Snap);
+        let snap = self.async_snapshot(node_id, req_clone);
         async move {
             match snap.await {
                 Ok(snap) => {
@@ -175,17 +180,21 @@ pub trait Simulator {
 
                     Ok(response)
                 }
-                Err(e) => Ok(e),
+                Err(e) => {
+                    error!("cluster.async_read fails"; "error" => ?e);
+                    Ok(e)
+                }
             }
         }
     }
 
     fn async_snapshot(
         &mut self,
+        node_id: u64,
         request: RaftCmdRequest,
-    ) -> impl Future<
-        Output = std::result::Result<RegionSnapshot<engine_rocks::RocksSnapshot>, RaftCmdResponse>,
-    > + Send;
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
+    + Send
+    + 'static;
 
     fn async_peer_msg_on_node(&self, node_id: u64, region_id: u64, msg: PeerMsg) -> Result<()>;
 
@@ -201,7 +210,7 @@ pub trait Simulator {
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
-        let (msg, sub) = PeerMsg::raft_query(request);
+        let (msg, sub) = PeerMsg::raft_query(request.clone());
         match self.async_peer_msg_on_node(node_id, region_id, msg) {
             Ok(()) => {}
             Err(e) => {
@@ -211,17 +220,17 @@ pub trait Simulator {
             }
         }
 
-        let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + timeout);
-        // todo: unwrap?
-        match block_on(async move {
-            select! {
-                res = sub.result().fuse() => Ok(res.unwrap()),
-                _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
-
+        let mut fut = Box::pin(sub.result());
+        match block_on_timeout(fut.as_mut(), timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
+        {
+            Some(QueryResult::Read(_)) => unreachable!(),
+            Some(QueryResult::Response(resp)) => Ok(resp),
+            None => {
+                error!("call_query_on_node receives none response"; "request" => ?request);
+                // Do not unwrap here, sometimes raftstore v2 may return none.
+                return Err(box_err!("receives none response {:?}", request));
             }
-        }).unwrap() {
-            QueryResult::Read(_) => unreachable!(),
-            QueryResult::Response(resp) => Ok(resp),
         }
     }
 
@@ -254,7 +263,13 @@ pub trait Simulator {
                         write_encoder.delete(delete.get_cf(), delete.get_key());
                     }
                     CmdType::DeleteRange => {
-                        unimplemented!()
+                        let delete_range = req.get_delete_range();
+                        write_encoder.delete_range(
+                            delete_range.get_cf(),
+                            delete_range.get_start_key(),
+                            delete_range.get_end_key(),
+                            delete_range.get_notify_only(),
+                        );
                     }
                     _ => unreachable!(),
                 }
@@ -281,10 +296,20 @@ pub trait Simulator {
         })
     }
 
-    fn async_command_on_node(&self, node_id: u64, mut request: RaftCmdRequest) {
+    fn async_command_on_node(
+        &mut self,
+        node_id: u64,
+        mut request: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
 
-        let (msg, _sub) = if request.has_admin_request() {
+        let is_read = check_raft_cmd_request(&request);
+        if is_read {
+            let fut = self.async_read(node_id, request);
+            return Box::pin(async move { fut.await.unwrap() });
+        }
+
+        let (msg, sub) = if request.has_admin_request() {
             PeerMsg::admin_command(request)
         } else {
             let requests = request.get_requests();
@@ -310,19 +335,20 @@ pub trait Simulator {
 
         self.async_peer_msg_on_node(node_id, region_id, msg)
             .unwrap();
+        Box::pin(async move { sub.result().await.unwrap() })
     }
 }
 
-pub struct Cluster<T: Simulator> {
+pub struct Cluster<T: Simulator<EK>, EK: KvEngine> {
     pub cfg: Config,
     leaders: HashMap<u64, metapb::Peer>,
     pub count: usize,
 
     pub paths: Vec<TempDir>,
-    pub engines: Vec<(TabletRegistry<RocksEngine>, RaftTestEngine)>,
-    pub tablet_registries: HashMap<u64, TabletRegistry<RocksEngine>>,
+    pub engines: Vec<(TabletRegistry<EK>, RaftTestEngine)>,
+    pub tablet_registries: HashMap<u64, TabletRegistry<EK>>,
     pub raft_engines: HashMap<u64, RaftTestEngine>,
-    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta<RocksEngine>>>>,
+    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta<EK>>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
@@ -334,19 +360,51 @@ pub struct Cluster<T: Simulator> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    pub engine_creator: Box<
+        dyn Fn(
+            Option<(u64, u64)>,
+            Option<Arc<IoRateLimiter>>,
+            &Config,
+        ) -> (
+            TabletRegistry<EK>,
+            RaftTestEngine,
+            Option<Arc<DataKeyManager>>,
+            TempDir,
+            LazyWorker<String>,
+            Arc<RocksStatistics>,
+            Option<Arc<RocksStatistics>>,
+        ),
+    >,
 }
 
-impl<T: Simulator> Cluster<T> {
+impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
     pub fn new(
         id: u64,
         count: usize,
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
-    ) -> Cluster<T> {
+        engine_creator: Box<
+            dyn Fn(
+                Option<(u64, u64)>,
+                Option<Arc<IoRateLimiter>>,
+                &Config,
+            ) -> (
+                TabletRegistry<EK>,
+                RaftTestEngine,
+                Option<Arc<DataKeyManager>>,
+                TempDir,
+                LazyWorker<String>,
+                Arc<RocksStatistics>,
+                Option<Arc<RocksStatistics>>,
+            ),
+        >,
+    ) -> Cluster<T, EK> {
+        let mut tikv_cfg = new_tikv_config_with_api_ver(id, api_version);
+        tikv_cfg.storage.engine = EngineType::RaftKv2;
         Cluster {
             cfg: Config {
-                tikv: new_tikv_config_with_api_ver(id, api_version),
+                tikv: tikv_cfg,
                 prefer_mem: true,
             },
             count,
@@ -367,6 +425,7 @@ impl<T: Simulator> Cluster<T> {
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             sim,
             pd_client,
+            engine_creator,
         }
     }
 
@@ -417,7 +476,7 @@ impl<T: Simulator> Cluster<T> {
     // id indicates cluster id store_id
     fn create_engine(&mut self, id: Option<(u64, u64)>) {
         let (reg, raft_engine, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            create_test_engine(id, self.io_rate_limiter.clone(), &self.cfg);
+            (self.engine_creator)(id, self.io_rate_limiter.clone(), &self.cfg);
         self.engines.push((reg, raft_engine));
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -476,6 +535,7 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let tablet_registry = self.tablet_registries[&node_id].clone();
         let raft_engine = self.raft_engines[&node_id].clone();
+        let key_mgr = self.key_managers_map[&node_id].clone();
         let cfg = self.cfg.clone();
 
         // if let Some(labels) = self.labels.get(&node_id) {
@@ -497,7 +557,6 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
-        let key_mgr = self.key_managers_map.get(&node_id).unwrap().clone();
         self.sim.wl().run_node(
             node_id,
             cfg,
@@ -536,7 +595,7 @@ impl<T: Simulator> Cluster<T> {
                 if let Some(tablet) = tablet.latest() {
                     let mut tried = 0;
                     while tried < 10 {
-                        if Arc::strong_count(tablet.as_inner()) <= 3 {
+                        if tablet.inner_refcount() <= 3 {
                             break;
                         }
                         thread::sleep(Duration::from_millis(10));
@@ -632,7 +691,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn get_engine(&self, node_id: u64) -> WrapFactory {
+    pub fn get_engine(&self, node_id: u64) -> WrapFactory<EK> {
         WrapFactory::new(
             self.pd_client.clone(),
             self.raft_engines[&node_id].clone(),
@@ -1218,7 +1277,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         self.get_engine(store_id)
-            .get_apply_state(region_id)
+            .raft_apply_state(region_id)
             .unwrap()
             .unwrap()
     }
@@ -1452,8 +1511,9 @@ impl<T: Simulator> Cluster<T> {
         let mut req = self.new_prepare_merge(source, target);
         let leader = self.leader_of_region(source).unwrap();
         req.mut_header().set_peer(leader.clone());
-        self.sim
-            .rl()
+        let _ = self
+            .sim
+            .wl()
             .async_command_on_node(leader.get_store_id(), req);
     }
 
@@ -1503,7 +1563,11 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().get_snap_dir(node_id)
     }
 
-    pub fn get_router(&self, node_id: u64) -> Option<StoreRouter<RocksEngine, RaftTestEngine>> {
+    pub fn get_snap_mgr(&self, node_id: u64) -> TabletSnapManager {
+        self.sim.rl().get_snap_mgr(node_id).clone()
+    }
+
+    pub fn get_router(&self, node_id: u64) -> Option<StoreRouter<EK, RaftTestEngine>> {
         self.sim.rl().get_router(node_id)
     }
 
@@ -1568,13 +1632,15 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
         self.get_engine(store_id)
-            .get_region_state(region_id)
+            .region_local_state(region_id)
             .unwrap()
             .unwrap()
     }
 
     pub fn get_raft_local_state(&self, region_id: u64, store_id: u64) -> Option<RaftLocalState> {
-        self.get_engine(store_id).get_raft_local_state(region_id)
+        self.get_engine(store_id)
+            .raft_local_state(region_id)
+            .unwrap()
     }
 
     pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
@@ -1630,24 +1696,24 @@ pub fn bootstrap_store<ER: RaftEngine>(
     Ok(())
 }
 
-impl<T: Simulator> Drop for Cluster<T> {
+impl<T: Simulator<EK>, EK: KvEngine> Drop for Cluster<T, EK> {
     fn drop(&mut self) {
         test_util::clear_failpoints();
         self.shutdown();
     }
 }
 
-pub struct WrapFactory {
+pub struct WrapFactory<EK: KvEngine> {
     pd_client: Arc<TestPdClient>,
     raft_engine: RaftTestEngine,
-    tablet_registry: TabletRegistry<RocksEngine>,
+    tablet_registry: TabletRegistry<EK>,
 }
 
-impl WrapFactory {
+impl<EK: KvEngine> WrapFactory<EK> {
     pub fn new(
         pd_client: Arc<TestPdClient>,
         raft_engine: RaftTestEngine,
-        tablet_registry: TabletRegistry<RocksEngine>,
+        tablet_registry: TabletRegistry<EK>,
     ) -> Self {
         Self {
             raft_engine,
@@ -1662,30 +1728,19 @@ impl WrapFactory {
         self.pd_client.get_region(key).unwrap().get_id()
     }
 
-    fn get_tablet(&self, key: &[u8]) -> Option<RocksEngine> {
+    fn get_tablet(&self, key: &[u8]) -> Option<EK> {
         // todo: unwrap
         let region_id = self.region_id_of_key(key);
         self.tablet_registry.get(region_id)?.latest().cloned()
     }
 
-    pub fn get_region_state(
-        &self,
-        region_id: u64,
-    ) -> engine_traits::Result<Option<RegionLocalState>> {
-        self.raft_engine.get_region_state(region_id, u64::MAX)
-    }
-
-    pub fn get_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
-        self.raft_engine.get_apply_state(region_id, u64::MAX)
-    }
-
-    pub fn get_raft_local_state(&self, region_id: u64) -> Option<RaftLocalState> {
-        self.raft_engine.get_raft_state(region_id).unwrap()
+    pub fn get_tablet_by_id(&self, id: u64) -> Option<EK> {
+        self.tablet_registry.get(id)?.latest().cloned()
     }
 }
 
-impl Peekable for WrapFactory {
-    type DbVector = RocksDbVector;
+impl<EK: KvEngine> Peekable for WrapFactory<EK> {
+    type DbVector = EK::DbVector;
 
     fn get_value_opt(
         &self,
@@ -1694,10 +1749,10 @@ impl Peekable for WrapFactory {
     ) -> engine_traits::Result<Option<Self::DbVector>> {
         let region_id = self.region_id_of_key(key);
 
-        if let Ok(Some(state)) = self.get_region_state(region_id)
-            && state.state == PeerState::Tombstone
-        {
-            return Ok(None);
+        if let Ok(Some(state)) = self.region_local_state(region_id) {
+            if state.state == PeerState::Tombstone {
+                return Ok(None);
+            }
         }
 
         match self.get_tablet(key) {
@@ -1714,10 +1769,10 @@ impl Peekable for WrapFactory {
     ) -> engine_traits::Result<Option<Self::DbVector>> {
         let region_id = self.region_id_of_key(key);
 
-        if let Ok(Some(state)) = self.get_region_state(region_id)
-            && state.state == PeerState::Tombstone
-        {
-            return Ok(None);
+        if let Ok(Some(state)) = self.region_local_state(region_id) {
+            if state.state == PeerState::Tombstone {
+                return Ok(None);
+            }
         }
 
         match self.get_tablet(key) {
@@ -1735,7 +1790,7 @@ impl Peekable for WrapFactory {
     }
 }
 
-impl SyncMutable for WrapFactory {
+impl<EK: KvEngine> SyncMutable for WrapFactory<EK> {
     fn put(&self, key: &[u8], value: &[u8]) -> engine_traits::Result<()> {
         match self.get_tablet(key) {
             Some(tablet) => tablet.put(key, value),
@@ -1778,11 +1833,19 @@ impl SyncMutable for WrapFactory {
     }
 }
 
-impl RawEngine for WrapFactory {
+impl<EK: KvEngine> RawEngine<EK> for WrapFactory<EK> {
     fn region_local_state(
         &self,
         region_id: u64,
     ) -> engine_traits::Result<Option<RegionLocalState>> {
-        self.get_region_state(region_id)
+        self.raft_engine.get_region_state(region_id, u64::MAX)
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.raft_engine.get_apply_state(region_id, u64::MAX)
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.raft_engine.get_raft_state(region_id)
     }
 }
