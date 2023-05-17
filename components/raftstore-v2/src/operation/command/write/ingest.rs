@@ -143,6 +143,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .map(|info| info.meta.get_uuid().to_vec())
             .collect::<Vec<_>>();
         self.set_sst_applied_index(uuids, index);
+        self.metrics.need_size_check = true;
         Ok(())
     }
 }

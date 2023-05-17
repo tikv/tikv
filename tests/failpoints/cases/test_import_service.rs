@@ -258,6 +258,10 @@ fn test_ingest_sst_v2() {
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(ctx.get_region_id())
+        .unwrap();
 
     // No region id and epoch.
     send_upload_sst(&import, &meta, &data).unwrap();
@@ -277,7 +281,6 @@ fn test_ingest_sst_v2() {
         tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
-
     rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
     let mut count = 0;
     for path in &cluster.paths {
@@ -292,4 +295,11 @@ fn test_ingest_sst_v2() {
     fail::remove("on_cleanup_import_sst");
     fail::remove("on_cleanup_import_sst_schedule");
     assert_ne!(0, count);
+
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let new_size = cluster
+        .pd_client
+        .get_region_approximate_size(ctx.get_region_id())
+        .unwrap();
+    assert_ne!(size, new_size);
 }

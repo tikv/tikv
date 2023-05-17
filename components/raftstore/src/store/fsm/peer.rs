@@ -5007,9 +5007,7 @@ where
                     context,
                     hash,
                 } => self.on_ready_verify_hash(index, context, hash),
-                ExecResult::DeleteRange { .. } => {
-                    // TODO: clean user properties?
-                }
+                ExecResult::DeleteRange { .. } =>  self.on_delete_range_result(),
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
                 ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
@@ -6441,6 +6439,14 @@ where
             &self.fsm.peer.consistency_state,
         );
         self.propose_raft_command_internal(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
+    }
+
+    fn on_delete_range_result(&mut self){
+        self.fsm.peer.may_skip_split_check = false;
+        if self.fsm.peer.is_leader() {
+            self.on_split_region_check_tick();
+            self.register_pd_heartbeat_tick();
+        }
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMetaInfo>) {

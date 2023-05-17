@@ -96,6 +96,10 @@ fn test_delete() {
 fn test_node_use_delete_range() {
     let mut cluster = new_cluster(0, 1);
     cluster.cfg.raft_store.use_delete_range = true;
+    let interval = Duration::from_millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval.0 = interval;
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval.0 = interval;
+
     cluster.run();
     test_delete_range(&mut cluster, CF_DEFAULT);
     // Prefix bloom filter is always enabled in the Write CF.

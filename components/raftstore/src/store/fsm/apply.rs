@@ -2002,7 +2002,6 @@ where
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
         };
-
         Ok(())
     }
 }
@@ -3838,6 +3837,8 @@ pub struct ApplyMetrics {
     pub written_bytes: u64,
     pub written_keys: u64,
     pub lock_cf_written_bytes: u64,
+
+    pub need_size_check: bool,
 }
 
 #[derive(Debug)]
