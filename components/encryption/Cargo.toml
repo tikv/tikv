@@ -4,6 +4,9 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+failpoints = ["fail/failpoints"]
+
 [dependencies]
 async-trait = "0.1"
 byteorder = "1.2"
