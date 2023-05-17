@@ -11,7 +11,7 @@ pub(crate) const DEFAULT_REFRESH_TIME: i64 = 300;
 const DEFAULT_REFRESH_TOKEN_TIMEOUT: i64 = 10;
 
 fn config_default_refresh_token_timeout() -> i64 {
-    fail::fail_point!("mock_token_cache::refresh_timeout", |_| 1);
+    fail::fail_point!("on_config_default_refresh_token_timeout", |_| 1);
     DEFAULT_REFRESH_TOKEN_TIMEOUT
 }
 
@@ -34,7 +34,7 @@ impl Default for TokenCache {
 
 impl TokenCache {
     fn is_fresh(&self) -> bool {
-        fail::fail_point!("mock_token_cache::is_fresh", |_| { true });
+        fail::fail_point!("on_is_fresh_return_true", |_| { true });
         if let Some(token) = self.cached_token.read().unwrap().as_ref() {
             let current_time = OffsetDateTime::now_utc().unix_timestamp();
             let expiry_time = current_time + DEFAULT_REFRESH_TIME;
@@ -91,29 +91,27 @@ pub trait TokenCredentialWithCache {
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time::Duration};
-
-    use super::*;
-
     #[test]
+    #[cfg(feature = "failpoints")]
     fn test_concurrently_refresh_token() {
-        let token_cache = TokenCache::default();
+        let token_cache = super::TokenCache::default();
         assert!(!token_cache.is_fresh());
         let (token1, token2) = (token_cache.clone(), token_cache.clone());
-        let thread1 = thread::spawn(move || {
+        let thread1 = std::thread::spawn(move || {
             assert!(token1.need_update_token());
-            thread::sleep(Duration::from_secs(2));
+            std::thread::sleep(std::time::Duration::from_secs(2));
         });
-        let thread2 = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(10));
-            let _f = fail::FailGuard::new("mock_token_cache::refresh_timeout", "return").unwrap();
+        let thread2 = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let _f =
+                fail::FailGuard::new("on_config_default_refresh_token_timeout", "return").unwrap();
             // forcely exit as timeout.
             assert!(token2.need_update_token());
         });
-        let thread3 = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(2023)); // sleep enough
+        let thread3 = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(2023)); // sleep enough
             // mock that token is refreshed.
-            let _f = fail::FailGuard::new("mock_token_cache::is_fresh", "return").unwrap();
+            let _f = fail::FailGuard::new("on_is_fresh_return_true", "return").unwrap();
             assert!(!token_cache.need_update_token());
         });
         thread1.join().unwrap();

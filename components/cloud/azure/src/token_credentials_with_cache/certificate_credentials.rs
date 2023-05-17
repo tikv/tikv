@@ -165,10 +165,14 @@ fn openssl_error(err: ErrorStack) -> azure_core::error::Error {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl TokenCredential for ClientCertificateCredentialWithCache {
     async fn get_token(&self, resource: &str) -> azure_core::Result<TokenResponse> {
+        // Following operations is just extended from
+        // `ClientCertificateCredential::get_token()` as a special version with
+        // caching feature and stable feature.
         if !self.need_update_cached_token() {
             return Ok(self.get_cached_token());
         }
         let options = self.options();
+        // Reference of the REST API: https://learn.microsoft.com/en-us/azure/key-vault/general/common-parameters-and-headers.
         let url = &format!(
             "{}/{}/oauth2/v2.0/token",
             options.authority_host(),
