@@ -6061,6 +6061,10 @@ mod tests {
         fn must_call() -> ExtCallback {
             let mut d = DropPanic(true);
             Box::new(move || {
+                // Must move the entire struct to closure,
+                // or else it will be dropped early in 2021 edition
+                // https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+                let _ = &d;
                 d.0 = false;
             })
         }

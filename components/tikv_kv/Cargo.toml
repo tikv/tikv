@@ -3,7 +3,7 @@ name = "tikv_kv"
 version = "0.1.0"
 authors = ["The TiKV Authors"]
 description = "The key-value abstraction directly used by TiKV"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
