@@ -430,7 +430,7 @@ fn test_node_callback_when_destroyed() {
     let get = new_get_cmd(b"k1");
     let mut req = new_request(1, epoch, vec![get], true);
     req.mut_header().set_peer(leader);
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster
         .sim
         .rl()
@@ -501,9 +501,7 @@ fn test_read_index_stale_in_suspect_lease() {
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Ensure peer 3 is ready to become leader.
     let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
-    let resp = block_on_timeout(resp_ch, Duration::from_secs(3))
-        .unwrap()
-        .unwrap();
+    let resp = block_on_timeout(resp_ch, Duration::from_secs(3)).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_eq!(
         resp.get_responses()[0].get_get().get_value(),
@@ -651,7 +649,7 @@ fn test_not_leader_read_lease() {
         true,
     );
     req.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.must_transfer_leader(region_id, new_peer(3, 3));
@@ -718,7 +716,7 @@ fn test_read_index_after_write() {
     );
     req.mut_header()
         .set_peer(new_peer(1, region_on_store1.get_id()));
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.sim.wl().clear_recv_filters(2);
