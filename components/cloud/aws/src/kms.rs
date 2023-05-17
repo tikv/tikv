@@ -4,10 +4,8 @@ use std::ops::Deref;
 
 use async_trait::async_trait;
 use cloud::{
-    crypter::{
-        Config, CrypterProvider, CryptographyType, DataKeyPair, EncryptedKey, KeyId, PlainKey,
-    },
-    error::{CrypterError, Error, Result},
+    error::{Error, KmsError, Result},
+    kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
 use rusoto_core::{request::DispatchSignedRequest, RusotoError};
 use rusoto_credential::ProvideAwsCredentials;
@@ -79,7 +77,7 @@ impl AwsKms {
 }
 
 #[async_trait]
-impl CrypterProvider for AwsKms {
+impl KmsProvider for AwsKms {
     fn name(&self) -> &str {
         ENCRYPTION_VENDOR_NAME_AWS_KMS
     }
@@ -150,11 +148,11 @@ fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> E
         match &e {
             GenerateDataKeyError::NotFound(_) => Error::ApiNotFound(err.into()),
             GenerateDataKeyError::InvalidKeyUsage(_) => {
-                Error::CrypterError(CrypterError::Other(err.into()))
+                Error::KmsError(KmsError::Other(err.into()))
             }
             GenerateDataKeyError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             GenerateDataKeyError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::CrypterError(CrypterError::Other(FixRusotoErrorDisplay(err).into())),
+            _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
         }
     } else {
         classify_error(err)
@@ -165,11 +163,11 @@ fn classify_decrypt_error(err: RusotoError<DecryptError>) -> Error {
     if let RusotoError::Service(e) = &err {
         match &e {
             DecryptError::IncorrectKey(_) | DecryptError::NotFound(_) => {
-                Error::CrypterError(CrypterError::WrongMasterKey(err.into()))
+                Error::KmsError(KmsError::WrongMasterKey(err.into()))
             }
             DecryptError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             DecryptError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::CrypterError(CrypterError::Other(FixRusotoErrorDisplay(err).into())),
+            _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
         }
     } else {
         classify_error(err)
@@ -181,7 +179,7 @@ fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: RusotoError
         RusotoError::HttpDispatch(_) => Error::ApiTimeout(err.into()),
         RusotoError::Credentials(_) => Error::ApiAuthentication(err.into()),
         e if e.is_retryable() => Error::ApiInternal(err.into()),
-        _ => Error::CrypterError(CrypterError::Other(FixRusotoErrorDisplay(err).into())),
+        _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
     }
 }
 
@@ -202,7 +200,7 @@ impl std::fmt::Debug for KmsClientDebug {
 #[cfg(test)]
 mod tests {
     // use rusoto_mock::MockRequestDispatcher;
-    use cloud::crypter::Location;
+    use cloud::kms::Location;
     use rusoto_credential::StaticProvider;
     use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     use rusoto_mock::MockRequestDispatcher;
@@ -285,7 +283,7 @@ mod tests {
         let enc_key = EncryptedKey::new(b"invalid".to_vec()).unwrap();
         let fut = aws_kms.decrypt_data_key(&enc_key);
         match fut.await {
-            Err(Error::CrypterError(CrypterError::WrongMasterKey(_))) => (),
+            Err(Error::KmsError(KmsError::WrongMasterKey(_))) => (),
             other => panic!("{:?}", other),
         }
     }

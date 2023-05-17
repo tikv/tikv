@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{BigEndian, ByteOrder};
-use cloud::crypter::PlainKey;
+use cloud::kms::PlainKey;
 use engine_traits::EncryptionMethod as EtEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
@@ -189,7 +189,7 @@ pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use cloud::crypter::CryptographyType;
+    use cloud::kms::CryptographyType;
     use hex::FromHex;
 
     use super::*;

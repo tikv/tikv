@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cloud::crypter::{CryptographyType, PlainKey};
+use cloud::kms::{CryptographyType, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::box_err;
 

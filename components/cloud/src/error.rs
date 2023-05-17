@@ -34,18 +34,18 @@ pub enum Error {
     #[error("API auth: {0}")]
     ApiAuthentication(Box<dyn error::Error + Sync + Send>),
     #[error("Key error: {0}")]
-    CrypterError(CrypterError),
+    KmsError(KmsError),
 }
 
 impl ErrorTrait for Error {}
 
 #[derive(Debug, Error)]
-pub enum CrypterError {
+pub enum KmsError {
     #[error("Wrong master key {0}")]
     WrongMasterKey(Box<dyn error::Error + Sync + Send>),
     #[error("Empty key {0}")]
     EmptyKey(String),
-    #[error("Crypter error {0}")]
+    #[error("Kms error {0}")]
     Other(Box<dyn error::Error + Sync + Send>),
 }
 
@@ -58,12 +58,12 @@ impl From<Error> for IoError {
     }
 }
 
-impl ErrorCodeExt for CrypterError {
+impl ErrorCodeExt for KmsError {
     fn error_code(&self) -> ErrorCode {
         match self {
-            CrypterError::WrongMasterKey(_) => error_code::cloud::WRONG_MASTER_KEY,
-            CrypterError::EmptyKey(_) => error_code::cloud::INVALID_INPUT,
-            CrypterError::Other(_) => error_code::cloud::UNKNOWN,
+            KmsError::WrongMasterKey(_) => error_code::cloud::WRONG_MASTER_KEY,
+            KmsError::EmptyKey(_) => error_code::cloud::INVALID_INPUT,
+            KmsError::Other(_) => error_code::cloud::UNKNOWN,
         }
     }
 }
@@ -78,7 +78,7 @@ impl ErrorCodeExt for Error {
             Error::ApiInternal(_) => error_code::cloud::API_INTERNAL,
             Error::ApiNotFound(_) => error_code::cloud::API_NOT_FOUND,
             Error::ApiAuthentication(_) => error_code::cloud::API_AUTHENTICATION,
-            Error::CrypterError(e) => e.error_code(),
+            Error::KmsError(e) => e.error_code(),
         }
     }
 }
@@ -95,17 +95,17 @@ impl RetryError for Error {
             Error::ApiInternal(_) => true,
             Error::ApiNotFound(_) => false,
             Error::ApiAuthentication(_) => false,
-            Error::CrypterError(e) => e.is_retryable(),
+            Error::KmsError(e) => e.is_retryable(),
         }
     }
 }
 
-impl RetryError for CrypterError {
+impl RetryError for KmsError {
     fn is_retryable(&self) -> bool {
         match self {
-            CrypterError::WrongMasterKey(_) => false,
-            CrypterError::EmptyKey(_) => false,
-            CrypterError::Other(_) => true,
+            KmsError::WrongMasterKey(_) => false,
+            KmsError::EmptyKey(_) => false,
+            KmsError::Other(_) => true,
         }
     }
 }

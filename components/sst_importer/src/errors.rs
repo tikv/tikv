@@ -4,7 +4,7 @@ use std::{
     error::Error as StdError, io::Error as IoError, num::ParseIntError, path::PathBuf, result,
 };
 
-use encryption::Error as CrypterError;
+use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
@@ -99,7 +99,7 @@ pub enum Error {
     BadFormat(String),
 
     #[error("Encryption {0:?}")]
-    Encryption(#[from] CrypterError),
+    Encryption(#[from] EncryptionError),
 
     #[error("Codec {0}")]
     CodecError(#[from] CodecError),

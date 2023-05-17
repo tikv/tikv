@@ -5,7 +5,7 @@ use derive_more::Deref;
 use kvproto::encryptionpb::MasterKeyKms;
 use tikv_util::box_err;
 
-use crate::error::{CrypterError, Error, Result};
+use crate::error::{Error, KmsError, Result};
 
 #[derive(Debug, Clone)]
 pub struct Location {
@@ -43,7 +43,7 @@ impl KeyId {
     pub fn new(id: String) -> Result<KeyId> {
         if id.is_empty() {
             let msg = "KMS key id can not be empty";
-            Err(Error::CrypterError(CrypterError::EmptyKey(msg.to_owned())))
+            Err(Error::KmsError(KmsError::EmptyKey(msg.to_owned())))
         } else {
             Ok(KeyId(id))
         }
@@ -58,7 +58,7 @@ pub struct EncryptedKey(Vec<u8>);
 impl EncryptedKey {
     pub fn new(key: Vec<u8>) -> Result<Self> {
         if key.is_empty() {
-            Err(Error::CrypterError(CrypterError::EmptyKey(
+            Err(Error::KmsError(KmsError::EmptyKey(
                 "Encrypted Key".to_owned(),
             )))
         } else {
@@ -96,7 +96,7 @@ impl PlainKey {
     pub fn new(key: Vec<u8>, t: CryptographyType) -> Result<Self> {
         let limitation = t.target_key_size();
         if limitation > 0 && key.len() != limitation {
-            Err(Error::CrypterError(CrypterError::Other(box_err!(
+            Err(Error::KmsError(KmsError::Other(box_err!(
                 "encryption method and key length mismatch, expect {} get
                     {}",
                 limitation,
@@ -134,8 +134,10 @@ pub struct DataKeyPair {
     pub plaintext: PlainKey,
 }
 
+/// `Key Management Service Provider`, serving for managing master key on
+/// different cloud.
 #[async_trait]
-pub trait CrypterProvider: Sync + Send + 'static + std::fmt::Debug {
+pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
     async fn generate_data_key(&self) -> Result<DataKeyPair>;
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
     fn name(&self) -> &str;

@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cloud::crypter::{DataKeyPair, EncryptedKey};
+use cloud::kms::{DataKeyPair, EncryptedKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::box_err;
 

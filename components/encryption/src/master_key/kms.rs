@@ -2,7 +2,7 @@
 
 use std::{sync::Mutex, time::Duration};
 
-use cloud::crypter::{CrypterProvider, CryptographyType, DataKeyPair, EncryptedKey, PlainKey};
+use cloud::kms::{CryptographyType, DataKeyPair, EncryptedKey, KmsProvider, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::{
     box_err,
@@ -18,13 +18,13 @@ use crate::{crypter::Iv, errors::cloud_convert_error, Error, Result};
 pub struct KmsBackend {
     timeout_duration: Duration,
     state: Mutex<Option<State>>,
-    kms_provider: Box<dyn CrypterProvider>,
+    kms_provider: Box<dyn KmsProvider>,
     // This mutex allows the decrypt_content API to be reference based
     runtime: Mutex<Runtime>,
 }
 
 impl KmsBackend {
-    pub fn new(kms_provider: Box<dyn CrypterProvider>) -> Result<KmsBackend> {
+    pub fn new(kms_provider: Box<dyn KmsProvider>) -> Result<KmsBackend> {
         // Basic scheduler executes futures in the current thread.
         let runtime = Mutex::new(
             Builder::new_current_thread()
@@ -153,7 +153,7 @@ impl Backend for KmsBackend {
 #[cfg(test)]
 mod fake {
     use async_trait::async_trait;
-    use cloud::{crypter::CrypterProvider, error::Result};
+    use cloud::{error::Result, kms::KmsProvider};
 
     use super::*;
 
@@ -174,7 +174,7 @@ mod fake {
     }
 
     #[async_trait]
-    impl CrypterProvider for FakeKms {
+    impl KmsProvider for FakeKms {
         async fn generate_data_key(&self) -> Result<DataKeyPair> {
             Ok(DataKeyPair {
                 encrypted: EncryptedKey::new(FAKE_DATA_KEY_ENCRYPTED.to_vec())?,

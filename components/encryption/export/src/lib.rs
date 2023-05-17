@@ -3,7 +3,7 @@ use std::path::Path;
 
 #[cfg(feature = "cloud-aws")]
 use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
-use cloud::crypter::Config as CloudConfig;
+use cloud::kms::Config as CloudConfig;
 #[cfg(feature = "cloud-aws")]
 pub use encryption::KmsBackend;
 pub use encryption::{
