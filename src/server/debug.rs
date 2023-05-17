@@ -938,7 +938,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
         let region = region_state.get_region();
         let start = keys::enc_start_key(region);
         let end = keys::enc_end_key(region);
-
         let mut res = dump_write_cf_properties(&self.engines.kv, &start, &end)?;
         let mut res1 = dump_default_cf_properties(&self.engines.kv, &start, &end)?;
         res.append(&mut res1);
@@ -994,7 +993,6 @@ pub fn dump_default_cf_properties(
     end: &[u8],
 ) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
-
     let collection = box_try!(db.get_range_properties_cf(CF_DEFAULT, start, end));
     let num_files = collection.len();
 

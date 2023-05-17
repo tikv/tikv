@@ -436,7 +436,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         let mut tablet_cache =
             get_tablet_cache(&self.tablet_reg, region.id, Some(region_state.clone())).unwrap();
         let tablet = tablet_cache.latest().unwrap();
-
         let mut res = dump_write_cf_properties(tablet, &start, &end)?;
         let mut res1 = dump_default_cf_properties(tablet, &start, &end)?;
         res.append(&mut res1);
@@ -473,6 +472,8 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
 
     fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
         let mut props = vec![];
+        let start= &keys::data_key(start);
+        let end =&keys::data_end_key(end);
         let regions = find_region_states_by_key_range(&self.raft_engine, start, end);
         for (region_id, start_key, end_key, region_state) in regions {
             let mut tablet_cache =
@@ -480,15 +481,15 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             let talbet = tablet_cache.latest().unwrap();
             let mut prop = dump_write_cf_properties(
                 talbet,
-                &keys::data_key(start_key.as_ref().map(|k| (k.as_bytes())).unwrap_or(start)),
-                &keys::data_key(end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end)),
+                start_key.as_ref().map(|k| (k.as_bytes())).unwrap_or(start),
+                end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
             )
             .unwrap();
             props.append(&mut prop);
             let mut prop1 = dump_default_cf_properties(
                 talbet,
-                &keys::data_key(start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start)),
-                &keys::data_key(end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end)),
+                start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start),
+                end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
             )?;
             props.append(&mut prop1);
         }
@@ -530,7 +531,6 @@ fn range_in_region<'a>(
     } else {
         DATA_PREFIX_KEY
     };
-
     if range_start == DATA_PREFIX_KEY && range_end == DATA_PREFIX_KEY {
         return Some((region.get_start_key(), region.get_end_key()));
     } else if range_start == DATA_PREFIX_KEY {

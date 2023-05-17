@@ -958,10 +958,13 @@ fn test_debug_store() {
     let resp = debug_client.get_store_info(&req).unwrap();
     assert_eq!(store_id, resp.get_store_id());
 
-    cluster.must_put_cf(CF_DEFAULT, b"1", b"val");
-    cluster.must_put_cf(CF_DEFAULT, b"2", b"val");
+    cluster.must_put( b"a", b"val");
+    cluster.must_put( b"c", b"val");
     cluster.flush_data();
     thread::sleep(Duration::from_millis(25));
+    assert_eq!(b"val".to_vec(),cluster.must_get(b"a").unwrap());
+    assert_eq!(b"val".to_vec(),cluster.must_get(b"c").unwrap());
+
     let mut req = debugpb::GetMetricsRequest::default();
     req.set_all(true);
     let resp = debug_client.get_metrics(&req).unwrap();
@@ -974,14 +977,23 @@ fn test_debug_store() {
     let resp = debug_client.get_region_properties(&req).unwrap();
     resp.get_props()
         .iter()
-        .find(|p| p.get_name() == "mvcc.min_ts")
+        .find(|p|p.get_name() == "defaultcf.num_entries"&&p.get_value().parse::<i32>().unwrap()>=2)
         .unwrap();
 
     let req = debugpb::GetRangePropertiesRequest::default();
     let resp = debug_client.get_range_properties(&req).unwrap();
     resp.get_properties()
         .iter()
-        .find(|p| p.get_key() == "mvcc.min_ts")
+        .find(|p|p.get_key() == "defaultcf.num_entries"&&p.get_value().parse::<i32>().unwrap()>=2)
+        .unwrap();
+
+    let mut req = debugpb::GetRangePropertiesRequest::default();
+    req.set_start_key(b"d".to_vec());
+    req.set_end_key(b"".to_vec());
+    let resp = debug_client.get_range_properties(&req).unwrap();
+    resp.get_properties()
+        .iter()
+        .find(|p| p.get_key() == "defaultcf.num_entries"&&p.get_value().parse::<i32>().unwrap()<2)
         .unwrap();
 }
 
