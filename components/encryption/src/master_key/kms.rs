@@ -11,8 +11,29 @@ use tikv_util::{
 };
 use tokio::runtime::{Builder, Runtime};
 
-use super::{metadata::MetadataKey, Backend, State};
+use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
 use crate::{crypter::Iv, errors::cloud_convert_error, Error, Result};
+
+#[derive(Debug)]
+pub(crate) struct State {
+    pub(crate) encryption_backend: MemAesGcmBackend,
+    pub(crate) cached_ciphertext_key: EncryptedKey,
+}
+
+impl State {
+    pub(crate) fn new_from_datakey(datakey: DataKeyPair) -> Result<State> {
+        Ok(State {
+            cached_ciphertext_key: datakey.encrypted,
+            encryption_backend: MemAesGcmBackend {
+                key: datakey.plaintext,
+            },
+        })
+    }
+
+    pub(crate) fn cached(&self, ciphertext_key: &EncryptedKey) -> bool {
+        *ciphertext_key == self.cached_ciphertext_key
+    }
+}
 
 #[derive(Debug)]
 pub struct KmsBackend {

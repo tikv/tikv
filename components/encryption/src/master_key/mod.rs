@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cloud::kms::{DataKeyPair, EncryptedKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::box_err;
 
@@ -30,27 +29,6 @@ use self::metadata::*;
 
 mod kms;
 pub use self::kms::KmsBackend;
-
-#[derive(Debug)]
-pub(crate) struct State {
-    pub(crate) encryption_backend: MemAesGcmBackend,
-    pub(crate) cached_ciphertext_key: EncryptedKey,
-}
-
-impl State {
-    pub(crate) fn new_from_datakey(datakey: DataKeyPair) -> Result<State> {
-        Ok(State {
-            cached_ciphertext_key: datakey.encrypted,
-            encryption_backend: MemAesGcmBackend {
-                key: datakey.plaintext,
-            },
-        })
-    }
-
-    pub(crate) fn cached(&self, ciphertext_key: &EncryptedKey) -> bool {
-        *ciphertext_key == self.cached_ciphertext_key
-    }
-}
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextBackend {}
