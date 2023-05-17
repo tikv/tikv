@@ -15,13 +15,13 @@ use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
 use crate::{crypter::Iv, errors::cloud_convert_error, Error, Result};
 
 #[derive(Debug)]
-pub(crate) struct State {
-    pub(crate) encryption_backend: MemAesGcmBackend,
-    pub(crate) cached_ciphertext_key: EncryptedKey,
+struct State {
+    encryption_backend: MemAesGcmBackend,
+    cached_ciphertext_key: EncryptedKey,
 }
 
 impl State {
-    pub(crate) fn new_from_datakey(datakey: DataKeyPair) -> Result<State> {
+    fn new_from_datakey(datakey: DataKeyPair) -> Result<State> {
         Ok(State {
             cached_ciphertext_key: datakey.encrypted,
             encryption_backend: MemAesGcmBackend {
@@ -30,7 +30,7 @@ impl State {
         })
     }
 
-    pub(crate) fn cached(&self, ciphertext_key: &EncryptedKey) -> bool {
+    fn cached(&self, ciphertext_key: &EncryptedKey) -> bool {
         *ciphertext_key == self.cached_ciphertext_key
     }
 }
