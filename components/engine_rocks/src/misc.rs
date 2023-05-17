@@ -147,29 +147,15 @@ impl MiscExt for RocksEngine {
     }
 
     // Don't flush if a memtable is just flushed within the threshold.
-    fn flush_oldest_cf(&self, wait: bool, age_threshold: std::time::Duration) -> Result<()> {
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<()> {
         let cfs = self.cf_names();
         let mut handles = Vec::with_capacity(cfs.len());
         for cf in cfs {
             handles.push(util::get_cf_handle(self.as_inner(), cf)?);
-        }
-        if handles.iter().any(|handle| {
-            match self.as_inner().get_approximate_active_memtable_stats_cf(handle) {
-                Some((_, time)) => {
-                    if let Ok(e) = time.elapsed()
-                        && e >= age_threshold
-                    {
-                        false
-                    } else {
-                        true
-                    }
-                }
-                None => {
-                    true
-                },
-            }
-        }) {
-            return Ok(());
         }
         if let Some((handle, time)) = handles
             .into_iter()
@@ -179,16 +165,12 @@ impl MiscExt for RocksEngine {
                     .map(|(_, time)| (handle, time))
             })
             .min_by(|(_, a), (_, b)| a.cmp(b))
+            && age_threshold.map_or(true, |threshold| time <= threshold)
         {
-            // Double check.
-            if let Ok(e) = time.elapsed()
-                && e >= age_threshold
-            {
-                return self
-                    .as_inner()
-                    .flush_cf(handle, wait, Some(time))
-                    .map_err(r2e);
-            }
+            return self
+                .as_inner()
+                .flush_cf(handle, wait, Some(time))
+                .map_err(r2e);
         }
         Ok(())
     }
@@ -761,20 +743,25 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(1));
         db.put_cf("write", b"k", b"v").unwrap();
         db.put_cf("lock", b"k", b"v").unwrap();
-        db.put_cf("raft", b"k", b"v").unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
         assert_eq!(
             db.get_total_sst_files_size_cf("default").unwrap().unwrap(),
             0
         );
         assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
         assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
-        assert_eq!(db.get_total_sst_files_size_cf("raft").unwrap().unwrap(), 0);
-        db.flush_oldest_cf(true, std::time::Duration::from_secs(1))
+        let now = std::time::SystemTime::now();
+        db.flush_oldest_cf(true, Some(now - std::time::Duration::from_secs(5)))
+            .unwrap();
+        assert_eq!(
+            db.get_total_sst_files_size_cf("default").unwrap().unwrap(),
+            0
+        );
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        db.flush_oldest_cf(true, Some(now - std::time::Duration::from_secs(1)))
             .unwrap();
         assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
         assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
-        assert_eq!(db.get_total_sst_files_size_cf("raft").unwrap().unwrap(), 0);
         assert!(db.get_total_sst_files_size_cf("default").unwrap().unwrap() > 0);
     }
 }
