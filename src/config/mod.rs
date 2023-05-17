@@ -3413,6 +3413,8 @@ impl TikvConfig {
         self.coprocessor.validate()?;
         self.split
             .optimize_for(self.coprocessor.region_split_size());
+        self.raft_store
+            .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.raft_store.validate(
             self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket(),
