@@ -2417,7 +2417,7 @@ mod tests {
             EvalContext {
                 cfg: Arc::new(cfg),
                 warnings,
-                tidb_source: Default::default(),
+                source_stmt: Default::default(),
             }
         };
         struct Case {

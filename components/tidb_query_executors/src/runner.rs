@@ -5,7 +5,7 @@ use std::{convert::TryFrom, sync::Arc};
 use api_version::KvFormat;
 use fail::fail_point;
 use itertools::Itertools;
-use kvproto::{coprocessor::KeyRange, kvrpcpb::TidbSource};
+use kvproto::{coprocessor::KeyRange, kvrpcpb::SourceStmt};
 use protobuf::Message;
 use tidb_query_common::{
     execute_stats::ExecSummary,
@@ -80,7 +80,7 @@ pub struct BatchExecutorsRunner<SS> {
 
     quota_limiter: Arc<QuotaLimiter>,
 
-    tidb_source: TidbSource,
+    source_stmt: SourceStmt,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling
@@ -183,7 +183,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
-    tidb_source: TidbSource,
+    source_stmt: SourceStmt,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -215,7 +215,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     descriptor.get_desc(),
                     is_scanned_range_aware,
                     primary_prefix_column_ids,
-                    tidb_source,
+                    source_stmt,
                 )?
                 .collect_summary(summary_slot_index),
             )
@@ -236,7 +236,7 @@ pub fn build_executors<S: Storage + 'static, F: KvFormat>(
                     descriptor.get_desc(),
                     descriptor.get_unique(),
                     is_scanned_range_aware,
-                    tidb_source,
+                    source_stmt,
                 )?
                 .collect_summary(summary_slot_index),
             )
@@ -433,7 +433,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         is_streaming: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
-        tidb_source: TidbSource,
+        source_stmt: SourceStmt,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -449,7 +449,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             is_streaming || paging_size.is_some(), /* For streaming and paging request,
                                                     * executors will continue scan from range
                                                     * end where last scan is finished */
-            tidb_source.clone(),
+            source_stmt.clone(),
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
@@ -484,7 +484,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             encode_type,
             paging_size,
             quota_limiter,
-            tidb_source,
+            source_stmt,
         })
     }
 
@@ -505,7 +505,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
-        ctx.tidb_source = self.tidb_source.clone();
+        ctx.source_stmt = self.source_stmt.clone();
         let mut record_all = 0;
 
         loop {
@@ -658,8 +658,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut result = self.out_most_executor.next_batch(batch_size).await;
         corr_debug!("internal handle cop request";
-            "start_ts" => ctx.tidb_source.start_ts,
-            "connection id" => ctx.tidb_source.connection_id,
+            "start_ts" => ctx.source_stmt.start_ts,
+            "connection id" => ctx.source_stmt.connection_id,
         );
 
         let is_drained = result.is_drained?;

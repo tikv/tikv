@@ -4,7 +4,7 @@
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::{IsolationLevel, TidbSource, WriteConflictReason};
+use kvproto::kvrpcpb::{IsolationLevel, SourceStmt, WriteConflictReason};
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -484,8 +484,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         Ok(())
     }
 
-    pub fn tidb_source(&self) -> TidbSource {
-        self.cfg.tidb_source.clone()
+    pub fn source_stmt(&self) -> SourceStmt {
+        self.cfg.source_stmt.clone()
     }
 }
 

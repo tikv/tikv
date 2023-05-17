@@ -4,7 +4,7 @@
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, TidbSource, WriteConflictReason};
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, SourceStmt, WriteConflictReason};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -378,8 +378,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         Ok(true)
     }
 
-    pub fn tidb_source(&self) -> TidbSource {
-        self.cfg.tidb_source.clone()
+    pub fn source_stmt(&self) -> SourceStmt {
+        self.cfg.source_stmt.clone()
     }
 }
 

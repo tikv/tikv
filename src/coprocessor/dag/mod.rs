@@ -6,7 +6,7 @@ use api_version::KvFormat;
 use async_trait::async_trait;
 use kvproto::{
     coprocessor::{KeyRange, Response},
-    kvrpcpb::TidbSource,
+    kvrpcpb::SourceStmt,
 };
 use protobuf::Message;
 use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
@@ -33,7 +33,7 @@ pub struct DagHandlerBuilder<S: Store + 'static, F: KvFormat> {
     is_cache_enabled: bool,
     paging_size: Option<u64>,
     quota_limiter: Arc<QuotaLimiter>,
-    tidb_source: TidbSource,
+    source_stmt: SourceStmt,
     _phantom: PhantomData<F>,
 }
 
@@ -48,7 +48,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
         is_cache_enabled: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
-        tidb_source: TidbSource,
+        source_stmt: SourceStmt,
     ) -> Self {
         DagHandlerBuilder {
             req,
@@ -61,7 +61,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             is_cache_enabled,
             paging_size,
             quota_limiter,
-            tidb_source,
+            source_stmt,
             _phantom: PhantomData,
         }
     }
@@ -85,7 +85,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             self.is_streaming,
             self.paging_size,
             self.quota_limiter,
-            self.tidb_source,
+            self.source_stmt,
         )?
         .into_boxed())
     }
@@ -108,7 +108,7 @@ impl BatchDagHandler {
         is_streaming: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
-        tidb_source: TidbSource,
+        source_stmt: SourceStmt,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
@@ -120,7 +120,7 @@ impl BatchDagHandler {
                 is_streaming,
                 paging_size,
                 quota_limiter,
-                tidb_source,
+                source_stmt,
             )?,
             data_version,
         })
