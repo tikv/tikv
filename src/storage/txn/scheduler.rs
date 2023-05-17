@@ -676,6 +676,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
                 let tag = task.cmd.tag();
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
+                if let Command::AcquirePessimisticLock(ref pessimistic_lock) = task.cmd {
+                    info!(
+                        "on_execute: acquire pessimistic lock";
+                        "start_ts" => pessimistic_lock.start_ts,
+                        "cid" => task.cid,
+                        "primary" => ?pessimistic_lock.primary,
+                    );
+                }
 
                 let mut snap_ctx = SnapContext {
                     pb_ctx: task.cmd.ctx(),
@@ -1108,8 +1116,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
                     tls_collect_query(region_id, QueryKind::Prewrite);
                 }
-                Command::AcquirePessimisticLock(_) => {
+                Command::AcquirePessimisticLock(pessimistic_lock) => {
                     tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
+                    info!(
+                        "on_process: acquire pessimistic lock";
+                        "start_ts" => pessimistic_lock.start_ts,
+                        "cid" => task.cid,
+                        "primary" => ?pessimistic_lock.primary,
+                    );
                 }
                 Command::Commit(_) => {
                     tls_collect_query(region_id, QueryKind::Commit);
@@ -1176,6 +1190,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
+
+        let mut start_ts = None;
+        let mut keys = None;
+        if let Command::AcquirePessimisticLock(ref pessimistic_lock) = task.cmd {
+            start_ts = Some(pessimistic_lock.start_ts);
+            keys = Some(pessimistic_lock.keys.clone());
+        }
+
         let group_name = task.cmd.group_name();
         let tracker = task.tracker;
         let scheduler = self.clone();
@@ -1278,7 +1300,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed"; "cid" => cid, "err" => ?err);
+                info!("write command failed"; "cid" => cid, "start_ts" => start_ts.unwrap(), "err" => ?err);
                 scheduler.finish_with_err(cid, err, Some(sched_details));
                 return;
             }
@@ -1295,6 +1317,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             if tag == CommandKind::acquire_pessimistic_lock {
                 assert_eq!(lock_info.len(), 1);
                 let lock_info = lock_info.into_iter().next().unwrap();
+
+                info!(
+                    "lock conflict: acquire pessimistic lock";
+                    "cid" => cid,
+                    "start_ts" => start_ts.unwrap(),
+                    "conflict_key" => ?lock_info.key,
+                    "keys" => ?keys.as_ref().unwrap(),
+                );
 
                 // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
                 // that it's a lock-no-wait request and we need to report error
@@ -1354,36 +1384,53 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return;
         }
 
-        if (tag == CommandKind::acquire_pessimistic_lock
-            || tag == CommandKind::acquire_pessimistic_lock_resumed)
-            && pessimistic_lock_mode == PessimisticLockMode::InMemory
-            && self.try_write_in_memory_pessimistic_locks(
+        if tag == CommandKind::acquire_pessimistic_lock
+            || tag == CommandKind::acquire_pessimistic_lock_resumed {
+            if tag == CommandKind::acquire_pessimistic_lock {
+                info!(
+                    "on_write_finished_before_write_locks: acquire pessimistic lock";
+                    "cid" => cid,
+                    "start_ts" => start_ts.unwrap(),
+                    "keys" => ?keys.as_ref().unwrap(),
+                );
+            }
+            if pessimistic_lock_mode == PessimisticLockMode::InMemory
+                && self.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,
                 &ctx,
             )
-        {
-            // Safety: `self.sched_pool` ensures a TLS engine exists.
-            unsafe {
-                with_tls_engine(|engine: &mut E| {
-                    // We skip writing the raftstore, but to improve CDC old value hit rate,
-                    // we should send the old values to the CDC scheduler.
-                    engine.schedule_txn_extra(to_be_write.extra);
-                })
+            {
+                // Safety: `self.sched_pool` ensures a TLS engine exists.
+                unsafe {
+                    with_tls_engine(|engine: &mut E| {
+                        // We skip writing the raftstore, but to improve CDC old value hit rate,
+                        // we should send the old values to the CDC scheduler.
+                        engine.schedule_txn_extra(to_be_write.extra);
+                    })
+                }
+                if tag == CommandKind::acquire_pessimistic_lock {
+                    info!(
+                        "on_write_finished: acquire pessimistic lock";
+                        "cid" => cid,
+                        "start_ts" => start_ts.unwrap(),
+                        "keys" => ?keys.as_ref().unwrap(),
+                    );
+                }
+                scheduler.on_write_finished(
+                    cid,
+                    pr,
+                    Ok(()),
+                    lock_guards,
+                    false,
+                    false,
+                    new_acquired_locks,
+                    tag,
+                    &group_name,
+                    sched_details,
+                );
+                return;
             }
-            scheduler.on_write_finished(
-                cid,
-                pr,
-                Ok(()),
-                lock_guards,
-                false,
-                false,
-                new_acquired_locks,
-                tag,
-                &group_name,
-                sched_details,
-            );
-            return;
         }
 
         let mut is_async_apply_prewrite = false;

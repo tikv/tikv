@@ -1472,7 +1472,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
             }
-            Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
+            Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, start_ts, primary, .. }) => {
                 let keys = keys.iter().map(|k| k.0.as_encoded());
                 Self::check_api_version(
                     self.api_version,
@@ -1481,6 +1481,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     keys.clone(),
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
+                info!(
+                    "on_sched_txn_command: acquire pessimistic lock";
+                    "start_ts" => start_ts,
+                    "primary" => ?primary,
+                );
             }
             Command::AcquirePessimisticLockResumed(AcquirePessimisticLockResumed {
                 items, ..
