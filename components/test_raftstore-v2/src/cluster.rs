@@ -56,7 +56,7 @@ use test_raftstore::{
     new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
     PartitionFilterFactory, RawEngine,
 };
-use tikv::server::Result as ServerResult;
+use tikv::{server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
     box_err, box_try, debug, error,
     future::block_on_timeout,
