@@ -1392,6 +1392,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     "cid" => cid,
                     "start_ts" => start_ts.unwrap(),
                     "keys" => ?keys.as_ref().unwrap(),
+                    "to_be_write" => ?to_be_write,
                 );
             }
             if pessimistic_lock_mode == PessimisticLockMode::InMemory
