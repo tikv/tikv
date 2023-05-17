@@ -1484,7 +1484,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 info!(
                     "on_sched_txn_command: acquire pessimistic lock";
                     "start_ts" => start_ts,
-                    "primary" => ?primary,
+                    "primary" => ?Key::from_encoded(primary.to_vec()),
                 );
             }
             Command::AcquirePessimisticLockResumed(AcquirePessimisticLockResumed {

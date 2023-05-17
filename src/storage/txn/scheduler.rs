@@ -53,7 +53,7 @@ use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 use crate::{
     server::lock_manager::waiter_manager,
@@ -681,7 +681,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         "on_execute: acquire pessimistic lock";
                         "start_ts" => pessimistic_lock.start_ts,
                         "cid" => task.cid,
-                        "primary" => ?pessimistic_lock.primary,
+                        "primary" => ?Key::from_encoded(pessimistic_lock.primary.to_vec()),
                     );
                 }
 
@@ -1122,7 +1122,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         "on_process: acquire pessimistic lock";
                         "start_ts" => pessimistic_lock.start_ts,
                         "cid" => task.cid,
-                        "primary" => ?pessimistic_lock.primary,
+                        "primary" => ?Key::from_encoded(pessimistic_lock.primary.to_vec()),
                     );
                 }
                 Command::Commit(_) => {
@@ -1396,10 +1396,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
             if pessimistic_lock_mode == PessimisticLockMode::InMemory
                 && self.try_write_in_memory_pessimistic_locks(
-                txn_ext.as_deref(),
-                &mut to_be_write,
-                &ctx,
-            )
+                    txn_ext.as_deref(),
+                    &mut to_be_write,
+                    &ctx,
+                )
             {
                 // Safety: `self.sched_pool` ensures a TLS engine exists.
                 unsafe {
