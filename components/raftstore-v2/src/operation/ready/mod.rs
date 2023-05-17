@@ -298,7 +298,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if self.is_leader() {
                 self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
             }
-            // We only cache peer with an vaild ID.
+            // We only cache peer with an valid ID.
             // It prevents cache peer(0,0) which is sent by region split.
             self.insert_peer_cache(from_peer);
         }
@@ -316,6 +316,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.is_leader()
+                && self.on_step_read_index(ctx, msg.mut_message())
+            {
+                // Read index has respond in `on_step_read_index`.
+                return;
+            }
+
             // As this peer is already created, the empty split message is meaningless.
             if is_empty_split_message(&msg) {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
@@ -611,6 +619,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             |entry| entry.index == self.raft_group().raft.raft_log.last_index()
         ));
 
+        fail::fail_point!(
+            "before_handle_snapshot_ready_3",
+            self.peer_id() == 3 && self.get_pending_snapshot().is_some(),
+            |_| ()
+        );
+
         self.on_role_changed(ctx, &ready);
 
         if let Some(hs) = ready.hs() {
@@ -903,7 +917,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
-                    self.leader_lease_mut().expire();
+                    self.expire_lease_on_became_follower(&ctx.store_meta);
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
