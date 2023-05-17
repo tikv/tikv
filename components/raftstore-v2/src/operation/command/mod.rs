@@ -571,6 +571,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 entry.get_term(),
             ) {
                 Ok(decoder) => {
+                    fail::fail_point!(
+                        "on_apply_write_cmd",
+                        cfg!(release) || self.peer_id() == 3,
+                        |_| {
+                            unimplemented!();
+                        }
+                    );
                     util::compare_region_epoch(
                         decoder.header().get_region_epoch(),
                         self.region(),
