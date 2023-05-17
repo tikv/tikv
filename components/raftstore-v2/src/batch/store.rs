@@ -54,7 +54,7 @@ use crate::{
     operation::{SharedReadTablet, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{pd, tablet_flush, tablet_gc},
+    worker::{cleanup, pd, tablet_flush, tablet_gc},
     Error, Result,
 };
 
@@ -466,6 +466,7 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub tablet_gc: Scheduler<tablet_gc::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
     pub tablet_flush: Scheduler<tablet_flush::Task>,
+    pub cleanup: Scheduler<cleanup::Task>,
 
     // Following is not maintained by raftstore itself.
     pub split_check: Scheduler<SplitCheckTask>,
@@ -490,6 +491,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
     tablet_flush: Worker,
+    cleanup_worker: Worker,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
@@ -506,6 +508,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             tablet_gc: Worker::new("tablet-gc-worker"),
             async_write: StoreWriters::new(None),
             purge,
+            cleanup_worker: Worker::new("cleanup-worker"),
             tablet_flush,
             background,
         }
@@ -640,6 +643,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet_flush::Runner::new(router.clone(), tablet_registry.clone(), self.logger.clone()),
         );
 
+        let compact_runner =
+            cleanup::CompactRunner::new(tablet_registry.clone(), self.logger.clone());
+        let cleanup_worker_scheduler = workers
+            .cleanup_worker
+            .start("clean-up-worker", cleanup::Runner::new(compact_runner));
+
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
@@ -647,6 +656,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
             tablet_flush: tablet_flush_scheduler,
+            cleanup: cleanup_worker_scheduler,
         };
 
         let builder = StorePollerBuilder::new(

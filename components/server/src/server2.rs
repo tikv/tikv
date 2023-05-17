@@ -827,6 +827,7 @@ where
 
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
 
+        self.config.raft_store.optimize_for(true);
         self.config
             .raft_store
             .validate(
