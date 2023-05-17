@@ -496,12 +496,12 @@ impl ServerCluster {
         let apply_router = system.apply_router();
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(false);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
-                false,
             )
             .unwrap();
         let health_service = HealthService::default();

@@ -714,6 +714,7 @@ where
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
+        self.core.config.raft_store.optimize_for(false);
         self.core
             .config
             .raft_store
@@ -721,7 +722,6 @@ where
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
                 self.core.config.coprocessor.region_bucket_size,
-                false,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
