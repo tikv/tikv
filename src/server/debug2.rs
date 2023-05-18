@@ -472,8 +472,8 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
 
     fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
         let mut props = vec![];
-        let start= &keys::data_key(start);
-        let end =&keys::data_end_key(end);
+        let start = &keys::data_key(start);
+        let end = &keys::data_end_key(end);
         let regions = find_region_states_by_key_range(&self.raft_engine, start, end);
         for (region_id, start_key, end_key, region_state) in regions {
             let mut tablet_cache =
