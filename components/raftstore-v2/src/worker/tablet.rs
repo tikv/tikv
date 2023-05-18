@@ -48,6 +48,7 @@ pub enum Task<EK> {
     /// split when flush finishes
     Flush {
         region_id: u64,
+        cf: Option<String>,
         cb: Option<Box<dyn FnOnce() + Send>>,
     },
 }
@@ -88,13 +89,15 @@ impl<EK> Display for Task<EK> {
             }
             Task::Flush {
                 region_id,
+                cf,
                 cb: on_flush_finish,
             } => {
                 write!(
                     f,
-                    "flush tablet for region_id {}, is leader {}",
+                    "flush tablet for region_id {}, is leader {}, cf {:?}",
                     region_id,
-                    on_flush_finish.is_some()
+                    on_flush_finish.is_some(),
+                    cf,
                 )
             }
         }
@@ -332,7 +335,12 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    fn flush_tablet(&self, region_id: u64, cb: Option<Box<dyn FnOnce() + Send>>) {
+    fn flush_tablet(
+        &self,
+        region_id: u64,
+        cf: Option<String>,
+        cb: Option<Box<dyn FnOnce() + Send>>,
+    ) {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
@@ -347,7 +355,12 @@ impl<EK: KvEngine> Runner<EK> {
             self.background_pool
                 .spawn(async move {
                     // sync flush for leader to let the flush happend before later checkpoint.
-                    tablet.flush_cfs(DATA_CFS, true).unwrap();
+                    if let Some(cf) = cf {
+                        tablet.flush_cf(cf.as_str(), true).unwrap();
+                    } else {
+                        tablet.flush_cfs(DATA_CFS, true).unwrap();
+                    }
+
                     let elapsed = now.saturating_elapsed();
                     // to be removed after when it's stable
                     info!(
@@ -368,7 +381,11 @@ impl<EK: KvEngine> Runner<EK> {
                 "region_id" => region_id,
             );
 
-            tablet.flush_cfs(DATA_CFS, false).unwrap();
+            if let Some(cf) = cf {
+                tablet.flush_cf(cf.as_str(), false).unwrap();
+            } else {
+                tablet.flush_cfs(DATA_CFS, false).unwrap();
+            }
         }
     }
 }
@@ -398,7 +415,7 @@ where
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
-            Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
+            Task::Flush { region_id, cf, cb } => self.flush_tablet(region_id, cf, cb),
         }
     }
 }

@@ -69,6 +69,7 @@ use crate::{
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
     worker::tablet,
+    TabletTask,
 };
 
 const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
@@ -287,13 +288,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
                         return;
                     }
-                    let _ = ctx
-                        .schedulers
-                        .tablet
-                        .schedule(crate::worker::tablet::Task::Flush {
-                            region_id: self.region().get_id(),
-                            cb: None,
-                        });
+                    let _ = ctx.schedulers.tablet.schedule(TabletTask::Flush {
+                        region_id: self.region().get_id(),
+                        cf: None,
+                        cb: None,
+                    });
                     return;
                 }
                 ExtraMessageType::MsgWantRollbackMerge => {

@@ -43,6 +43,7 @@ use crate::{
     batch::StoreContext,
     raft::Peer,
     router::{CmdResChannel, PeerMsg, RaftRequest},
+    TabletTask,
 };
 
 #[derive(Debug)]
@@ -195,12 +196,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 }
                             };
 
-                            if let Err(e) =
-                                ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
-                                    region_id,
-                                    cb: Some(Box::new(on_flush_finish)),
-                                })
-                            {
+                            if let Err(e) = ctx.schedulers.tablet.schedule(TabletTask::Flush {
+                                region_id,
+                                cf: None,
+                                cb: Some(Box::new(on_flush_finish)),
+                            }) {
                                 error!(
                                     self.logger,
                                     "Fail to schedule flush task";
