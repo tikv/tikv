@@ -684,7 +684,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             cleanup::CompactRunner::new(tablet_registry.clone(), self.logger.clone());
         let cleanup_worker_scheduler = workers
             .cleanup_worker
-            .start("clean-up-worker", cleanup::Runner::new(compact_runner));
+            .start("cleanup-worker", cleanup::Runner::new(compact_runner));
 
         let checkpoint_scheduler = workers.checkpoint.start(
             "checkpoint-worker",
