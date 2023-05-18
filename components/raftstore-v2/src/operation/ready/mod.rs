@@ -233,6 +233,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         });
                     return;
                 }
+                ExtraMessageType::MsgWantRollbackMerge => return,
                 ExtraMessageType::MsgAvailabilityRequest => {
                     self.on_availability_request(
                         ctx,

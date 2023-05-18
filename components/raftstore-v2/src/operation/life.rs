@@ -53,7 +53,7 @@ use crate::{
     fsm::{PeerFsm, Store},
     operation::command::report_split_init_finish,
     raft::{Peer, Storage},
-    router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
+    router::{CmdResChannel, PeerMsg, PeerTick},
 };
 
 /// When a peer is about to destroy, it becomes `WaitReady` first. If there is
@@ -574,9 +574,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         let check = extra_msg.get_check_gc_peer();
-        let Some(source_index) = self.storage().region_state().get_merged_records().iter().find(|r| {
-            r.get_source_peers().iter().any(|p| p.get_id() == check.get_check_peer().get_id())
-        }).map(|r| r.get_source_index()) else { return };
+        let check_peer_id = check.get_check_peer().get_id();
+        let records = self.storage().region_state().get_merged_records();
+        let Some(record) = records.iter().find(|r| {
+            r.get_source_peers().iter().any(|p| p.get_id() == check_peer_id)
+        }) else { return };
+        let source_index = record.get_source_index();
         forward_destroy_to_source_peer(msg, |m| {
             let source_checkpoint = super::merge_source_path(
                 &ctx.tablet_registry,
@@ -584,22 +587,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 source_index,
             );
             if source_checkpoint.exists() {
-                let mailbox = ctx.router.mailbox(m.get_region_id());
-                let control = if mailbox.is_some() {
-                    None
-                } else {
-                    Some(ctx.router.control_mailbox())
-                };
+                let router = ctx.router.clone();
                 self.record_tombstone_tablet_path_callback(
                     ctx,
                     source_checkpoint,
                     extra_msg.get_index(),
                     move || {
-                        if let Some(mailbox) = mailbox {
-                            let _ = mailbox.try_send(PeerMsg::RaftMessage(m.into()));
-                        } else {
-                            let _ = control.unwrap().try_send(StoreMsg::RaftMessage(m.into()));
-                        }
+                        let _ = router.send_raft_message(m.into());
                     },
                 );
             }
