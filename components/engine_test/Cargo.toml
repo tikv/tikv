@@ -2,7 +2,7 @@
 name = "engine_test"
 version = "0.0.1"
 description = "A single engine that masquerades as all other engines, for testing"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
