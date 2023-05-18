@@ -629,8 +629,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // Notes on the lifetime of this checkpoint:
         // - Target region is responsible to clean up if it has proposed `CommitMerge`.
         //   It will destroy the checkpoint if the persisted apply index is advanced. It
-        //   will also try to destroy when handling the `GcPeerResponse` from source
-        //   peers.
+        //   will also destroy the checkpoint before sending `GcPeerResponse` to target
+        //   leader.
         // - Otherwise, the `PrepareMerge` is rollback-ed. In this case the source
         //   region is responsible to clean up (see `rollback_merge`).
 

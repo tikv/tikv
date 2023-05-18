@@ -433,15 +433,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             if prefix == SPLIT_PREFIX {
                 self.remove_dir(&path)?;
                 continue;
-            } else if prefix == MERGE_IN_PROGRESS_PREFIX {
+            } else if prefix == MERGE_IN_PROGRESS_PREFIX || prefix == MERGE_SOURCE_PREFIX {
                 continue;
-            } else if prefix == MERGE_SOURCE_PREFIX {
-                // `PrepareMerge` must have been rollback-ed.
-                if fsm.peer().storage().entry_storage().last_index() > tablet_index {
-                    file_system::remove_dir_all(&path)?;
-                } else {
-                    continue;
-                }
             } else if prefix.is_empty() {
                 // Stale split data can be deleted.
                 if fsm.peer().storage().tablet_index() > tablet_index {

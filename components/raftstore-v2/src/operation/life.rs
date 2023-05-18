@@ -53,7 +53,7 @@ use crate::{
     fsm::{PeerFsm, Store},
     operation::command::report_split_init_finish,
     raft::{Peer, Storage},
-    router::{CmdResChannel, PeerMsg, PeerTick},
+    router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
 };
 
 /// When a peer is about to destroy, it becomes `WaitReady` first. If there is
@@ -573,61 +573,52 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        let check = extra_msg.get_check_gc_peer();
+        let Some(source_index) = self.storage().region_state().get_merged_records().iter().find(|r| {
+            r.get_source_peers().iter().any(|p| p.get_id() == check.get_check_peer().get_id())
+        }).map(|r| r.get_source_index()) else { return };
         forward_destroy_to_source_peer(msg, |m| {
-            let _ = ctx.router.send_raft_message(m.into());
+            let source_checkpoint = super::merge_source_path(
+                &ctx.tablet_registry,
+                check.get_check_region_id(),
+                source_index,
+            );
+            if source_checkpoint.exists() {
+                let mailbox = ctx.router.mailbox(m.get_region_id());
+                let control = if mailbox.is_some() {
+                    None
+                } else {
+                    Some(ctx.router.control_mailbox())
+                };
+                self.record_tombstone_tablet_path_callback(
+                    ctx,
+                    source_checkpoint,
+                    extra_msg.get_index(),
+                    move || {
+                        if let Some(mailbox) = mailbox {
+                            let _ = mailbox.try_send(PeerMsg::RaftMessage(m.into()));
+                        } else {
+                            let _ = control.unwrap().try_send(StoreMsg::RaftMessage(m.into()));
+                        }
+                    },
+                );
+            }
         });
     }
 
     /// A peer confirms it's destroyed.
-    pub fn on_gc_peer_response<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, msg: &RaftMessage) {
+    pub fn on_gc_peer_response(&mut self, msg: &RaftMessage) {
         let gc_peer_id = msg.get_from_peer().get_id();
         let state = self.storage().region_state();
-
-        let mut has_merged = false;
-        for r in state.get_merged_records().iter() {
-            if r.get_source_peers()
-                .iter()
-                .any(|p| p.get_id() == gc_peer_id)
-            {
-                has_merged = true;
-                let source_checkpoint = super::merge_source_path(
-                    &ctx.tablet_registry,
-                    r.get_source_region_id(),
-                    r.get_source_index(),
-                );
-                // Source checkpoint may be leaked if target region used snapshot and skipped
-                // applying `CommitMerge`. We need to check them until the checkpoint is
-                // physically deleted.
-                if source_checkpoint.exists() {
-                    let mut req = RaftCmdRequest::default();
-                    let header = req.mut_header();
-                    header.set_region_id(self.region_id());
-                    header.set_peer(self.peer().clone());
-                    let admin = req.mut_admin_request();
-                    admin.set_cmd_type(AdminCmdType::UpdateGcPeer);
-                    let gc_peer = admin.mut_update_gc_peers();
-                    gc_peer.set_peer_id(vec![gc_peer_id]);
-
-                    let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
-                    self.record_tombstone_tablet_path_callback(
-                        ctx,
-                        source_checkpoint,
-                        r.get_index(),
-                        move || {
-                            // It's OK to fail as we will retry by tick.
-                            let _ = mailbox.force_send(PeerMsg::admin_command(req).0);
-                        },
-                    );
-                    return;
-                }
-            }
-        }
-
-        if !has_merged
-            && state
-                .get_removed_records()
-                .iter()
-                .all(|p| p.get_id() != gc_peer_id)
+        if state
+            .get_removed_records()
+            .iter()
+            .all(|p| p.get_id() != gc_peer_id)
+            && state.get_merged_records().iter().all(|p| {
+                p.get_source_peers()
+                    .iter()
+                    .all(|p| p.get_id() != gc_peer_id)
+            })
         {
             return;
         }

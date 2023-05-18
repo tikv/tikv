@@ -6,7 +6,7 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb,
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse},
-    raft_serverpb::{MergeState, PeerState},
+    raft_serverpb::PeerState,
 };
 use protobuf::Message;
 use raftstore::{
@@ -101,8 +101,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         region.mut_region_epoch().set_version(version + 1);
         self.region_state_mut().set_region(region.clone());
         self.region_state_mut().set_state(PeerState::Normal);
-        self.region_state_mut()
-            .set_merge_state(MergeState::default());
+        self.region_state_mut().take_merge_state();
 
         PEER_ADMIN_CMD_COUNTER.rollback_merge.success.inc();
         Ok((
