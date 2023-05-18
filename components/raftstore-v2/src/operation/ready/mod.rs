@@ -306,6 +306,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
         } else {
+            // As this peer is already created, the empty split message is meaningless.
+            if is_empty_split_message(&msg) {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
             if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
@@ -316,21 +322,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
+
             if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
                 && self.is_leader()
                 && self.on_step_read_index(ctx, msg.mut_message())
             {
-                // Read index has respond in `on_step_read_index`.
-                return;
-            }
-
-            // As this peer is already created, the empty split message is meaningless.
-            if is_empty_split_message(&msg) {
-                ctx.raft_metrics.message_dropped.stale_msg.inc();
-                return;
-            }
-
-            if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+                // Read index has respond in `on_step_read_index`,
+                // No need to step again.
+            } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
                 error!(self.logger, "raft step error"; "err" => ?e);
             } else {
                 let committed_index = self.raft_group().raft.raft_log.committed;
