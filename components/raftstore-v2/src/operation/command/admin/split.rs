@@ -233,7 +233,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_update_region_size(&mut self, size: u64) {
-        println!("on_update_region_size:{}",size);
+        fail_point!("on_update_region_size");
         self.split_flow_control_mut().approximate_size = Some(size);
         self.add_pending_tick(PeerTick::SplitRegionCheck);
         self.add_pending_tick(PeerTick::PdHeartbeat);
@@ -252,23 +252,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.add_pending_tick(PeerTick::SplitRegionCheck);
     }
 
-    pub fn update_split_flow_control<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        metrics: &ApplyMetrics,
-    ) {
+    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
         let control = self.split_flow_control_mut();
         control.size_diff_hint += metrics.size_diff_hint;
-        if metrics.need_size_check {
-            self.force_split_check(ctx);
-        }
         if self.is_leader() {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
     }
 
     pub fn force_split_check<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
-        println!("force_split_check");
         let control = self.split_flow_control_mut();
         control.size_diff_hint = ctx.cfg.region_split_check_diff().0 as i64;
         self.add_pending_tick(PeerTick::SplitRegionCheck);

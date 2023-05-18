@@ -1446,7 +1446,7 @@ pub fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
         // key9 is always the last region.
         cluster.batch_put(b"key9", requests).unwrap();
     }
-    let new_size = cluster.pd_client.get_region_approximate_size(1).unwrap();
+
     // delete_range request with notify_only set should not actually delete data.
     cluster.must_notify_delete_range_cf(cf, b"", b"");
 
@@ -1455,7 +1455,7 @@ pub fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
         let (k, v) = data_set.choose(&mut rng).unwrap();
         assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
     }
-    
+
     // Empty keys means the whole range.
     cluster.must_delete_range_cf(cf, b"", b"");
 
@@ -1463,10 +1463,4 @@ pub fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
         let k = &data_set.choose(&mut rng).unwrap().0;
         assert!(cluster.get_cf(cf, k).is_none());
     }
-
-    std::thread::sleep(std::time::Duration::from_secs(5));
-
-    let size = cluster.pd_client.get_region_approximate_size(1);
-    assert!(size.unwrap()>0);
-    println!("size:{:?},new_size:{:?}", size,new_size);
 }

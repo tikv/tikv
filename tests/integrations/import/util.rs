@@ -9,7 +9,7 @@ use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
 use security::SecurityConfig;
 use test_raftstore::*;
 use tikv::config::TikvConfig;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableSize, HandyRwLock};
 use uuid::Uuid;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
@@ -82,8 +82,6 @@ pub fn open_cluster_and_tikv_import_client_v2(
         config.server.addr = "127.0.0.1:0".to_owned();
         let cleanup_interval = Duration::from_millis(10);
         config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
-        config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
-        config.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
         config.server.grpc_concurrency = 1;
         config
     });
