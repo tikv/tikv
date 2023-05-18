@@ -623,7 +623,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                             {
                                 std::thread::sleep(limiter.consume_duration(1));
                                 if let Err(e) = t.flush_oldest_cf(true, Some(threshold)) {
-                                    warn!(logger, "failed to flush oldest cf: {:?}", e);
+                                    warn!(logger, "failed to flush oldest cf"; "err" => %e);
                                 }
                             }
                         }

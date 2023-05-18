@@ -3295,6 +3295,8 @@ impl TikvConfig {
                 .to_owned();
         }
 
+        self.rocksdb.optimize_for(self.storage.engine);
+
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
             if !self.raft_engine.enable {
@@ -3307,6 +3309,15 @@ impl TikvConfig {
                     recovery_threads,
                 );
                 self.raft_engine.config.recovery_threads = recovery_threads;
+            }
+            // Filled in DbOptions::optimize_for.
+            let write_buffer_limit = self.rocksdb.write_buffer_limit.unwrap();
+            if self.raft_engine.config.purge_threshold.0 < write_buffer_limit.0 * 2 {
+                self.raft_engine.config.purge_threshold.0 = write_buffer_limit.0 * 2;
+                info!(
+                    "raft-engine.purge-threshold is too small. Set it to {} instead.",
+                    self.raft_engine.config.purge_threshold,
+                );
             }
             if self.rocksdb.titan.enabled {
                 return Err("partitioned-raft-kv doesn't support titan.".into());
@@ -3404,8 +3415,6 @@ impl TikvConfig {
             self.log_backup.temp_path =
                 config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-temp")?;
         }
-
-        self.rocksdb.optimize_for(self.storage.engine);
 
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
