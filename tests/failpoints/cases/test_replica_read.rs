@@ -475,7 +475,7 @@ fn test_replica_read_after_transfer_leader() {
 // This test is for reproducing the bug that some replica reads was sent to a
 // leader and shared a same read index because of the optimization on leader.
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_after_transfer_leader() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -572,7 +572,7 @@ fn test_read_index_after_transfer_leader() {
 /// Test if the read index request can get a correct response when the commit
 /// index of leader if not up-to-date after transferring leader.
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_batch_read_index_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(100));
