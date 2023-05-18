@@ -9,7 +9,7 @@ use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
 use security::SecurityConfig;
 use test_raftstore::*;
 use tikv::config::TikvConfig;
-use tikv_util::{config::ReadableSize, HandyRwLock};
+use tikv_util::HandyRwLock;
 use uuid::Uuid;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
