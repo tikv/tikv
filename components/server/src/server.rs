@@ -85,6 +85,7 @@ use tikv::{
     },
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
+        debug::{Debugger, DebuggerImpl},
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
@@ -1030,14 +1031,18 @@ where
             .unwrap()
             .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
 
+        let mut debugger = DebuggerImpl::new(
+            engines.engines.clone(),
+            self.cfg_controller.as_ref().unwrap().clone(),
+        );
+        debugger.set_kv_statistics(self.kv_statistics.clone());
+        debugger.set_raft_statistics(self.raft_statistics.clone());
+
         // Debug service.
         let debug_service = DebugService::new(
-            engines.engines.clone(),
-            self.kv_statistics.clone(),
-            self.raft_statistics.clone(),
+            debugger,
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
-            self.cfg_controller.as_ref().unwrap().clone(),
         );
         if servers
             .server

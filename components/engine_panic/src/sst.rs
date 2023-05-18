@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{marker::PhantomData, path::PathBuf};
+use std::{marker::PhantomData, path::PathBuf, sync::Arc};
 
 use engine_traits::{
     CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, RefIterable, Result,
@@ -19,6 +19,12 @@ pub struct PanicSstReader;
 
 impl SstReader for PanicSstReader {
     fn open(path: &str) -> Result<Self> {
+        panic!()
+    }
+    fn open_encrypted<E: engine_traits::EncryptionKeyManager>(
+        path: &str,
+        mgr: Arc<E>,
+    ) -> Result<Self> {
         panic!()
     }
     fn verify_checksum(&self) -> Result<()> {

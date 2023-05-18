@@ -1445,10 +1445,10 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 
     // The gap is too large, so the previous merge should fail. And this new put
     // request should be allowed.
-    let res = cluster.async_put(b"k1", b"new_val").unwrap();
+    let mut res = cluster.async_put(b"k1", b"new_val").unwrap();
 
     cluster.clear_send_filters();
-    res.recv().unwrap();
+    res.recv_timeout(Duration::from_secs(5)).unwrap();
 
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
 }

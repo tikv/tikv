@@ -8,8 +8,11 @@ use std::{
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
 use engine_traits::{Checkpointer, KvEngine, Peekable, SyncMutable, LARGE_CFS};
 use futures::executor::block_on;
-use grpcio::Environment;
-use kvproto::raft_serverpb::{RaftMessage, *};
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{
+    raft_serverpb::{RaftMessage, *},
+    tikvpb::TikvClient,
+};
 use raft::eraftpb::{MessageType, Snapshot};
 use raftstore::{
     errors::Result,
@@ -132,26 +135,19 @@ fn test_v1_receive_snap_from_v2() {
         let snap_mgr = cluster_v2.get_snap_mgr(1);
         let security_mgr = cluster_v2.get_security_mgr();
         let (msg, snap_key) = generate_snap(&engine, region_id, &snap_mgr);
-        let cfg = tikv::server::Config::default();
         let limit = Limiter::new(f64::INFINITY);
         let env = Arc::new(Environment::new(1));
         let _ = block_on(async {
-            send_snap_v2(
-                env.clone(),
-                snap_mgr.clone(),
-                security_mgr.clone(),
-                &cfg,
-                &s1_addr,
-                msg.clone(),
-                limit.clone(),
-            )
-            .unwrap()
-            .await
+            let client =
+                TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+            send_snap_v2(client, snap_mgr.clone(), msg.clone(), limit.clone())
+                .await
+                .unwrap()
         });
         let send_result = block_on(async {
-            send_snap_v2(env, snap_mgr, security_mgr, &cfg, &s2_addr, msg, limit)
-                .unwrap()
-                .await
+            let client =
+                TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s2_addr));
+            send_snap_v2(client, snap_mgr, msg, limit).await
         });
         // snapshot should be rejected by cluster v1 tikv, and the snapshot should be
         // deleted.
