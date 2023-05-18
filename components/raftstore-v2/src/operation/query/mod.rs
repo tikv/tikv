@@ -164,7 +164,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Err(e);
         }
 
-        // TODO: check applying snapshot
+        // Check whether the peer is initialized.
+        if !self.storage().is_initialized() {
+            raft_metrics.invalid_proposal.region_not_initialized.inc();
+            let region_id = msg.get_header().get_region_id();
+            return Err(Error::RegionNotInitialized(region_id));
+        }
 
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg.get_header(), self.term()) {

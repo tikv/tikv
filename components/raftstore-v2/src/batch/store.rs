@@ -224,6 +224,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
     }
 
     fn handle_normal(&mut self, fsm: &mut impl DerefMut<Target = PeerFsm<EK, ER>>) -> HandleResult {
+        fail::fail_point!(
+            "pause_on_peer_collect_message",
+            fsm.deref_mut().peer().peer_id() == 1,
+            |_| unreachable!()
+        );
+        fail::fail_point!(
+            "on_peer_collect_message_2",
+            fsm.deref_mut().peer().peer_id() == 2,
+            |_| unreachable!()
+        );
         debug_assert!(self.peer_msg_buf.is_empty());
         let batch_size = self.messages_per_tick();
         let received_cnt = fsm.recv(&mut self.peer_msg_buf, batch_size);
