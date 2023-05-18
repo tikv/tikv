@@ -27,7 +27,7 @@ use fail::fail_point;
 use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
-    kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
+    kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb::{self, PeerRole},
     pdpb::{self, PeerStats},
     raft_cmdpb::{
@@ -571,13 +571,12 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
 pub fn propose_read_index<T: raft::Storage>(
     raft_group: &mut RawNode<T>,
     request: Option<&raft_cmdpb::ReadIndexRequest>,
-    locked: Option<&LockInfo>,
 ) -> (Uuid, bool) {
     let last_pending_read_count = raft_group.raft.pending_read_count();
     let last_ready_read_count = raft_group.raft.ready_read_count();
 
     let id = Uuid::new_v4();
-    raft_group.read_index(ReadIndexContext::fields_to_bytes(id, request, locked));
+    raft_group.read_index(ReadIndexContext::fields_to_bytes(id, request, None));
 
     let pending_read_count = raft_group.raft.pending_read_count();
     let ready_read_count = raft_group.raft.ready_read_count();
@@ -3614,7 +3613,7 @@ where
             let term = self.term();
             self.leader_lease
                 .maybe_new_remote_lease(term)
-                .map(ReadProgress::leader_lease)
+                .map(ReadProgress::set_leader_lease)
         };
         if let Some(progress) = progress {
             let mut meta = ctx.store_meta.lock().unwrap();
@@ -4051,7 +4050,7 @@ where
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        let (id, dropped) = self.propose_read_index(request.as_ref(), None);
+        let (id, dropped) = self.propose_read_index(request.as_ref());
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
@@ -4098,9 +4097,8 @@ where
     pub fn propose_read_index(
         &mut self,
         request: Option<&raft_cmdpb::ReadIndexRequest>,
-        locked: Option<&LockInfo>,
     ) -> (Uuid, bool) {
-        propose_read_index(&mut self.raft_group, request, locked)
+        propose_read_index(&mut self.raft_group, request)
     }
 
     /// Returns (minimal matched, minimal committed_index)
@@ -6063,6 +6061,10 @@ mod tests {
         fn must_call() -> ExtCallback {
             let mut d = DropPanic(true);
             Box::new(move || {
+                // Must move the entire struct to closure,
+                // or else it will be dropped early in 2021 edition
+                // https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+                let _ = &d;
                 d.0 = false;
             })
         }

@@ -9,7 +9,10 @@ use engine_traits::{CfName, KvEngine, TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
 use futures::future::BoxFuture;
 use kvproto::{
-    encryptionpb::EncryptionMethod, kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse,
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::Context,
+    metapb,
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
 };
 use raftstore::Result;
 use rand::{prelude::SliceRandom, RngCore};
@@ -21,10 +24,11 @@ use tikv::{
     storage::{
         config::EngineType,
         kv::{SnapContext, SnapshotExt},
-        Engine, Snapshot,
+        point_key_range, Engine, Snapshot,
     },
 };
 use tikv_util::{config::ReadableDuration, worker::LazyWorker, HandyRwLock};
+use txn_types::Key;
 
 use crate::{bootstrap_store, cluster::Cluster, ServerCluster, Simulator};
 
@@ -234,7 +238,7 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     key: &[u8],
     read_quorum: bool,
     replica_read: bool,
-) -> BoxFuture<'static, Result<RaftCmdResponse>> {
+) -> BoxFuture<'static, RaftCmdResponse> {
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -243,8 +247,43 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     );
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
-    let f = cluster.sim.wl().async_read(request);
-    Box::pin(async move { f.await })
+    let node_id = request.get_header().get_peer().get_store_id();
+    let f = cluster.sim.wl().async_read(node_id, request);
+    Box::pin(async move { f.await.unwrap() })
+}
+
+pub fn async_read_index_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    let mut cmd = new_get_cmd(key);
+    cmd.mut_read_index().set_start_ts(u64::MAX);
+    cmd.mut_read_index()
+        .mut_key_ranges()
+        .push(point_key_range(Key::from_raw(key)));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        read_quorum,
+    );
+    // Use replica read to issue a read index.
+    request.mut_header().set_replica_read(true);
+    request.mut_header().set_peer(peer);
+    let node_id = request.get_header().get_peer().get_store_id();
+    let f = cluster.sim.wl().async_read(node_id, request);
+    Box::pin(async move { f.await.unwrap() })
+}
+
+pub fn async_command_on_node<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    node_id: u64,
+    request: RaftCmdRequest,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    cluster.sim.wl().async_command_on_node(node_id, request)
 }
 
 pub fn test_delete_range<T: Simulator<EK>, EK: KvEngine>(cluster: &mut Cluster<T, EK>, cf: CfName) {

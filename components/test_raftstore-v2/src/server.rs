@@ -810,10 +810,11 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
 
     fn async_snapshot(
         &mut self,
+        node_id: u64,
         request: kvproto::raft_cmdpb::RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
-    {
-        let node_id = request.get_header().get_peer().get_store_id();
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
+    + Send
+    + 'static {
         let mut router = match self.metas.get(&node_id) {
             None => {
                 let mut resp = RaftCmdResponse::default();

@@ -164,6 +164,10 @@ impl<EK: KvEngine> NodeCluster<EK> {
             snap_mgrs: HashMap::default(),
         }
     }
+
+    pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
+        self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
 }
 
 impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
@@ -355,11 +359,11 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
     fn async_snapshot(
         &mut self,
+        node_id: u64,
         request: RaftCmdRequest,
     ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
     + Send
     + 'static {
-        let node_id = request.get_header().get_peer().get_store_id();
         if !self
             .trans
             .core
