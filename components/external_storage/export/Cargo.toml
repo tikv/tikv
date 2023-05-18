@@ -1,7 +1,7 @@
 [package]
 name = "external_storage_export"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [[bin]]

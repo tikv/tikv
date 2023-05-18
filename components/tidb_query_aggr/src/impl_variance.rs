@@ -71,8 +71,6 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
-        use std::convert::TryFrom;
-
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert!(V::check_expr_type(root_expr.get_tp()));
