@@ -2994,12 +2994,20 @@ where
         match req.get_cmd_type() {
             AdminCmdType::PrepareFlashback => {
                 PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+                // First time enter into the flashback state, inc the counter.
+                if !region.is_in_flashback {
+                    PEER_IN_FLASHBACK_STATE.inc()
+                }
 
                 region.set_is_in_flashback(true);
                 region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
             }
             AdminCmdType::FinishFlashback => {
                 PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+                // Leave the flashback state, dec the counter.
+                if region.is_in_flashback {
+                    PEER_IN_FLASHBACK_STATE.dec()
+                }
 
                 region.set_is_in_flashback(false);
                 region.clear_flashback_start_ts();
