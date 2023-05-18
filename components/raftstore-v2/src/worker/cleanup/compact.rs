@@ -339,7 +339,7 @@ mod tests {
         let regions = collect_regions_to_compact(
             &registry,
             vec![2, 3, 4],
-            CompactThreshold::new(4, 25, 100, 100),
+            CompactThreshold::new(3, 25, 100, 100),
             &logger,
         )
         .unwrap();
