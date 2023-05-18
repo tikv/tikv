@@ -859,6 +859,9 @@ where
             cop_read_pools.handle()
         };
 
+        tidb_query_common::storage::scanner::set_reschedule_time_slice(
+            self.config.readpool.unified.reschedule_duration.into(),
+        );
         let mut unified_read_pool_scale_receiver = None;
         if self.config.readpool.is_unified_pool_enabled() {
             let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);

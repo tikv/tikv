@@ -1,6 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
@@ -9,11 +12,24 @@ use super::{range::*, ranges_iter::*, OwnedKvPair, Storage};
 use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
-/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time
-/// a coroutine can run without being yielded.
-const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
+
 /// the number of scanned keys that should trigger a reschedule.
 const CHECK_KEYS: usize = 32;
+
+/// Batch executors are run in coroutines. `MAX_TIME_SLICE_MS` is the maximum
+/// time a coroutine can run without being yielded.
+static MAX_TIME_SLICE_MS: AtomicU64 = AtomicU64::new(1);
+
+// the max time slice should be >= 1ms.
+pub fn set_reschedule_time_slice(dur: Duration) {
+    // the reschedule duration should be at lease 1ms.
+    let dur_ms = (dur.as_millis() as u64).max(1);
+    MAX_TIME_SLICE_MS.store(dur_ms, Ordering::Relaxed);
+}
+
+pub fn get_reschedule_time_slice() -> Duration {
+    Duration::from_millis(MAX_TIME_SLICE_MS.load(Ordering::Relaxed))
+}
 
 /// A scanner that scans over multiple ranges. Each range can be a point range
 /// containing only one row, or an interval range containing multiple rows.
@@ -41,6 +57,7 @@ pub struct RangesScanner<T> {
 struct RescheduleChecker {
     prev_start: Instant,
     prev_key_count: usize,
+    dur: Duration,
 }
 
 impl RescheduleChecker {
@@ -48,6 +65,7 @@ impl RescheduleChecker {
         Self {
             prev_start: Instant::now(),
             prev_key_count: 0,
+            dur: Duration::from_millis(MAX_TIME_SLICE_MS.load(Ordering::Relaxed)),
         }
     }
 
@@ -55,7 +73,7 @@ impl RescheduleChecker {
     async fn check_reschedule(&mut self, force_check: bool) {
         self.prev_key_count += 1;
         if (force_check || self.prev_key_count % CHECK_KEYS == 0)
-            && self.prev_start.saturating_elapsed() > MAX_TIME_SLICE
+            && self.prev_start.saturating_elapsed() > self.dur
         {
             reschedule().await;
             self.prev_start = Instant::now();

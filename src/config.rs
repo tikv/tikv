@@ -1848,6 +1848,7 @@ pub struct UnifiedReadPoolConfig {
     #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     pub auto_adjust_pool_size: bool,
+    pub reschedule_duration: ReadableDuration,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -1886,6 +1887,11 @@ impl UnifiedReadPoolConfig {
                 .to_string()
                 .into());
         }
+        if self.reschedule_duration < ReadableDuration::millis(1) {
+            return Err("readpool.unified.max-tasks-per-worker should be >= 1ms"
+                .to_string()
+                .into());
+        }
         Ok(())
     }
 }
@@ -1904,6 +1910,7 @@ impl Default for UnifiedReadPoolConfig {
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             auto_adjust_pool_size: false,
+            reschedule_duration: ReadableDuration::millis(1),
         }
     }
 }
@@ -1920,6 +1927,7 @@ mod unified_read_pool_tests {
             stack_size: ReadableSize::mb(2),
             max_tasks_per_worker: 2000,
             auto_adjust_pool_size: false,
+            reschedule_duration: ReadableDuration::millis(1),
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2255,6 +2263,7 @@ mod readpool_tests {
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
             auto_adjust_pool_size: false,
+            reschedule_duration: ReadableDuration::millis(1),
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {
@@ -4071,17 +4080,19 @@ mod tests {
         logger::get_log_level,
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{dummy_scheduler, Builder as WorkerBuilder, ReceiverWrapper},
+        yatp_pool::CleanupMethod,
     };
 
     use super::*;
     use crate::{
+        read_pool::{build_yatp_read_pool, ReadPoolConfigManager},
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
             config_manager::StorageConfigManger,
             lock_manager::MockLockManager,
             txn::flow_controller::{EngineFlowController, FlowController},
-            Storage, TestStorageBuilder,
+            Storage, TestEngineBuilder, TestStorageBuilder,
         },
     };
 

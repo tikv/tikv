@@ -5247,6 +5247,7 @@ dependencies = [
  "slog-global",
  "snap_recovery",
  "tempfile",
+ "tidb_query_common",
  "tikv",
  "tikv_alloc",
  "tikv_util",

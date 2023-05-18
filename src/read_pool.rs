@@ -12,6 +12,7 @@ use kvproto::kvrpcpb::CommandPri;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{IntCounter, IntGauge};
 use thiserror::Error;
+use tidb_query_common::storage::scanner::set_reschedule_time_slice;
 use tikv_util::{
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
@@ -533,6 +534,9 @@ impl ConfigManager for ReadPoolConfigManager {
             }
             if let Some(ConfigValue::Bool(b)) = unified.get("auto_adjust_pool_size") {
                 self.scheduler.schedule(Task::AutoAdjust(*b))?;
+            }
+            if let Some(ConfigValue::Duration(d)) = unified.get("reschedule_duration") {
+                set_reschedule_time_slice(Duration::from_millis(*d));
             }
         }
         info!(
