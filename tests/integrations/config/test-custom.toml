@@ -24,6 +24,7 @@ min-thread-count = 5
 max-thread-count = 10
 stack-size = "20MB"
 max-tasks-per-worker = 2200
+reschedule-duration = "1s"
 
 [readpool.storage]
 use-unified-pool = true

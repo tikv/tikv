@@ -77,6 +77,7 @@ slog = { workspace = true }
 slog-global = { workspace = true }
 snap_recovery = { workspace = true }
 tempfile = "3.0"
+tidb_query_common = { workspace = true }
 tikv = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }

@@ -2080,6 +2080,7 @@ pub struct UnifiedReadPoolConfig {
     #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     pub auto_adjust_pool_size: bool,
+    pub reschedule_duration: ReadableDuration,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -2118,6 +2119,11 @@ impl UnifiedReadPoolConfig {
                 .to_string()
                 .into());
         }
+        if self.reschedule_duration < ReadableDuration::millis(1) {
+            return Err("readpool.unified.max-tasks-per-worker should be >= 1ms"
+                .to_string()
+                .into());
+        }
         Ok(())
     }
 }
@@ -2136,6 +2142,7 @@ impl Default for UnifiedReadPoolConfig {
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             auto_adjust_pool_size: false,
+            reschedule_duration: ReadableDuration::millis(1),
         }
     }
 }
@@ -2152,6 +2159,7 @@ mod unified_read_pool_tests {
             stack_size: ReadableSize::mb(2),
             max_tasks_per_worker: 2000,
             auto_adjust_pool_size: false,
+            reschedule_duration: ReadableDuration::millis(1),
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2487,6 +2495,7 @@ mod readpool_tests {
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
             auto_adjust_pool_size: false,
+            reschedule_duration: ReadableDuration::millis(1),
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {
@@ -4364,31 +4373,34 @@ mod tests {
             region_info_accessor::MockRegionInfoProvider,
         },
         store::{
-            BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
-            DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
-            REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+            FlowStatsReporter, ReadStats, WriteStats, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+            DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
+            DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
         },
     };
     use slog::Level;
     use tempfile::Builder;
     use test_util::assert_eq_debug;
+    use tidb_query_common::storage::scanner::get_reschedule_time_slice;
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
         config::VersionTrack,
         logger::get_log_level,
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
-        worker::{dummy_scheduler, ReceiverWrapper},
+        worker::{dummy_scheduler, Builder as WorkerBuilder, ReceiverWrapper},
+        yatp_pool::CleanupMethod,
     };
 
     use super::*;
     use crate::{
+        read_pool::{build_yatp_read_pool, ReadPoolConfigManager},
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
             config_manager::StorageConfigManger,
             lock_manager::MockLockManager,
             txn::flow_controller::{EngineFlowController, FlowController},
-            Storage, TestStorageBuilder,
+            Storage, TestEngineBuilder, TestStorageBuilder,
         },
     };
 
@@ -5349,6 +5361,46 @@ mod tests {
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
+    }
+
+    #[derive(Clone)]
+    struct DummyReporter;
+
+    impl FlowStatsReporter for DummyReporter {
+        fn report_read_stats(&self, _read_stats: ReadStats) {}
+        fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
+
+    #[test]
+    fn test_change_read_pool_config() {
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.validate().unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let readpool = build_yatp_read_pool(
+            &cfg.readpool.unified,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+        );
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let (tx, _tx) = std::sync::mpsc::sync_channel(10);
+        let worker = WorkerBuilder::new("background").thread_count(1).create();
+        cfg_controller.register(
+            Module::Readpool,
+            Box::new(ReadPoolConfigManager::new(
+                readpool.handle(),
+                tx,
+                &worker,
+                4,
+                true,
+            )),
+        );
+        assert_eq!(get_reschedule_time_slice(), Duration::from_millis(1));
+        cfg_controller
+            .update_config("readpool.unified.reschedule-duration", "1m")
+            .unwrap();
+        assert_eq!(get_reschedule_time_slice(), Duration::from_secs(60));
     }
 
     #[test]
