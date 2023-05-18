@@ -132,15 +132,13 @@ where
                                     "cf" => cf,
                                     "err" => %e,
                                 );
-                            } else {
-                                info!(
-                                    self.logger,
-                                    "compaction done";
-                                    "cf" => cf,
-                                    "region_id" => region_id,
-                                );
                             }
                         }
+                        info!(
+                            self.logger,
+                            "compaction range finished";
+                            "region_id" => region_id,
+                        );
                         fail_point!("raftstore-v2::CheckAndCompact::AfterCompact");
                     }
                 }
