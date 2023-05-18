@@ -2,7 +2,7 @@
 name = "raft_log_engine"
 version = "0.0.1"
 publish = false
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 encryption = { workspace = true }
