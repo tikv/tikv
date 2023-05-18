@@ -1193,9 +1193,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         let mut start_ts = None;
         let mut keys = None;
-        if let Command::AcquirePessimisticLock(ref pessimistic_lock) = task.cmd {
-            start_ts = Some(pessimistic_lock.start_ts);
-            keys = Some(pessimistic_lock.keys.clone());
+
+        match task.cmd {
+            Command::AcquirePessimisticLock(ref pessimistic_lock) => {
+                start_ts = Some(pessimistic_lock.start_ts);
+                keys = Some(pessimistic_lock.keys.clone());
+            },
+            Command::Prewrite(ref prewrite) => {
+                start_ts = Some(prewrite.start_ts);
+            }
+            Command::PrewritePessimistic(ref p) => {
+                start_ts = Some(p.start_ts)
+            }
+            _ => {}
         }
 
         let group_name = task.cmd.group_name();
@@ -1300,7 +1310,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                info!("write command failed"; "cid" => cid, "start_ts" => start_ts.unwrap(), "err" => ?err);
+                info!("write command failed"; "cid" => cid, "tag" => ?tag, "start_ts" => ?start_ts, "err" => ?err);
                 scheduler.finish_with_err(cid, err, Some(sched_details));
                 return;
             }
