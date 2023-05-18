@@ -313,7 +313,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if index != u64::MAX {
             self.modifications_mut()[off] = index;
         }
-        
+
         Ok(())
     }
 }

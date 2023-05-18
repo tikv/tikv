@@ -2002,7 +2002,7 @@ where
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
         };
-        
+
         Ok(())
     }
 }

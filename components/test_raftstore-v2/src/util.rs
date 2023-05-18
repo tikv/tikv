@@ -261,7 +261,7 @@ pub fn test_delete_range<T: Simulator<EK>, EK: KvEngine>(cluster: &mut Cluster<T
         // key9 is always the last region.
         cluster.batch_put(b"key9", requests).unwrap();
     }
-    
+
     // delete_range request with notify_only set should not actually delete data.
     cluster.must_notify_delete_range_cf(cf, b"", b"");
 
