@@ -161,13 +161,15 @@ fn openssl_error(err: ErrorStack) -> azure_core::error::Error {
     Error::new(ErrorKind::Credential, err)
 }
 
+// Not care about "wasm32" platform, this is the requirement from
+// [`TokenCredential`](https://github.com/Azure/azure-sdk-for-rust/blob/main/sdk/core/src/auth.rs#L39-L42).
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl TokenCredential for ClientCertificateCredentialWithCache {
+    // As previous [TODO] shows, following operations in `get_token` is just
+    // extended from `ClientCertificateCredential::get_token()` as a special
+    // version with caching feature and stable feature.
     async fn get_token(&self, resource: &str) -> azure_core::Result<TokenResponse> {
-        // Following operations is just extended from
-        // `ClientCertificateCredential::get_token()` as a special version with
-        // caching feature and stable feature.
         if !self.need_update_cached_token() {
             return Ok(self.get_cached_token());
         }
