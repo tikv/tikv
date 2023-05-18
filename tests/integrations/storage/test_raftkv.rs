@@ -322,7 +322,7 @@ fn test_invalid_read_index_when_no_leader() {
         true,
     );
     request.mut_header().set_peer(follower.clone());
-    let (cb, rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb(&request);
     cluster
         .sim
         .rl()

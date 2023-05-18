@@ -451,7 +451,7 @@ where
                 .map_ok(|props| {
                     let mut resp = GetRangePropertiesResponse::default();
                     for (key, value) in props {
-                        let mut prop = get_range_properties_response::RangeProperty::default();
+                        let mut prop = GetRangePropertiesResponseRangeProperty::default();
                         prop.set_key(key);
                         prop.set_value(value);
                         resp.mut_properties().push(prop)
@@ -554,8 +554,4 @@ mod region_size_response {
 
 mod list_fail_points_response {
     pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
-}
-
-mod get_range_properties_response {
-    pub type RangeProperty = kvproto::debugpb::GetRangePropertiesResponseRangeProperty;
 }
