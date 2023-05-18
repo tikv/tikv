@@ -199,8 +199,10 @@ impl SstImporter {
             "size" => ?memory_limit,
         );
 
+        let dir = ImportDir::new(root)?;
+
         Ok(SstImporter {
-            dir: ImportDir::new(root)?,
+            dir,
             key_manager,
             switcher,
             api_version,
@@ -1275,8 +1277,21 @@ impl SstImporter {
         }
     }
 
+    /// List the basic information of the current SST files.
+    /// The information contains UUID, region ID, region Epoch.
+    /// Other fields may be left blank.
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         self.dir.list_ssts()
+    }
+
+    /// Load the start key by a metadata.
+    /// This will open the internal SST and try to load the first user key.
+    /// (For RocksEngine, that is the key without the 'z' prefix.)
+    /// When the SST is empty or the first key cannot be parsed as user key,
+    /// return None.
+    pub fn load_start_key_by_meta<S: SstExt>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
+        self.dir
+            .load_start_key_by_meta::<S>(meta, self.key_manager.clone())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
