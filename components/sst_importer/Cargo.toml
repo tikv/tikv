@@ -1,7 +1,7 @@
 [package]
 name = "sst_importer"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
@@ -11,6 +11,10 @@ cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
 cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
 cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
+
+test-engines-rocksdb = [
+  "engine_test/test-engines-rocksdb",
+]
 
 [dependencies]
 api_version = { workspace = true }
@@ -32,6 +36,7 @@ log_wrappers = { workspace = true }
 online_config = { workspace = true }
 openssl = "0.10"
 prometheus = { version = "0.13", default-features = false }
+protobuf = { version = "2.8", features = ["bytes"] }
 rand = "0.8"
 serde = "1.0"
 serde_derive = "1.0"
@@ -45,6 +50,7 @@ txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+engine_test = { workspace = true }
 tempfile = "3.0"
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }

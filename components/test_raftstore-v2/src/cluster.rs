@@ -50,15 +50,17 @@ use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
-    is_error_response, new_admin_request, new_delete_cmd, new_delete_range_cmd, new_get_cf_cmd,
-    new_peer, new_prepare_merge, new_put_cf_cmd, new_region_detail_cmd, new_region_leader_cmd,
-    new_request, new_snap_cmd, new_status_request, new_store, new_tikv_config_with_api_ver,
-    new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory, PartitionFilterFactory,
-    RawEngine,
+    check_raft_cmd_request, is_error_response, new_admin_request, new_delete_cmd,
+    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd,
+    new_region_detail_cmd, new_region_leader_cmd, new_request, new_status_request, new_store,
+    new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
+    PartitionFilterFactory, RawEngine,
 };
 use tikv::{server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
-    box_err, box_try, debug, error, safe_panic,
+    box_err, box_try, debug, error,
+    future::block_on_timeout,
+    safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     timer::GLOBAL_TIMER_HANDLE,
@@ -83,7 +85,7 @@ pub trait Simulator<EK: KvEngine> {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
-        key_mgr: Option<Arc<DataKeyManager>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<EK>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -104,12 +106,13 @@ pub trait Simulator<EK: KvEngine> {
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
+        let node_id = request.get_header().get_peer().get_store_id();
         let timeout_f = GLOBAL_TIMER_HANDLE
             .delay(std::time::Instant::now() + timeout)
             .compat();
         futures::executor::block_on(async move {
             futures::select! {
-                res = self.async_read(request).fuse() => res,
+                res = self.async_read(node_id, request).fuse() => res,
                 e = timeout_f.fuse() => {
                     Err(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e)))
                 },
@@ -119,12 +122,13 @@ pub trait Simulator<EK: KvEngine> {
 
     fn async_read(
         &mut self,
+        node_id: u64,
         request: RaftCmdRequest,
-    ) -> impl Future<Output = Result<RaftCmdResponse>> + Send {
+    ) -> impl Future<Output = Result<RaftCmdResponse>> + Send + 'static {
         let mut req_clone = request.clone();
-        req_clone.clear_requests();
-        req_clone.mut_requests().push(new_snap_cmd());
-        let snap = self.async_snapshot(req_clone);
+        // raftstore v2 only supports snap request.
+        req_clone.mut_requests()[0].set_cmd_type(CmdType::Snap);
+        let snap = self.async_snapshot(node_id, req_clone);
         async move {
             match snap.await {
                 Ok(snap) => {
@@ -177,15 +181,21 @@ pub trait Simulator<EK: KvEngine> {
 
                     Ok(response)
                 }
-                Err(e) => Ok(e),
+                Err(e) => {
+                    error!("cluster.async_read fails"; "error" => ?e);
+                    Ok(e)
+                }
             }
         }
     }
 
     fn async_snapshot(
         &mut self,
+        node_id: u64,
         request: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send;
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
+    + Send
+    + 'static;
 
     fn async_peer_msg_on_node(&self, node_id: u64, region_id: u64, msg: PeerMsg) -> Result<()>;
 
@@ -201,7 +211,7 @@ pub trait Simulator<EK: KvEngine> {
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
-        let (msg, sub) = PeerMsg::raft_query(request);
+        let (msg, sub) = PeerMsg::raft_query(request.clone());
         match self.async_peer_msg_on_node(node_id, region_id, msg) {
             Ok(()) => {}
             Err(e) => {
@@ -211,17 +221,17 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + timeout);
-        // todo: unwrap?
-        match block_on(async move {
-            select! {
-                res = sub.result().fuse() => Ok(res.unwrap()),
-                _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
-
+        let mut fut = Box::pin(sub.result());
+        match block_on_timeout(fut.as_mut(), timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
+        {
+            Some(QueryResult::Read(_)) => unreachable!(),
+            Some(QueryResult::Response(resp)) => Ok(resp),
+            None => {
+                error!("call_query_on_node receives none response"; "request" => ?request);
+                // Do not unwrap here, sometimes raftstore v2 may return none.
+                return Err(box_err!("receives none response {:?}", request));
             }
-        }).unwrap() {
-            QueryResult::Read(_) => unreachable!(),
-            QueryResult::Response(resp) => Ok(resp),
         }
     }
 
@@ -287,10 +297,20 @@ pub trait Simulator<EK: KvEngine> {
         })
     }
 
-    fn async_command_on_node(&self, node_id: u64, mut request: RaftCmdRequest) {
+    fn async_command_on_node(
+        &mut self,
+        node_id: u64,
+        mut request: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
 
-        let (msg, _sub) = if request.has_admin_request() {
+        let is_read = check_raft_cmd_request(&request);
+        if is_read {
+            let fut = self.async_read(node_id, request);
+            return Box::pin(async move { fut.await.unwrap() });
+        }
+
+        let (msg, sub) = if request.has_admin_request() {
             PeerMsg::admin_command(request)
         } else {
             let requests = request.get_requests();
@@ -316,6 +336,7 @@ pub trait Simulator<EK: KvEngine> {
 
         self.async_peer_msg_on_node(node_id, region_id, msg)
             .unwrap();
+        Box::pin(async move { sub.result().await.unwrap() })
     }
 }
 
@@ -515,6 +536,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         debug!("starting node {}", node_id);
         let tablet_registry = self.tablet_registries[&node_id].clone();
         let raft_engine = self.raft_engines[&node_id].clone();
+        let key_mgr = self.key_managers_map[&node_id].clone();
         let cfg = self.cfg.clone();
 
         // if let Some(labels) = self.labels.get(&node_id) {
@@ -536,7 +558,6 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
-        let key_mgr = self.key_managers_map.get(&node_id).unwrap().clone();
         self.sim.wl().run_node(
             node_id,
             cfg,
@@ -1491,8 +1512,9 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         let mut req = self.new_prepare_merge(source, target);
         let leader = self.leader_of_region(source).unwrap();
         req.mut_header().set_peer(leader.clone());
-        self.sim
-            .rl()
+        let _ = self
+            .sim
+            .wl()
             .async_command_on_node(leader.get_store_id(), req);
     }
 

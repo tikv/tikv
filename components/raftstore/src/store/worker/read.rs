@@ -496,7 +496,7 @@ impl ReadDelegate {
                 self.applied_term = applied_term;
             }
             Progress::LeaderLease(leader_lease) => {
-                self.leader_lease = Some(leader_lease);
+                self.leader_lease = leader_lease;
             }
             Progress::RegionBuckets(bucket_meta) => {
                 self.bucket_meta = Some(bucket_meta);
@@ -631,7 +631,7 @@ pub enum Progress {
     Region(metapb::Region),
     Term(u64),
     AppliedTerm(u64),
-    LeaderLease(RemoteLease),
+    LeaderLease(Option<RemoteLease>),
     RegionBuckets(Arc<BucketMeta>),
     WaitData(bool),
 }
@@ -649,8 +649,12 @@ impl Progress {
         Progress::AppliedTerm(applied_term)
     }
 
-    pub fn leader_lease(lease: RemoteLease) -> Progress {
-        Progress::LeaderLease(lease)
+    pub fn set_leader_lease(lease: RemoteLease) -> Progress {
+        Progress::LeaderLease(Some(lease))
+    }
+
+    pub fn unset_leader_lease() -> Progress {
+        Progress::LeaderLease(None)
     }
 
     pub fn region_buckets(bucket_meta: Arc<BucketMeta>) -> Progress {
@@ -1548,7 +1552,7 @@ mod tests {
         cmd.mut_header().set_term(term6 + 3);
         lease.expire_remote_lease();
         let remote_lease = lease.maybe_new_remote_lease(term6 + 3).unwrap();
-        let pg = Progress::leader_lease(remote_lease);
+        let pg = Progress::set_leader_lease(remote_lease);
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
@@ -1680,7 +1684,7 @@ mod tests {
         {
             let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
             let remote = lease.maybe_new_remote_lease(3).unwrap();
-            let pg = Progress::leader_lease(remote);
+            let pg = Progress::set_leader_lease(remote);
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }

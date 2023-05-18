@@ -794,7 +794,7 @@ fn generate_init_metadata_fn(
 fn generate_downcast_metadata(has_metadata: bool) -> TokenStream {
     if has_metadata {
         quote! {
-            let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
+            let metadata = <dyn std::any::Any>::downcast_ref(metadata).expect("downcast metadata error");
         }
     } else {
         quote! {}
