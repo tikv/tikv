@@ -349,6 +349,7 @@ impl<EK: KvEngine> Runner<EK> {
         // The callback `cb` being some means it's the task sent from
         // leader, we should sync flush memtables and call it after the flush complete
         // where the split will be proposed again with extra flag.
+        let cf_copy = cf.clone();
         if let Some(cb) = cb {
             let logger = self.logger.clone();
             let now = Instant::now();
@@ -365,8 +366,9 @@ impl<EK: KvEngine> Runner<EK> {
                     // to be removed after when it's stable
                     info!(
                         logger,
-                        "flush memtable for leader";
+                        "flush memtable and wait";
                         "region_id" => region_id,
+                        "cf" => cf_copy,
                         "duration" => ?elapsed,
                     );
 
@@ -377,8 +379,9 @@ impl<EK: KvEngine> Runner<EK> {
         } else {
             info!(
                 self.logger,
-                "flush memtable for follower";
+                "flush memtable without wait";
                 "region_id" => region_id,
+                "cf" => cf_copy,
             );
 
             if let Some(cf) = cf {
