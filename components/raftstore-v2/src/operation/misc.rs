@@ -9,7 +9,10 @@ use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
 use slog::{debug, error, info};
 
 use crate::{
-    fsm::StoreFsmDelegate, router::StoreTick, worker::cleanup, CompactTask::CheckAndCompact,
+    fsm::StoreFsmDelegate,
+    router::StoreTick,
+    worker::cleanup::{self, CompactThreshold},
+    CompactTask::CheckAndCompact,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
@@ -85,13 +88,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             .schedule(cleanup::Task::Compact(CheckAndCompact {
                 cf_names,
                 region_ids: regions_to_check.into_iter().collect::<Vec<_>>(),
-                tombstones_num_threshold: self.store_ctx.cfg.region_compact_min_tombstones,
-                tombstones_percent_threshold: self.store_ctx.cfg.region_compact_tombstones_percent,
-                redundant_rows_threshold: self.store_ctx.cfg.region_compact_min_redundant_rows,
-                redundant_rows_percent_threshold: self
-                    .store_ctx
-                    .cfg
-                    .region_compact_redundant_rows_percent,
+                compact_threshold: CompactThreshold::new(
+                    self.store_ctx.cfg.region_compact_min_tombstones,
+                    self.store_ctx.cfg.region_compact_tombstones_percent,
+                    self.store_ctx.cfg.region_compact_min_redundant_rows,
+                    self.store_ctx.cfg.region_compact_redundant_rows_percent,
+                ),
             }))
         {
             error!(

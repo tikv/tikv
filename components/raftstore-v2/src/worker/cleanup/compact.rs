@@ -17,12 +17,31 @@ pub enum Task {
         // Column families need to compact
         cf_names: Vec<String>,
         region_ids: Vec<u64>,
-        // The minimum RocksDB tombstones a range that need compacting has
+        compact_threshold: CompactThreshold,
+    },
+}
+
+pub struct CompactThreshold {
+    tombstones_num_threshold: u64,
+    tombstones_percent_threshold: u64,
+    redundant_rows_threshold: u64,
+    redundant_rows_percent_threshold: u64,
+}
+
+impl CompactThreshold {
+    pub fn new(
         tombstones_num_threshold: u64,
         tombstones_percent_threshold: u64,
         redundant_rows_threshold: u64,
         redundant_rows_percent_threshold: u64,
-    },
+    ) -> Self {
+        Self {
+            tombstones_num_threshold,
+            tombstones_percent_threshold,
+            redundant_rows_percent_threshold,
+            redundant_rows_threshold,
+        }
+    }
 }
 
 impl Display for Task {
@@ -31,23 +50,26 @@ impl Display for Task {
             Task::CheckAndCompact {
                 ref cf_names,
                 ref region_ids,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
-                redundant_rows_threshold,
-                redundant_rows_percent_threshold,
+                ref compact_threshold,
             } => f
                 .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
                 .field("regions", region_ids)
-                .field("tombstones_num_threshold", &tombstones_num_threshold)
+                .field(
+                    "tombstones_num_threshold",
+                    &compact_threshold.tombstones_num_threshold,
+                )
                 .field(
                     "tombstones_percent_threshold",
-                    &tombstones_percent_threshold,
+                    &compact_threshold.tombstones_percent_threshold,
                 )
-                .field("redundant_rows_threshold", &redundant_rows_threshold)
+                .field(
+                    "redundant_rows_threshold",
+                    &compact_threshold.redundant_rows_threshold,
+                )
                 .field(
                     "redundant_rows_percent_threshold",
-                    &redundant_rows_percent_threshold,
+                    &compact_threshold.redundant_rows_percent_threshold,
                 )
                 .finish(),
         }
@@ -88,17 +110,11 @@ where
             Task::CheckAndCompact {
                 cf_names,
                 region_ids,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
-                redundant_rows_threshold,
-                redundant_rows_percent_threshold,
+                compact_threshold,
             } => match collect_regions_to_compact(
                 &self.tablet_registry,
                 region_ids,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
-                redundant_rows_threshold,
-                redundant_rows_percent_threshold,
+                compact_threshold,
                 &self.logger,
             ) {
                 Ok(mut region_ids) => {
@@ -116,13 +132,14 @@ where
                                     "cf" => cf,
                                     "err" => %e,
                                 );
+                            } else {
+                                info!(
+                                    self.logger,
+                                    "compaction done";
+                                    "cf" => cf,
+                                    "region_id" => region_id,
+                                );
                             }
-                            info!(
-                                self.logger,
-                                "compaction done";
-                                "cf" => cf,
-                                "region_id" => region_id,
-                            );
                         }
                         fail_point!("raftstore-v2::CheckAndCompact::AfterCompact");
                     }
@@ -136,36 +153,27 @@ where
     }
 }
 
-fn need_compact(
-    num_rows: u64,
-    num_entires: u64,
-    num_versions: u64,
-    tombstones_num_threshold: u64,
-    tombstones_percent_threshold: u64,
-    redundant_rows_threshold: u64,
-    redundant_rows_percent_threshold: u64,
-) -> bool {
-    if num_entires < num_versions {
+fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThreshold) -> bool {
+    if range_stats.num_entries < range_stats.num_versions {
         return false;
     }
 
     // When the number of tombstones exceed threshold and ratio, this range need
     // compacting.
-    let estimate_num_del = num_entires - num_versions;
-    let redundent_keys = num_entires - num_rows;
-    (redundent_keys >= redundant_rows_threshold
-        && redundent_keys * 100 >= redundant_rows_percent_threshold * num_entires)
-        || (estimate_num_del >= tombstones_num_threshold
-            && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires)
+    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
+    let redundent_keys = range_stats.num_entries - range_stats.num_rows;
+    (redundent_keys >= compact_threshold.redundant_rows_threshold
+        && redundent_keys * 100
+            >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries)
+        || (estimate_num_del >= compact_threshold.tombstones_num_threshold
+            && estimate_num_del * 100
+                >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries)
 }
 
 fn collect_regions_to_compact<E: KvEngine>(
     reg: &TabletRegistry<E>,
     region_ids: Vec<u64>,
-    tombstones_num_threshold: u64,
-    tombstones_percent_threshold: u64,
-    redundant_rows_threshold: u64,
-    redundant_rows_percent_threshold: u64,
+    compact_threshold: CompactThreshold,
     logger: &Logger,
 ) -> Result<Vec<u64>, Error> {
     fail_point!("on_collect_regions_to_compact");
@@ -187,29 +195,18 @@ fn collect_regions_to_compact<E: KvEngine>(
             continue;
         }
 
-        if let Some(RangeStats {
-            num_entries,
-            num_versions,
-            num_rows,
-        }) = box_try!(tablet.get_range_stats(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
+        if let Some(range_stats) =
+            box_try!(tablet.get_range_stats(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY))
         {
             info!(
                 logger,
                 "get range entries and versions";
-                "num_entries" => num_entries,
-                "num_versions" => num_versions,
-                "num_rows" => num_rows,
+                "num_entries" => range_stats.num_entries,
+                "num_versions" => range_stats.num_versions,
+                "num_rows" => range_stats.num_rows,
                 "region_id" => id,
             );
-            if need_compact(
-                num_rows,
-                num_entries,
-                num_versions,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
-                redundant_rows_threshold,
-                redundant_rows_percent_threshold,
-            ) {
+            if need_compact(&range_stats, &compact_threshold) {
                 regions_to_compact.push(id);
             }
         }
@@ -330,21 +327,41 @@ mod tests {
         let logger = slog_global::borrow_global().new(slog::o!());
 
         // collect regions according to tombstone's parameters
-        let regions =
-            collect_regions_to_compact(&registry, vec![2, 3, 4], 4, 30, 100, 100, &logger).unwrap();
+        let regions = collect_regions_to_compact(
+            &registry,
+            vec![2, 3, 4],
+            CompactThreshold::new(4, 30, 100, 100),
+            &logger,
+        )
+        .unwrap();
         assert!(regions.len() == 1 && regions[0] == 2);
 
-        let regions =
-            collect_regions_to_compact(&registry, vec![2, 3, 4], 3, 25, 100, 100, &logger).unwrap();
+        let regions = collect_regions_to_compact(
+            &registry,
+            vec![2, 3, 4],
+            CompactThreshold::new(4, 25, 100, 100),
+            &logger,
+        )
+        .unwrap();
         assert!(regions.len() == 2 && !regions.contains(&4));
 
         // collect regions accroding to redundant rows' parameter
-        let regions =
-            collect_regions_to_compact(&registry, vec![2, 3, 4], 100, 100, 9, 60, &logger).unwrap();
+        let regions = collect_regions_to_compact(
+            &registry,
+            vec![2, 3, 4],
+            CompactThreshold::new(100, 100, 9, 60),
+            &logger,
+        )
+        .unwrap();
         assert!(regions.len() == 1 && regions[0] == 2);
 
-        let regions =
-            collect_regions_to_compact(&registry, vec![2, 3, 4], 100, 100, 5, 50, &logger).unwrap();
+        let regions = collect_regions_to_compact(
+            &registry,
+            vec![2, 3, 4],
+            CompactThreshold::new(100, 100, 5, 50),
+            &logger,
+        )
+        .unwrap();
         assert!(regions.len() == 2 && !regions.contains(&4));
     }
 }
