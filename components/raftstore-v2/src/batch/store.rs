@@ -425,14 +425,12 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 continue;
             }
             let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
+            if prefix == MERGE_SOURCE_PREFIX {
+                continue;
+            }
             let fsm = match peers.get(&region_id) {
                 Some((_, fsm)) => fsm,
                 None => {
-                    // If source is destroyed, it means target must have proposed `CommitMerge`. The
-                    // ownership of this checkpoint is transfered to target.
-                    if prefix == MERGE_SOURCE_PREFIX {
-                        continue;
-                    }
                     // The peer is either destroyed or not created yet. It will be
                     // recovered by leader heartbeats.
                     self.remove_dir(&path)?;
@@ -443,7 +441,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             if prefix == SPLIT_PREFIX {
                 self.remove_dir(&path)?;
                 continue;
-            } else if prefix == MERGE_IN_PROGRESS_PREFIX || prefix == MERGE_SOURCE_PREFIX {
+            } else if prefix == MERGE_IN_PROGRESS_PREFIX {
                 continue;
             } else if prefix.is_empty() {
                 // Stale split data can be deleted.
