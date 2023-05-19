@@ -180,11 +180,23 @@ impl ApplyTrace {
         // Get all the recorded apply index from data CFs.
         for (off, cf) in DATA_CFS.iter().enumerate() {
             // There should be at least one record.
-            let i = engine.get_flushed_index(region_id, cf)?.unwrap();
+            let i = engine.get_flushed_index(region_id, cf)?.unwrap_or_else(|| {
+                panic!(
+                    "failed to get flushed index [region_id={}] [cf={}] [apply_trace={:?}]",
+                    region_id, cf, trace
+                )
+            });
             trace.data_cfs[off].flushed = i;
             trace.data_cfs[off].last_modified = i;
         }
-        let i = engine.get_flushed_index(region_id, CF_RAFT)?.unwrap();
+        let i = engine
+            .get_flushed_index(region_id, CF_RAFT)?
+            .unwrap_or_else(|| {
+                panic!(
+                    "failed to get flushed index [region_id={}] [cf={}] [apply_trace={:?}]",
+                    region_id, CF_RAFT, trace
+                )
+            });
         // Index of raft CF means all data before that must be persisted.
         trace.admin.flushed = i;
         trace.admin.last_modified = i;
