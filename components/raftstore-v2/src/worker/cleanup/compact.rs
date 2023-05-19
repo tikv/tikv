@@ -156,12 +156,12 @@ fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThreshold) 
         return false;
     }
 
-    // When the number of tombstones exceed threshold and ratio, this range need
-    // compacting.
+    // We trigger region compaction when their are to many tombstones as well as
+    // redundant keys, both of which can severly impact scan operation:
     let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
-    let redundent_keys = range_stats.num_entries - range_stats.num_rows;
-    (redundent_keys >= compact_threshold.redundant_rows_threshold
-        && redundent_keys * 100
+    let redundant_keys = range_stats.num_entries - range_stats.num_rows;
+    (redundant_keys >= compact_threshold.redundant_rows_threshold
+        && redundant_keys * 100
             >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries)
         || (estimate_num_del >= compact_threshold.tombstones_num_threshold
             && estimate_num_del * 100
