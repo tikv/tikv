@@ -534,7 +534,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     ) {
         let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
         let tracker = get_tls_tracker_token();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
+        info!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
@@ -748,7 +748,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     where
         StorageError: From<ER>,
     {
-        debug!("write command finished with error"; "cid" => cid);
+        info!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
