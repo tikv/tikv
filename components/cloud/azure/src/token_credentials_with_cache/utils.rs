@@ -60,17 +60,21 @@ impl TokenCache {
         loop {
             if self.is_fresh() {
                 return false;
+            } else if OffsetDateTime::now_utc().unix_timestamp() - now
+                >= config_default_refresh_token_timeout()
+            {
+                // Timeout to forcely trigger refreshing token.
+                break;
             }
-            if let Ok(ref mut mtx) = self.wait_refreshed.lock() {
+            if let Ok(ref mut mtx) = self.wait_refreshed.try_lock() {
+                // If one pioneer has already updated the token, current thread
+                // could skip to update it.
+                if self.is_fresh() {
+                    return false;
+                }
                 // Only allowed he first one who gets the lock to refresh the token.
                 if !**mtx {
                     **mtx = true;
-                    break;
-                }
-                // Timeout to forcely trigger refreshing token.
-                if OffsetDateTime::now_utc().unix_timestamp() - now
-                    >= config_default_refresh_token_timeout()
-                {
                     break;
                 }
             }
@@ -90,18 +94,14 @@ impl TokenCache {
 
     #[inline]
     pub fn get_token(&self) -> Option<TokenResponse> {
-        match self.cached_token.read() {
-            Ok(cached_token) => {
-                let token = cached_token.clone();
-                debug_assert!(token.is_some());
-                if is_token_fresh(token.as_ref().unwrap()) {
-                    token
-                } else {
-                    None
-                }
+        if let Ok(cached_token) = self.cached_token.read() {
+            let token = cached_token.clone();
+            debug_assert!(token.is_some());
+            if is_token_fresh(token.as_ref().unwrap()) {
+                return token;
             }
-            Err(_) => None,
         }
+        None
     }
 }
 
@@ -156,9 +156,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "failpoints")]
+    // #[cfg(feature = "failpoints")]
     fn test_concurrently_refresh_token_cache() {
-        let token_cache = super::TokenCache::default();
+        let token_cache = TokenCache::default();
         assert!(!token_cache.is_fresh());
         let (token1, token2) = (token_cache.clone(), token_cache.clone());
         let thread1 = std::thread::spawn(move || {
