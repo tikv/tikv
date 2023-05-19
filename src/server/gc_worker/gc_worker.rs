@@ -17,8 +17,8 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
-    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
-    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt,
+    Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -1227,7 +1227,10 @@ impl<E: Engine> GcWorker<E> {
             store_id,
             self.engine.clone(),
             self.flow_info_sender.take().unwrap(),
-            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
+            self.config_manager
+                .0
+                .clone()
+                .tracker("gc-worker".to_owned()),
             self.config_manager.value().clone(),
         );
         self.worker.lock().unwrap().start(runner);
@@ -1903,7 +1906,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker("gc-worker".to_owned()),
             cfg,
         );
 
@@ -1965,7 +1968,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker("gc-worker".to_owned()),
             cfg,
         );
 
@@ -2066,7 +2069,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker("gc-worker".to_owned()),
             cfg,
         );
 

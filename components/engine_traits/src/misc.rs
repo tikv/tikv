@@ -6,7 +6,8 @@
 //! FIXME: Things here need to be moved elsewhere.
 
 use crate::{
-    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt, range::Range,
+    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt,
+    mvcc_properties::MvccProperties, range::Range,
 };
 
 #[derive(Clone, Debug)]
@@ -121,12 +122,12 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn get_num_keys(&self) -> Result<u64>;
 
-    fn get_range_entries_and_versions(
+    fn get_range_entries_and_properties(
         &self,
         cf: &str,
         start: &[u8],
         end: &[u8],
-    ) -> Result<Option<(u64, u64)>>;
+    ) -> Result<Option<(u64, MvccProperties)>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
 }
