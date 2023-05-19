@@ -31,8 +31,8 @@ use std::{cmp, sync::Mutex};
 
 use encryption_export::DataKeyManager;
 use engine_traits::{
-    data_cf_offset, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    data_cf_offset, ApplyProgress, CfName, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use fail::fail_point;
 use kvproto::{
@@ -54,6 +54,15 @@ use crate::{
     router::PeerMsg,
     Result, StoreRouter,
 };
+
+const FLUSH_LAG_THRESHOLD: u64 = 20480;
+// The records in default cf and write cf are probaby valid during flush, use
+// large threshold to avoid frequent flush.
+const FLUSH_LAG_THRESHOLD_PER_CF: &[u64] = &[
+    FLUSH_LAG_THRESHOLD * 2,
+    FLUSH_LAG_THRESHOLD,
+    FLUSH_LAG_THRESHOLD * 2,
+];
 
 /// Write states for the given region. The region is supposed to have all its
 /// data persisted and not governed by any raft group before.
@@ -140,6 +149,10 @@ struct Progress {
     ///
     /// If `flushed` == `last_modified`, then all data in the CF is persisted.
     last_modified: u64,
+    /// Flush will be triggered explicitly when there are too many pending
+    /// writes. It marks the last index that is flushed to avoid too many
+    /// flushes.
+    last_trigger_flush: u64,
 }
 
 /// `ApplyTrace` is used to track the indexes of modifications and flushes.
@@ -166,10 +179,6 @@ pub struct ApplyTrace {
     admin: Progress,
     /// Index that is issued to be written. It may not be truely persisted.
     persisted_applied: u64,
-    /// Flush will be triggered explicitly when there are too many pending
-    /// writes. It marks the last index that is flushed to avoid too many
-    /// flushes.
-    last_flush_trigger: u64,
     /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
 }
@@ -183,13 +192,13 @@ impl ApplyTrace {
             let i = engine.get_flushed_index(region_id, cf)?.unwrap();
             trace.data_cfs[off].flushed = i;
             trace.data_cfs[off].last_modified = i;
+            trace.data_cfs[off].last_trigger_flush = i;
         }
         let i = engine.get_flushed_index(region_id, CF_RAFT)?.unwrap();
         // Index of raft CF means all data before that must be persisted.
         trace.admin.flushed = i;
         trace.admin.last_modified = i;
         trace.persisted_applied = i;
-        trace.last_flush_trigger = i;
         let applied_region_state = match engine.get_region_state(region_id, trace.admin.flushed)? {
             Some(s) => s,
             None => panic!(
@@ -208,9 +217,15 @@ impl ApplyTrace {
         }
     }
 
-    fn on_modify(&mut self, cf: &str, index: u64) {
-        let off = data_cf_offset(cf);
-        self.data_cfs[off].last_modified = index;
+    fn on_modify(&mut self, cf: &str, index: u64, mem_index: u64) {
+        let pr = &mut self.data_cfs[data_cf_offset(cf)];
+        if index != 0 {
+            pr.last_modified = index;
+        }
+        if pr.flushed == pr.last_modified {
+            // Increasing `last_trigger_flush` to avoid too many flushes.
+            pr.last_trigger_flush = mem_index;
+        }
     }
 
     pub fn on_admin_flush(&mut self, index: u64) {
@@ -228,28 +243,47 @@ impl ApplyTrace {
         self.persisted_applied
     }
 
-    pub fn should_flush(&mut self) -> bool {
+    /// In general, we avoid flushing to reduce the write amplification. But if
+    /// a CF is not active for a long time, it may cause too many logs to be
+    /// replayed after restart and cause raft engine write amplification. So we
+    /// need to find those CFs and trigger manual flush.
+    pub fn pick_cf_to_flush(&mut self) -> Option<CfName> {
         if self.admin.flushed < self.admin.last_modified {
             // It's waiting for other peers, flush will not help.
-            return false;
+            return None;
         }
-        let last_modified = self
-            .data_cfs
-            .iter()
-            .filter_map(|pr| {
-                if pr.last_modified != pr.flushed {
-                    Some(pr.last_modified)
-                } else {
-                    None
-                }
-            })
-            .max();
-        if let Some(m) = last_modified && m >= self.admin.flushed + 4096000 && m >= self.last_flush_trigger + 4096000 {
-            self.last_flush_trigger = m;
-            true
-        } else {
-            false
+        let (mut max_modified, mut max_flushed) = (0, 0);
+        for pr in self.data_cfs.iter() {
+            max_flushed = cmp::max(max_flushed, pr.flushed);
+            max_modified = cmp::max(max_modified, pr.last_modified);
         }
+        // Manual flush only when we can gc some logs.
+        if max_flushed < self.admin.flushed + FLUSH_LAG_THRESHOLD {
+            return None;
+        }
+        let (mut offset, mut min_flushed) = (usize::MAX, u64::MAX);
+        for (i, pr) in self.data_cfs.iter().enumerate() {
+            // Nothing to flush.
+            if pr.flushed >= pr.last_modified
+                // Avoid frequent flush.
+                || pr.flushed > self.admin.flushed + FLUSH_LAG_THRESHOLD_PER_CF[i]
+            {
+                continue;
+            }
+            let f = cmp::max(pr.flushed, pr.last_trigger_flush);
+            if f < min_flushed {
+                offset = i;
+                min_flushed = f;
+            }
+        }
+        // Skip if no other CF can be flushed or all other CFs are already flushed.
+        if offset == usize::MAX || min_flushed >= max_flushed {
+            return None;
+        }
+        // Modification records may race with flush records, but all data before
+        // maximum of them must be written to kv db already.
+        self.data_cfs[offset].last_trigger_flush = cmp::max(max_modified, max_flushed);
+        Some(DATA_CFS[offset])
     }
 
     // All events before `mem_index` must be consumed before calling this function.
@@ -539,7 +573,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply_trace = self.storage_mut().apply_trace_mut();
         for (cf, index) in DATA_CFS.iter().zip(modification) {
             if index != 0 {
-                apply_trace.on_modify(cf, index);
+                apply_trace.on_modify(cf, index, apply_index);
             }
         }
         apply_trace.maybe_advance_admin_flushed(apply_index);
@@ -629,7 +663,7 @@ mod tests {
         trace.maybe_advance_admin_flushed(2);
         assert_eq!(2, trace.admin.flushed);
         for cf in DATA_CFS {
-            trace.on_modify(cf, 3);
+            trace.on_modify(cf, 3, 3);
         }
         trace.maybe_advance_admin_flushed(3);
         // Modification is not flushed.
@@ -645,7 +679,7 @@ mod tests {
             trace.on_flush(cf, 4);
         }
         for cf in DATA_CFS {
-            trace.on_modify(cf, 4);
+            trace.on_modify(cf, 4, 4);
         }
         trace.maybe_advance_admin_flushed(4);
         // Unflushed admin modification should hold index.
@@ -662,7 +696,7 @@ mod tests {
         // advanced as we don't know whether there is admin modification.
         assert_eq!(4, trace.admin.flushed);
         for cf in DATA_CFS {
-            trace.on_modify(cf, 5);
+            trace.on_modify(cf, 5, 5);
         }
         trace.maybe_advance_admin_flushed(5);
         // Because modify is recorded, so we know there should be no admin

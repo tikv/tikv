@@ -143,7 +143,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
                     ApplyTask::UnsafeWrite(raw_write) => self.apply.apply_unsafe_write(raw_write),
-                    ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
+                    ApplyTask::ManualFlush(cfs) => self.apply.on_manual_flush(cfs).await,
                     ApplyTask::RefreshBucketStat(bucket_meta) => {
                         self.apply.on_refresh_buckets(bucket_meta)
                     }

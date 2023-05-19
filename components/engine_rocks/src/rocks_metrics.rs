@@ -104,6 +104,17 @@ make_auto_flush_static_metric! {
     pub struct SimpleEngineTickerMetrics : LocalIntCounter {
         "db" => TickerName,
     }
+
+    pub label_enum CfName {
+        default,
+        lock,
+        write,
+        raft,
+    }
+
+    pub struct ManualFlushCounter: LocalIntCounter {
+        "cf" => CfName,
+    }
 }
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
@@ -1738,6 +1749,15 @@ lazy_static! {
         "Histogram of titan iter touched blob file count",
         &["db", "type"]
     ).unwrap();
+
+    pub static ref MANUAL_FLUSH_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_engine_manual_flush",
+        "Flushes triggered manually, it's recorded in TiKV",
+        &["cf"]
+    )
+    .unwrap();
+    pub static ref MANUAL_FLUSH_COUNTER: ManualFlushCounter =
+        auto_flush_from!(MANUAL_FLUSH_COUNTER_VEC, ManualFlushCounter);
 }
 
 #[cfg(test)]

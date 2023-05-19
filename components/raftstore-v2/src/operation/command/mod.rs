@@ -22,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
+use engine_traits::{CfName, KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
@@ -429,10 +429,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
-        self.try_compelete_recovery();
-        if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
+      
+        if self.pause_for_replay()
+            && self.storage().entry_storage().commit_index() <= apply_res.applied_index
+        {
+            info!(self.logger, "replay completed"; "apply_index" => apply_res.applied_index);
+            self.set_replay_watch(None);
+            // Flush to avoid replay again and again.
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
+            }
+            self.add_pending_tick(PeerTick::Raft);
+        }
+        if !self.pause_for_replay() && let Some(cf) = self.storage_mut().apply_trace_mut().pick_cf_to_flush() {
+            if let Some(scheduler) = self.apply_scheduler() {
+                scheduler.send(ApplyTask::ManualFlush(vec![cf].into()));
             }
         }
         let last_applying_index = self.compact_log_context().last_applying_index();
@@ -527,9 +538,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.apply_flow_control_mut().need_flush = true;
     }
 
-    pub async fn on_manual_flush(&mut self) {
+    pub async fn on_manual_flush(&mut self, cfs: Box<[CfName]>) {
         let written_bytes = self.flush();
-        if let Err(e) = self.tablet().flush_cfs(&[], false) {
+        if let Err(e) = self.tablet().flush_cfs(cfs.as_ref(), false) {
             warn!(self.logger, "failed to flush: {:?}", e);
         }
         self.maybe_reschedule(written_bytes).await

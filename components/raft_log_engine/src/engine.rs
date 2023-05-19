@@ -27,7 +27,7 @@ use raft_engine::{
     Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
-use tikv_util::Either;
+use tikv_util::{sys::SysQuota, Either};
 
 use crate::perf_context::RaftEnginePerfContext;
 
@@ -622,6 +622,19 @@ impl RaftEngineReadOnly for RaftLogEngine {
         self.0
             .get_message(STORE_STATE_ID, RECOVER_STATE_KEY)
             .map_err(transfer_error)
+    }
+
+    fn optimize_for(&self, scan: bool) {
+        let upper_bound = if scan {
+            ReadableSize::gb(10)
+        } else {
+            ReadableSize::mb(256)
+        };
+        let mem = std::cmp::min(
+            (SysQuota::memory_limit_in_bytes() as f64 * 0.3) as u64,
+            upper_bound.0,
+        );
+        self.0.resize_internal_cache(mem as usize);
     }
 }
 
