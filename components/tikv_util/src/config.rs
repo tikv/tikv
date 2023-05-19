@@ -136,21 +136,20 @@ impl fmt::Display for ReadableSize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let size = self.0;
         if size == 0 {
-            write!(f, "{}KiB", size).unwrap();
+            write!(f, "{}KiB", size)
         } else if size % PIB == 0 {
-            write!(f, "{}PiB", size / PIB).unwrap();
+            write!(f, "{}PiB", size / PIB)
         } else if size % TIB == 0 {
-            write!(f, "{}TiB", size / TIB).unwrap();
+            write!(f, "{}TiB", size / TIB)
         } else if size % GIB == 0 {
-            write!(f, "{}GiB", size / GIB).unwrap();
+            write!(f, "{}GiB", size / GIB)
         } else if size % MIB == 0 {
-            write!(f, "{}MiB", size / MIB).unwrap();
+            write!(f, "{}MiB", size / MIB)
         } else if size % KIB == 0 {
-            write!(f, "{}KiB", size / KIB).unwrap();
+            write!(f, "{}KiB", size / KIB)
         } else {
-            write!(f, "{}B", size).unwrap();
+            write!(f, "{}B", size)
         }
-        Ok(())
     }
 }
 
@@ -172,11 +171,11 @@ impl FromStr for ReadableSize {
     fn from_str(s: &str) -> Result<ReadableSize, String> {
         let size_str = s.trim();
         if size_str.is_empty() {
-            return Err(format!("{:?} is not a valid size.", s));
+            return Err(format!("{s:?} is not a valid size."));
         }
 
         if !size_str.is_ascii() {
-            return Err(format!("ASCII string is expected, but got {:?}", s));
+            return Err(format!("ASCII string is expected, but got {s:?}"));
         }
 
         // size: digits and '.' as decimal separator
@@ -206,15 +205,14 @@ impl FromStr for ReadableSize {
             }
             _ => {
                 return Err(format!(
-                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
-                    s
+                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {s:?}"
                 ));
             }
         };
 
         match size.parse::<f64>() {
             Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
-            Err(_) => Err(format!("invalid size string: {:?}", s)),
+            Err(_) => Err(format!("invalid size string: {s:?}")),
         }
     }
 }
