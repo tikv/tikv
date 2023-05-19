@@ -134,11 +134,11 @@ mod tests {
         assert!(is_token_fresh(&token2));
 
         let token_cache1 = TokenCache {
-            cached_token: Arc::new(RwLock::new(Some(token1).clone())),
+            cached_token: Arc::new(RwLock::new(Some(token1))),
             ..TokenCache::default()
         };
         let token_cache2 = TokenCache {
-            cached_token: Arc::new(RwLock::new(Some(token2).clone())),
+            cached_token: Arc::new(RwLock::new(Some(token2))),
             ..TokenCache::default()
         };
         assert!(token_cache1.need_update_token());
