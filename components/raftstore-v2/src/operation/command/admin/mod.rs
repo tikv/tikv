@@ -264,10 +264,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
-                admin_type => slog_panic!(
+                _ => slog_panic!(
                     self.logger,
                     "unimplemented";
-                    "admin_type" => ?admin_type,
+                    "admin_type" => ?cmd_type,
                 ),
             }
         };

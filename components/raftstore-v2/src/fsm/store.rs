@@ -263,7 +263,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst(),
-            _ => panic!("unimplemented for {:?}", tick),
+            _ => slog_panic!(
+                self.store_ctx.logger,
+                "unimplemented";
+                "tick" => ?tick,
+            ),
         }
     }
 

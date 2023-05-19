@@ -692,10 +692,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             self.use_delete_range(),
                         )?;
                     }
-                    ty => slog_panic!(
+                    _ => slog_panic!(
                         self.logger,
                         "unimplemented";
-                        "request_type" => ?ty,
+                        "request_type" => ?r.get_cmd_type(),
                     ),
                 }
             }
