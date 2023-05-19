@@ -274,25 +274,6 @@ impl Write {
             txn_source: self.txn_source,
         }
     }
-
-    /// Returns the new `last_change_ts` and `versions_to_last_change` according
-    /// to this write record.
-    pub fn next_last_change_info(&self, commit_ts: TimeStamp) -> (TimeStamp, u64) {
-        match self.write_type {
-            WriteType::Put | WriteType::Delete => (commit_ts, 1),
-            WriteType::Lock | WriteType::Rollback => {
-                // If neither `last_change_ts` nor `versions_to_last_change` exists, do not
-                // set `last_change_ts` to indicate we don't know where is the last change.
-                // This should not happen if data is written in new version TiKV. If we hope to
-                // support data from old TiKV, consider iterating to the last change to find it.
-                if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
-                    (self.last_change_ts, self.versions_to_last_change + 1)
-                } else {
-                    (TimeStamp::zero(), 0)
-                }
-            }
-        }
-    }
 }
 
 #[derive(PartialEq, Clone)]
