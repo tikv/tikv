@@ -3306,25 +3306,29 @@ impl TikvConfig {
         let kv_data_exists = match self.storage.engine {
             EngineType::RaftKv => {
                 let kv_db_path = self.infer_kv_engine_path(None)?;
-                if self.raft_engine.enable && kv_db_path == self.raft_engine.config.dir {
-                    return Err("raft-engine.dir can't be same as storage.data_dir/db".into());
-                } else if kv_db_path == self.raft_store.raftdb_path {
-                    return Err(
-                        "raft_store.raftdb_path can't be same as storage.data_dir/db".into(),
-                    );
-                }
                 let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
                     config::canonicalize_path(&kv_db_path)?
                 } else {
                     config::canonicalize_path(&self.rocksdb.wal_dir)?
                 };
-                let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
-                    config::canonicalize_path(&self.raft_store.raftdb_path)?
+                if self.raft_engine.enable {
+                    if kv_db_path == self.raft_engine.config.dir {
+                        return Err("raft-engine.dir can't be same as storage.data_dir/db".into());
+                    }
                 } else {
-                    config::canonicalize_path(&self.raftdb.wal_dir)?
-                };
-                if kv_db_wal_path == raft_db_wal_path {
-                    return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
+                    if kv_db_path == self.raft_store.raftdb_path {
+                        return Err(
+                            "raft_store.raftdb_path can't be same as storage.data_dir/db".into(),
+                        );
+                    }
+                    let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
+                        config::canonicalize_path(&self.raft_store.raftdb_path)?
+                    } else {
+                        config::canonicalize_path(&self.raftdb.wal_dir)?
+                    };
+                    if kv_db_wal_path == raft_db_wal_path {
+                        return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
+                    }
                 }
                 // Check blob file dir is empty when titan is disabled
                 if !self.rocksdb.titan.enabled {
@@ -5518,38 +5522,69 @@ mod tests {
 
         {
             let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = false;
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
             cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
             cfg.validate().unwrap_err();
+
+            let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = true;
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
+            cfg.raft_engine.config.dir = tmp_path_string_generate!(tmp_path, "data", "db");
+            cfg.validate().unwrap_err();
+
+            let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = true;
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
+            cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
+            cfg.validate().unwrap();
         }
 
         {
             let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = false;
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.validate().unwrap_err();
+
+            let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = true;
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
+            cfg.raft_store.raftdb_path =
+                tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.validate().unwrap();
         }
 
         {
             let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = false;
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
             cfg.validate().unwrap_err();
-        }
 
-        {
             let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = true;
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
-            cfg.validate().unwrap_err();
+            cfg.validate().unwrap();
         }
 
         {
             let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = false;
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
