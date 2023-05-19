@@ -158,6 +158,9 @@ pub struct Write {
     pub last_change_ts: TimeStamp,
     /// The number of versions that need skipping from this record
     /// to find the latest PUT/DELETE record
+    /// NOTE: `last_change_ts` == 0 && `versions_to_last_change` > 0 means the
+    /// key does not exist. Either there is no such key **or the last write
+    /// is a DELETE**.
     pub versions_to_last_change: u64,
     /// The source of this txn.
     pub txn_source: u64,
@@ -303,7 +306,8 @@ pub struct WriteRef<'a> {
     /// The number of versions that need skipping from this record
     /// to find the latest PUT/DELETE record.
     /// If versions_to_last_change > 0 but last_change_ts == 0, the key does not
-    /// have a PUT/DELETE record before this write record.
+    /// have a PUT/DELETE record before this write record, OR the previous
+    /// change is a DELETE.
     pub versions_to_last_change: u64,
     /// The source of this txn.
     pub txn_source: u64,
