@@ -2365,12 +2365,8 @@ fn test_storage_with_quota_limiter_disable() {
 #[test_case(test_raftstore::must_new_and_configure_cluster_and_kv_client)]
 #[test_case(test_raftstore_v2::must_new_and_configure_cluster_and_kv_client)]
 fn test_commands_write_detail() {
-<<<<<<< HEAD
-    let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-=======
     test_util::init_log_for_test();
     let (cluster, client, ctx) = new_cluster(|cluster| {
->>>>>>> 8aa8f5480d (raftstore-v2: add raftstore-v2's test cases under kv_service (#14719))
         cluster.cfg.pessimistic_txn.pipelined = false;
         cluster.cfg.pessimistic_txn.in_memory = false;
     });
