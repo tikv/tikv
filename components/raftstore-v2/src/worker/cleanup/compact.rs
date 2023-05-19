@@ -8,7 +8,7 @@ use std::{
 use engine_traits::{KvEngine, RangeStats, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
-use slog::{error, info, warn, Logger};
+use slog::{debug, error, info, warn, Logger};
 use thiserror::Error;
 use tikv_util::{box_try, worker::Runnable};
 
@@ -128,7 +128,7 @@ where
                                 error!(
                                     self.logger,
                                     "compact range failed";
-                                    "regionid" => region_id,
+                                    "region_id" => region_id,
                                     "cf" => cf,
                                     "err" => %e,
                                 );
@@ -175,7 +175,7 @@ fn collect_regions_to_compact<E: KvEngine>(
     logger: &Logger,
 ) -> Result<Vec<u64>, Error> {
     fail_point!("on_collect_regions_to_compact");
-    info!(
+    debug!(
         logger,
         "received compaction check";
         "regions" => ?region_ids
