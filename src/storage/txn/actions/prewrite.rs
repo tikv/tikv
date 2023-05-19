@@ -2428,8 +2428,10 @@ pub mod tests {
         assert_eq!(lock.versions_to_last_change, 1);
         must_rollback(&mut engine, key, 55, false);
 
-        // Latest version is a LOCK without last_change_ts. Set the last_change_ts of
-        // the new record to zero.
+        // Latest version is a LOCK without last_change_ts. It iterates back to find the
+        // actual last write. In this case it is a DELETE, so it returns
+        // (last_change_ts == 0 && versions_to_last_change == 1), indicating the key
+        // does not exist.
         let write = Write::new(WriteType::Lock, 60.into(), None);
         engine
             .put_cf(
@@ -2442,7 +2444,7 @@ pub mod tests {
         prewrite_func(&mut engine, LockType::Lock, 70);
         let lock = must_locked(&mut engine, key, 70);
         assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.versions_to_last_change, 1);
         must_rollback(&mut engine, key, 70, false);
 
         // Latest version is a ROLLBACK without last_change_ts. Set the last_change_ts
