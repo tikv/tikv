@@ -119,17 +119,13 @@ fn test_replica_read_not_applied() {
     // internally.
     cluster.sim.wl().clear_send_filters(1);
     cluster.sim.wl().clear_recv_filters(2);
-    let resp1 = block_on_timeout(resp1_ch, Duration::from_secs(6))
-        .unwrap()
-        .unwrap();
+    let resp1 = block_on_timeout(resp1_ch, Duration::from_secs(6)).unwrap();
     let exp_value = resp1.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 
     // New read index requests can be resolved quickly.
     let resp2_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1, b"k1", true, true);
-    let resp2 = block_on_timeout(resp2_ch, Duration::from_secs(3))
-        .unwrap()
-        .unwrap();
+    let resp2 = block_on_timeout(resp2_ch, Duration::from_secs(3)).unwrap();
     let exp_value = resp2.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 }
@@ -229,9 +225,7 @@ fn test_read_hibernated_region() {
     cluster.pd_client.trigger_leader_info_loss();
     // This request will fail because no valid leader.
     let resp1_ch = async_read_on_peer(&mut cluster, p2.clone(), region.clone(), b"k1", true, true);
-    let resp1 = block_on_timeout(resp1_ch, Duration::from_secs(5))
-        .unwrap()
-        .unwrap();
+    let resp1 = block_on_timeout(resp1_ch, Duration::from_secs(5)).unwrap();
     assert!(
         resp1.get_header().get_error().has_not_leader(),
         "{:?}",
@@ -254,9 +248,7 @@ fn test_read_hibernated_region() {
     // Wait for the leader is woken up.
     thread::sleep(Duration::from_millis(500));
     let resp2_ch = async_read_on_peer(&mut cluster, p2, region, b"k1", true, true);
-    let resp2 = block_on_timeout(resp2_ch, Duration::from_secs(5))
-        .unwrap()
-        .unwrap();
+    let resp2 = block_on_timeout(resp2_ch, Duration::from_secs(5)).unwrap();
     assert!(!resp2.get_header().has_error(), "{:?}", resp2);
 }
 
@@ -332,16 +324,12 @@ fn test_read_index_out_of_order() {
 
     // After peer 2 is removed, we can get 2 read responses.
     let resp2 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1, b"k1", true, true);
-    block_on_timeout(resp2, Duration::from_secs(1))
-        .unwrap()
-        .unwrap();
-    block_on_timeout(resp1, Duration::from_secs(1))
-        .unwrap()
-        .unwrap();
+    block_on_timeout(resp2, Duration::from_secs(1)).unwrap();
+    block_on_timeout(resp1, Duration::from_secs(1)).unwrap();
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_retry_lock_checking() {
     let mut cluster = new_cluster(0, 2);
 
@@ -371,10 +359,10 @@ fn test_read_index_retry_lock_checking() {
 
     // Can't get response because read index responses are blocked.
     let r1 = cluster.get_region(b"k1");
-    let resp1 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
-    let resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true);
-    resp1.recv_timeout(Duration::from_secs(2)).unwrap_err();
-    resp2.try_recv().unwrap_err();
+    let mut resp1 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
+    let mut resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true);
+    block_on_timeout(resp1.as_mut(), Duration::from_secs(2)).unwrap_err();
+    block_on_timeout(resp2.as_mut(), Duration::from_millis(1)).unwrap_err();
 
     // k1 has a memory lock
     let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
@@ -396,22 +384,22 @@ fn test_read_index_retry_lock_checking() {
     cluster.sim.wl().clear_recv_filters(2);
     // resp1 should contain key is locked error
     assert!(
-        resp1
-            .recv_timeout(Duration::from_secs(2))
+        block_on_timeout(resp1, Duration::from_secs(2))
             .unwrap()
             .responses[0]
             .get_read_index()
             .has_locked()
     );
     // resp2 should has a successful read index
+    let resp = block_on_timeout(resp2, Duration::from_secs(2)).unwrap();
     assert!(
-        resp2
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .responses[0]
-            .get_read_index()
-            .get_read_index()
-            > 0
+        !resp.get_header().has_error()
+            && resp
+                .get_responses()
+                .get(0)
+                .map_or(true, |r| !r.get_read_index().has_locked()),
+        "{:?}",
+        resp,
     );
 }
 
@@ -465,9 +453,7 @@ fn test_split_isolation() {
     // cannot be created.
     for _ in 0..10 {
         let resp = async_read_on_peer(&mut cluster, peer.clone(), r2.clone(), b"k1", true, true);
-        let resp = block_on_timeout(resp, Duration::from_secs(1))
-            .unwrap()
-            .unwrap();
+        let resp = block_on_timeout(resp, Duration::from_secs(1)).unwrap();
         if !resp.get_header().has_error() {
             return;
         }
@@ -506,9 +492,7 @@ fn test_read_local_after_snapshot_replace_peer() {
     // wait applying snapshot finish
     sleep_ms(100);
     let resp = async_read_on_peer(&mut cluster, new_peer(3, 3), r, b"k1", true, true);
-    let resp = block_on_timeout(resp, Duration::from_secs(1))
-        .unwrap()
-        .unwrap();
+    let resp = block_on_timeout(resp, Duration::from_secs(1)).unwrap();
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 
     // trigger leader send snapshot to peer 3
@@ -537,9 +521,7 @@ fn test_read_local_after_snapshot_replace_peer() {
 
     let r = cluster.get_region(b"k1");
     let resp = async_read_on_peer(&mut cluster, new_peer(3, 1003), r, b"k3", true, true);
-    let resp = block_on_timeout(resp, Duration::from_secs(1))
-        .unwrap()
-        .unwrap();
+    let resp = block_on_timeout(resp, Duration::from_secs(1)).unwrap();
     // should not have `mismatch peer id` error
     if resp.get_header().has_error() {
         panic!("unexpected err: {:?}", resp.get_header().get_error());
@@ -607,8 +589,6 @@ fn test_malformed_read_index() {
     // the read queue, the correct request should be responded.
     let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), region, b"k1", true, false);
     cluster.clear_send_filters();
-    let resp = block_on_timeout(resp, Duration::from_secs(10))
-        .unwrap()
-        .unwrap();
+    let resp = block_on_timeout(resp, Duration::from_secs(10)).unwrap();
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 }

@@ -41,7 +41,8 @@ use raftstore::{
             APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM, STORE_APPLY_LOG_HISTOGRAM,
         },
         msg::ErrorCallback,
-        util, Config, Transport, WriteCallback,
+        util::{self, check_flashback_state},
+        Config, Transport, WriteCallback,
     },
     Error, Result,
 };
@@ -190,6 +191,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Error::EpochNotMatch(_, _new_regions) = &mut e {
                 // TODO: query sibling regions.
                 metrics.invalid_proposal.epoch_not_match.inc();
+            }
+            return Err(e);
+        }
+        // Check whether the region is in the flashback state and the request could be
+        // proposed. Skip the not prepared error because the
+        // `self.region().is_in_flashback` may not be the latest right after applying
+        // the `PrepareFlashback` admin command, we will let it pass here and check in
+        // the apply phase and because a read-only request doesn't need to be applied,
+        // so it will be allowed during the flashback progress, for example, a snapshot
+        // request.
+        if let Err(e) = util::check_flashback_state(
+            self.region().get_is_in_flashback(),
+            self.region().get_flashback_start_ts(),
+            header,
+            admin_type,
+            self.region_id(),
+            true,
+        ) {
+            match e {
+                Error::FlashbackInProgress(..) => {
+                    metrics.invalid_proposal.flashback_in_progress.inc()
+                }
+                _ => unreachable!("{:?}", e),
             }
             return Err(e);
         }
@@ -372,6 +396,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
                 AdminCmdResult::CommitMerge(res) => self.on_apply_res_commit_merge(ctx, res),
+                AdminCmdResult::Flashback(res) => self.on_apply_res_flashback(ctx, res),
             }
         }
         self.region_buckets_info_mut()
@@ -574,6 +599,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 entry.get_term(),
             ) {
                 Ok(decoder) => {
+                    fail::fail_point!(
+                        "on_apply_write_cmd",
+                        cfg!(release) || self.peer_id() == 3,
+                        |_| {
+                            unimplemented!();
+                        }
+                    );
                     util::compare_region_epoch(
                         decoder.header().get_region_epoch(),
                         self.region(),
@@ -632,6 +664,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         };
 
         util::check_req_region_epoch(&req, self.region(), true)?;
+        let header = req.get_header();
+        let admin_type = req.admin_request.as_ref().map(|req| req.get_cmd_type());
+        check_flashback_state(
+            self.region().get_is_in_flashback(),
+            self.region().get_flashback_start_ts(),
+            header,
+            admin_type,
+            self.region_id(),
+            false,
+        )?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
@@ -652,8 +694,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
                 AdminCmdType::ComputeHash => unimplemented!(),
                 AdminCmdType::VerifyHash => unimplemented!(),
-                AdminCmdType::PrepareFlashback => unimplemented!(),
-                AdminCmdType::FinishFlashback => unimplemented!(),
+                AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+                    self.apply_flashback(log_index, admin_req)?
+                }
                 AdminCmdType::BatchSwitchWitness => unimplemented!(),
                 AdminCmdType::UpdateGcPeer => self.apply_update_gc_peer(log_index, admin_req),
                 AdminCmdType::InvalidAdmin => {
