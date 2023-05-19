@@ -662,6 +662,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let reg = reg.clone();
         let key_manager = key_manager.cloned();
         let hook = move || {
+            fail::fail_point!("region_apply_snap");
             if !install_tablet(&reg, key_manager.as_deref(), &path, region_id, last_index) {
                 slog_panic!(
                     logger,

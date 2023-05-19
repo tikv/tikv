@@ -945,9 +945,10 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_debug_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
 fn test_debug_get() {
-    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+    let (cluster, debug_client, store_id) = new_cluster();
     let (k, v) = (b"key", b"value");
 
     // Put some data.
@@ -973,9 +974,10 @@ fn test_debug_get() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_debug_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
 fn test_debug_raft_log() {
-    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+    let (cluster, debug_client, store_id) = new_cluster();
 
     // Put some data.
     let engine = cluster.get_raft_engine(store_id);
@@ -1011,6 +1013,8 @@ fn test_debug_raft_log() {
     }
 }
 
+// Note: if modified in the future, should be sync with
+// `test_debug_region_info_v2`
 #[test]
 fn test_debug_region_info() {
     let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
@@ -1074,6 +1078,67 @@ fn test_debug_region_info() {
     }
 }
 
+// Note: if modified in the future, should be sync with `test_debug_region_info`
+#[test]
+fn test_debug_region_info_v2() {
+    let (cluster, debug_client, store_id) = test_raftstore_v2::must_new_cluster_and_debug_client();
+
+    let raft_engine = cluster.get_raft_engine(store_id);
+    let region_id = 100;
+    let mut raft_state = raft_serverpb::RaftLocalState::default();
+    raft_state.set_last_index(42);
+    let mut lb = raft_engine.log_batch(10);
+    lb.put_raft_state(region_id, &raft_state).unwrap();
+
+    let mut apply_state = raft_serverpb::RaftApplyState::default();
+    apply_state.set_applied_index(42);
+    lb.put_apply_state(region_id, 42, &apply_state).unwrap();
+
+    let mut region_state = raft_serverpb::RegionLocalState::default();
+    region_state.set_state(raft_serverpb::PeerState::Tombstone);
+    lb.put_region_state(region_id, 42, &region_state).unwrap();
+
+    raft_engine.consume(&mut lb, false).unwrap();
+    assert_eq!(
+        raft_engine.get_raft_state(region_id).unwrap().unwrap(),
+        raft_state
+    );
+
+    assert_eq!(
+        raft_engine
+            .get_apply_state(region_id, u64::MAX)
+            .unwrap()
+            .unwrap(),
+        apply_state
+    );
+
+    assert_eq!(
+        raft_engine
+            .get_region_state(region_id, u64::MAX)
+            .unwrap()
+            .unwrap(),
+        region_state
+    );
+
+    // Debug region_info
+    let mut req = debugpb::RegionInfoRequest::default();
+    req.set_region_id(region_id);
+    let mut resp = debug_client.region_info(&req).unwrap();
+    assert_eq!(resp.take_raft_local_state(), raft_state);
+    assert_eq!(resp.take_raft_apply_state(), apply_state);
+    assert_eq!(resp.take_region_local_state(), region_state);
+
+    req.set_region_id(region_id + 1);
+    match debug_client.region_info(&req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+// Note: if modified in the future, should be sync with
+// `test_debug_region_size_v2`
 #[test]
 fn test_debug_region_size() {
     let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
@@ -1091,6 +1156,56 @@ fn test_debug_region_size() {
     engine
         .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
+
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
+    // At lease 8 bytes for the WRITE cf.
+    let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
+    for cf in &cfs {
+        engine.put_cf(cf, k.as_slice(), v).unwrap();
+    }
+
+    let mut req = debugpb::RegionSizeRequest::default();
+    req.set_region_id(region_id);
+    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
+    let entries: Vec<_> = debug_client
+        .region_size(&req)
+        .unwrap()
+        .take_entries()
+        .into();
+    assert_eq!(entries.len(), 3);
+    for e in entries {
+        cfs.iter().find(|&&c| c == e.cf).unwrap();
+        assert!(e.size > 0);
+    }
+
+    req.set_region_id(region_id + 1);
+    match debug_client.region_size(&req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+// Note: if modified in the future, should be sync with `test_debug_region_size`
+#[test]
+fn test_debug_region_size_v2() {
+    let (cluster, debug_client, store_id) = test_raftstore_v2::must_new_cluster_and_debug_client();
+    let raft_engine = cluster.get_raft_engine(store_id);
+    let engine = cluster.get_engine(store_id);
+
+    let mut lb = raft_engine.log_batch(10);
+    // Put some data.
+    let region_id = 1;
+    let mut region = metapb::Region::default();
+    region.set_id(region_id);
+    region.set_start_key(b"a".to_vec());
+    region.set_end_key(b"z".to_vec());
+    let mut state = RegionLocalState::default();
+    state.set_region(region);
+    state.set_tablet_index(5);
+    lb.put_region_state(region_id, 5, &state).unwrap();
+    raft_engine.consume(&mut lb, false).unwrap();
 
     let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
     // At lease 8 bytes for the WRITE cf.
@@ -1159,9 +1274,10 @@ fn test_debug_fail_point() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_debug_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
 fn test_debug_scan_mvcc() {
-    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+    let (cluster, debug_client, store_id) = new_cluster();
     let engine = cluster.get_engine(store_id);
 
     // Put some data.

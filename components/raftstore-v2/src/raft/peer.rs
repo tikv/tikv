@@ -9,14 +9,14 @@ use std::{
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
 use engine_traits::{
-    CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
+    CachedTablet, FlushState, KvEngine, RaftEngine, SstApplyState, TabletContext, TabletRegistry,
 };
 use kvproto::{
     metapb::{self, PeerRole},
     pdpb,
     raft_serverpb::RaftMessage,
 };
-use raft::{RawNode, StateRole};
+use raft::{eraftpb, RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
@@ -107,6 +107,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// advancing apply index.
     state_changes: Option<Box<ER::LogBatch>>,
     flush_state: Arc<FlushState>,
+    sst_apply_state: SstApplyState,
 
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     leader_transferee: u64,
@@ -147,6 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
 
         let flush_state: Arc<FlushState> = Arc::new(FlushState::new(applied_index));
+        let sst_apply_state = SstApplyState::default();
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
@@ -199,6 +201,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             split_trace: vec![],
             state_changes: None,
             flush_state,
+            sst_apply_state,
             split_flow_control: SplitFlowControl::default(),
             leader_transferee: raft::INVALID_ID,
             long_uncommitted_threshold: cmp::max(
@@ -282,7 +285,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Some(progress) = self
                 .leader_lease
                 .maybe_new_remote_lease(self.term())
-                .map(ReadProgress::leader_lease)
+                .map(ReadProgress::set_leader_lease)
             {
                 self.maybe_update_read_progress(reader, progress);
             }
@@ -427,6 +430,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn persisted_index(&self) -> u64 {
         self.raft_group.raft.raft_log.persisted
+    }
+
+    #[inline]
+    pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
+        self.raft_group.snap()
     }
 
     #[inline]
@@ -791,6 +799,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn flush_state(&self) -> &Arc<FlushState> {
         &self.flush_state
+    }
+
+    #[inline]
+    pub fn sst_apply_state(&self) -> &SstApplyState {
+        &self.sst_apply_state
     }
 
     pub fn reset_flush_state(&mut self, index: u64) {
