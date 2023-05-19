@@ -176,7 +176,7 @@ fn test_txn_gc_keys_handled() {
         must_commit(&mut prefixed_engine, &k, 151, 152);
     }
 
-    db.flush_cf(cf, true).unwrap();
+    db.flush_cf(cf, true, false).unwrap();
 
     db.compact_range_cf(cf, None, None);
 
@@ -344,7 +344,7 @@ fn test_raw_gc_keys_handled() {
     engine.write(&ctx, batch).unwrap();
 
     let cf = get_cf_handle(&db, CF_DEFAULT).unwrap();
-    db.flush_cf(cf, true).unwrap();
+    db.flush_cf(cf, true, false).unwrap();
 
     db.compact_range_cf(cf, None, None);
 
