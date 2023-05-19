@@ -371,7 +371,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     /// Gets the write record of the specified key's latest version before
-    /// specified `ts`, and additionally the write record's `commit_ts`, if any.
+    /// specified `ts` (i.e. a PUT or a DELETE), and additionally the write
+    /// record's `commit_ts`, if any.
     ///
     /// See also [`MvccReader::get_write`].
     pub fn get_write_with_commit_ts(
@@ -759,6 +760,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
     pub fn snapshot_ext(&self) -> S::Ext<'_> {
         self.snapshot.ext()
     }
+
+    pub fn snapshot(&self) -> &S {
+        &self.snapshot
+    }
 }
 
 #[cfg(test)]
@@ -778,6 +783,7 @@ pub mod tests {
         kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*},
         metapb::{Peer, Region},
     };
+    use pd_client::FeatureGate;
     use raftstore::store::RegionSnapshot;
     use txn_types::{LockType, Mutation};
 
@@ -786,8 +792,8 @@ pub mod tests {
         kv::Modify,
         mvcc::{tests::write, MvccReader, MvccTxn},
         txn::{
-            acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
-            TransactionProperties,
+            acquire_pessimistic_lock, cleanup, commit, gc, prewrite,
+            sched_pool::set_tls_feature_gate, CommitKind, TransactionKind, TransactionProperties,
         },
         Engine, TestEngineBuilder,
     };
@@ -2441,5 +2447,77 @@ pub mod tests {
         assert_eq!(reader.statistics.write.seek, 1);
         assert_eq!(reader.statistics.write.next, 0);
         assert_eq!(reader.statistics.write.get, 0);
+    }
+
+    #[test]
+    fn test_skip_lock_after_upgrade_6_5() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_skip_lock_after_upgrade_6_5")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+        let k = b"k";
+
+        // 6.1.0, locks were written
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.1.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+
+        engine.put(k, 1, 2);
+        // 10 locks were put
+        for start_ts in (6..30).into_iter().step_by(2) {
+            engine.lock(k, start_ts, start_ts + 1);
+        }
+
+        // in 6.5 a new lock was put, and it should contain a `last_change_ts`.
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.5.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+
+        engine.lock(k, 30, 31);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
+        let mut reader = MvccReader::new(snap, None, false);
+        let res = reader
+            .get_write_with_commit_ts(&Key::from_raw(k), 100.into(), None)
+            .unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().0.write_type, WriteType::Put);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 0);
+    }
+
+    #[test]
+    fn test_locks_interleaving_rollbacks() {
+        // a ROLLBACK inside a chain of LOCKs won't prevent LOCKs  from tracking the
+        // correct `last_change_ts`
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_skip_lock_after_upgrade_6_5")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+        let k = b"k";
+        engine.put(k, 1, 2);
+
+        for start_ts in (6..30).into_iter().step_by(2) {
+            engine.lock(k, start_ts, start_ts + 1);
+        }
+        engine.rollback(k, 30);
+        engine.lock(k, 31, 32);
+
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
+        let mut reader = MvccReader::new(snap, None, false);
+        let res = reader
+            .get_write_with_commit_ts(&Key::from_raw(k), 100.into(), None)
+            .unwrap();
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().0.write_type, WriteType::Put);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 0);
     }
 }

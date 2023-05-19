@@ -10,7 +10,8 @@ use crate::storage::{
         Error as MvccError, ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
     },
     txn::{
-        actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
+        actions::{check_data_constraint::check_data_constraint, common::next_last_change_info},
+        sched_pool::tls_can_enable,
         scheduler::LAST_CHANGE_TS,
     },
     types::PessimisticLockKeyResult,
@@ -313,7 +314,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             Err(e)
         })?;
 
-        (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
+        (last_change_ts, versions_to_last_change) =
+            next_last_change_info(&key, &write, txn.start_ts, reader, commit_ts)?;
 
         // Load value if locked_with_conflict, so that when the client (TiDB) need to
         // read the value during statement retry, it will be possible to read the value
