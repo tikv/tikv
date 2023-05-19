@@ -15,6 +15,12 @@ fn config_default_refresh_token_timeout() -> i64 {
     DEFAULT_REFRESH_TOKEN_TIMEOUT
 }
 
+#[inline]
+fn is_token_fresh(token: &TokenResponse) -> bool {
+    let refresh_ts = OffsetDateTime::now_utc().unix_timestamp() + DEFAULT_REFRESH_TIME;
+    refresh_ts <= token.expires_on.unix_timestamp()
+}
+
 #[derive(Clone)]
 pub(crate) struct TokenCache {
     /// Cached token
@@ -33,16 +39,22 @@ impl Default for TokenCache {
 }
 
 impl TokenCache {
+    #[inline]
     fn is_fresh(&self) -> bool {
         fail::fail_point!("on_is_fresh_return_true", |_| { true });
-        if let Some(token) = self.cached_token.read().unwrap().as_ref() {
-            let current_time = OffsetDateTime::now_utc().unix_timestamp();
-            let expiry_time = current_time + DEFAULT_REFRESH_TIME;
-            return expiry_time <= token.expires_on.unix_timestamp();
+        if let Ok(token) = self.cached_token.read() {
+            if let Some(token) = token.as_ref() {
+                return is_token_fresh(token);
+            }
         }
         false
     }
 
+    /// Check whether need to update the cached token.
+    ///
+    /// This function is set to permit only one WRITE thread to update the
+    /// cached token, unless the WRITE thread is time out for updating token.
+    #[inline]
     pub fn need_update_token(&self) -> bool {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         loop {
@@ -66,18 +78,30 @@ impl TokenCache {
         true
     }
 
+    #[inline]
     pub fn update_token(&self, token: TokenResponse) {
-        let mut cached_token = self.cached_token.write().unwrap();
-        *cached_token = Some(token);
-        // Mark `wait_refresed` to be FALSE, making it waited for next refreshing.
-        let mut wait_refreshed = self.wait_refreshed.lock().unwrap();
-        *wait_refreshed = false;
+        if let Ok(mut cached_token) = self.cached_token.write() {
+            *cached_token = Some(token);
+            // Mark `wait_refresed` to be FALSE, making it waited for next refreshing.
+            let mut wait_refreshed = self.wait_refreshed.lock().unwrap();
+            *wait_refreshed = false;
+        }
     }
 
-    pub fn get_token(&self) -> TokenResponse {
-        let cached_token = self.cached_token.read().unwrap();
-        assert!(cached_token.is_some());
-        cached_token.clone().unwrap()
+    #[inline]
+    pub fn get_token(&self) -> Option<TokenResponse> {
+        match self.cached_token.read() {
+            Ok(cached_token) => {
+                let token = cached_token.clone();
+                debug_assert!(token.is_some());
+                if is_token_fresh(token.as_ref().unwrap()) {
+                    token
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
     }
 }
 
@@ -86,14 +110,54 @@ pub trait TokenCredentialWithCache {
 
     fn update_cached_token(&self, token: TokenResponse);
 
-    fn get_cached_token(&self) -> TokenResponse;
+    fn get_cached_token(&self) -> Option<TokenResponse>;
 }
 
 #[cfg(test)]
 mod tests {
+    use azure_core::auth::AccessToken;
+
+    use super::*;
+
+    #[test]
+    fn test_token_cache_basement() {
+        let acces_token = AccessToken::new("test_token");
+        let expire_on =
+            OffsetDateTime::from_unix_timestamp(OffsetDateTime::now_utc().unix_timestamp() + 1)
+                .unwrap();
+        let token1 = TokenResponse::new(acces_token.clone(), expire_on);
+        let token2 = TokenResponse::new(
+            acces_token,
+            expire_on + std::time::Duration::from_secs(DEFAULT_REFRESH_TIME as u64),
+        );
+        assert!(!is_token_fresh(&token1));
+        assert!(is_token_fresh(&token2));
+
+        let token_cache1 = TokenCache {
+            cached_token: Arc::new(RwLock::new(Some(token1).clone())),
+            ..TokenCache::default()
+        };
+        let token_cache2 = TokenCache {
+            cached_token: Arc::new(RwLock::new(Some(token2).clone())),
+            ..TokenCache::default()
+        };
+        assert!(token_cache1.need_update_token());
+        assert!(!token_cache2.need_update_token());
+        assert!(token_cache1.get_token().is_none());
+        let cached_token2 = token_cache2.get_token().unwrap();
+        assert!(is_token_fresh(&cached_token2));
+
+        token_cache1.update_token(cached_token2);
+        assert!(token_cache1.get_token().is_some());
+        assert!(!token_cache1.need_update_token());
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        assert!(token_cache1.need_update_token());
+        assert!(token_cache1.get_token().is_none());
+    }
+
     #[test]
     #[cfg(feature = "failpoints")]
-    fn test_concurrently_refresh_token() {
+    fn test_concurrently_refresh_token_cache() {
         let token_cache = super::TokenCache::default();
         assert!(!token_cache.is_fresh());
         let (token1, token2) = (token_cache.clone(), token_cache.clone());

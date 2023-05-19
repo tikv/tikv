@@ -145,7 +145,7 @@ impl TokenCredentialWithCache for ClientCertificateCredentialWithCache {
         self.cached_token.update_token(token);
     }
 
-    fn get_cached_token(&self) -> TokenResponse {
+    fn get_cached_token(&self) -> Option<TokenResponse> {
         self.cached_token.get_token()
     }
 }
@@ -171,7 +171,9 @@ impl TokenCredential for ClientCertificateCredentialWithCache {
     // version with caching feature and stable feature.
     async fn get_token(&self, resource: &str) -> azure_core::Result<TokenResponse> {
         if !self.need_update_cached_token() {
-            return Ok(self.get_cached_token());
+            if let Some(token) = self.get_cached_token() {
+                return Ok(token);
+            }
         }
         let options = self.options();
         // Reference of the REST API: https://learn.microsoft.com/en-us/azure/key-vault/general/common-parameters-and-headers.
