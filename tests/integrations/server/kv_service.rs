@@ -982,7 +982,9 @@ fn test_debug_store() {
         })
         .unwrap();
 
-    let req = debugpb::GetRangePropertiesRequest::default();
+    let mut req = debugpb::GetRangePropertiesRequest::default();
+    req.set_start_key(keys::data_key(b"").to_vec());
+    req.set_end_key(keys::data_end_key(b"").to_vec());
     let resp = debug_client.get_range_properties(&req).unwrap();
     resp.get_properties()
         .iter()
@@ -992,8 +994,8 @@ fn test_debug_store() {
         .unwrap();
 
     let mut req = debugpb::GetRangePropertiesRequest::default();
-    req.set_start_key(b"d".to_vec());
-    req.set_end_key(b"".to_vec());
+    req.set_start_key(keys::data_key(b"d").to_vec());
+    req.set_end_key(keys::data_end_key(b"").to_vec());
     let resp = debug_client.get_range_properties(&req).unwrap();
     resp.get_properties()
         .iter()
