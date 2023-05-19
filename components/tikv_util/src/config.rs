@@ -131,28 +131,36 @@ impl Mul<u64> for ReadableSize {
     }
 }
 
+impl fmt::Display for ReadableSize {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let size = self.0;
+        if size == 0 {
+            write!(f, "{}KiB", size).unwrap();
+        } else if size % PIB == 0 {
+            write!(f, "{}PiB", size / PIB).unwrap();
+        } else if size % TIB == 0 {
+            write!(f, "{}TiB", size / TIB).unwrap();
+        } else if size % GIB == 0 {
+            write!(f, "{}GiB", size / GIB).unwrap();
+        } else if size % MIB == 0 {
+            write!(f, "{}MiB", size / MIB).unwrap();
+        } else if size % KIB == 0 {
+            write!(f, "{}KiB", size / KIB).unwrap();
+        } else {
+            write!(f, "{}B", size).unwrap();
+        }
+        Ok(())
+    }
+}
+
 impl Serialize for ReadableSize {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let size = self.0;
         let mut buffer = String::new();
-        if size == 0 {
-            write!(buffer, "{}KiB", size).unwrap();
-        } else if size % PIB == 0 {
-            write!(buffer, "{}PiB", size / PIB).unwrap();
-        } else if size % TIB == 0 {
-            write!(buffer, "{}TiB", size / TIB).unwrap();
-        } else if size % GIB == 0 {
-            write!(buffer, "{}GiB", size / GIB).unwrap();
-        } else if size % MIB == 0 {
-            write!(buffer, "{}MiB", size / MIB).unwrap();
-        } else if size % KIB == 0 {
-            write!(buffer, "{}KiB", size / KIB).unwrap();
-        } else {
-            write!(buffer, "{}B", size).unwrap();
-        }
+        write!(buffer, "{}", self).unwrap();
         serializer.serialize_str(&buffer)
     }
 }

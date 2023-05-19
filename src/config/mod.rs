@@ -3277,16 +3277,14 @@ impl TikvConfig {
         }
     }
 
+    // FIXME: consider engine_type.
     pub fn infer_kv_engine_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
         let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.log.validate()?;
-        self.readpool.validate()?;
-        self.storage.validate()?;
-
+        // Setting up data paths.
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
                 .join(LAST_CONFIG_FILE)
@@ -3294,9 +3292,93 @@ impl TikvConfig {
                 .unwrap()
                 .to_owned();
         }
+        self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
+        self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
+        if self.log_backup.temp_path.is_empty() {
+            self.log_backup.temp_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-temp")?;
+        }
 
+        // Validating data paths.
+        if self.raft_engine.config.dir == self.raft_store.raftdb_path {
+            return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
+        }
+        let kv_data_exists = match self.storage.engine {
+            EngineType::RaftKv => {
+                let kv_db_path = self.infer_kv_engine_path(None)?;
+                if self.raft_engine.enable && kv_db_path == self.raft_engine.config.dir {
+                    return Err("raft-engine.dir can't be same as storage.data_dir/db".into());
+                } else if kv_db_path == self.raft_store.raftdb_path {
+                    return Err(
+                        "raft_store.raftdb_path can't be same as storage.data_dir/db".into(),
+                    );
+                }
+                let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
+                    config::canonicalize_path(&kv_db_path)?
+                } else {
+                    config::canonicalize_path(&self.rocksdb.wal_dir)?
+                };
+                let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
+                    config::canonicalize_path(&self.raft_store.raftdb_path)?
+                } else {
+                    config::canonicalize_path(&self.raftdb.wal_dir)?
+                };
+                if kv_db_wal_path == raft_db_wal_path {
+                    return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
+                }
+                // Check blob file dir is empty when titan is disabled
+                if !self.rocksdb.titan.enabled {
+                    let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
+                        Path::new(&kv_db_path).join("titandb")
+                    } else {
+                        Path::new(&self.rocksdb.titan.dirname).to_path_buf()
+                    };
+                    if let Err(e) = tikv_util::config::check_data_dir_empty(
+                        titandb_path.to_str().unwrap(),
+                        "blob",
+                    ) {
+                        return Err(format!(
+                            "check: titandb-data-dir-empty; err: \"{}\"; \
+                            hint: You have disabled titan when its data directory is not empty. \
+                            To properly shutdown titan, please enter fallback blob-run-mode and \
+                            wait till titandb files are all safely ingested.",
+                            e
+                        )
+                        .into());
+                    }
+                }
+                RocksEngine::exists(&kv_db_path)
+            }
+            EngineType::RaftKv2 => {
+                if !self.rocksdb.wal_dir.is_empty() {
+                    return Err(
+                        "partitioned-raft-kv doesn't support designating rocksdb.wal-dir".into(),
+                    );
+                }
+                Path::new(&self.storage.data_dir)
+                    .join(DEFAULT_TABLET_SUB_DIR)
+                    .exists()
+            }
+        };
+        RaftDataStateMachine::new(
+            &self.storage.data_dir,
+            &self.raft_store.raftdb_path,
+            &self.raft_engine.config.dir,
+        )
+        .validate(kv_data_exists)?;
+
+        // Optimize.
+        self.rocksdb.optimize_for(self.storage.engine);
+        self.coprocessor
+            .optimize_for(self.storage.engine == EngineType::RaftKv2);
+        self.split
+            .optimize_for(self.coprocessor.region_split_size());
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
+        }
+
+        // Validate for v2.
+        if self.storage.engine == EngineType::RaftKv2 {
             if !self.raft_engine.enable {
                 return Err("partitioned-raft-kv only supports raft log engine.".into());
             }
@@ -3314,68 +3396,7 @@ impl TikvConfig {
             }
         }
 
-        self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
-        self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
-
-        if self.raft_engine.config.dir == self.raft_store.raftdb_path {
-            return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
-        }
-
-        let kv_db_path = self.infer_kv_engine_path(None)?;
-        if kv_db_path == self.raft_store.raftdb_path {
-            return Err("raft_store.raftdb_path can't be same as storage.data_dir/db".into());
-        }
-
-        let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
-            config::canonicalize_path(&kv_db_path)?
-        } else {
-            config::canonicalize_path(&self.rocksdb.wal_dir)?
-        };
-        let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
-            config::canonicalize_path(&self.raft_store.raftdb_path)?
-        } else {
-            config::canonicalize_path(&self.raftdb.wal_dir)?
-        };
-        if kv_db_wal_path == raft_db_wal_path {
-            return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
-        }
-
-        let kv_data_exists = if self.storage.engine == EngineType::RaftKv {
-            RocksEngine::exists(&kv_db_path)
-        } else {
-            Path::new(&self.storage.data_dir)
-                .join(DEFAULT_TABLET_SUB_DIR)
-                .exists()
-        };
-
-        RaftDataStateMachine::new(
-            &self.storage.data_dir,
-            &self.raft_store.raftdb_path,
-            &self.raft_engine.config.dir,
-        )
-        .validate(kv_data_exists)?;
-
-        // Check blob file dir is empty when titan is disabled
-        if !self.rocksdb.titan.enabled {
-            let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
-                Path::new(&kv_db_path).join("titandb")
-            } else {
-                Path::new(&self.rocksdb.titan.dirname).to_path_buf()
-            };
-            if let Err(e) =
-                tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
-            {
-                return Err(format!(
-                    "check: titandb-data-dir-empty; err: \"{}\"; \
-                     hint: You have disabled titan when its data directory is not empty. \
-                     To properly shutdown titan, please enter fallback blob-run-mode and \
-                     wait till titandb files are all safely ingested.",
-                    e
-                )
-                .into());
-            }
-        }
-
+        // Validate raftstore with other components.
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
         if expect_keepalive > self.server.grpc_keepalive_time.0 {
             return Err(format!(
@@ -3385,7 +3406,6 @@ impl TikvConfig {
             )
             .into());
         }
-
         if self.raft_store.hibernate_regions && !self.cdc.hibernate_regions_compatible {
             warn!(
                 "raftstore.hibernate-regions was enabled but cdc.hibernate-regions-compatible \
@@ -3393,45 +3413,7 @@ impl TikvConfig {
             );
         }
 
-        if self.log_backup.temp_path.is_empty() {
-            self.log_backup.temp_path =
-                config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-temp")?;
-        }
-
-        self.rocksdb.optimize_for(self.storage.engine);
-
-        self.rocksdb.validate()?;
-        self.raftdb.validate()?;
-        self.raft_engine.validate()?;
-        self.server.validate()?;
-        self.pd.validate()?;
-
-        // cannot pass EngineType directly as component raftstore cannot have dependency
-        // on tikv
-        self.coprocessor
-            .optimize_for(self.storage.engine == EngineType::RaftKv2);
-        self.coprocessor.validate()?;
-        self.split
-            .optimize_for(self.coprocessor.region_split_size());
-        self.raft_store.validate(
-            self.coprocessor.region_split_size(),
-            self.coprocessor.enable_region_bucket(),
-            self.coprocessor.region_bucket_size,
-        )?;
-        self.security
-            .validate(self.storage.engine == EngineType::RaftKv2)?;
-        self.import.validate()?;
-        self.backup.validate()?;
-        self.log_backup.validate()?;
-        self.cdc
-            .validate(self.storage.engine == EngineType::RaftKv2)?;
-        self.pessimistic_txn.validate()?;
-        self.gc.validate()?;
-        self.resolved_ts.validate()?;
-        self.resource_metering.validate()?;
-        self.quota.validate()?;
-        self.causal_ts.validate()?;
-
+        // Validate flow control and rocksdb write stall.
         if self.storage.flow_control.enable {
             self.rocksdb.defaultcf.disable_write_stall = true;
             self.rocksdb.writecf.disable_write_stall = true;
@@ -3509,6 +3491,7 @@ impl TikvConfig {
         fill_cf_opts!(self.rocksdb.lockcf, flow_control_cfg);
         fill_cf_opts!(self.rocksdb.raftcf, flow_control_cfg);
 
+        // Validate memory usage limit.
         if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
             if memory_usage_limit.0 > total {
@@ -3528,7 +3511,6 @@ impl TikvConfig {
                 self.memory_usage_limit = Some(Self::suggested_memory_usage_limit());
             }
         }
-
         let mut limit = self.memory_usage_limit.unwrap();
         let total = ReadableSize(SysQuota::memory_limit_in_bytes());
         if limit.0 > total.0 {
@@ -3547,6 +3529,34 @@ impl TikvConfig {
                 limit, default,
             );
         }
+
+        // Validate sub-components.
+        self.log.validate()?;
+        self.readpool.validate()?;
+        self.storage.validate()?;
+        self.rocksdb.validate()?;
+        self.raftdb.validate()?;
+        self.raft_engine.validate()?;
+        self.server.validate()?;
+        self.pd.validate()?;
+        self.coprocessor.validate()?;
+        self.raft_store.validate(
+            self.coprocessor.region_split_size(),
+            self.coprocessor.enable_region_bucket(),
+            self.coprocessor.region_bucket_size,
+        )?;
+        self.security.validate()?;
+        self.import.validate()?;
+        self.backup.validate()?;
+        self.log_backup.validate()?;
+        self.cdc
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
+        self.pessimistic_txn.validate()?;
+        self.gc.validate()?;
+        self.resolved_ts.validate()?;
+        self.resource_metering.validate()?;
+        self.quota.validate()?;
+        self.causal_ts.validate()?;
 
         Ok(())
     }
