@@ -172,8 +172,6 @@ pub trait Debugger {
 
     fn reset_to_version(&self, version: u64);
 
-    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>>;
-
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
 
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
@@ -935,21 +933,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
         Ok(())
     }
 
-    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
-        let mut props = dump_write_cf_properties(
-            &self.engines.kv,
-            &keys::data_key(start),
-            &keys::data_end_key(end),
-        )?;
-        let mut props1 = dump_default_cf_properties(
-            &self.engines.kv,
-            &keys::data_key(start),
-            &keys::data_end_key(end),
-        )?;
-        props.append(&mut props1);
-        Ok(props)
-    }
-
     fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
@@ -989,19 +972,16 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
     }
 
     fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
-        if !start.starts_with(keys::DATA_PREFIX_KEY) {
-            return Err(Error::InvalidArgument(
-                "start key must start with \"z\"".to_owned(),
-            ));
-        }
-
-        if end != keys::DATA_MAX_KEY && !end.starts_with(keys::DATA_PREFIX_KEY) {
-            return Err(Error::InvalidArgument(
-                "end key must start with \"z\"".to_owned(),
-            ));
-        }
-        let mut props = dump_write_cf_properties(&self.engines.kv, start, end)?;
-        let mut props1 = dump_default_cf_properties(&self.engines.kv, start, end)?;
+        let mut props = dump_write_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        let mut props1 = dump_default_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
         props.append(&mut props1);
         Ok(props)
     }

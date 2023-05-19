@@ -458,10 +458,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         Ok(res)
     }
 
-    fn get_range_properties(&self, _: &[u8], _: &[u8]) -> Result<Vec<(String, String)>> {
-        unimplemented!()
-    }
-
     fn reset_to_version(&self, _version: u64) {
         unimplemented!()
     }
@@ -476,17 +472,8 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
 
     fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
         let mut props = vec![];
-        if !start.starts_with(DATA_PREFIX_KEY) {
-            return Err(Error::InvalidArgument(
-                "start key must start with \"z\"".to_owned(),
-            ));
-        }
-
-        if end != keys::DATA_MAX_KEY && !end.starts_with(DATA_PREFIX_KEY) {
-            return Err(Error::InvalidArgument(
-                "end key must start with \"z\"".to_owned(),
-            ));
-        }
+        let start = &keys::data_key(start);
+        let end = &keys::data_end_key(end);
         let regions = find_region_states_by_key_range(&self.raft_engine, start, end);
         for (region_id, start_key, end_key, region_state) in regions {
             let mut tablet_cache =
