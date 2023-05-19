@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DeleteStrategy, MiscExt, Range, Result, StatisticsReporter};
+use engine_traits::{DeleteStrategy, MiscExt, MvccProperties, Range, Result, StatisticsReporter};
 
 use crate::engine::PanicEngine;
 
@@ -100,12 +100,12 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_range_entries_and_versions(
+    fn get_range_entries_and_properties(
         &self,
         cf: &str,
         start: &[u8],
         end: &[u8],
-    ) -> Result<Option<(u64, u64)>> {
+    ) -> Result<Option<(u64, MvccProperties)>> {
         panic!()
     }
 

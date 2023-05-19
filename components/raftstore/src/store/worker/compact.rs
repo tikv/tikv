@@ -177,6 +177,7 @@ where
 fn need_compact(
     num_entires: u64,
     num_versions: u64,
+    num_deletes: u64,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
 ) -> bool {
@@ -186,9 +187,13 @@ fn need_compact(
 
     // When the number of tombstones exceed threshold and ratio, this range need
     // compacting.
+    // When MVCC deletes exceed the threshold,
+    // we need to compact and let compaction filter clear them.
     let estimate_num_del = num_entires - num_versions;
     estimate_num_del >= tombstones_num_threshold
         && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
+        || num_deletes > tombstones_num_threshold
+            && num_deletes * 100 >= num_entires * tombstones_percent_threshold
 }
 
 fn collect_ranges_need_compact(
@@ -206,12 +211,13 @@ fn collect_ranges_need_compact(
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to
         // be compacted.
-        if let Some((num_ent, num_ver)) =
-            box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1]))
+        if let Some((num_entries, props)) =
+            box_try!(engine.get_range_entries_and_properties(CF_WRITE, &range[0], &range[1]))
         {
             if need_compact(
-                num_ent,
-                num_ver,
+                num_entries,
+                props.num_versions,
+                props.num_deletes,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
             ) {
@@ -257,8 +263,8 @@ mod tests {
         kv::{new_engine, new_engine_opt, KvTestEngine},
     };
     use engine_traits::{
-        MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT,
-        CF_WRITE,
+        MiscExt, Mutable, MvccProperties, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
+        CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use keys::data_key;
     use tempfile::Builder;
@@ -319,6 +325,13 @@ mod tests {
             .unwrap();
     }
 
+    fn mvcc_delete(db: &KvTestEngine, k: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
+        let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
+        let w = Write::new(WriteType::Delete, start_ts, None);
+        db.put_cf(CF_WRITE, k.as_encoded(), &w.as_ref().to_bytes())
+            .unwrap();
+    }
+
     fn delete(db: &KvTestEngine, k: &[u8], commit_ts: TimeStamp) {
         let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
         db.delete_cf(CF_WRITE, k.as_encoded()).unwrap();
@@ -357,8 +370,14 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) = engine
-            .get_range_entries_and_versions(CF_WRITE, &start, &end)
+        let (
+            entries,
+            MvccProperties {
+                num_versions: version,
+                ..
+            },
+        ) = engine
+            .get_range_entries_and_properties(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
         assert_eq!(entries, 10);
@@ -372,8 +391,14 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = engine
-            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+        let (
+            entries,
+            MvccProperties {
+                num_versions: version,
+                ..
+            },
+        ) = engine
+            .get_range_entries_and_properties(CF_WRITE, &s, &e)
             .unwrap()
             .unwrap();
         assert_eq!(entries, 5);
@@ -399,8 +424,14 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = engine
-            .get_range_entries_and_versions(CF_WRITE, &s, &e)
+        let (
+            entries,
+            MvccProperties {
+                num_versions: version,
+                ..
+            },
+        ) = engine
+            .get_range_entries_and_properties(CF_WRITE, &s, &e)
             .unwrap()
             .unwrap();
         assert_eq!(entries, 10);
@@ -416,6 +447,57 @@ mod tests {
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
+        assert_eq!(ranges_need_to_compact, expected_ranges);
+    }
+
+    #[test]
+    fn test_compact_after_delete() {
+        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
+        let engine = open_db(tmp_dir.path().to_str().unwrap());
+
+        // mvcc_put 0..5
+        for i in 0..5 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let (start, end) = (data_key(b"k0"), data_key(b"k5"));
+
+        let (entries, props) = engine
+            .get_range_entries_and_properties(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entries, 5);
+        assert_eq!(props.num_rows, 5);
+        assert_eq!(props.num_puts, 5);
+        assert_eq!(props.num_deletes, 0);
+
+        // mvcc_delete 0..5
+        for i in 0..5 {
+            let k = format!("k{}", i);
+            mvcc_delete(&engine, k.as_bytes(), 3.into(), 4.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let (entries, props) = engine
+            .get_range_entries_and_properties(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entries, 10);
+        assert_eq!(props.num_rows, 10);
+        assert_eq!(props.num_puts, 5);
+        assert_eq!(props.num_deletes, 5);
+
+        let ranges_need_to_compact = collect_ranges_need_compact(
+            &engine,
+            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            1,
+            50,
+        )
+        .unwrap();
+
+        let expected_ranges = VecDeque::from(vec![(start, end)]);
         assert_eq!(ranges_need_to_compact, expected_ranges);
     }
 }
