@@ -64,6 +64,12 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<()>;
+
     fn delete_ranges_cfs(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.cf_names() {
             self.delete_ranges_cf(cf, strategy.clone(), ranges)?;

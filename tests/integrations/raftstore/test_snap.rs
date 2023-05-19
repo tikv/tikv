@@ -12,7 +12,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{Checkpointer, KvEngine, RaftEngineReadOnly};
+use engine_traits::{Checkpointer, KvEngine, RaftEngineDebug};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::{self, ChannelBuilder, Environment};

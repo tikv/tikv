@@ -44,7 +44,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     log::SlogFormat,
     sys::SysQuota,
-    time::{duration_to_sec, Instant as TiInstant},
+    time::{duration_to_sec, Instant as TiInstant, Limiter},
     timer::SteadyTimer,
     worker::{Builder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
@@ -60,6 +60,8 @@ use crate::{
     worker::{checkpoint, pd, tablet},
     Error, Result,
 };
+
+const MAX_MANUAL_FLUSH_RATE: f64 = 0.3;
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
@@ -613,12 +615,27 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
             let router = router.clone();
+            let registry = tablet_registry.clone();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                let limiter = Limiter::new(MAX_MANUAL_FLUSH_RATE);
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
-                    Ok(regions) => {
+                    Ok(mut regions) => {
+                        warn!(logger, "flushing oldest cf of regions {regions:?}");
+                        // Refresh the list at least every 60s.
+                        regions.truncate((MAX_MANUAL_FLUSH_RATE * 60.0) as usize);
+                        // Skip tablets that are flushed elsewhere.
+                        let threshold = std::time::SystemTime::now() - Duration::from_secs(60 * 2);
                         for r in regions {
                             let _ = router.send(r, PeerMsg::ForceCompactLog);
+                            if let Some(mut t) = registry.get(r)
+                                && let Some(t) = t.latest()
+                            {
+                                std::thread::sleep(limiter.consume_duration(1));
+                                if let Err(e) = t.flush_oldest_cf(true, Some(threshold)) {
+                                    warn!(logger, "failed to flush oldest cf"; "err" => %e);
+                                }
+                            }
                         }
                     }
                     Err(e) => {
