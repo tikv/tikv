@@ -5012,7 +5012,7 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
+                ExecResult::Flashback { region } => self.on_set_flashback_state(region),
                 ExecResult::BatchSwitchWitness(switches) => {
                     self.on_ready_batch_switch_witness(switches)
                 }
@@ -5260,10 +5260,13 @@ where
         // the apply phase and because a read-only request doesn't need to be applied,
         // so it will be allowed during the flashback progress, for example, a snapshot
         // request.
+        let header = msg.get_header();
+        let admin_type = msg.admin_request.as_ref().map(|req| req.get_cmd_type());
         if let Err(e) = util::check_flashback_state(
             self.region().is_in_flashback,
             self.region().flashback_start_ts,
-            msg,
+            header,
+            admin_type,
             region_id,
             true,
         ) {
@@ -5280,7 +5283,7 @@ where
                     .invalid_proposal
                     .flashback_not_prepared
                     .inc(),
-                _ => unreachable!(),
+                _ => unreachable!("{:?}", e),
             }
             return Err(e);
         }

@@ -93,6 +93,7 @@ pub enum StoreTick {
     SnapGc,
     ConsistencyCheck,
     CleanupImportSst,
+    CompactCheck,
 }
 
 impl StoreTick {
@@ -103,6 +104,7 @@ impl StoreTick {
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::CompactCheck => RaftEventDurationType::compact_check,
         }
     }
 }

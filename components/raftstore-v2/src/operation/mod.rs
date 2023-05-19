@@ -3,6 +3,7 @@
 mod bucket;
 mod command;
 mod life;
+mod misc;
 mod pd;
 mod query;
 mod ready;
