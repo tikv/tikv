@@ -1367,6 +1367,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
 
         let woken_up_resumable_entries = if !released_locks.is_empty() {
+            info!(
+                "release_locks";
+                "locks" => ?released_locks,
+                "tag" => ?tag,
+                "cid" => cid,
+            );
             scheduler.on_release_locks(&group_name, released_locks)
         } else {
             smallvec![]
