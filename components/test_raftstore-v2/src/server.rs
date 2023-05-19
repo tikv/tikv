@@ -375,6 +375,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
 
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(true);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),

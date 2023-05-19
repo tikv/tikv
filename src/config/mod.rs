@@ -3371,6 +3371,8 @@ impl TikvConfig {
         self.coprocessor.validate()?;
         self.split
             .optimize_for(self.coprocessor.region_split_size());
+        self.raft_store
+            .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.raft_store.validate(
             self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket(),
@@ -5712,6 +5714,7 @@ mod tests {
         default_cfg.rocksdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.rocksdb.lockcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.raftdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
+        default_cfg.raft_store.region_compact_check_step = Some(100);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
