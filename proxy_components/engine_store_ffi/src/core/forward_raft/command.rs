@@ -236,6 +236,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         fail::fail_point!("on_empty_cmd_normal", |_| {});
         debug!("encounter empty cmd, maybe due to leadership change";
             "region" => ?ob_region,
+            "region_id" => region_id,
             "index" => index,
             "term" => term,
         );
@@ -262,7 +263,17 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         let response = &cmd.response;
         if response.get_header().has_error() {
             let proto_err = response.get_header().get_error();
+            let mut ignorable_error = false;
             if proto_err.has_flashback_in_progress() {
+                ignorable_error = true;
+            }
+            if cmd.request.has_admin_request()
+                && cmd.request.get_admin_request().get_cmd_type() == AdminCmdType::UpdateGcPeer
+            {
+                // We are safe to treaat v2's admin cmd as an empty cmd.
+                ignorable_error = true;
+            }
+            if ignorable_error {
                 debug!(
                     "error occurs when apply_write_cmd, {:?}",
                     response.get_header().get_error()
