@@ -28,6 +28,9 @@ pub enum Task {
     // Check if the provided `LeaderInfo`s are same as ours local `LeaderInfo`
     CheckLeader {
         leaders: Vec<LeaderInfo>,
+        hibernates: Vec<u64>,
+        ts: u64,
+        store_id: u64,
         cb: Box<dyn FnOnce(Vec<u64>) + Send>,
     },
     // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
@@ -35,19 +38,44 @@ pub enum Task {
         key_range: KeyRange,
         cb: Box<dyn FnOnce(u64) + Send>,
     },
+    ApplySafeTs {
+        ts: u64,
+        unsafe_regions: Vec<u64>,
+        store_id: u64,
+        cb: Box<dyn FnOnce(()) + Send>,
+    },
 }
 
 impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("CheckLeaderTask");
         match self {
-            Task::CheckLeader { ref leaders, .. } => de
+            Task::CheckLeader {
+                ref leaders,
+                ref hibernates,
+                ts,
+                store_id,
+                ..
+            } => de
                 .field("name", &"check_leader")
                 .field("leader_num", &leaders.len())
+                .field("hibernates_num", &hibernates.len())
+                .field("ts", ts)
+                .field("store_id", store_id)
                 .finish(),
             Task::GetStoreTs { ref key_range, .. } => de
                 .field("name", &"fet_store_ts")
                 .field("key_range", &key_range)
+                .finish(),
+            Task::ApplySafeTs {
+                ts,
+                ref unsafe_regions,
+                store_id,
+                ..
+            } => de
+                .field("ts", ts)
+                .field("unsafe_region_num", &unsafe_regions.len())
+                .field("store_id", store_id)
                 .finish(),
         }
     }
@@ -105,7 +133,13 @@ impl<S: StoreRegionMeta, E: KvEngine> Runnable for Runner<S, E> {
     type Task = Task;
     fn run(&mut self, task: Task) {
         match task {
-            Task::CheckLeader { leaders, cb } => {
+            Task::CheckLeader {
+                leaders,
+                hibernates,
+                ts,
+                store_id,
+                cb,
+            } => {
                 fail_point!(
                     "before_check_leader_store_2",
                     self.store_meta.lock().unwrap().store_id() == 2,
@@ -116,14 +150,32 @@ impl<S: StoreRegionMeta, E: KvEngine> Runnable for Runner<S, E> {
                     self.store_meta.lock().unwrap().store_id() == 3,
                     |_| {}
                 );
-                let regions = self
-                    .region_read_progress
-                    .handle_check_leaders(leaders, &self.coprocessor);
+                let regions = self.region_read_progress.handle_check_leaders(
+                    leaders,
+                    hibernates,
+                    &self.coprocessor,
+                    ts,
+                    store_id,
+                );
                 cb(regions);
             }
             Task::GetStoreTs { key_range, cb } => {
                 let ts = self.get_range_safe_ts(key_range);
                 cb(ts);
+            }
+            Task::ApplySafeTs {
+                ts,
+                unsafe_regions,
+                store_id,
+                cb,
+            } => {
+                self.region_read_progress.apply_safe_ts(
+                    ts,
+                    store_id,
+                    unsafe_regions,
+                    &self.coprocessor,
+                );
+                cb(());
             }
         }
     }

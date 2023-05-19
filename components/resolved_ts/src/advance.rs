@@ -3,6 +3,7 @@
 use std::{
     cmp,
     ffi::CString,
+    iter::FromIterator,
     sync::{
         atomic::{AtomicI32, Ordering},
         Arc,
@@ -10,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use collections::{HashMap, HashSet};
+use collections::{hash_map_with_capacity, HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
@@ -19,7 +20,7 @@ use grpcio::{
     ChannelBuilder, CompressionAlgorithms, Environment, Error as GrpcError, RpcStatusCode,
 };
 use kvproto::{
-    kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse},
+    kvrpcpb::{ApplySafeTsRequest, ApplySafeTsResponse, CheckLeaderRequest, CheckLeaderResponse},
     metapb::{Peer, PeerRole},
     tikvpb::TikvClient,
 };
@@ -210,6 +211,7 @@ impl LeadershipResolver {
     fn clear(&mut self) {
         for v in self.store_req_map.values_mut() {
             v.regions.clear();
+            v.hibernated_regions.clear();
             v.ts = 0;
         }
         for v in self.region_map.values_mut() {
@@ -245,6 +247,7 @@ impl LeadershipResolver {
         let region_map = &mut self.region_map;
         let resp_map = &mut self.resp_map;
         let store_req_map = &mut self.store_req_map;
+        let mut store_region_map = HashMap::default();
         let checking_regions = &mut self.checking_regions;
         for region_id in &regions {
             checking_regions.insert(*region_id);
@@ -255,6 +258,7 @@ impl LeadershipResolver {
                     continue;
                 }
                 let core = read_progress.get_core();
+                let is_hibernated = core.is_hibernated();
                 let local_leader_info = core.get_local_leader_info();
                 let leader_id = local_leader_info.get_leader_id();
                 let leader_store_id = local_leader_info.get_leader_store_id();
@@ -275,18 +279,25 @@ impl LeadershipResolver {
                     } else {
                         // It's still necessary to check leader on learners even if they don't vote
                         // because performing stale read on learners require it.
-                        store_req_map
-                            .entry(peer.store_id)
-                            .or_insert_with(|| {
-                                let mut req = CheckLeaderRequest::default();
-                                req.regions = Vec::with_capacity(registry.len()).into();
-                                req
-                            })
-                            .regions
-                            .push(leader_info.clone());
+                        let req = store_req_map.entry(peer.store_id).or_insert_with(|| {
+                            let mut req = CheckLeaderRequest::default();
+                            req.regions = Vec::with_capacity(registry.len()).into();
+                            req.hibernated_regions = Vec::with_capacity(registry.len()).into();
+                            req.set_store_id(store_id);
+                            req
+                        });
+                        if !is_hibernated {
+                            req.regions.push(leader_info.clone());
+                        } else {
+                            req.hibernated_regions.push(leader_info.region_id);
+                        }
                         if peer.get_role() != PeerRole::Learner {
                             unvotes += 1;
                         }
+                        store_region_map
+                            .entry(peer.store_id)
+                            .or_insert_with(|| Vec::with_capacity(registry.len()))
+                            .push(*region_id);
                     }
                 }
                 // Check `region_has_quorum` here because `store_map` can be empty,
@@ -314,6 +325,7 @@ impl LeadershipResolver {
         let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
         for (store_id, req) in store_req_map {
+            // TODO: send empty request to push resolve ts of hibernated regions.
             if req.regions.is_empty() {
                 continue;
             }
@@ -378,28 +390,42 @@ impl LeadershipResolver {
                 .observe(start.saturating_elapsed_secs());
         });
         let rpc_count = check_leader_rpcs.len();
+        let mut failed_region_store_map = HashMap::default();
+        let mut store_unsafe_regions_map = hash_map_with_capacity(rpc_count);
         for _ in 0..rpc_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
             let (res, _, remains) = select_all(check_leader_rpcs).await;
             check_leader_rpcs = remains;
             match res {
-                Ok((to_store, resp)) => {
-                    for region_id in resp.regions {
+                Ok((to_store, mut resp)) => {
+                    store_unsafe_regions_map.insert(to_store, Vec::new());
+                    let failed_regions = HashSet::from_iter(resp.take_failed_regions());
+                    for region in &failed_regions {
+                        failed_region_store_map
+                            .entry(*region)
+                            .or_insert_with(|| Vec::with_capacity(3))
+                            .push(to_store);
+                    }
+                    let regions = store_region_map.get(&to_store).unwrap();
+                    for region in regions {
+                        if failed_regions.contains(&region) {
+                            continue;
+                        }
                         resp_map
-                            .entry(region_id)
+                            .entry(*region)
                             .or_insert_with(|| Vec::with_capacity(store_count))
                             .push(to_store);
                     }
                 }
                 Err((to_store, reconnect, err)) => {
-                    info!("check leader failed"; "error" => ?err, "to_store" => to_store);
                     if reconnect {
                         self.tikv_clients.lock().await.remove(&to_store);
                     }
                 }
             }
         }
+
         for (region_id, prs) in region_map {
             if prs.is_empty() {
                 // The peer had the leadership before, but now it's no longer
@@ -413,6 +439,84 @@ impl LeadershipResolver {
                 }
                 if region_has_quorum(prs, resp) {
                     valid_regions.insert(*region_id);
+                } else {
+                    // This is an invalid leader, should send apply_safe_ts request with
+                    // unsafe_regions.
+                    failed_region_store_map.get(&region_id).map(|stores| {
+                        for store in stores {
+                            store_unsafe_regions_map
+                                .entry(*store)
+                                .or_insert_with(|| {
+                                    Vec::with_capacity(failed_region_store_map.len())
+                                })
+                                .push(*region_id);
+                        }
+                    });
+                }
+            }
+        }
+        let mut apply_safe_ts_rpcs = Vec::with_capacity(store_unsafe_regions_map.len());
+        let rpc_count = store_unsafe_regions_map.len();
+        for (to_store, unsafe_regions) in store_unsafe_regions_map {
+            let env = env.clone();
+            let mut req = ApplySafeTsRequest::default();
+            req.set_ts(min_ts.into_inner());
+            req.set_unsafe_regions(unsafe_regions);
+            req.set_store_id(store_id);
+
+            // Apply safe_ts for regions besides `unsafe_reginos` on `to_store`.
+            let rpc = async move {
+                let client = get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients)
+                    .await
+                    .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
+
+                // let slow_timer = SlowTimer::default();
+                // defer!({
+                //     slow_log!(
+                //         T
+                //         slow_timer,
+                //         "check leader rpc costs too long, to_store: {}",
+                //         to_store
+                //     );
+                //     let elapsed = slow_timer.saturating_elapsed();
+                //     RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                //         .with_label_values(&["rpc"])
+                //         .observe(elapsed.as_secs_f64());
+                // });
+
+                let rpc = match client.apply_safe_ts_async(&req) {
+                    Ok(rpc) => rpc,
+                    Err(GrpcError::RpcFailure(status))
+                        if status.code() == RpcStatusCode::UNIMPLEMENTED =>
+                    {
+                        // Some stores like TiFlash don't implement it.
+                        return Ok((to_store, ApplySafeTsResponse::default()));
+                    }
+                    Err(e) => return Err((to_store, true, format!("[rpc create failed]{}", e))),
+                };
+
+                PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
+                defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
+                let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
+                let resp = tokio::time::timeout(timeout, rpc)
+                    .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
+                    .await?
+                    .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
+                Ok((to_store, resp))
+            }
+            .boxed();
+            apply_safe_ts_rpcs.push(rpc);
+        }
+
+        let resps = futures::future::join_all(apply_safe_ts_rpcs).await;
+        for resp in resps.into_iter() {
+            match resp {
+                Ok(_) => {}
+                Err((to_store, reconnect, err)) => {
+                    info!("apply ts failed failed"; "error" => ?err, "to_store" => to_store);
+                    if reconnect {
+                        self.tikv_clients.lock().await.remove(&to_store);
+                    }
                 }
             }
         }

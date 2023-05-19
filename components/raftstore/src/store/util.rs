@@ -6,6 +6,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt,
     fmt::Display,
+    iter::FromIterator,
     option::Option,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -42,7 +43,7 @@ use time::{Duration, Timespec};
 use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
-use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
+use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config, GroupState};
 use crate::{
     coprocessor::CoprocessorHost,
     store::{simple_write::SimpleWriteReqDecoder, snap::SNAPSHOT_VERSION},
@@ -1123,12 +1124,19 @@ impl Display for MsgType<'_> {
 #[derive(Clone)]
 pub struct RegionReadProgressRegistry {
     registry: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
+    checked_states: Arc<Mutex<HashMap<u64, CheckedState>>>,
+}
+
+struct CheckedState {
+    safe_ts: u64,
+    valid_regions: Vec<u64>,
 }
 
 impl RegionReadProgressRegistry {
     pub fn new() -> RegionReadProgressRegistry {
         RegionReadProgressRegistry {
             registry: Arc::new(Mutex::new(HashMap::new())),
+            checked_states: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1195,19 +1203,81 @@ impl RegionReadProgressRegistry {
     pub fn handle_check_leaders<E: KvEngine>(
         &self,
         leaders: Vec<LeaderInfo>,
+        hibernates: Vec<u64>,
         coprocessor: &CoprocessorHost<E>,
+        ts: u64,
+        store_id: u64,
     ) -> Vec<u64> {
-        let mut regions = Vec::with_capacity(leaders.len());
+        let mut failed_regions = Vec::with_capacity(16);
+        let mut valid_regions = Vec::with_capacity(hibernates.len());
         let registry = self.registry.lock().unwrap();
         for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
                 if rp.consume_leader_info(leader_info, coprocessor) {
-                    regions.push(region_id);
+                    continue;
                 }
             }
+            failed_regions.push(region_id);
         }
-        regions
+        for region_id in &hibernates {
+            if let Some(rp) = registry.get(&region_id) {
+                if rp.check_hibernate_region_state() {
+                    valid_regions.push(*region_id);
+                    continue;
+                }
+            }
+            failed_regions.push(*region_id);
+        }
+        self.checked_states.lock().unwrap().insert(
+            store_id,
+            CheckedState {
+                safe_ts: ts,
+                valid_regions,
+            },
+        );
+        failed_regions
+    }
+
+    // apply the safe_ts if the region is safe.
+    pub fn apply_safe_ts<E: KvEngine>(
+        &self,
+        ts: u64,
+        store_id: u64,
+        unsafe_regions: Vec<u64>,
+        coprocessor: &CoprocessorHost<E>,
+    ) {
+        let unsafe_regions = HashSet::from_iter(unsafe_regions.iter());
+        let mut checked_states = self.checked_states.lock().unwrap();
+        let checked_state = checked_states.remove(&store_id);
+        match checked_state {
+            Some(CheckedState {
+                safe_ts,
+                ref valid_regions,
+            }) => {
+                if safe_ts != ts {
+                    info!("safe ts not matched, discard checked state";
+                        "store_id" => store_id,
+                        "ts" => ts,
+                        "safe_ts" => safe_ts,
+                        "valid_regions_num" => valid_regions.len());
+                    return;
+                }
+            }
+            _ => {
+                return;
+            }
+        }
+        let valid_regions = checked_state.unwrap().valid_regions;
+        let registry = self.registry.lock().unwrap();
+        for region_id in valid_regions {
+            if unsafe_regions.contains(&region_id) {
+                continue;
+            }
+            if let Some(rp) = registry.get(&region_id) {
+                rp.update_hibernate_safe_ts(ts, coprocessor);
+            }
+        }
     }
 
     /// Invoke the provided callback with the registry, an internal lock will
@@ -1323,6 +1393,38 @@ impl RegionReadProgress {
         }
     }
 
+    pub fn update_hibernate_safe_ts<E: KvEngine>(&self, ts: u64, coprocessor: &CoprocessorHost<E>) {
+        let mut core = self.core.lock().unwrap();
+        match core.group_state {
+            Some(GroupState::Idle) => {
+                if let Some(ts) = core.update_hibernate_ts(ts) {
+                    coprocessor.on_update_safe_ts(core.region_id, ts, ts);
+                    if !core.pause {
+                        self.safe_ts.store(ts, AtomicOrdering::Release);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn check_hibernate_region_state(&self) -> bool {
+        let core = self.core.lock().unwrap();
+        match core.group_state {
+            Some(GroupState::Idle) => {
+                if core
+                    .last_term
+                    .map_or(false, |last_term| last_term == core.leader_info.leader_term)
+                {
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     pub fn merge_safe_ts<E: KvEngine>(
         &self,
         source_safe_ts: u64,
@@ -1348,7 +1450,12 @@ impl RegionReadProgress {
         coprocessor: &CoprocessorHost<E>,
     ) -> bool {
         let mut core = self.core.lock().unwrap();
-        if leader_info.has_read_state() {
+        // whether the provided `LeaderInfo` is same as ours
+        if core.leader_info.leader_term == leader_info.term
+            && core.leader_info.leader_id == leader_info.peer_id
+            && is_region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
+            && leader_info.has_read_state()
+        {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
             // `read_state` is guaranteed to be valid when it is published by the leader
             let rs = leader_info.get_read_state();
@@ -1360,12 +1467,12 @@ impl RegionReadProgress {
                     }
                 }
             }
-            coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts())
+            coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts());
+            core.last_term.replace(leader_info.term);
+            true
+        } else {
+            false
         }
-        // whether the provided `LeaderInfo` is same as ours
-        core.leader_info.leader_term == leader_info.term
-            && core.leader_info.leader_id == leader_info.peer_id
-            && is_region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
     }
 
     // Dump the `LeaderInfo` and the peer list
@@ -1456,6 +1563,10 @@ pub struct RegionReadProgressCore {
     discard: bool,
     // A notify to trigger advancing resolved ts immediately.
     advance_notify: Option<Arc<Notify>>,
+    // The hibernated region's read progress can be pushed without region epoch checking.
+    group_state: Option<GroupState>,
+    // `last_term` is used to check if leader changed when `leader_info` is missing.
+    last_term: Option<u64>,
 }
 
 // A helpful wrapper of `(apply_index, safe_ts)` item
@@ -1528,6 +1639,8 @@ impl RegionReadProgressCore {
             pause: is_witness,
             discard: is_witness,
             advance_notify: None,
+            group_state: Some(GroupState::Ordered),
+            last_term: None,
         }
     }
 
@@ -1615,6 +1728,16 @@ impl RegionReadProgressCore {
         None
     }
 
+    // Return the `safe_ts` if it is updated
+    fn update_hibernate_ts(&mut self, ts: u64) -> Option<u64> {
+        if self.read_state.ts >= ts {
+            None
+        } else {
+            self.read_state.ts = ts;
+            Some(ts)
+        }
+    }
+
     fn push_back(&mut self, item: ReadState) {
         if self.pending_items.len() >= self.pending_items.capacity() {
             // Stepping by one to evently remove pending items, so the follower can keep
@@ -1652,6 +1775,14 @@ impl RegionReadProgressCore {
 
     pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
         &self.leader_info
+    }
+
+    pub fn is_hibernated(&self) -> bool {
+        matches!(self.group_state, Some(GroupState::Idle))
+    }
+
+    pub fn set_group_state(&mut self, state: GroupState) {
+        self.group_state = self.group_state.map(|_| state);
     }
 }
 
