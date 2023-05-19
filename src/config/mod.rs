@@ -3356,7 +3356,7 @@ impl TikvConfig {
             EngineType::RaftKv2 => {
                 if !self.rocksdb.wal_dir.is_empty() {
                     return Err(
-                        "partitioned-raft-kv doesn't support designating rocksdb.wal-dir".into(),
+                        "partitioned-raft-kv doesn't support configuring rocksdb.wal-dir".into(),
                     );
                 }
                 Path::new(&self.storage.data_dir)
@@ -3377,6 +3377,8 @@ impl TikvConfig {
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.split
             .optimize_for(self.coprocessor.region_split_size());
+        self.raft_store
+            .optimize_for(self.storage.engine == EngineType::RaftKv2);
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
         }
@@ -3389,7 +3391,6 @@ impl TikvConfig {
             if self.rocksdb.titan.enabled {
                 return Err("partitioned-raft-kv doesn't support titan.".into());
             }
-
             if self.raft_store.enable_v2_compatible_learner {
                 self.raft_store.enable_v2_compatible_learner = false;
                 warn!(
@@ -5799,6 +5800,7 @@ mod tests {
         default_cfg.rocksdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.rocksdb.lockcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.raftdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
+        default_cfg.raft_store.region_compact_check_step = Some(100);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.

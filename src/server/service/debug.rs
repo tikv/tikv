@@ -433,6 +433,35 @@ where
         self.handle_response(ctx, sink, f, TAG);
     }
 
+    fn get_range_properties(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: GetRangePropertiesRequest,
+        sink: UnarySink<GetRangePropertiesResponse>,
+    ) {
+        const TAG: &str = "get_range_properties";
+        let debugger = self.debugger.clone();
+
+        let f =
+            self.pool
+                .spawn(async move {
+                    debugger.get_range_properties(req.get_start_key(), req.get_end_key())
+                })
+                .map(|res| res.unwrap())
+                .map_ok(|props| {
+                    let mut resp = GetRangePropertiesResponse::default();
+                    for (key, value) in props {
+                        let mut prop = GetRangePropertiesResponseRangeProperty::default();
+                        prop.set_key(key);
+                        prop.set_value(value);
+                        resp.mut_properties().push(prop)
+                    }
+                    resp
+                });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
     fn get_store_info(
         &mut self,
         ctx: RpcContext<'_>,
