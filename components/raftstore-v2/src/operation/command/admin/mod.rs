@@ -36,7 +36,7 @@ pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
     SplitInit, SPLIT_PREFIX,
 };
-use tikv_util::{box_err, log::SlogFormat};
+use tikv_util::{box_err, log::SlogFormat, slog_panic};
 use txn_types::WriteBatchFlags;
 
 use crate::{
@@ -264,7 +264,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
-                _ => unimplemented!(),
+                admin_type => slog_panic!(
+                    self.logger,
+                    "unimplemented";
+                    "admin_type" => ?admin_type,
+                ),
             }
         };
         match &res {
