@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    // #[cfg(feature = "failpoints")]
+    #[cfg(feature = "failpoints")]
     fn test_concurrently_refresh_token_cache() {
         let token_cache = TokenCache::default();
         assert!(!token_cache.is_fresh());
