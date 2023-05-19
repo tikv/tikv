@@ -23,8 +23,10 @@ use crate::storage::{
         SnapshotReader,
     },
     txn::{
-        actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
-        scheduler::LAST_CHANGE_TS, LockInfo,
+        actions::{check_data_constraint::check_data_constraint, common::next_last_change_info},
+        sched_pool::tls_can_enable,
+        scheduler::LAST_CHANGE_TS,
+        LockInfo,
     },
     Snapshot,
 };
@@ -433,7 +435,7 @@ impl<'a> PrewriteMutation<'a> {
             }
             if seek_ts == TimeStamp::max() {
                 (self.last_change_ts, self.versions_to_last_change) =
-                    write.next_last_change_info(commit_ts);
+                    next_last_change_info(&self.key, &write, reader.start_ts, reader, commit_ts)?;
             }
             match self.txn_props.kind {
                 TransactionKind::Optimistic(_) => {
@@ -824,7 +826,7 @@ fn amend_pessimistic_lock<S: Snapshot>(
             .into());
         }
         (mutation.last_change_ts, mutation.versions_to_last_change) =
-            write.next_last_change_info(*commit_ts);
+            next_last_change_info(&mutation.key, write, reader.start_ts, reader, *commit_ts)?;
     } else {
         // last_change_ts == 0 && versions_to_last_change > 0 means the key actually
         // does not exist.
