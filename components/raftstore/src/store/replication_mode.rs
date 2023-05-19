@@ -329,6 +329,9 @@ mod tests {
         );
         // But a calculated group id can't be changed.
         let res = panic_hook::recover_safe(move || {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &state;
             state
                 .group
                 .register_store(1, vec![label1.clone(), label3.clone()])

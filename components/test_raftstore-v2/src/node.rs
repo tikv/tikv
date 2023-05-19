@@ -164,6 +164,10 @@ impl<EK: KvEngine> NodeCluster<EK> {
             snap_mgrs: HashMap::default(),
         }
     }
+
+    pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
+        self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
 }
 
 impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
@@ -200,6 +204,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(true);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
@@ -319,6 +324,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
+        raftstore_cfg.optimize_for(true);
         raftstore_cfg
             .validate(region_split_size, enable_region_bucket, region_bucket_size)
             .unwrap();
@@ -355,11 +361,11 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
     fn async_snapshot(
         &mut self,
+        node_id: u64,
         request: RaftCmdRequest,
     ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
     + Send
     + 'static {
-        let node_id = request.get_header().get_peer().get_store_id();
         if !self
             .trans
             .core

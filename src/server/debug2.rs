@@ -431,6 +431,10 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         unimplemented!()
     }
 
+    fn get_range_properties(&self, _: &[u8], _: &[u8]) -> Result<Vec<(String, String)>> {
+        unimplemented!()
+    }
+
     fn reset_to_version(&self, _version: u64) {
         unimplemented!()
     }
