@@ -5521,6 +5521,7 @@ mod tests {
             cfg.validate().unwrap();
         }
 
+        // raft path == kv path
         {
             let mut cfg = TikvConfig::default();
             cfg.storage.engine = EngineType::RaftKv;
@@ -5544,6 +5545,7 @@ mod tests {
             cfg.validate().unwrap();
         }
 
+        // raft path == kv wal path
         {
             let mut cfg = TikvConfig::default();
             cfg.storage.engine = EngineType::RaftKv;
@@ -5564,6 +5566,7 @@ mod tests {
             cfg.validate().unwrap();
         }
 
+        // raft wal path == kv path
         {
             let mut cfg = TikvConfig::default();
             cfg.storage.engine = EngineType::RaftKv;
@@ -5572,6 +5575,25 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
+            cfg.validate().unwrap_err();
+
+            let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = true;
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
+            cfg.raft_store.raftdb_path =
+                tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
+            cfg.validate().unwrap();
+        }
+
+        // raft wal path == kv wal path
+        {
+            let mut cfg = TikvConfig::default();
+            cfg.storage.engine = EngineType::RaftKv;
+            cfg.raft_engine.enable = false;
+            cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
+            cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.validate().unwrap_err();
 
             let mut cfg = TikvConfig::default();
