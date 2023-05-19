@@ -400,6 +400,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             self.peer().get_store_id() == 3,
             |_| { unreachable!() }
         );
+        fail_point!(
+            "apply_before_split_1_3",
+            self.peer_id() == 3 && self.region_id() == 1,
+            |_| { unreachable!() }
+        );
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let region = self.region();

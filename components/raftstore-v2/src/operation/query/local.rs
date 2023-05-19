@@ -340,7 +340,17 @@ where
                     Some(query_res) => {
                         if query_res.read().is_none() {
                             let QueryResult::Response(res) = query_res else { unreachable!() };
-                            assert!(res.get_header().has_error(), "{:?}", res);
+                            // Get an error explicitly in header,
+                            // or leader reports KeyIsLocked error via read index.
+                            assert!(
+                                res.get_header().has_error()
+                                    || res
+                                        .get_responses()
+                                        .get(0)
+                                        .map_or(false, |r| r.get_read_index().has_locked()),
+                                "{:?}",
+                                res
+                            );
                             return Err(res);
                         }
                     }
@@ -906,7 +916,7 @@ mod tests {
                         .get_mut(&1)
                         .unwrap()
                         .0
-                        .update(ReadProgress::leader_lease(remote));
+                        .update(ReadProgress::set_leader_lease(remote));
                 }),
                 rx,
                 ch_tx.clone(),

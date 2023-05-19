@@ -177,6 +177,8 @@ pub trait Debugger {
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
 
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>>;
 }
 
 #[derive(Clone)]
@@ -931,6 +933,21 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
             ));
         }
         Ok(())
+    }
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        let mut props = dump_write_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        let mut props1 = dump_default_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        props.append(&mut props1);
+        Ok(props)
     }
 
     fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {

@@ -556,6 +556,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 #[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_failed_after_first_batch() {
     let (_cluster, client, ctx) = new_cluster();
@@ -677,6 +678,7 @@ fn test_mvcc_flashback_failed_after_first_batch() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback() {
     let (_cluster, client, ctx) = new_cluster();
     let mut ts = 0;
@@ -719,10 +721,12 @@ fn test_mvcc_flashback() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_rw() {
     let (_cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
     must_prepare_flashback(&client, ctx.clone(), 1, 2);
+
     // Try to read version 3 (after flashback, FORBIDDEN).
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     // Get
@@ -731,7 +735,11 @@ fn test_mvcc_flashback_block_rw() {
     get_req.key = k.clone();
     get_req.version = 3;
     let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(get_resp.get_region_error().has_flashback_in_progress());
+    assert!(
+        get_resp.get_region_error().has_flashback_in_progress(),
+        "{:?}",
+        get_resp
+    );
     assert!(!get_resp.has_error());
     assert!(get_resp.value.is_empty());
     // Scan
@@ -777,6 +785,7 @@ fn test_mvcc_flashback_block_rw() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_scheduling() {
     let (mut cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
@@ -787,13 +796,16 @@ fn test_mvcc_flashback_block_scheduling() {
         transfer_leader_resp
             .get_header()
             .get_error()
-            .has_flashback_in_progress()
+            .has_flashback_in_progress(),
+        "{:?}",
+        transfer_leader_resp
     );
     // Finish the flashback.
     must_finish_flashback(&client, ctx, 0, 1, 2);
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_unprepared() {
     let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
@@ -813,23 +825,14 @@ fn test_mvcc_flashback_unprepared() {
     must_kv_read_equal(&client, ctx.clone(), k.clone(), v, 6);
     // Flashback with preparing.
     must_flashback_to_version(&client, ctx.clone(), 0, 6, 7);
-    let mut get_req = GetRequest::default();
-    get_req.set_context(ctx.clone());
-    get_req.key = k;
-    get_req.version = 7;
-    let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(!get_resp.has_region_error());
-    assert!(!get_resp.has_error());
-    assert_eq!(get_resp.value, b"".to_vec());
+    must_kv_read_not_found(&client, ctx.clone(), k.clone(), 7);
     // Mock the flashback retry.
     must_finish_flashback(&client, ctx.clone(), 0, 6, 7);
-    let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(!get_resp.has_region_error());
-    assert!(!get_resp.has_error());
-    assert_eq!(get_resp.value, b"".to_vec());
+    must_kv_read_not_found(&client, ctx, k, 7);
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_with_unlimited_range() {
     let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
@@ -857,14 +860,7 @@ fn test_mvcc_flashback_with_unlimited_range() {
     assert!(!resp.has_region_error());
     assert!(resp.get_error().is_empty());
 
-    let mut get_req = GetRequest::default();
-    get_req.set_context(ctx);
-    get_req.key = k;
-    get_req.version = 7;
-    let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(!get_resp.has_region_error());
-    assert!(!get_resp.has_error());
-    assert_eq!(get_resp.value, b"".to_vec());
+    must_kv_read_not_found(&client, ctx, k, 7);
 }
 
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
@@ -943,6 +939,64 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
             .map(|k| encode_key(&k[..]))
             .collect::<Vec<_>>()
     );
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_debug_client)]
+// #[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
+fn test_debug_store() {
+    let (mut cluster, debug_client, store_id) = new_cluster();
+    let cluster_id = cluster.id();
+    let req = debugpb::GetClusterInfoRequest::default();
+    let resp = debug_client.get_cluster_info(&req).unwrap();
+    assert_eq!(resp.get_cluster_id(), cluster_id);
+
+    let req = debugpb::GetStoreInfoRequest::default();
+    let resp = debug_client.get_store_info(&req).unwrap();
+    assert_eq!(store_id, resp.get_store_id());
+
+    cluster.must_put(b"a", b"val");
+    cluster.must_put(b"c", b"val");
+    cluster.flush_data();
+    thread::sleep(Duration::from_millis(25));
+    assert_eq!(b"val".to_vec(), cluster.must_get(b"a").unwrap());
+    assert_eq!(b"val".to_vec(), cluster.must_get(b"c").unwrap());
+
+    let mut req = debugpb::GetMetricsRequest::default();
+    req.set_all(true);
+    let resp = debug_client.get_metrics(&req).unwrap();
+    assert_eq!(store_id, resp.get_store_id());
+    assert!(!resp.get_rocksdb_kv().is_empty());
+    assert!(resp.get_rocksdb_raft().is_empty());
+
+    let mut req = debugpb::GetRegionPropertiesRequest::default();
+    req.set_region_id(1);
+    let resp = debug_client.get_region_properties(&req).unwrap();
+    resp.get_props()
+        .iter()
+        .find(|p| {
+            p.get_name() == "defaultcf.num_entries" && p.get_value().parse::<i32>().unwrap() >= 2
+        })
+        .unwrap();
+
+    let req = debugpb::GetRangePropertiesRequest::default();
+    let resp = debug_client.get_range_properties(&req).unwrap();
+    resp.get_properties()
+        .iter()
+        .find(|p| {
+            p.get_key() == "defaultcf.num_entries" && p.get_value().parse::<i32>().unwrap() >= 2
+        })
+        .unwrap();
+
+    let mut req = debugpb::GetRangePropertiesRequest::default();
+    req.set_start_key(b"d".to_vec());
+    req.set_end_key(b"".to_vec());
+    let resp = debug_client.get_range_properties(&req).unwrap();
+    resp.get_properties()
+        .iter()
+        .find(|p| {
+            p.get_key() == "defaultcf.num_entries" && p.get_value().parse::<i32>().unwrap() < 2
+        })
+        .unwrap();
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_debug_client)]

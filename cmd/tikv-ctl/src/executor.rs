@@ -865,8 +865,16 @@ impl DebugExecutor for DebugClient {
         }
     }
 
-    fn dump_range_properties(&self, _: Vec<u8>, _: Vec<u8>) {
-        unimplemented!("only available for local mode");
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        let mut req = GetRangePropertiesRequest::default();
+        req.set_start_key(start);
+        req.set_end_key(end);
+        let resp = self
+            .get_range_properties(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_range_properties", e));
+        for prop in resp.get_properties() {
+            println!("{}: {}", prop.get_key(), prop.get_value())
+        }
     }
 
     fn dump_store_info(&self) {

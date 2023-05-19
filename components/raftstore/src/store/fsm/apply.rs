@@ -306,7 +306,7 @@ pub enum ExecResult<S> {
     TransferLeader {
         term: u64,
     },
-    SetFlashbackState {
+    Flashback {
         region: Region,
     },
     BatchSwitchWitness(SwitchWitness),
@@ -1496,7 +1496,7 @@ where
                 ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
-                ExecResult::SetFlashbackState { ref region } => (Some(region.clone()), None),
+                ExecResult::Flashback { ref region } => (Some(region.clone()), None),
                 _ => (None, None),
             },
             _ => (None, None),
@@ -1565,7 +1565,7 @@ where
                     self.region = region.clone();
                     self.is_merging = false;
                 }
-                ExecResult::SetFlashbackState { ref region } => {
+                ExecResult::Flashback { ref region } => {
                     self.region = region.clone();
                 }
                 ExecResult::BatchSwitchWitness(ref switches) => {
@@ -1662,10 +1662,13 @@ where
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_req_region_epoch(req, &self.region, include_region)?;
+        let header = req.get_header();
+        let admin_type = req.admin_request.as_ref().map(|req| req.get_cmd_type());
         check_flashback_state(
             self.region.is_in_flashback,
             self.region.flashback_start_ts,
-            req,
+            header,
+            admin_type,
             self.region_id(),
             false,
         )?;
@@ -2986,31 +2989,37 @@ where
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
-        let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        // Modify the region meta in memory.
+        // Modify flashback fields in region state.
         let mut region = self.region.clone();
-        region.set_is_in_flashback(is_in_flashback);
-        region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
-        // Modify the `RegionLocalState` persisted in disk.
-        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
-            panic!(
-                "{} failed to change the flashback state to {} for region {:?}: {:?}",
-                self.tag, is_in_flashback, region, e
-            )
-        });
-
         match req.get_cmd_type() {
             AdminCmdType::PrepareFlashback => {
                 PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+
+                region.set_is_in_flashback(true);
+                region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
             }
             AdminCmdType::FinishFlashback => {
                 PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+
+                region.set_is_in_flashback(false);
+                region.clear_flashback_start_ts();
             }
             _ => unreachable!(),
         }
+
+        // Modify the `RegionLocalState` persisted in disk.
+        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to change the flashback state to {:?} for region {:?}: {:?}",
+                self.tag,
+                req.get_cmd_type(),
+                region,
+                e
+            )
+        });
         Ok((
             AdminResponse::default(),
-            ApplyResult::Res(ExecResult::SetFlashbackState { region }),
+            ApplyResult::Res(ExecResult::Flashback { region }),
         ))
     }
 
@@ -5351,6 +5360,9 @@ mod tests {
         reg.apply_state.set_applied_index(3);
         router.schedule_task(2, Msg::Registration(reg.dup()));
         validate(&router, 2, move |delegate| {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &reg;
             assert_eq!(delegate.id(), 1);
             assert_eq!(delegate.peer, peer);
             assert_eq!(delegate.tag, "[region 2] 1");
