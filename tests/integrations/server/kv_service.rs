@@ -556,6 +556,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 #[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_failed_after_first_batch() {
     let (_cluster, client, ctx) = new_cluster();
@@ -677,6 +678,7 @@ fn test_mvcc_flashback_failed_after_first_batch() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback() {
     let (_cluster, client, ctx) = new_cluster();
     let mut ts = 0;
@@ -719,10 +721,12 @@ fn test_mvcc_flashback() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_rw() {
     let (_cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
     must_prepare_flashback(&client, ctx.clone(), 1, 2);
+
     // Try to read version 3 (after flashback, FORBIDDEN).
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     // Get
@@ -731,7 +735,11 @@ fn test_mvcc_flashback_block_rw() {
     get_req.key = k.clone();
     get_req.version = 3;
     let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(get_resp.get_region_error().has_flashback_in_progress());
+    assert!(
+        get_resp.get_region_error().has_flashback_in_progress(),
+        "{:?}",
+        get_resp
+    );
     assert!(!get_resp.has_error());
     assert!(get_resp.value.is_empty());
     // Scan
@@ -777,6 +785,7 @@ fn test_mvcc_flashback_block_rw() {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_block_scheduling() {
     let (mut cluster, client, ctx) = new_cluster();
     // Prepare the flashback.
@@ -787,13 +796,16 @@ fn test_mvcc_flashback_block_scheduling() {
         transfer_leader_resp
             .get_header()
             .get_error()
-            .has_flashback_in_progress()
+            .has_flashback_in_progress(),
+        "{:?}",
+        transfer_leader_resp
     );
     // Finish the flashback.
     must_finish_flashback(&client, ctx, 0, 1, 2);
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_unprepared() {
     let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
@@ -813,23 +825,14 @@ fn test_mvcc_flashback_unprepared() {
     must_kv_read_equal(&client, ctx.clone(), k.clone(), v, 6);
     // Flashback with preparing.
     must_flashback_to_version(&client, ctx.clone(), 0, 6, 7);
-    let mut get_req = GetRequest::default();
-    get_req.set_context(ctx.clone());
-    get_req.key = k;
-    get_req.version = 7;
-    let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(!get_resp.has_region_error());
-    assert!(!get_resp.has_error());
-    assert_eq!(get_resp.value, b"".to_vec());
+    must_kv_read_not_found(&client, ctx.clone(), k.clone(), 7);
     // Mock the flashback retry.
     must_finish_flashback(&client, ctx.clone(), 0, 6, 7);
-    let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(!get_resp.has_region_error());
-    assert!(!get_resp.has_error());
-    assert_eq!(get_resp.value, b"".to_vec());
+    must_kv_read_not_found(&client, ctx, k, 7);
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_mvcc_flashback_with_unlimited_range() {
     let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
@@ -857,14 +860,7 @@ fn test_mvcc_flashback_with_unlimited_range() {
     assert!(!resp.has_region_error());
     assert!(resp.get_error().is_empty());
 
-    let mut get_req = GetRequest::default();
-    get_req.set_context(ctx);
-    get_req.key = k;
-    get_req.version = 7;
-    let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(!get_resp.has_region_error());
-    assert!(!get_resp.has_error());
-    assert_eq!(get_resp.value, b"".to_vec());
+    must_kv_read_not_found(&client, ctx, k, 7);
 }
 
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
