@@ -43,6 +43,7 @@ pub use fsm::StoreMeta;
 pub use operation::{write_initial_states, SimpleWriteBinary, SimpleWriteEncoder, StateStorage};
 pub use raftstore::{store::Config, Error, Result};
 pub use worker::{
+    cleanup::CompactTask,
     pd::{PdReporter, Task as PdTask},
     tablet::Task as TabletTask,
 };
