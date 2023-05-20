@@ -43,8 +43,7 @@ use raftstore::store::{
     ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{info, trace, Logger};
-use tikv_util::error;
-use tikv_util::{box_err, slog_panic, worker::Scheduler};
+use tikv_util::{box_err, error, slog_panic, worker::Scheduler};
 
 use crate::{
     operation::{
