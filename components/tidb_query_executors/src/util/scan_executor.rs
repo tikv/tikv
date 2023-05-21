@@ -151,8 +151,6 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
 
 /// Checks whether the given columns info are supported.
 pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
-    use std::convert::TryFrom;
-
     use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 
     for column in columns_info {
