@@ -621,11 +621,13 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                             if let Some(mut t) = registry.get(r)
                                 && let Some(t) = t.latest()
                             {
-                                std::thread::sleep(limiter.consume_duration(1));
                                 if let Err(e) = t.flush_oldest_cf(true, Some(threshold)) {
                                     warn!(logger, "failed to flush oldest cf"; "err" => %e);
                                 }
+                            } else {
+                                continue;
                             }
+                            std::thread::sleep(limiter.consume_duration(1));
                         }
                     }
                     Err(e) => {
