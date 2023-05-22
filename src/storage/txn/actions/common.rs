@@ -30,6 +30,10 @@ pub fn next_last_change_info<S: Snapshot>(
                 // TODO: can we reuse the reader?
                 let snapshot = original_reader.reader.snapshot().clone();
                 let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+
+                // Note that the scan can also utilize `last_change`. So once it finds a LOCK
+                // version with useful `last_change` pointer, it just needs one more `seek` or
+                // several `next`s to get to the final result.
                 let res = reader.get_write_with_commit_ts(key, commit_ts);
                 let stat = reader.take_statistics();
                 original_reader.reader.statistics.add(&stat);
