@@ -190,7 +190,7 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
-        self.base_file_system.delete(path)?;
+        self.base_file_system.delete(path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
             manager.delete_file(path.as_ref().to_str().unwrap())?;
         }
