@@ -196,6 +196,7 @@ impl FileDictionaryFile {
                             }
                         }
                         Err(e @ Error::TailRecordParseIncomplete) => {
+                            // We will call `rewrite` later to trim the corruption.
                             warn!(
                                 "{:?} occurred and the last complete filename is {}",
                                 e, last_record_name
