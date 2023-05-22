@@ -9,7 +9,11 @@ use grpcio::{
     Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
 };
-use kvproto::debugpb::{self, *};
+use kvproto::{
+    debugpb::{self, *},
+    kvrpcpb::KeyRange,
+};
+use raftstore::{store::util::build_key_range, RegionInfoAccessor};
 use tikv_kv::RaftExtension;
 use tikv_util::metrics;
 use tokio::runtime::Handle;
@@ -21,6 +25,8 @@ fn error_to_status(e: Error) -> RpcStatus {
         Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
         Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
         Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
+        Error::FlashbackFailed(msg) => (RpcStatusCode::UNKNOWN, msg),
+        Error::NotPreparedFlashback(msg) => (RpcStatusCode::UNKNOWN, msg),
     };
     RpcStatus::with_message(code, msg)
 }
@@ -46,6 +52,7 @@ where
     pool: Handle,
     debugger: D,
     raft_router: T,
+    region_info_accessor: RegionInfoAccessor,
 }
 
 impl<T, D> Service<T, D>
@@ -53,13 +60,19 @@ where
     T: RaftExtension,
     D: Debugger,
 {
-    /// Constructs a new `Service` with `Engines`, a `RaftExtension` and a
-    /// `GcWorker`.
-    pub fn new(debugger: D, pool: Handle, raft_router: T) -> Self {
+    /// Constructs a new `Service` with `Engines`, a `RaftExtension`, a
+    /// `GcWorker` and a `RegionInfoAccessor`.
+    pub fn new(
+        debugger: D,
+        pool: Handle,
+        raft_router: T,
+        region_info_accessor: RegionInfoAccessor,
+    ) -> Self {
         Service {
             pool,
             debugger,
             raft_router,
+            region_info_accessor,
         }
     }
 
@@ -546,8 +559,70 @@ where
         self.debugger.reset_to_version(req.get_ts());
         sink.success(ResetToVersionResponse::default());
     }
+
+    fn flashback_to_version(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: FlashbackToVersionRequest,
+        sink: UnarySink<FlashbackToVersionResponse>,
+    ) {
+        let debugger = self.debugger.clone();
+        let tmp = self.region_info_accessor.clone().region_leaders();
+        let region_leaders = tmp.read().unwrap();
+        let region_ids = req.get_region_ids();
+
+        let filtered_region_ids = region_leaders
+            .iter()
+            .filter_map(|region_id| {
+                if region_ids.is_empty() || region_ids.contains(region_id) {
+                    let r = debugger.region_info(*region_id).unwrap();
+                    let region = r
+                        .region_local_state
+                        .as_ref()
+                        .map(|s| s.get_region().clone())
+                        .unwrap();
+
+                    if check_intersect_of_range(
+                        &build_key_range(region.get_start_key(), region.get_end_key(), false),
+                        &build_key_range(req.get_start_key(), req.get_end_key(), false),
+                    ) {
+                        Some(*region_id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let res = self.pool.spawn(async move {
+            let req = req;
+            debugger
+                .flashback_to_version(filtered_region_ids, req.get_version())
+                .map(|_| FlashbackToVersionResponse::default())
+        });
+        let f = async move { res.await.unwrap() };
+        self.handle_response(ctx, sink, f, "debug_flashback_to_version");
+    }
 }
 
+// Check if region's `key_range` intersects with `key_range_limit`.
+pub fn check_intersect_of_range(key_range: &KeyRange, key_range_limit: &KeyRange) -> bool {
+    if !key_range.get_end_key().is_empty()
+        && !key_range_limit.get_start_key().is_empty()
+        && key_range.get_end_key() <= key_range_limit.get_start_key()
+    {
+        return false;
+    }
+    if !key_range_limit.get_end_key().is_empty()
+        && !key_range.get_start_key().is_empty()
+        && key_range_limit.get_end_key() < key_range.get_start_key()
+    {
+        return false;
+    }
+    true
+}
 mod region_size_response {
     pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
 }

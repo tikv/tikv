@@ -742,11 +742,11 @@ where
 
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
-        let server = Server::new(
+        let mut server = Server::new(
             node.id(),
             &server_config,
             &self.security_mgr,
-            storage,
+            storage.clone(),
             coprocessor::Endpoint::new(
                 &server_config.value(),
                 cop_read_pool_handle,
@@ -991,6 +991,30 @@ where
             )),
         );
 
+        let mut debugger = DebuggerImpl::new(
+            engines.engines.clone(),
+            self.cfg_controller.as_ref().unwrap().clone(),
+            Some(storage),
+            Some(self.pd_client.clone()),
+        );
+        debugger.set_kv_statistics(self.kv_statistics.clone());
+        debugger.set_raft_statistics(self.raft_statistics.clone());
+        // Debug service.
+        let debug_service = DebugService::new(
+            debugger,
+            server.get_debug_thread_pool().clone(),
+            engines.engine.raft_extension(),
+            self.region_info_accessor.clone(),
+        );
+        info!("start register debug service");
+        if server
+            .register_service(create_debug(debug_service))
+            .is_some()
+        {
+            fatal!("failed to register debug service");
+        }
+        info!("start register debug service");
+
         self.servers = Some(Servers {
             lock_mgr,
             server,
@@ -1031,27 +1055,6 @@ where
             .as_mut()
             .unwrap()
             .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
-
-        let mut debugger = DebuggerImpl::new(
-            engines.engines.clone(),
-            self.cfg_controller.as_ref().unwrap().clone(),
-        );
-        debugger.set_kv_statistics(self.kv_statistics.clone());
-        debugger.set_raft_statistics(self.raft_statistics.clone());
-
-        // Debug service.
-        let debug_service = DebugService::new(
-            debugger,
-            servers.server.get_debug_thread_pool().clone(),
-            engines.engine.raft_extension(),
-        );
-        if servers
-            .server
-            .register_service(create_debug(debug_service))
-            .is_some()
-        {
-            fatal!("failed to register debug service");
-        }
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(

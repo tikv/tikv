@@ -8,7 +8,7 @@ use std::{
     usize,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{dispatch_api_version, ApiV1, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -66,7 +66,8 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, LocalTablets, SnapContext},
+        kv::{FakeExtension, LocalTablets, MockEngine, SnapContext},
+        lock_manager::MockLockManager,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
@@ -489,9 +490,15 @@ impl ServerCluster {
                 .unwrap(),
         );
 
-        let debugger = DebuggerImpl::new(engines.clone(), ConfigController::default());
+        let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
+            DebuggerImpl::new(engines.clone(), ConfigController::default(), None, None);
         let debug_thread_handle = debug_thread_pool.handle().clone();
-        let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
+        let debug_service = DebugService::new(
+            debugger,
+            debug_thread_handle,
+            extension,
+            region_info_accessor.clone(),
+        );
 
         let apply_router = system.apply_router();
         // Create node.

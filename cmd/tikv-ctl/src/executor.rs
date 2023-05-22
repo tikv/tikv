@@ -5,6 +5,7 @@ use std::{
     time::Duration, u64,
 };
 
+use api_version::{ApiV1, KvFormat};
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::util::{db_exist, new_engine_opt};
 use engine_traits::{
@@ -34,9 +35,15 @@ use tikv::{
     server::{
         debug::{BottommostLevelCompaction, Debugger, DebuggerImpl, RegionInfo},
         debug2::DebuggerImplV2,
+        service::check_intersect_of_range,
         KvEngineFactoryBuilder,
     },
-    storage::config::EngineType,
+    storage::{
+        config::EngineType,
+        kv::MockEngine,
+        lock_manager::{LockManager, MockLockManager},
+        Engine,
+    },
 };
 use tikv_util::escape;
 
@@ -99,7 +106,9 @@ pub fn new_debug_executor(
             Err(e) => handle_engine_error(e),
         };
 
-        let debugger = DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller);
+        let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
+            DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None, None);
+
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
         let mut config = cfg.raft_engine.config();
@@ -116,7 +125,8 @@ pub fn new_debug_executor(
                     Err(e) => handle_engine_error(e),
                 };
 
-                let debugger = DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller);
+                let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
+                    DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None, None);
                 Box::new(debugger) as Box<dyn DebugExecutor>
             }
             EngineType::RaftKv2 => {
@@ -678,6 +688,14 @@ pub trait DebugExecutor {
     fn dump_cluster_info(&self);
 
     fn reset_to_version(&self, version: u64);
+
+    fn flashback_to_version(
+        &self,
+        _region_ids: Vec<u64>,
+        _version: u64,
+        _start_key: Vec<u8>,
+        _end_key: Vec<u8>,
+    );
 }
 
 impl DebugExecutor for DebugClient {
@@ -687,7 +705,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
-        DebugClient::get_all_regions_in_store(self, &GetAllRegionsInStoreRequest::default())
+        self.get_all_regions_in_store(&GetAllRegionsInStoreRequest::default())
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store", e))
             .take_regions()
     }
@@ -897,12 +915,34 @@ impl DebugExecutor for DebugClient {
     fn reset_to_version(&self, version: u64) {
         let mut req = ResetToVersionRequest::default();
         req.set_ts(version);
-        DebugClient::reset_to_version(self, &req)
+        self.reset_to_version(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
+    }
+
+    fn flashback_to_version(
+        &self,
+        region_ids: Vec<u64>,
+        version: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) {
+        let mut req = FlashbackToVersionRequest::default();
+        req.set_region_ids(region_ids);
+        req.set_version(version);
+        req.set_start_key(start_key);
+        req.set_end_key(end_key);
+        self.flashback_to_version(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::flashback", e));
     }
 }
 
-impl<ER: RaftEngine> DebugExecutor for DebuggerImpl<ER> {
+impl<ER, E, L, K> DebugExecutor for DebuggerImpl<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     fn check_local_mode(&self) {}
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
@@ -1134,6 +1174,16 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImpl<ER> {
     fn reset_to_version(&self, version: u64) {
         Debugger::reset_to_version(self, version);
     }
+
+    fn flashback_to_version(
+        &self,
+        _region_ids: Vec<u64>,
+        _version: u64,
+        _start_key: Vec<u8>,
+        _end_key: Vec<u8>,
+    ) {
+        unimplemented!("only available for online mode");
+    }
 }
 
 fn handle_engine_error(err: EngineError) -> ! {
@@ -1274,5 +1324,15 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
 
     fn reset_to_version(&self, _version: u64) {
         unimplemented!()
+    }
+
+    fn flashback_to_version(
+        &self,
+        _region_ids: Vec<u64>,
+        _version: u64,
+        _start_key: Vec<u8>,
+        _end_key: Vec<u8>,
+    ) {
+        unimplemented!("only available for online mode");
     }
 }

@@ -235,6 +235,30 @@ fn main() {
             let key = unescape(&key);
             split_region(&pd_client, mgr, region_id, key);
         }
+        Cmd::Flashback { cmd: subcmd } => match subcmd {
+            FlashbackCmd::Cluster {
+                version,
+                regions,
+                start,
+                end,
+            } => {
+                let start_key = from_hex(&start).unwrap();
+                let end_key = from_hex(&end).unwrap();
+                let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+                flashback_whole_cluster(
+                    &pd_client,
+                    &cfg,
+                    Arc::clone(&mgr),
+                    regions.unwrap_or_default(),
+                    version,
+                    start_key,
+                    end_key,
+                );
+            }
+            FlashbackCmd::Process {} => {
+                // debug_executor.flashback_to_process();
+            }
+        },
         // Commands below requires either the data dir or the host.
         cmd => {
             let data_dir = opt.data_dir.as_deref();
@@ -665,9 +689,41 @@ fn compact_whole_cluster(
         handles.push(h);
     }
 
-    for h in handles {
-        h.join().unwrap();
-    }
+    handles.into_iter().for_each(|h| h.join().unwrap());
+}
+
+fn flashback_whole_cluster(
+    pd_client: &RpcClient,
+    cfg: &TikvConfig,
+    mgr: Arc<SecurityManager>,
+    region_ids: Vec<u64>,
+    version: u64,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+) {
+    let stores = pd_client
+            .get_all_stores(true) // Exclude tombstone stores.
+            .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
+
+    stores
+        .iter()
+        .map(|s| {
+            let cfg = cfg.clone();
+            let mgr = Arc::clone(&mgr);
+            let addr = s.address.clone();
+            let region_ids = region_ids.clone();
+            let start_key = start_key.clone();
+            let end_key = end_key.clone();
+
+            thread::Builder::new()
+                .name(format!("flashback-{}", addr))
+                .spawn_wrapper(move || {
+                    let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
+                    debug_executor.flashback_to_version(region_ids, version, start_key, end_key);
+                })
+                .unwrap()
+        })
+        .for_each(|h| h.join().unwrap());
 }
 
 fn read_fail_file(path: &str) -> Vec<(String, String)> {

@@ -446,6 +446,10 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.raft_statistics = s;
     }
+
+    fn flashback_to_version(&self, _region_ids: Vec<u64>, _version: u64) -> Result<()> {
+        unimplemented!()
+    }
 }
 
 fn validate_db_and_cf(db: DbType, cf: &str) -> Result<()> {

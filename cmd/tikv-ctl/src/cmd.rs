@@ -565,6 +565,38 @@ pub enum Cmd {
     },
     #[structopt(external_subcommand)]
     External(Vec<String>),
+    Flashback {
+        #[structopt(subcommand)]
+        cmd: FlashbackCmd,
+    },
+}
+
+#[derive(StructOpt)]
+pub enum FlashbackCmd {
+    Cluster {
+        #[structopt(short = "v")]
+        /// The version to flashback
+        version: u64,
+
+        #[structopt(
+            short = "r",
+            aliases = &["region"],
+            use_delimiter = true,
+            require_delimiter = true,
+            value_delimiter = ","
+        )]
+        /// Specific regions to flashback
+        regions: Option<Vec<u64>>,
+
+        #[structopt(long, default_value = "")]
+        /// hex start key
+        start: String,
+
+        #[structopt(long, default_value = "")]
+        /// hex end key
+        end: String,
+    },
+    Process {},
 }
 
 #[derive(StructOpt)]
