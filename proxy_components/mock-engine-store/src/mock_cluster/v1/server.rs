@@ -182,7 +182,8 @@ impl ServerCluster {
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
-        let raft_client = RaftClient::new(conn_builder);
+        // TODO Set store_id to 0 as a workaround.
+        let raft_client = RaftClient::new(0, conn_builder);
         ServerCluster {
             metas: HashMap::default(),
             addrs: map,
@@ -470,6 +471,7 @@ impl ServerCluster {
         let apply_router = system.apply_router();
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(false);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
@@ -768,7 +770,7 @@ impl Simulator<TiFlashEngine> for ServerCluster {
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
-        let (cb, rx) = test_raftstore::make_cb(&request);
+        let (cb, mut rx) = test_raftstore::make_cb(&request);
         self.async_read(node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| RaftError::Timeout(format!("request timeout for {:?}", timeout)))
@@ -780,7 +782,7 @@ impl Simulator<TiFlashEngine> for ServerCluster {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        let (cb, rx) = test_raftstore::make_cb(&request);
+        let (cb, mut rx) = test_raftstore::make_cb(&request);
 
         match self.async_command_on_node(node_id, request, cb) {
             Ok(()) => {}

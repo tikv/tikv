@@ -78,6 +78,7 @@ use tikv::{
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
+        debug::{Debugger, DebuggerImpl},
         gc_worker::GcWorker,
         raftkv::ReplicaReadLockChecker,
         resolve,
@@ -1033,6 +1034,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
+        self.core.config.raft_store.optimize_for(false);
         self.core
             .config
             .raft_store
@@ -1311,16 +1313,20 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
 
         // Debug service.
-        let debug_service = DebugService::new(
+        let mut debugger = DebuggerImpl::new(
             Engines {
                 kv: engines.engines.kv.rocks.clone(),
                 raft: engines.engines.raft.clone(),
             },
-            self.kv_statistics.clone(),
-            self.raft_statistics.clone(),
-            servers.server.get_debug_thread_pool().clone(),
-            engines.engine.raft_extension().clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
+        );
+        debugger.set_kv_statistics(self.kv_statistics.clone());
+        debugger.set_raft_statistics(self.raft_statistics.clone());
+
+        let debug_service = DebugService::new(
+            debugger,
+            servers.server.get_debug_thread_pool().clone(),
+            engines.engine.raft_extension(),
         );
         if servers
             .server

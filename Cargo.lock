@@ -2885,7 +2885,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#10e7620a630db63d769503ba99c7389f19fb6516"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#0af0becd87ae89dfd48ef313a4fca7e04688b2b2"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5940,6 +5940,7 @@ dependencies = [
  "dashmap",
  "encryption",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -5954,6 +5955,7 @@ dependencies = [
  "online_config",
  "openssl",
  "prometheus",
+ "protobuf",
  "rand 0.8.5",
  "serde",
  "serde_derive",

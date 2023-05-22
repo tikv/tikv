@@ -2075,6 +2075,8 @@ pub struct TabletSnapManager {
     key_manager: Option<Arc<DataKeyManager>>,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
     stats: Arc<Mutex<HashMap<TabletSnapKey, (Instant, SnapshotStat)>>>,
+    sending_count: Arc<AtomicUsize>,
+    recving_count: Arc<AtomicUsize>,
 }
 
 impl TabletSnapManager {
@@ -2099,6 +2101,8 @@ impl TabletSnapManager {
             key_manager,
             receiving: Arc::default(),
             stats: Arc::default(),
+            sending_count: Arc::default(),
+            recving_count: Arc::default(),
         })
     }
 
@@ -2131,8 +2135,8 @@ impl TabletSnapManager {
             .filter(|stat| stat.get_total_duration_sec() > 1)
             .collect();
         SnapStats {
-            sending_count: 0,
-            receiving_count: 0,
+            sending_count: self.sending_count.load(Ordering::SeqCst),
+            receiving_count: self.recving_count.load(Ordering::SeqCst),
             stats,
         }
     }
@@ -2216,6 +2220,14 @@ impl TabletSnapManager {
             receiving: &self.receiving,
             key,
         })
+    }
+
+    pub fn sending_count(&self) -> &Arc<AtomicUsize> {
+        &self.sending_count
+    }
+
+    pub fn recving_count(&self) -> &Arc<AtomicUsize> {
+        &self.recving_count
     }
 
     #[inline]
