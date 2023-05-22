@@ -364,6 +364,7 @@ dependencies = [
  "azure_storage_blobs",
  "base64 0.13.0",
  "cloud",
+ "fail",
  "futures 0.3.15",
  "futures-util",
  "kvproto",
@@ -1521,6 +1522,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
+ "cloud",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -2930,7 +2932,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#2475f5bed8c358e9e9942546007b962f4530a1a6"
+source = "git+https://github.com/pingcap/kvproto.git#6e0e8a7deaa199418f4e8c7e3b63fcb89e153771"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5762,6 +5764,7 @@ dependencies = [
  "dashmap",
  "encryption",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -5776,6 +5779,7 @@ dependencies = [
  "online_config",
  "openssl",
  "prometheus",
+ "protobuf",
  "rand 0.8.5",
  "serde",
  "serde_derive",
