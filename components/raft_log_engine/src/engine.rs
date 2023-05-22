@@ -25,7 +25,7 @@ use kvproto::{
 use protobuf::parse_from_bytes;
 use raft::eraftpb::Entry;
 use raft_engine::{
-    env::{DefaultFileSystem, FileSystem, Handle, Permission, WriteExt},
+    env::{DefaultFileSystem, FileSystem, Handle, WriteExt},
     Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
@@ -184,10 +184,10 @@ impl FileSystem for ManagedFileSystem {
         })
     }
 
-    fn open<P: AsRef<Path>>(&self, path: P, perm: Permission) -> IoResult<Self::Handle> {
+    fn open<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
         Ok(ManagedHandle {
             path: path.as_ref().to_path_buf(),
-            base: Arc::new(self.base_file_system.open(path.as_ref(), perm)?),
+            base: Arc::new(self.base_file_system.open(path.as_ref())?),
         })
     }
 
