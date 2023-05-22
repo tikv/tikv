@@ -204,6 +204,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(true);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
@@ -323,6 +324,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
+        raftstore_cfg.optimize_for(true);
         raftstore_cfg
             .validate(region_split_size, enable_region_bucket, region_bucket_size)
             .unwrap();
