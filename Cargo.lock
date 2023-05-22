@@ -360,6 +360,7 @@ dependencies = [
  "async-trait",
  "azure_core",
  "azure_identity",
+ "azure_security_keyvault",
  "azure_storage",
  "azure_storage_blobs",
  "base64 0.13.0",
@@ -386,7 +387,7 @@ dependencies = [
 [[package]]
 name = "azure_core"
 version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#e21e2ec6bae784a717ac7b3cf1123d3a9596f074"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
 dependencies = [
  "async-trait",
  "base64 0.21.0",
@@ -412,7 +413,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#e21e2ec6bae784a717ac7b3cf1123d3a9596f074"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -430,9 +431,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "azure_security_keyvault"
+version = "0.11.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "const_format",
+ "futures 0.3.15",
+ "serde",
+ "serde_json",
+ "time 0.3.20",
+ "url",
+]
+
+[[package]]
 name = "azure_storage"
 version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#e21e2ec6bae784a717ac7b3cf1123d3a9596f074"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -454,7 +470,7 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#e21e2ec6bae784a717ac7b3cf1123d3a9596f074"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -1114,6 +1130,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "const_format"
+version = "0.2.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7309d9b4d3d2c0641e018d449232f2e28f1b22933c137f157d3dbc14228b8c0e"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d897f47bf7270cf70d370f8f98c1abb6d2d4cf60a6845d30e05bfb90c6568650"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-xid",
+]
+
+[[package]]
 name = "coprocessor_plugin_api"
 version = "0.1.0"
 dependencies = [
@@ -1561,6 +1597,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "aws",
+ "azure",
  "cloud",
  "derive_more",
  "encryption",
@@ -7368,6 +7405,12 @@ name = "unicode-width"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7007dbd421b92cc6e28410fe7362e2e0a2503394908f417b68ec8d1c364c4e20"
+
+[[package]]
+name = "unicode-xid"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
 
 [[package]]
 name = "untrusted"

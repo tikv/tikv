@@ -72,9 +72,11 @@ impl Backend for PlaintextBackend {
 pub mod tests {
     use std::{collections::HashMap, sync::Mutex};
 
+    use hex::FromHex;
     use lazy_static::lazy_static;
+    use matches::assert_matches;
 
-    use super::*;
+    use super::{Backend, *};
     use crate::*;
 
     #[derive(Debug)]

@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use cloud::kms::SubConfigAzure;
 use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
@@ -46,6 +47,24 @@ pub struct FileConfig {
     pub path: String,
 }
 
+// TODO: the representation of Azure KMS to users needs to be discussed.
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct AzureKmsConfig {
+    pub tenant_id: String,
+    pub client_id: String,
+
+    pub client_certificate: Option<String>,
+    pub client_certificate_path: Option<String>,
+    pub client_secret: Option<String>,
+    /// Url to access KeyVault
+    pub keyvault_url: String,
+    pub hsm_name: String,
+    /// Url to access HSM
+    pub hsm_url: String,
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -54,6 +73,9 @@ pub struct KmsConfig {
     pub region: String,
     pub endpoint: String,
     pub vendor: String,
+    // followings are used for Azure Kms
+    #[online_config(skip)]
+    pub azure: Option<AzureKmsConfig>,
 }
 
 impl KmsConfig {
@@ -65,6 +87,30 @@ impl KmsConfig {
             vendor: self.vendor,
             ..MasterKeyKms::default()
         }
+    }
+
+    pub fn convert_to_azure_kms_config(self) -> (MasterKeyKms, SubConfigAzure) {
+        let azure_kms_cfg = {
+            let cfg = self.azure.unwrap();
+            SubConfigAzure {
+                tenant_id: cfg.tenant_id,
+                client_id: cfg.client_id,
+                client_certificate: cfg.client_certificate,
+                client_certificate_path: cfg.client_certificate_path,
+                client_secret: cfg.client_secret,
+                keyvault_url: cfg.keyvault_url,
+                hsm_name: cfg.hsm_name,
+                hsm_url: cfg.hsm_url,
+            }
+        };
+        let mk = MasterKeyKms {
+            key_id: self.key_id,
+            region: self.region,
+            endpoint: self.endpoint,
+            vendor: self.vendor,
+            ..MasterKeyKms::default()
+        };
+        (mk, azure_kms_cfg)
     }
 }
 
@@ -176,6 +222,7 @@ mod tests {
                     region: "region".to_owned(),
                     endpoint: "endpoint".to_owned(),
                     vendor: "".to_owned(),
+                    azure: None,
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,

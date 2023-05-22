@@ -13,10 +13,26 @@ pub struct Location {
     pub endpoint: String,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct SubConfigAzure {
+    pub tenant_id: String,
+    pub client_id: String,
+
+    pub client_certificate: Option<String>,
+    pub client_certificate_path: Option<String>,
+    pub client_secret: Option<String>,
+    /// Url to access KeyVault
+    pub keyvault_url: String,
+    pub hsm_name: String,
+    /// Url to access HSM
+    pub hsm_url: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub key_id: KeyId,
     pub location: Location,
+    pub azure: Option<SubConfigAzure>,
     pub vendor: String,
 }
 
@@ -28,8 +44,15 @@ impl Config {
                 region: mk.region,
                 endpoint: mk.endpoint,
             },
+            azure: None,
             vendor: mk.vendor,
         })
+    }
+
+    pub fn from_azure_kms_config(mk: MasterKeyKms, azure_kms_cfg: SubConfigAzure) -> Result<Self> {
+        let mut cfg = Config::from_proto(mk)?;
+        cfg.azure = Some(azure_kms_cfg);
+        Ok(cfg)
     }
 }
 
@@ -48,6 +71,10 @@ impl KeyId {
             Ok(KeyId(id))
         }
     }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
 }
 
 // EncryptedKey is a newtype used to mark data as an encrypted key
@@ -64,6 +91,10 @@ impl EncryptedKey {
         } else {
             Ok(Self(key))
         }
+    }
+
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
     }
 }
 
