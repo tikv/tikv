@@ -1,11 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-
-use std::{fmt::Display, ops::Bound};
-
 // #[PerformanceCriticalPath]
+
+use std::ops::Bound;
+
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
+    metrics::{CommandKind, KV_COMMAND_COUNTER_VEC_STATIC},
     mvcc::MvccReader,
     txn::{
         actions::flashback_to_version::{check_flashback_commit, get_first_user_key},
@@ -35,17 +36,6 @@ pub enum FlashbackToVersionState {
     Commit {
         key_to_commit: Key,
     },
-}
-
-impl Display for FlashbackToVersionState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FlashbackToVersionState::RollbackLock { .. } => write!(f, "RollbackLock"),
-            FlashbackToVersionState::Prewrite { .. } => write!(f, "Prewrite"),
-            FlashbackToVersionState::FlashbackWrite { .. } => write!(f, "FlashbackWrite"),
-            FlashbackToVersionState::Commit { .. } => write!(f, "Commit"),
-        }
-    }
 }
 
 pub fn new_flashback_rollback_lock_cmd(
@@ -107,13 +97,40 @@ command! {
 
 impl CommandExt for FlashbackToVersionReadPhase {
     ctx!();
-    tag!(flashback_to_version);
     request_type!(KvFlashbackToVersion);
     property!(readonly);
     gen_lock!(empty);
 
     fn write_bytes(&self) -> usize {
         0
+    }
+
+    fn tag(&self) -> CommandKind {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                CommandKind::flashback_to_version_read_lock
+            }
+            FlashbackToVersionState::FlashbackWrite { .. } => {
+                CommandKind::flashback_to_version_read_write
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn incr_cmd_metric(&self) {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                KV_COMMAND_COUNTER_VEC_STATIC
+                    .flashback_to_version_read_lock
+                    .inc();
+            }
+            FlashbackToVersionState::FlashbackWrite { .. } => {
+                KV_COMMAND_COUNTER_VEC_STATIC
+                    .flashback_to_version_read_write
+                    .inc();
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -134,7 +151,7 @@ impl CommandExt for FlashbackToVersionReadPhase {
 ///       second phase to finish the flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
-        let tag = format!("{}-{}", self.tag(), self.state);
+        let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         // Filter out the SST that does not have a newer version than `self.version` in
         // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
@@ -174,7 +191,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     };
                     FlashbackToVersionState::Prewrite { key_to_lock }
                 } else {
-                    tls_collect_keyread_histogram_vec(&tag, key_locks.len() as f64);
+                    tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
                     FlashbackToVersionState::RollbackLock {
                         next_lock_key: if key_locks.len() > 1 {
                             key_locks.pop().map(|(key, _)| key).unwrap()
@@ -243,7 +260,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         key_to_commit: start_key.clone(),
                     }
                 } else {
-                    tls_collect_keyread_histogram_vec(&tag, keys.len() as f64);
+                    tls_collect_keyread_histogram_vec(tag, keys.len() as f64);
                     FlashbackToVersionState::FlashbackWrite {
                         // DO NOT pop the last key as the next key when it's the only key to prevent
                         // from making flashback fall into a dead loop.
