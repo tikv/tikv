@@ -587,6 +587,83 @@ impl WriteBatchFlags {
     }
 }
 
+/// The position info of the last actual write (PUT or DELETE) of a LOCK or
+/// ROLLBACK record.
+#[derive(Clone, Eq, PartialEq)]
+pub enum LastChange {
+    Unknown,
+    Exist(LastChangePosition),
+    NotExist, // Either there is no previous write of the key **or the last write is a DELETE**.
+}
+
+impl LastChange {
+    pub fn make_exist(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
+        assert!(!last_change_ts.is_zero());
+        assert!(estimated_versions_to_last_change > 0);
+        LastChange::Exist(LastChangePosition {
+            last_change_ts,
+            estimated_versions_to_last_change,
+        })
+    }
+
+    // How `LastChange` is stored.
+
+    pub fn serialize(&self) -> (TimeStamp, u64) {
+        match self {
+            LastChange::Unknown => (TimeStamp::zero(), 0),
+            LastChange::Exist(p) => (p.last_change_ts, p.estimated_versions_to_last_change),
+            LastChange::NotExist => (TimeStamp::zero(), 1),
+        }
+    }
+
+    pub fn deserialize(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
+        if last_change_ts.is_zero() {
+            if estimated_versions_to_last_change > 0 {
+                LastChange::NotExist
+            } else {
+                LastChange::Unknown
+            }
+        } else {
+            LastChange::Exist(LastChangePosition {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            })
+        }
+    }
+}
+
+impl Debug for LastChange {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LastChange::Unknown => write!(f, "Unknown"),
+            LastChange::NotExist => write!(f, "NotExist"),
+            LastChange::Exist(LastChangePosition {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            }) => write!(
+                f,
+                "Exist {{ last_change_ts: {}, estimated_versions_to_last_change: {} }}",
+                last_change_ts, estimated_versions_to_last_change
+            ),
+        }
+    }
+}
+
+impl Default for LastChange {
+    fn default() -> Self {
+        LastChange::Unknown
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct LastChangePosition {
+    /// The commit TS of the latest PUT/DELETE record
+    pub last_change_ts: TimeStamp,
+    /// The estimated number of versions that need skipping from this record
+    /// to find the latest PUT/DELETE record. Note this could be inaccurate.
+    pub estimated_versions_to_last_change: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -757,6 +834,19 @@ mod tests {
             let mut another_key = key.clone();
             another_key.append_ts_inplace(ts);
             assert_eq!(another_key, key_with_ts);
+        }
+    }
+
+    #[test]
+    fn test_serialize_last_change() {
+        let objs = vec![
+            LastChange::Unknown,
+            LastChange::NotExist,
+            LastChange::make_exist(100.into(), 3),
+        ];
+        for obj in objs {
+            let (ts, versions) = obj.serialize();
+            assert_eq!(obj, LastChange::deserialize(ts, versions));
         }
     }
 }

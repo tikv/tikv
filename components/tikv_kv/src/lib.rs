@@ -1304,6 +1304,7 @@ pub mod tests {
 #[cfg(test)]
 mod unit_tests {
     use engine_traits::CF_WRITE;
+    use txn_types::LastChange;
 
     use super::*;
     use crate::raft_cmdpb;
@@ -1325,8 +1326,7 @@ mod unit_tests {
                     ttl: 200,
                     for_update_ts: 101.into(),
                     min_commit_ts: 102.into(),
-                    last_change_ts: 80.into(),
-                    versions_to_last_change: 2,
+                    last_change: LastChange::make_exist(80.into(), 2),
                 },
             ),
             Modify::DeleteRange(
@@ -1369,8 +1369,7 @@ mod unit_tests {
                         ttl: 200,
                         for_update_ts: 101.into(),
                         min_commit_ts: 102.into(),
-                        last_change_ts: 80.into(),
-                        versions_to_last_change: 2,
+                        last_change: LastChange::make_exist(80.into(), 2),
                     }
                     .into_lock()
                     .to_bytes(),

@@ -19,7 +19,7 @@ use tikv_util::{
     config::{ReadableDuration, ReadableSize},
     HandyRwLock,
 };
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 /// When a follower applies log slowly, leader should not transfer leader
 /// to it. Otherwise, new leader may wait a long time to serve read/write
@@ -134,8 +134,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
                 ttl: 1000,
                 for_update_ts: 10.into(),
                 min_commit_ts: 20.into(),
-                last_change_ts: 5.into(),
-                versions_to_last_change: 3,
+                last_change: LastChange::make_exist(5.into(), 3),
             },
         )])
         .unwrap();
@@ -213,8 +212,7 @@ fn test_delete_lock_proposed_before_proposing_locks() {
                 ttl: 1000,
                 for_update_ts: 10.into(),
                 min_commit_ts: 20.into(),
-                last_change_ts: 5.into(),
-                versions_to_last_change: 3,
+                last_change: LastChange::make_exist(5.into(), 3),
             },
         )])
         .unwrap();
@@ -297,8 +295,7 @@ fn test_read_lock_after_become_follower() {
                 ttl: 1000,
                 for_update_ts,
                 min_commit_ts: for_update_ts,
-                last_change_ts: start_ts.prev(),
-                versions_to_last_change: 1,
+                last_change: LastChange::make_exist(start_ts.prev(), 1),
             },
         )])
         .unwrap();
