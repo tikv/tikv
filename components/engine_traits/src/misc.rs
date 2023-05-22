@@ -54,6 +54,16 @@ pub trait StatisticsReporter<T: ?Sized> {
     fn flush(&mut self);
 }
 
+#[derive(Default)]
+pub struct RangeStats {
+    // The number of entries
+    pub num_entries: u64,
+    // The number of MVCC versions of all rows (num_entries - tombstones).
+    pub num_versions: u64,
+    // The number of rows.
+    pub num_rows: u64,
+}
+
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     type StatisticsReporter: StatisticsReporter<Self>;
 
@@ -121,12 +131,7 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn get_num_keys(&self) -> Result<u64>;
 
-    fn get_range_entries_and_versions(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<(u64, u64)>>;
+    fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
 }

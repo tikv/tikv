@@ -2420,7 +2420,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         // Start from last checked key.
         let mut ranges_need_check =
-            Vec::with_capacity(self.ctx.cfg.region_compact_check_step as usize + 1);
+            Vec::with_capacity(self.ctx.cfg.region_compact_check_step() as usize + 1);
         ranges_need_check.push(self.fsm.store.last_compact_checked_key.clone());
 
         let largest_key = {
@@ -2440,7 +2440,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             ));
             ranges_need_check.extend(
                 left_ranges
-                    .take(self.ctx.cfg.region_compact_check_step as usize)
+                    .take(self.ctx.cfg.region_compact_check_step() as usize)
                     .map(|(k, _)| k.to_owned()),
             );
 

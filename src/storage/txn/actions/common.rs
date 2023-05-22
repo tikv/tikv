@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_kv::{SEEK_BOUND, Snapshot};
+use tikv_kv::{Snapshot, SEEK_BOUND};
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::storage::mvcc::{Result, SnapshotReader};
