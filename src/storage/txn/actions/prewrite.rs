@@ -2447,8 +2447,8 @@ pub mod tests {
         assert_eq!(lock.versions_to_last_change, 1);
         must_rollback(&mut engine, key, 70, false);
 
-        // Latest version is a ROLLBACK without last_change_ts. Set the last_change_ts
-        // of the new record to zero.
+        // Latest version is a ROLLBACK without last_change_ts. Iterate back to find the
+        // DELETE.
         let write = Write::new(WriteType::Rollback, 75.into(), None);
         engine
             .put_cf(
@@ -2461,7 +2461,7 @@ pub mod tests {
         prewrite_func(&mut engine, LockType::Lock, 85);
         let lock = must_locked(&mut engine, key, 85);
         assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.versions_to_last_change, 1);
         must_rollback(&mut engine, key, 85, false);
 
         // Latest version is a LOCK with last_change_ts
