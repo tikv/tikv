@@ -364,6 +364,7 @@ dependencies = [
  "azure_storage_blobs",
  "base64 0.13.0",
  "cloud",
+ "fail",
  "futures 0.3.15",
  "futures-util",
  "kvproto",
@@ -1521,6 +1522,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
+ "cloud",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -2930,7 +2932,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/tabokie/kvproto?branch=merge-source-index#48a5d471f8a11c8fa4247413f1c70b96cc7d02d2"
+source = "git+https://github.com/tabokie/kvproto?branch=merge-source-index#f2c3e039ed5e6c7d7a5eb6ea37fddaeaa0f27727"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

@@ -2,6 +2,7 @@
 
 mod compact_log;
 mod conf_change;
+mod flashback;
 mod merge;
 mod split;
 mod transfer_leader;
@@ -41,6 +42,7 @@ pub use split::{
 use tikv_util::{box_err, log::SlogFormat};
 use txn_types::WriteBatchFlags;
 
+use self::flashback::FlashbackResult;
 use crate::{
     batch::StoreContext,
     raft::Peer,
@@ -58,6 +60,7 @@ pub enum AdminCmdResult {
     UpdateGcPeers(UpdateGcPeersResult),
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
+    Flashback(FlashbackResult),
     RollbackMerge(RollbackMergeResult),
 }
 
@@ -267,7 +270,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
-                _ => unimplemented!(),
+                AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+                    self.propose_flashback(ctx, req)
+                }
+                _ => unimplemented!("{:?}", req),
             }
         };
         match &res {

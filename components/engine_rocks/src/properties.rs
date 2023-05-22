@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range};
+use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range, RangeStats};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -530,12 +530,12 @@ impl TablePropertiesCollectorFactory<MvccPropertiesCollector>
     }
 }
 
-pub fn get_range_entries_and_versions(
+pub fn get_range_stats(
     engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)> {
+) -> Option<RangeStats> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -557,8 +557,11 @@ pub fn get_range_entries_and_versions(
         num_entries += v.num_entries();
         props.add(&mvcc);
     }
-
-    Some((num_entries, props.num_versions))
+    Some(RangeStats {
+        num_entries,
+        num_versions: props.num_versions,
+        num_rows: props.num_rows,
+    })
 }
 
 #[cfg(test)]
@@ -773,10 +776,9 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let (entries, versions) =
-            get_range_entries_and_versions(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
-        assert_eq!(entries, (cases.len() * 2) as u64);
-        assert_eq!(versions, cases.len() as u64);
+        let range_stats = get_range_stats(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
+        assert_eq!(range_stats.num_entries, (cases.len() * 2) as u64);
+        assert_eq!(range_stats.num_versions, cases.len() as u64);
     }
 
     #[test]
