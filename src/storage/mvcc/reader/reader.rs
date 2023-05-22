@@ -402,6 +402,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                 return Ok(None);
                             }
                             if write.versions_to_last_change < SEEK_BOUND {
+                                if ts.is_zero() {
+                                    // this should only happen in tests
+                                    return Ok(None);
+                                }
                                 ts = commit_ts.prev();
                             } else {
                                 let commit_ts = write.last_change_ts;
