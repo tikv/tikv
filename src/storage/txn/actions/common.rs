@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_kv::Snapshot;
+use tikv_kv::{SEEK_BOUND, Snapshot};
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::storage::mvcc::{Result, SnapshotReader};
@@ -43,7 +43,9 @@ pub fn next_last_change_info<S: Snapshot>(
                     None => Ok((TimeStamp::zero(), 1)),
                     Some((w, last_change_ts)) => {
                         assert!(matches!(w.write_type, WriteType::Put));
-                        Ok((last_change_ts, stat.write.next as u64))
+                        // We don't know how many versions there are. Make `versions_to_last_change`
+                        // big enough so that later reads won't try to `next` to it.
+                        Ok((last_change_ts, SEEK_BOUND + 1))
                     }
                 }
             }
