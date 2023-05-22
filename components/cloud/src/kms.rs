@@ -13,19 +13,24 @@ pub struct Location {
     pub endpoint: String,
 }
 
+/// Configurations for Azure KMS.
 #[derive(Debug, Default, Clone)]
 pub struct SubConfigAzure {
     pub tenant_id: String,
     pub client_id: String,
 
-    pub client_certificate: Option<String>,
-    pub client_certificate_path: Option<String>,
-    pub client_secret: Option<String>,
     /// Url to access KeyVault
     pub keyvault_url: String,
+    /// Key name in the HSM
     pub hsm_name: String,
     /// Url to access HSM
     pub hsm_url: String,
+    /// Authorized certificate
+    pub client_certificate: Option<String>,
+    /// Path of local authorized certificate
+    pub client_certificate_path: Option<String>,
+    /// Secret of the client.
+    pub client_secret: Option<String>,
 }
 
 #[derive(Debug, Clone)]

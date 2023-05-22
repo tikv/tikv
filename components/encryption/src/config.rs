@@ -55,14 +55,19 @@ pub struct AzureKmsConfig {
     pub tenant_id: String,
     pub client_id: String,
 
-    pub client_certificate: Option<String>,
-    pub client_certificate_path: Option<String>,
-    pub client_secret: Option<String>,
     /// Url to access KeyVault
     pub keyvault_url: String,
+    /// Key name in the HSM
     pub hsm_name: String,
     /// Url to access HSM
     pub hsm_url: String,
+    /// Authorized certificate, the certificate is expected to be in base64
+    /// encoded PKCS12 format
+    pub client_certificate: Option<String>,
+    /// Path of local authorized certificate
+    pub client_certificate_path: Option<String>,
+    /// Secret of the client.
+    pub client_secret: Option<String>,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -95,12 +100,12 @@ impl KmsConfig {
             SubConfigAzure {
                 tenant_id: cfg.tenant_id,
                 client_id: cfg.client_id,
-                client_certificate: cfg.client_certificate,
-                client_certificate_path: cfg.client_certificate_path,
-                client_secret: cfg.client_secret,
                 keyvault_url: cfg.keyvault_url,
                 hsm_name: cfg.hsm_name,
                 hsm_url: cfg.hsm_url,
+                client_certificate: cfg.client_certificate,
+                client_certificate_path: cfg.client_certificate_path,
+                client_secret: cfg.client_secret,
             }
         };
         let mk = MasterKeyKms {
