@@ -1777,7 +1777,7 @@ pub mod tests {
         must_succeed(&mut engine, key, key, 80, 80);
         let lock = must_pessimistic_locked(&mut engine, key, 80, 80);
         assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.versions_to_last_change, 1);
         pessimistic_rollback::tests::must_success(&mut engine, key, 80, 80);
 
         // Latest version is a ROLLBACK without last_change_ts
@@ -1793,7 +1793,7 @@ pub mod tests {
         must_succeed(&mut engine, key, key, 95, 95);
         let lock = must_pessimistic_locked(&mut engine, key, 95, 95);
         assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.versions_to_last_change, 1);
         pessimistic_rollback::tests::must_success(&mut engine, key, 95, 95);
 
         // Latest version is a LOCK with last_change_ts
