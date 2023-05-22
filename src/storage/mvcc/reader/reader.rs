@@ -2478,23 +2478,46 @@ pub mod tests {
         set_tls_feature_gate(feature_gate);
 
         engine.lock(k, 30, 31);
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false);
         let res = reader
             .get_write_with_commit_ts(&Key::from_raw(k), 100.into(), None)
             .unwrap();
         assert!(res.is_some());
-        assert_eq!(res.unwrap().0.write_type, WriteType::Put);
+        let res = res.unwrap();
+        assert_eq!(res.1, 2.into());
+        assert_eq!(res.0.write_type, WriteType::Put);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 0);
+
+        // same as above, but for delete
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.1.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+        engine.delete(k, 51, 52);
+        for start_ts in (56..80).into_iter().step_by(2) {
+            engine.lock(k, start_ts, start_ts + 1);
+        }
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.5.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+        engine.lock(k, 80, 81);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
+        let mut reader = MvccReader::new(snap, None, false);
+        let res = reader
+            .get_write_with_commit_ts(&Key::from_raw(k), 100.into(), None)
+            .unwrap();
+        assert!(res.is_none());
         assert_eq!(reader.statistics.write.seek, 1);
         assert_eq!(reader.statistics.write.next, 0);
     }
 
     #[test]
     fn test_locks_interleaving_rollbacks() {
-        // a ROLLBACK inside a chain of LOCKs won't prevent LOCKs  from tracking the
+        // a ROLLBACK inside a chain of LOCKs won't prevent LOCKs from tracking the
         // correct `last_change_ts`
         let path = tempfile::Builder::new()
-            .prefix("_test_storage_mvcc_reader_skip_lock_after_upgrade_6_5")
+            .prefix("_test_storage_mvcc_reader_locks_interleaving_rollbacks")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
@@ -2516,7 +2539,9 @@ pub mod tests {
             .get_write_with_commit_ts(&Key::from_raw(k), 100.into(), None)
             .unwrap();
         assert!(res.is_some());
-        assert_eq!(res.unwrap().0.write_type, WriteType::Put);
+        let res = res.unwrap();
+        assert_eq!(res.0.write_type, WriteType::Put);
+        assert_eq!(res.1, 2.into());
         assert_eq!(reader.statistics.write.seek, 1);
         assert_eq!(reader.statistics.write.next, 0);
     }
