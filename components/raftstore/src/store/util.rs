@@ -344,27 +344,28 @@ pub fn compare_region_epoch(
 pub fn check_flashback_state(
     is_in_flashback: bool,
     flashback_start_ts: u64,
-    req: &RaftCmdRequest,
+    header: &RaftRequestHeader,
+    admin_type: Option<AdminCmdType>,
     region_id: u64,
     skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
-    if req.has_admin_request()
-        && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
-            || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+    if let Some(ty) = admin_type
+        && (ty == AdminCmdType::PrepareFlashback
+            || ty == AdminCmdType::FinishFlashback)
     {
         return Ok(());
     }
     // TODO: only use `flashback_start_ts` to check flashback state.
     let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
-    let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+    let is_flashback_request = WriteBatchFlags::from_bits_truncate(header.get_flags())
         .contains(WriteBatchFlags::FLASHBACK);
     // If the region is in the flashback state:
     //   - A request with flashback flag will be allowed.
     //   - A read request whose `read_ts` is smaller than `flashback_start_ts` will
     //     be allowed.
     if is_in_flashback && !is_flashback_request {
-        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+        if let Ok(read_ts) = decode_u64(&mut header.get_flag_data()) {
             if read_ts != 0 && read_ts < flashback_start_ts {
                 return Ok(());
             }
