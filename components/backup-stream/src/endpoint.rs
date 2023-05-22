@@ -7,6 +7,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
+use file_system::IoType;
 use futures::FutureExt;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
@@ -1028,6 +1029,7 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .enable_io()
         .enable_time()
         .after_start_wrapper(|| {
+            file_system::set_io_type(IoType::Replication);
             tikv_alloc::add_thread_memory_accessor();
         })
         .before_stop_wrapper(|| {
