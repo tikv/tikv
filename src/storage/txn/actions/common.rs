@@ -38,7 +38,7 @@ pub fn next_last_change_info<S: Snapshot>(
                     // exist.
                     None => Ok((TimeStamp::zero(), 1)),
                     Some((w, last_change_ts)) => {
-                        assert!(matches!(w.write_type, WriteType::Put | WriteType::Delete));
+                        assert!(matches!(w.write_type, WriteType::Put));
                         Ok((last_change_ts, stat.write.next as u64))
                     }
                 }

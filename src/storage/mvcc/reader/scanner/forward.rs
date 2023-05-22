@@ -1219,8 +1219,9 @@ mod latest_kv_tests {
         must_prewrite_put(&mut engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
         must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
-        // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
-        for ts in 0..SEEK_BOUND / 2 {
+        // Generate SEEK_BOUND / 2 - 1 rollback and 1 put for [b] .
+        // A ROLLBACK of commit_ts=0 is impossible in reality.
+        for ts in 1..SEEK_BOUND / 2 {
             let modifies = vec![
                 // ts is rather small, so it is ok to `as u8`
                 Modify::Put(
@@ -1274,7 +1275,7 @@ mod latest_kv_tests {
         );
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
-        assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
+        assert_eq!(statistics.write.next, (SEEK_BOUND / 2) as usize);
         assert_eq!(
             statistics.processed_size,
             Key::from_raw(b"b").len() + b"b_value".len()
@@ -1789,8 +1790,9 @@ mod latest_entry_tests {
         must_prewrite_put(&mut engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
         must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
-        // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
-        for ts in 0..SEEK_BOUND / 2 {
+        // Generate SEEK_BOUND / 2 - 1 rollback and 1 put for [b] .
+        // A ROLLBACK of commit_ts=0 is impossible in reality.
+        for ts in 1..SEEK_BOUND / 2 {
             let modifies = vec![
                 // ts is rather small, so it is ok to `as u8`
                 Modify::Put(
@@ -1849,7 +1851,7 @@ mod latest_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
-        assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
+        assert_eq!(statistics.write.next, (SEEK_BOUND / 2) as usize);
         assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
@@ -2220,8 +2222,9 @@ mod delta_entry_tests {
         must_prewrite_put(&mut engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
         must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
-        // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
-        for ts in 0..SEEK_BOUND / 2 {
+        // Generate SEEK_BOUND / 2 -1 rollback and 1 put for [b] .
+        // A ROLLBACK of commit_ts=0 is impossible in reality.
+        for ts in 1..SEEK_BOUND / 2 {
             let modifies = vec![
                 // ts is rather small, so it is ok to `as u8`
                 Modify::Put(
@@ -2287,7 +2290,7 @@ mod delta_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
-        assert_eq!(statistics.write.next, 4);
+        assert_eq!(statistics.write.next, 3);
         assert_eq!(statistics.processed_size, 0);
     }
 
