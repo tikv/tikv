@@ -11,7 +11,7 @@ use kvproto::{
 use more_asserts::{assert_ge, assert_le};
 use protobuf::Message;
 use test_coprocessor::*;
-use test_raftstore::{must_get_equal, new_peer, new_server_cluster};
+use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
     codec::{datum, Datum},
@@ -361,14 +361,14 @@ fn test_paging_scan_multi_ranges() {
     }
 }
 
-#[test]
+// TODO: #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client_mul)]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client_mul)]
 fn test_read_index_lock_checking_on_follower() {
-    let mut cluster = new_server_cluster(0, 2);
-
+    let (mut cluster, _client, _ctx) = new_cluster(2);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    let rid = cluster.run_conf_change();
+    let rid = 1;
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(rid, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");

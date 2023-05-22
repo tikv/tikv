@@ -679,7 +679,12 @@ struct Store {
     stopped: bool,
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
-    last_unreachable_report: HashMap<u64, Instant>,
+    store_reachability: HashMap<u64, StoreReachability>,
+}
+
+struct StoreReachability {
+    last_broadcast: Instant,
+    received_message_count: u64,
 }
 
 pub struct StoreFsm<EK>
@@ -703,7 +708,7 @@ where
                 stopped: false,
                 start_time: None,
                 consistency_check_time: HashMap::default(),
-                last_unreachable_report: HashMap::default(),
+                store_reachability: HashMap::default(),
             },
             receiver: rx,
         });
@@ -2415,7 +2420,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         // Start from last checked key.
         let mut ranges_need_check =
-            Vec::with_capacity(self.ctx.cfg.region_compact_check_step as usize + 1);
+            Vec::with_capacity(self.ctx.cfg.region_compact_check_step() as usize + 1);
         ranges_need_check.push(self.fsm.store.last_compact_checked_key.clone());
 
         let largest_key = {
@@ -2435,7 +2440,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             ));
             ranges_need_check.extend(
                 left_ranges
-                    .take(self.ctx.cfg.region_compact_check_step as usize)
+                    .take(self.ctx.cfg.region_compact_check_step() as usize)
                     .map(|(k, _)| k.to_owned()),
             );
 
@@ -2894,22 +2899,35 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_store_unreachable(&mut self, store_id: u64) {
         let now = Instant::now();
         let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
-        if self
-            .fsm
-            .store
-            .last_unreachable_report
-            .get(&store_id)
-            .map_or(unreachable_backoff, |t| now.saturating_duration_since(*t))
-            < unreachable_backoff
-        {
-            return;
-        }
+        let new_messages = MESSAGE_RECV_BY_STORE
+            .with_label_values(&[&format!("{}", store_id)])
+            .get();
+        match self.fsm.store.store_reachability.entry(store_id) {
+            HashMapEntry::Vacant(x) => {
+                x.insert(StoreReachability {
+                    last_broadcast: now,
+                    received_message_count: new_messages,
+                });
+            }
+            HashMapEntry::Occupied(x) => {
+                let ob = x.into_mut();
+                if now.saturating_duration_since(ob.last_broadcast) < unreachable_backoff
+                    // If there are no new messages come from `store_id`, it's not
+                    // necessary to do redundant broadcasts.
+                    || (new_messages <= ob.received_message_count && new_messages > 0)
+                {
+                    return;
+                }
+                ob.last_broadcast = now;
+                ob.received_message_count = new_messages;
+            }
+        };
+
         info!(
             "broadcasting unreachable";
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        self.fsm.store.last_unreachable_report.insert(store_id, now);
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.

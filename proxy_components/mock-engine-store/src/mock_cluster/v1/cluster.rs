@@ -118,7 +118,7 @@ pub trait Simulator<EK: KvEngine> {
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
-        let (cb, rx) = make_cb(&request);
+        let (cb, mut rx) = make_cb(&request);
         self.async_read(node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
@@ -138,7 +138,7 @@ pub trait Simulator<EK: KvEngine> {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        let (cb, rx) = make_cb(&request);
+        let (cb, mut rx) = make_cb(&request);
 
         match self.async_command_on_node(node_id, request, cb) {
             Ok(()) => {}

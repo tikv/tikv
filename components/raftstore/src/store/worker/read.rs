@@ -496,7 +496,7 @@ impl ReadDelegate {
                 self.applied_term = applied_term;
             }
             Progress::LeaderLease(leader_lease) => {
-                self.leader_lease = Some(leader_lease);
+                self.leader_lease = leader_lease;
             }
             Progress::RegionBuckets(bucket_meta) => {
                 self.bucket_meta = Some(bucket_meta);
@@ -631,7 +631,7 @@ pub enum Progress {
     Region(metapb::Region),
     Term(u64),
     AppliedTerm(u64),
-    LeaderLease(RemoteLease),
+    LeaderLease(Option<RemoteLease>),
     RegionBuckets(Arc<BucketMeta>),
     WaitData(bool),
 }
@@ -649,8 +649,12 @@ impl Progress {
         Progress::AppliedTerm(applied_term)
     }
 
-    pub fn leader_lease(lease: RemoteLease) -> Progress {
-        Progress::LeaderLease(lease)
+    pub fn set_leader_lease(lease: RemoteLease) -> Progress {
+        Progress::LeaderLease(Some(lease))
+    }
+
+    pub fn unset_leader_lease() -> Progress {
+        Progress::LeaderLease(None)
     }
 
     pub fn region_buckets(bucket_meta: Arc<BucketMeta>) -> Progress {
@@ -828,20 +832,32 @@ where
         // be performed.
         let is_in_flashback = delegate.region.is_in_flashback;
         let flashback_start_ts = delegate.region.flashback_start_ts;
-        if let Err(e) =
-            util::check_flashback_state(is_in_flashback, flashback_start_ts, req, region_id, false)
-        {
-            TLS_LOCAL_READ_METRICS.with(|m| match e {
+        let header = req.get_header();
+        let admin_type = req.admin_request.as_ref().map(|req| req.get_cmd_type());
+        if let Err(e) = util::check_flashback_state(
+            is_in_flashback,
+            flashback_start_ts,
+            header,
+            admin_type,
+            region_id,
+            true,
+        ) {
+            debug!("rejected by flashback state";
+                "error" => ?e,
+                "is_in_flashback" => is_in_flashback,
+                "tag" => &delegate.tag);
+            match e {
                 Error::FlashbackNotPrepared(_) => {
-                    m.borrow_mut().reject_reason.flashback_not_prepared.inc()
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().reject_reason.flashback_not_prepared.inc());
                 }
                 Error::FlashbackInProgress(..) => {
-                    m.borrow_mut().reject_reason.flashback_in_progress.inc()
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().reject_reason.flashback_in_progress.inc());
                 }
-                _ => unreachable!(),
-            });
-            debug!("rejected by flashback state"; "is_in_flashback" => is_in_flashback, "tag" => &delegate.tag);
-            return Ok(None);
+                _ => unreachable!("{:?}", e),
+            };
+            return Err(e);
         }
 
         Ok(Some(delegate))
@@ -1536,7 +1552,7 @@ mod tests {
         cmd.mut_header().set_term(term6 + 3);
         lease.expire_remote_lease();
         let remote_lease = lease.maybe_new_remote_lease(term6 + 3).unwrap();
-        let pg = Progress::leader_lease(remote_lease);
+        let pg = Progress::set_leader_lease(remote_lease);
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
@@ -1668,7 +1684,7 @@ mod tests {
         {
             let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
             let remote = lease.maybe_new_remote_lease(3).unwrap();
-            let pg = Progress::leader_lease(remote);
+            let pg = Progress::set_leader_lease(remote);
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }

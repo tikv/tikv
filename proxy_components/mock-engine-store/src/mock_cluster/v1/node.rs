@@ -272,6 +272,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(false);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
@@ -405,6 +406,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         );
 
         let mut raftstore_cfg = cfg.tikv.raft_store.clone();
+        raftstore_cfg.optimize_for(false);
         raftstore_cfg
             .validate(
                 cfg.coprocessor.region_split_size(),

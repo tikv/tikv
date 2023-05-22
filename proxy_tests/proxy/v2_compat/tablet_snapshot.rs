@@ -227,7 +227,6 @@ fn test_v1_apply_snap_from_v2() {
     cluster_v2.run();
 
     let region = cluster_v2.get_region(b"");
-    let region_id = region.get_id();
     cluster_v2.must_split(&region, b"k0010");
 
     let s1_addr = cluster_v1.get_addr(1);
