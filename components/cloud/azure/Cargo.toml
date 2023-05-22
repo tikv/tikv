@@ -4,6 +4,9 @@ version = "0.0.1"
 edition = "2021"
 publish = false
 
+[features]
+failpoints = ["fail/failpoints"]
+
 [dependencies]
 async-trait = "0.1"
 azure_core = { version = "0.11.0", git = "https://github.com/Azure/azure-sdk-for-rust" }
@@ -12,6 +15,7 @@ azure_storage = { version = "0.11.0", git = "https://github.com/Azure/azure-sdk-
 azure_storage_blobs = { version = "0.11.0", git = "https://github.com/Azure/azure-sdk-for-rust" }
 base64 = "0.13"
 cloud = { workspace = true }
+fail = "0.5"
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 kvproto = { workspace = true }
