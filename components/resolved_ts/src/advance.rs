@@ -532,6 +532,8 @@ async fn get_tikv_client(
     let mut clients = tikv_clients.lock().await;
     let start = Instant::now_coarse();
     // hack: so it's different args, grpc will always create a new connection.
+    // the check leader requests may be large but not frequent, compress it to
+    // reduce the traffic.
     let cb = ChannelBuilder::new(env.clone())
         .raw_cfg_int(
             CString::new("random id").unwrap(),
