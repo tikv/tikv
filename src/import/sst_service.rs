@@ -628,6 +628,9 @@ macro_rules! impl_write {
                     };
                     let writer = rx
                         .try_fold(writer, |mut writer, req| async move {
+                            // Migrated to 2021 migration. This let statement is probably not
+                            // needed, see   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+                            let _ = &req;
                             let batch = match req.chunk {
                                 Some($chunk_ty::Batch(b)) => b,
                                 _ => return Err(Error::InvalidChunk),

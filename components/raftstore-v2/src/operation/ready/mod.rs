@@ -96,7 +96,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     /// Raft relies on periodic ticks to keep the state machine sync with other
     /// peers.
     pub fn on_raft_tick(&mut self) {
-        if self.fsm.peer_mut().tick() {
+        if self.fsm.peer_mut().tick(self.store_ctx) {
             self.fsm.peer_mut().set_has_ready();
         }
         self.fsm.peer_mut().maybe_clean_up_stale_merge_context();
@@ -152,11 +152,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn tick(&mut self) -> bool {
+    fn tick<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) -> bool {
         // When it's handling snapshot, it's pointless to tick as all the side
         // affects have to wait till snapshot is applied. On the other hand, ticking
         // will bring other corner cases like elections.
-        !self.is_handling_snapshot() && self.serving() && self.raft_group_mut().tick()
+        if self.is_handling_snapshot() || !self.serving() {
+            return false;
+        }
+        self.retry_pending_reads(&store_ctx.cfg);
+        self.raft_group_mut().tick()
     }
 
     pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
@@ -229,13 +233,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         });
                     return;
                 }
-                ExtraMessageType::MsgWantRollbackMerge => {
-                    if self.is_leader() {
-                        // TODO:
-                        // self.merge_context_mut().maybe_add_rollback_peer();
-                        return;
-                    }
-                }
+                ExtraMessageType::MsgWantRollbackMerge => return,
                 ExtraMessageType::MsgAvailabilityRequest => {
                     self.on_availability_request(
                         ctx,
@@ -294,7 +292,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if self.is_leader() {
                 self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
             }
-            // We only cache peer with an vaild ID.
+            // We only cache peer with an valid ID.
             // It prevents cache peer(0,0) which is sent by region split.
             self.insert_peer_cache(from_peer);
         }
@@ -312,6 +310,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.is_leader()
+                && self.on_step_read_index(ctx, msg.mut_message())
+            {
+                // Read index has respond in `on_step_read_index`.
+                return;
+            }
+
             // As this peer is already created, the empty split message is meaningless.
             if is_empty_split_message(&msg) {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
@@ -607,6 +613,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             |entry| entry.index == self.raft_group().raft.raft_log.last_index()
         ));
 
+        fail::fail_point!(
+            "before_handle_snapshot_ready_3",
+            self.peer_id() == 3 && self.get_pending_snapshot().is_some(),
+            |_| ()
+        );
+
         self.on_role_changed(ctx, &ready);
 
         if let Some(hs) = ready.hs() {
@@ -899,7 +911,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
-                    self.leader_lease_mut().expire();
+                    self.expire_lease_on_became_follower(&ctx.store_meta);
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
@@ -1035,7 +1047,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 write_task,
                 &ctx.snap_mgr,
                 &ctx.tablet_registry,
-                ctx.key_manager.as_ref(),
             ) {
                 SNAP_COUNTER.apply.fail.inc();
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)

@@ -25,13 +25,7 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{
-    any::Any,
-    borrow::Cow,
-    cmp,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{any::Any, borrow::Cow, cmp, path::PathBuf, time::Duration};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
@@ -245,6 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_update_region_keys(&mut self, keys: u64) {
+        fail_point!("on_update_region_keys");
         self.split_flow_control_mut().approximate_keys = Some(keys);
         self.add_pending_tick(PeerTick::SplitRegionCheck);
         self.add_pending_tick(PeerTick::PdHeartbeat);
@@ -406,6 +401,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             self.peer().get_store_id() == 3,
             |_| { unreachable!() }
         );
+        fail_point!(
+            "apply_before_split_1_3",
+            self.peer_id() == 3 && self.region_id() == 1,
+            |_| { unreachable!() }
+        );
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let region = self.region();
@@ -480,19 +480,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .map(|r| r.get_id())
             .filter(|id| id != &region_id)
             .collect::<Vec<_>>();
-        let (_, _, cur_suffix) = self
-            .tablet_registry()
-            .parse_tablet_name(Path::new(self.tablet().path()))
-            .unwrap();
         let scheduler: _ = self.checkpoint_scheduler().clone();
-        let checkpoint_duration = async_checkpoint(
-            &scheduler,
-            region_id,
-            split_region_ids,
-            cur_suffix,
-            log_index,
-        )
-        .await;
+        let tablet = self.tablet().clone();
+        let checkpoint_duration =
+            async_checkpoint(tablet, &scheduler, region_id, split_region_ids, log_index).await;
 
         // It should equal to checkpoint_duration + the duration of rescheduling current
         // apply peer
@@ -538,16 +529,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
 // asynchronously execute the checkpoint creation and return the duration spent
 // by it
-async fn async_checkpoint(
-    scheduler: &Scheduler<checkpoint::Task>,
+async fn async_checkpoint<EK: KvEngine>(
+    tablet: EK,
+    scheduler: &Scheduler<checkpoint::Task<EK>>,
     parent_region: u64,
     split_regions: Vec<u64>,
-    cur_suffix: u64,
     log_index: u64,
 ) -> Duration {
     let (tx, rx) = oneshot::channel();
     let task = checkpoint::Task::Checkpoint {
-        cur_suffix,
+        tablet,
         log_index,
         parent_region,
         split_regions,
@@ -862,7 +853,8 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
+        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT,
+        DATA_CFS,
     };
     use futures::executor::block_on;
     use kvproto::{
@@ -1049,6 +1041,7 @@ mod test {
             reg,
             read_scheduler,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,

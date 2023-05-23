@@ -7,7 +7,7 @@ use keys::{data_key, DATA_MAX_KEY};
 use kvproto::debugpb::Db;
 use tikv::{
     config::ConfigController,
-    server::debug2::DebuggerV2,
+    server::{debug::Debugger, debug2::DebuggerImplV2},
     storage::mvcc::{TimeStamp, Write, WriteType},
 };
 use txn_types::Key;
@@ -93,7 +93,7 @@ fn test_compact() {
             })
         }
 
-        let debugger = DebuggerV2::new(
+        let debugger = DebuggerImplV2::new(
             cluster.engines[0].0.clone(),
             cluster.raft_engines.get(&1).unwrap().clone(),
             ConfigController::default(),

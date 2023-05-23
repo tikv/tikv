@@ -1,16 +1,21 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Write, sync::Arc, thread, time::Duration};
+use std::{fmt::Write, path::Path, sync::Arc, thread, time::Duration};
 
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, TabletRegistry, CF_DEFAULT};
+use engine_traits::{CfName, KvEngine, TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
-use futures::Future;
-use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb::RaftCmdResponse};
+use futures::future::BoxFuture;
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::Context,
+    metapb,
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+};
 use raftstore::Result;
-use rand::RngCore;
+use rand::{prelude::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
@@ -19,10 +24,11 @@ use tikv::{
     storage::{
         config::EngineType,
         kv::{SnapContext, SnapshotExt},
-        Engine, Snapshot,
+        point_key_range, Engine, Snapshot,
     },
 };
 use tikv_util::{config::ReadableDuration, worker::LazyWorker, HandyRwLock};
+use txn_types::Key;
 
 use crate::{bootstrap_store, cluster::Cluster, ServerCluster, Simulator};
 
@@ -126,12 +132,22 @@ pub fn put_cf_till_size<T: Simulator<EK>, EK: KvEngine>(
     key.into_bytes()
 }
 
+pub fn configure_for_encryption(config: &mut Config) {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let cfg = &mut config.security.encryption;
+    cfg.data_encryption_method = EncryptionMethod::Aes128Ctr;
+    cfg.data_key_rotation_period = ReadableDuration(Duration::from_millis(100));
+    cfg.master_key = test_util::new_test_file_master_key(manifest_dir);
+}
+
 pub fn configure_for_snapshot(config: &mut Config) {
     // Truncate the log quickly so that we can force sending snapshot.
     config.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     config.raft_store.raft_log_gc_count_limit = Some(2);
     config.raft_store.merge_max_log_gap = 1;
     config.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    configure_for_encryption(config);
 }
 
 pub fn configure_for_lease_read_v2<T: Simulator<EK>, EK: KvEngine>(
@@ -222,7 +238,7 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     key: &[u8],
     read_quorum: bool,
     replica_read: bool,
-) -> impl Future<Output = Result<RaftCmdResponse>> {
+) -> BoxFuture<'static, RaftCmdResponse> {
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -231,5 +247,74 @@ pub fn async_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
     );
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
-    cluster.sim.wl().async_read(request)
+    let node_id = request.get_header().get_peer().get_store_id();
+    let f = cluster.sim.wl().async_read(node_id, request);
+    Box::pin(async move { f.await.unwrap() })
+}
+
+pub fn async_read_index_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    let mut cmd = new_get_cmd(key);
+    cmd.mut_read_index().set_start_ts(u64::MAX);
+    cmd.mut_read_index()
+        .mut_key_ranges()
+        .push(point_key_range(Key::from_raw(key)));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        read_quorum,
+    );
+    // Use replica read to issue a read index.
+    request.mut_header().set_replica_read(true);
+    request.mut_header().set_peer(peer);
+    let node_id = request.get_header().get_peer().get_store_id();
+    let f = cluster.sim.wl().async_read(node_id, request);
+    Box::pin(async move { f.await.unwrap() })
+}
+
+pub fn async_command_on_node<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    node_id: u64,
+    request: RaftCmdRequest,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    cluster.sim.wl().async_command_on_node(node_id, request)
+}
+
+pub fn test_delete_range<T: Simulator<EK>, EK: KvEngine>(cluster: &mut Cluster<T, EK>, cf: CfName) {
+    let data_set: Vec<_> = (1..500)
+        .map(|i| {
+            (
+                format!("key{:08}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
+    }
+
+    // delete_range request with notify_only set should not actually delete data.
+    cluster.must_notify_delete_range_cf(cf, b"", b"");
+
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let (k, v) = data_set.choose(&mut rng).unwrap();
+        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
+    }
+
+    // Empty keys means the whole range.
+    cluster.must_delete_range_cf(cf, b"", b"");
+
+    for _ in 0..50 {
+        let k = &data_set.choose(&mut rng).unwrap().0;
+        assert!(cluster.get_cf(cf, k).is_none());
+    }
 }
