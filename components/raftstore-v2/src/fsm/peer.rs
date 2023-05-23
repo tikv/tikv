@@ -338,9 +338,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::AckCommitMerge { index, target_id } => {
                     self.fsm.peer_mut().on_ack_commit_merge(index, target_id)
                 }
-                PeerMsg::RejectCommitMerge { index } => {
-                    self.fsm.peer_mut().on_reject_commit_merge(index)
-                }
+                PeerMsg::RejectCommitMerge { index } => self
+                    .fsm
+                    .peer_mut()
+                    .on_reject_commit_merge(self.store_ctx, index),
                 PeerMsg::RedirectCatchUpLogs(c) => self
                     .fsm
                     .peer_mut()

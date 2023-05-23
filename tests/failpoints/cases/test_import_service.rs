@@ -12,7 +12,8 @@ use kvproto::import_sstpb::*;
 use tempfile::Builder;
 use test_raftstore::Simulator;
 use test_sst_importer::*;
-use tikv_util::HandyRwLock;
+use tikv::config::TikvConfig;
+use tikv_util::{config::ReadableSize, HandyRwLock};
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
@@ -253,7 +254,16 @@ fn test_ingest_file_twice_and_conflict() {
 #[test]
 fn test_ingest_sst_v2() {
     let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
-    let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None, &mut cluster);
+    let mut config = TikvConfig::default();
+    config.server.addr = "127.0.0.1:0".to_owned();
+    let cleanup_interval = Duration::from_millis(10);
+    config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
+    config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
+    config.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
+    config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
+    config.server.grpc_concurrency = 1;
+
+    let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config), &mut cluster);
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
@@ -267,7 +277,8 @@ fn test_ingest_sst_v2() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
-    ingest.set_sst(meta);
+    ingest.set_sst(meta.clone());
+
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
     fail::cfg("on_cleanup_import_sst", "return").unwrap();
@@ -277,7 +288,6 @@ fn test_ingest_sst_v2() {
         tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
-
     rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
     let mut count = 0;
     for path in &cluster.paths {
@@ -289,7 +299,25 @@ fn test_ingest_sst_v2() {
             }
         }
     }
+
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("on_update_region_keys", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+
+    fail::remove("on_update_region_keys");
     fail::remove("on_cleanup_import_sst");
     fail::remove("on_cleanup_import_sst_schedule");
     assert_ne!(0, count);
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let region_keys = cluster
+        .pd_client
+        .get_region_approximate_keys(ctx.get_region_id())
+        .unwrap();
+    assert_eq!(100, region_keys);
 }
