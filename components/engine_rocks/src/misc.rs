@@ -138,12 +138,17 @@ impl MiscExt for RocksEngine {
                 handles.push(util::get_cf_handle(self.as_inner(), cf)?);
             }
         }
-        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
+        self.as_inner()
+            .flush_cfs(&handles, wait, false)
+            .map_err(r2e)
     }
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        self.as_inner().flush_cf(handle, wait, None).map_err(r2e)
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(wait);
+        fopts.set_allow_write_stall(true);
+        self.as_inner().flush_cf(handle, &fopts).map_err(r2e)
     }
 
     // Don't flush if a memtable is just flushed within the threshold.
@@ -167,6 +172,11 @@ impl MiscExt for RocksEngine {
             .min_by(|(_, a), (_, b)| a.cmp(b))
             && age_threshold.map_or(true, |threshold| time <= threshold)
         {
+            let mut fopts = FlushOptions::default();
+            fopts.set_wait(wait);
+            fopts.set_allow_write_stall(true);
+            fopts.set_check_if_compaction_disabled(true);
+            fopts.set_expected_oldest_key_time(time);
             return self
                 .as_inner()
                 .flush_cf(handle, wait, Some(time))

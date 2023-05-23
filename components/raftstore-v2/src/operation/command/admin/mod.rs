@@ -16,10 +16,12 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
-use merge::{commit::CommitMergeResult, prepare::PrepareMergeResult};
+use merge::{
+    commit::CommitMergeResult, prepare::PrepareMergeResult, rollback::RollbackMergeResult,
+};
 pub use merge::{
     commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
-    MergeContext, MERGE_SOURCE_PREFIX,
+    merge_source_path, MergeContext, MERGE_SOURCE_PREFIX,
 };
 use protobuf::Message;
 use raftstore::{
@@ -37,7 +39,7 @@ pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
     SplitInit, SPLIT_PREFIX,
 };
-use tikv_util::{box_err, log::SlogFormat};
+use tikv_util::{box_err, log::SlogFormat, slog_panic};
 use txn_types::WriteBatchFlags;
 
 use self::flashback::FlashbackResult;
@@ -59,6 +61,7 @@ pub enum AdminCmdResult {
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
     Flashback(FlashbackResult),
+    RollbackMerge(RollbackMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -270,7 +273,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                     self.propose_flashback(ctx, req)
                 }
-                _ => unimplemented!("{:?}", req),
+                _ => slog_panic!(
+                    self.logger,
+                    "unimplemented";
+                    "admin_type" => ?cmd_type,
+                ),
             }
         };
         match &res {

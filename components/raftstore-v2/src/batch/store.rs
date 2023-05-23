@@ -427,7 +427,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 continue;
             }
             let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
-            // Keep the checkpoint even if source is destroyed.
             if prefix == MERGE_SOURCE_PREFIX {
                 continue;
             }

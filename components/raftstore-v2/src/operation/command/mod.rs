@@ -66,8 +66,8 @@ mod control;
 mod write;
 
 pub use admin::{
-    report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs, CompactLogContext,
-    MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
+    merge_source_path, report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs,
+    CompactLogContext, MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
     MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
@@ -397,6 +397,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
                 AdminCmdResult::CommitMerge(res) => self.on_apply_res_commit_merge(ctx, res),
                 AdminCmdResult::Flashback(res) => self.on_apply_res_flashback(ctx, res),
+                AdminCmdResult::RollbackMerge(res) => self.on_apply_res_rollback_merge(ctx, res),
             }
         }
         self.region_buckets_info_mut()
@@ -682,7 +683,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index).await?,
                 AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
                 AdminCmdType::CommitMerge => self.apply_commit_merge(admin_req, log_index).await?,
-                AdminCmdType::RollbackMerge => unimplemented!(),
+                AdminCmdType::RollbackMerge => self.apply_rollback_merge(admin_req, log_index)?,
                 AdminCmdType::TransferLeader => {
                     self.apply_transfer_leader(admin_req, entry.term)?
                 }
@@ -735,7 +736,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             self.use_delete_range(),
                         )?;
                     }
-                    _ => unimplemented!(),
+                    _ => slog_panic!(
+                        self.logger,
+                        "unimplemented";
+                        "request_type" => ?r.get_cmd_type(),
+                    ),
                 }
             }
             let resp = new_response(req.get_header());
