@@ -2797,7 +2797,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#0af0becd87ae89dfd48ef313a4fca7e04688b2b2"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#5d6aacbe966eb499b5463f88bb003cf61bd35f76"
+>>>>>>> 736a9804c8 (raftstore-v2: implement rollback merge (#14511))
 dependencies = [
  "futures 0.3.15",
  "grpcio",

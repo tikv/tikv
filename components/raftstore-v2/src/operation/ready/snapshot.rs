@@ -267,7 +267,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group_mut().advance_apply_to(snapshot_index);
             if self.proposal_control().is_merging() {
                 // After applying a snapshot, merge is rollbacked implicitly.
-                // TODO: self.rollback_merge(ctx);
+                self.rollback_merge(ctx);
             }
             let read_tablet = SharedReadTablet::new(tablet.clone());
             {
