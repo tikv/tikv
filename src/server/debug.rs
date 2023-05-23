@@ -56,7 +56,7 @@ use crate::{
     },
 };
 
-const FLASHBACK_TIMEOUT: u64 = 600;
+const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -846,6 +846,7 @@ where
             ) {
                 Ok(_) => return Ok(()),
                 Err(err) => match err {
+                    // Both error need to be retried.
                     Error::FlashbackFailed(ref msg) => {
                         error!("flashback failed"; "region_id" => ?region_id, "err" => ?msg);
                     }
@@ -894,7 +895,7 @@ where
         .unwrap();
         if !resp.get_error().is_empty() || resp.has_region_error() {
             error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-            return Err(Error::FlashbackFailed(resp.get_error().to_string()));
+            return Err(Error::NotPreparedFlashback(resp.get_error().to_string()));
         }
 
         Ok(())

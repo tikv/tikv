@@ -618,7 +618,7 @@ where
                     ) {
                         Ok(_) => {}
                         Err(err) => {
-                            return Err(Error::FlashbackFailed(format!(
+                            return Err(Error::NotPreparedFlashback(format!(
                                 "prepare flashback failed err is {}",
                                 err
                             )));
