@@ -122,7 +122,7 @@ impl std::fmt::Debug for Lock {
             .field("use_async_commit", &self.use_async_commit)
             .field("secondaries", &secondary_keys)
             .field("rollback_ts", &self.rollback_ts)
-            .field("last_change_ts", &self.last_change)
+            .field("last_change", &self.last_change)
             .field("txn_source", &self.txn_source)
             .finish()
     }
@@ -1064,7 +1064,7 @@ mod tests {
             min_commit_ts: TimeStamp(127), use_async_commit: true, \
             secondaries: [7365636F6E646172795F6B31, 7365636F6E646172795F6B6B6B6B6B32, \
             7365636F6E646172795F6B336B336B336B336B336B33, 7365636F6E646172795F6B34], rollback_ts: [], \
-            last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4, txn_source: 0 }"
+            last_change: Exist { last_change_ts: 80, estimated_versions_to_last_change: 4 }, txn_source: 0 }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -1074,7 +1074,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, \
             short_value: ?, for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [?, ?, ?, ?], rollback_ts: [], \
-            last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4, txn_source: 0 }"
+            last_change: Exist { last_change_ts: 80, estimated_versions_to_last_change: 4 }, txn_source: 0 }"
         );
 
         lock.short_value = None;
@@ -1083,8 +1083,8 @@ mod tests {
             format!("{:?}", lock),
             "Lock { lock_type: Put, primary_key: 706B, start_ts: TimeStamp(100), ttl: 3, short_value: , \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
-            use_async_commit: true, secondaries: [], rollback_ts: [], last_change_ts: TimeStamp(80), \
-            estimated_versions_to_last_change: 4, txn_source: 0 }"
+            use_async_commit: true, secondaries: [], rollback_ts: [], \
+            last_change: Exist { last_change_ts: 80, estimated_versions_to_last_change: 4 }, txn_source: 0 }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -1093,8 +1093,8 @@ mod tests {
             redact_result,
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
-            use_async_commit: true, secondaries: [], rollback_ts: [], last_change_ts: TimeStamp(80), \
-            estimated_versions_to_last_change: 4, txn_source: 0 }"
+            use_async_commit: true, secondaries: [], rollback_ts: [], \
+            last_change: Exist { last_change_ts: 80, estimated_versions_to_last_change: 4 }, txn_source: 0 }"
         );
     }
 
@@ -1140,8 +1140,8 @@ mod tests {
         assert_eq!(
             format!("{:?}", pessimistic_lock),
             "PessimisticLock { primary_key: 7072696D617279, start_ts: TimeStamp(5), ttl: 1000, \
-            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), last_change_ts: TimeStamp(8), \
-            estimated_versions_to_last_change: 2 }"
+            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), \
+            last_change: Exist { last_change_ts: 8, estimated_versions_to_last_change: 2 } }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", pessimistic_lock);
@@ -1149,8 +1149,8 @@ mod tests {
         assert_eq!(
             redact_result,
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
-            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), last_change_ts: TimeStamp(8), \
-            estimated_versions_to_last_change: 2 }"
+            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), \
+            last_change: Exist { last_change_ts: 8, estimated_versions_to_last_change: 2 } }"
         );
     }
 
@@ -1164,7 +1164,8 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change: LastChange::make_exist(8.into(), 2),
         };
-        // 7 bytes for primary key, 16 bytes for Box<[u8]>, and 6 8-byte integers.
-        assert_eq!(lock.memory_size(), 7 + 16 + 6 * 8);
+        // 7 bytes for primary key, 16 bytes for Box<[u8]>, 4 x 8-byte integers, and 1
+        // enum (8 + 2 * 8).
+        assert_eq!(lock.memory_size(), 7 + 16 + 4 * 8 + 24);
     }
 }
