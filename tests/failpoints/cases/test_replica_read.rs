@@ -351,7 +351,7 @@ fn test_read_after_cleanup_range_for_snap() {
 /// a heartbeat timeout to know its leader before that it can't handle any read
 /// request.
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_new_split_learner_can_not_find_leader() {
     let mut cluster = new_cluster(0, 4);
     configure_for_lease_read(&mut cluster.cfg, Some(5000), None);
