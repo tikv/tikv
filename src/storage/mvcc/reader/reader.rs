@@ -760,17 +760,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
     pub fn set_hint_min_ts(&mut self, ts_bound: Option<Bound<TimeStamp>>) {
         self.hint_min_ts = ts_bound;
     }
-<<<<<<< HEAD
-=======
-
-    pub fn snapshot_ext(&self) -> S::Ext<'_> {
-        self.snapshot.ext()
-    }
 
     pub fn snapshot(&self) -> &S {
         &self.snapshot
     }
->>>>>>> c69c97f716 (fix: find the correct last_change_ts after upgrade from versions < 6.5 (#14784))
 }
 
 #[cfg(test)]
