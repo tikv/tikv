@@ -1472,7 +1472,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
             }
-            Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, start_ts, primary, .. }) => {
+            Command::AcquirePessimisticLock(AcquirePessimisticLock {
+                keys,
+                start_ts,
+                primary,
+                ..
+            }) => {
                 let keys = keys.iter().map(|k| k.0.as_encoded());
                 Self::check_api_version(
                     self.api_version,

@@ -287,6 +287,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 !s.scheduled || snapshot_index != RAFT_INIT_LOG_INDEX
             }) {
                 info!(self.logger, "apply tablet snapshot completely");
+                self.storage_mut().set_has_dirty_data(false);
                 SNAP_COUNTER.apply.success.inc();
             }
             if let Some(init) = split {

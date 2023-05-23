@@ -748,14 +748,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     where
         StorageError: From<ER>,
     {
-        info!("write command finished with error"; "cid" => cid);
+        let err = StorageError::from(err);
+        info!("write command finished with error"; "cid" => cid, "err" => ?err);
         let tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
 
-        let pr = ProcessResult::Failed {
-            err: StorageError::from(err),
-        };
+        let pr = ProcessResult::Failed { err };
         if let Some(details) = sched_details {
             GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
                 tracker.metrics.scheduler_process_nanos = details
@@ -1113,8 +1112,23 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             let ts = task.cmd.ts();
             let mut sched_details = SchedulerDetails::new(task.tracker, timer);
             match &task.cmd {
-                Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
+                Command::Prewrite(prewrite) => {
                     tls_collect_query(region_id, QueryKind::Prewrite);
+                    info!(
+                        "on_process: prewrite";
+                        "start_ts" => prewrite.start_ts,
+                        "cid" => task.cid,
+                        "primary" => ?Key::from_encoded(prewrite.primary.to_vec()),
+                    );
+                }
+                Command::PrewritePessimistic(prewrite_pessimistic) => {
+                    tls_collect_query(region_id, QueryKind::Prewrite);
+                    info!(
+                        "on_process: prewrite pessimistic";
+                        "start_ts" => prewrite_pessimistic.start_ts,
+                        "cid" => task.cid,
+                        "primary" => ?Key::from_encoded(prewrite_pessimistic.primary.to_vec()),
+                    );
                 }
                 Command::AcquirePessimisticLock(pessimistic_lock) => {
                     tls_collect_query(region_id, QueryKind::AcquirePessimisticLock);
@@ -1198,13 +1212,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             Command::AcquirePessimisticLock(ref pessimistic_lock) => {
                 start_ts = Some(pessimistic_lock.start_ts);
                 keys = Some(pessimistic_lock.keys.clone());
-            },
+            }
             Command::Prewrite(ref prewrite) => {
                 start_ts = Some(prewrite.start_ts);
             }
-            Command::PrewritePessimistic(ref p) => {
-                start_ts = Some(p.start_ts)
-            }
+            Command::PrewritePessimistic(ref p) => start_ts = Some(p.start_ts),
             _ => {}
         }
 
@@ -1401,7 +1413,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
 
         if tag == CommandKind::acquire_pessimistic_lock
-            || tag == CommandKind::acquire_pessimistic_lock_resumed {
+            || tag == CommandKind::acquire_pessimistic_lock_resumed
+        {
             if tag == CommandKind::acquire_pessimistic_lock {
                 info!(
                     "on_write_finished_before_write_locks: acquire pessimistic lock";
