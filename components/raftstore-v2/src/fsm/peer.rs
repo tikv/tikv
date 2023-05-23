@@ -189,11 +189,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_start(&mut self, watch: Option<Arc<ReplayWatch>>) {
-        if !self
-            .fsm
-            .peer
-            .maybe_pause_for_recovery(self.store_ctx, watch)
-        {
+        if !self.fsm.peer.maybe_pause_for_replay(self.store_ctx, watch) {
             self.schedule_tick(PeerTick::Raft);
         }
         self.schedule_tick(PeerTick::SplitRegionCheck);
