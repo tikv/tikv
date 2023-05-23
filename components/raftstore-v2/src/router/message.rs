@@ -89,6 +89,7 @@ pub enum StoreTick {
     SnapGc,
     ConsistencyCheck,
     CleanupImportSst,
+    CompactCheck,
 }
 
 impl StoreTick {
@@ -99,6 +100,7 @@ impl StoreTick {
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::CompactCheck => RaftEventDurationType::compact_check,
         }
     }
 }
@@ -282,6 +284,27 @@ impl PeerMsg {
         source: String,
     ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
+        (
+            PeerMsg::RequestSplit {
+                request: RequestSplit {
+                    epoch,
+                    split_keys,
+                    source: source.into(),
+                },
+                ch,
+            },
+            sub,
+        )
+    }
+
+    #[cfg(feature = "testexport")]
+    pub fn request_split_with_callback(
+        epoch: metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: String,
+        f: Box<dyn FnOnce(&mut kvproto::raft_cmdpb::RaftCmdResponse) + Send>,
+    ) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::with_callback(f);
         (
             PeerMsg::RequestSplit {
                 request: RequestSplit {

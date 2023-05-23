@@ -69,6 +69,6 @@ pub trait KvEngine:
 
     /// A method for test to expose inner db refcount in order to make sure a
     /// full release of engine.
-    #[cfg(any(test, feature = "testexport"))]
+    #[cfg(feature = "testexport")]
     fn inner_refcount(&self) -> usize;
 }

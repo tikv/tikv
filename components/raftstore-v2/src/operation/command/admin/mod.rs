@@ -2,6 +2,7 @@
 
 mod compact_log;
 mod conf_change;
+mod flashback;
 mod merge;
 mod split;
 mod transfer_leader;
@@ -15,10 +16,12 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
-use merge::{commit::CommitMergeResult, prepare::PrepareMergeResult};
+use merge::{
+    commit::CommitMergeResult, prepare::PrepareMergeResult, rollback::RollbackMergeResult,
+};
 pub use merge::{
     commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
-    MergeContext, MERGE_SOURCE_PREFIX,
+    merge_source_path, MergeContext, MERGE_SOURCE_PREFIX,
 };
 use protobuf::Message;
 use raftstore::{
@@ -36,9 +39,10 @@ pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
     SplitInit, SPLIT_PREFIX,
 };
-use tikv_util::{box_err, log::SlogFormat};
+use tikv_util::{box_err, log::SlogFormat, slog_panic};
 use txn_types::WriteBatchFlags;
 
+use self::flashback::FlashbackResult;
 use crate::{
     batch::StoreContext,
     raft::Peer,
@@ -56,6 +60,8 @@ pub enum AdminCmdResult {
     UpdateGcPeers(UpdateGcPeersResult),
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
+    Flashback(FlashbackResult),
+    RollbackMerge(RollbackMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -93,6 +99,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        let is_transfer_leader = cmd_type == AdminCmdType::TransferLeader;
         let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
             && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
                 .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL);
@@ -113,7 +120,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
+        // Do not check conflict for transfer leader, otherwise we may not
+        // transfer leadership out of busy nodes in time.
+        if !is_transfer_leader && let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
             return;
         }
@@ -264,7 +273,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
-                _ => unimplemented!(),
+                AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+                    self.propose_flashback(ctx, req)
+                }
+                _ => slog_panic!(
+                    self.logger,
+                    "unimplemented";
+                    "admin_type" => ?cmd_type,
+                ),
             }
         };
         match &res {
