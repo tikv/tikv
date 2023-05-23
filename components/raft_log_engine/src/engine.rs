@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    backtrace::Backtrace,
     fs,
     io::{Read, Result as IoResult, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -21,6 +22,7 @@ use kvproto::{
         RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
     },
 };
+use protobuf::parse_from_bytes;
 use raft::eraftpb::Entry;
 use raft_engine::{
     env::{DefaultFileSystem, FileSystem, Handle, Permission, WriteExt},
@@ -666,10 +668,15 @@ impl RaftEngine for RaftLogEngine {
     fn clean(
         &self,
         raft_group_id: u64,
-        _: u64,
-        _: &RaftLocalState,
+        index: u64,
+        state: &RaftLocalState,
         batch: &mut RaftLogBatch,
     ) -> Result<()> {
+        info!("dbg clean";
+            "region_id" => raft_group_id,
+            "index" => index,
+            "state" => ?state,
+            "backtrace" => ?Backtrace::force_capture());
         batch.0.add_command(raft_group_id, Command::Clean);
         Ok(())
     }
@@ -710,14 +717,22 @@ impl RaftEngine for RaftLogEngine {
                 Some(REGION_STATE_KEY),
                 Some(&end),
                 true,
-                |key, _| {
+                |key, value| {
                     match &key[..KEY_PREFIX_LEN] {
                         REGION_STATE_KEY
                             if NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]) <= apply_index =>
                         {
                             if found_region_state {
+                                info!("dbg delete stale region state";
+                                    "apply_index" => apply_index,
+                                    "index" => NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]),
+                                    "state" => ?parse_from_bytes::<RegionLocalState>(value));
                                 batch.0.delete(raft_group_id, key.to_vec());
                             } else {
+                                info!("dbg keep region state";
+                                    "apply_index" => apply_index,
+                                    "index" => NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]),
+                                    "state" => ?parse_from_bytes::<RegionLocalState>(value));
                                 found_region_state = true;
                             }
                         }
@@ -725,8 +740,16 @@ impl RaftEngine for RaftLogEngine {
                             if NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]) <= apply_index =>
                         {
                             if found_apply_state {
+                                info!("dbg delete stale apply state";
+                                    "apply_index" => apply_index,
+                                    "index" => NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]),
+                                    "state" => ?parse_from_bytes::<RaftApplyState>(value));
                                 batch.0.delete(raft_group_id, key.to_vec());
                             } else {
+                                info!("dbg keep apply state";
+                                    "apply_index" => apply_index,
+                                    "index" => NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]),
+                                    "state" => ?parse_from_bytes::<RaftApplyState>(value));
                                 found_apply_state = true;
                             }
                         }
@@ -735,8 +758,18 @@ impl RaftEngine for RaftLogEngine {
                             let tablet_index = NumberCodec::decode_u64(&key[KEY_PREFIX_LEN + 1..]);
                             if cf_id <= MAX_CF_ID && tablet_index <= apply_index {
                                 if found_flush_state[cf_id as usize] {
+                                    info!("dbg delete stale flush state";
+                                        "apply_index" => apply_index,
+                                        "tablet_index" => tablet_index,
+                                        "flush_index" => NumberCodec::decode_u64(value),
+                                        "cf_id" => cf_id);
                                     batch.0.delete(raft_group_id, key.to_vec());
                                 } else {
+                                    info!("dbg keep flush state";
+                                        "apply_index" => apply_index,
+                                        "tablet_index" => tablet_index,
+                                        "flush_index" => NumberCodec::decode_u64(value),
+                                        "cf_id" => cf_id);
                                     found_flush_state[cf_id as usize] = true;
                                 }
                             }
