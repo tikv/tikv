@@ -71,7 +71,7 @@ use crate::{
     worker::tablet,
 };
 
-const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
+const PAUSE_FOR_REPLAY_GAP: u64 = 128;
 
 pub struct ReplayWatch {
     skipped: AtomicUsize,
@@ -113,10 +113,10 @@ impl ReplayWatch {
 impl Drop for ReplayWatch {
     fn drop(&mut self) {
         info!(
-            self.logger, 
-            "The raft log replay completed"; 
-            "skipped" => self.skipped.load(Ordering::Relaxed), 
-            "paused" => self.paused.load(Ordering::Relaxed), 
+            self.logger,
+            "The raft log replay completed";
+            "skipped" => self.skipped.load(Ordering::Relaxed),
+            "paused" => self.paused.load(Ordering::Relaxed),
             "elapsed" => ?self.timer.elapsed()
         );
     }
@@ -172,7 +172,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn maybe_pause_for_recovery<T>(
+    pub fn maybe_pause_for_replay<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         watch: Option<Arc<ReplayWatch>>,
@@ -200,13 +200,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // it may block for ever when there is unapplied conf change.
             self.set_has_ready();
         }
-        if committed_index > applied_index + PAUSE_FOR_RECOVERY_GAP && let Some(w) = watch {
+        if committed_index > applied_index + PAUSE_FOR_REPLAY_GAP {
             // If there are too many the missing logs, we need to skip ticking otherwise
             // it may block the raftstore thread for a long time in reading logs for
             // election timeout.
-            info!(self.logger, "pause for recovery"; "applied" => applied_index, "committed" => committed_index);
-            w.record_paused();
-            self.set_replay_watch(Some(w));
+            info!(self.logger, "pause for replay"; "applied" => applied_index, "committed" => committed_index);
+
+            // when committed_index > applied_index + PAUSE_FOR_REPLAY_GAP, the peer must be
+            // created from StoreSystem on TiKV Start
+            assert!(watch.is_some());
+            if let Some(w) = watch {
+                w.record_paused();
+                self.set_replay_watch(Some(w));
+            }
             true
         } else {
             if let Some(w) = watch {
