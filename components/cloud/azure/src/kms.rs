@@ -14,11 +14,11 @@ use cloud::{
 };
 use tikv_util::box_err;
 
-use crate::ClientCertificateCredentialExt;
+use crate::{ClientCertificateCredentialExt, STORAGE_VENDOR_NAME_AZURE};
 
 /// Use 256 bits for data key as default.
 const DEFAULT_DATAKEY_SIZE: u8 = 32;
-const ENCRYPTION_VENDOR_NAME_AZURE_KMS: &str = "Azure";
+const ENCRYPTION_VENDOR_NAME_AZURE_KMS: &str = STORAGE_VENDOR_NAME_AZURE;
 
 pub struct AzureKms {
     tenant_id: String,

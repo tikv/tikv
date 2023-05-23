@@ -51,7 +51,7 @@ pub struct FileConfig {
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct AzureKmsConfig {
+pub struct AzureConfig {
     pub tenant_id: String,
     pub client_id: String,
 
@@ -80,7 +80,7 @@ pub struct KmsConfig {
     pub vendor: String,
     // followings are used for Azure Kms
     #[online_config(skip)]
-    pub azure: Option<AzureKmsConfig>,
+    pub azure: Option<AzureConfig>,
 }
 
 impl KmsConfig {
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_kms_config() {
-        let kms_cfg = EncryptionConfig {
+        let kms_config = EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
             master_key: MasterKeyConfig::Kms {
@@ -234,25 +234,71 @@ mod tests {
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 1000000,
         };
+        let kms_config_azure = EncryptionConfig {
+            master_key: MasterKeyConfig::Kms {
+                config: KmsConfig {
+                    key_id: "key_id".to_owned(),
+                    region: "region".to_owned(),
+                    endpoint: "endpoint".to_owned(),
+                    vendor: "Azure".to_owned(),
+                    azure: Some(AzureConfig {
+                        tenant_id: "tenant_id".to_owned(),
+                        client_id: "client_id".to_owned(),
+                        keyvault_url: "keyvault_url".to_owned(),
+                        hsm_name: "hsm_name".to_owned(),
+                        hsm_url: "hsm_url".to_owned(),
+                        ..AzureConfig::default()
+                    }),
+                },
+            },
+            ..kms_config.clone()
+        };
+        // KMS with default(aws).
         let kms_str = r#"
-        data-encryption-method = "aes128-ctr"
-        data-key-rotation-period = "14d"
-        enable-file-dictionary-log = true
-        file-dictionary-rewrite-threshold = 1000000
-        [previous-master-key]
-        type = "plaintext"
-        [master-key]
-        type = "kms"
-        key-id = "key_id"
-        region = "region"
-        endpoint = "endpoint"
+            data-encryption-method = "aes128-ctr"
+            data-key-rotation-period = "14d"
+            enable-file-dictionary-log = true
+            file-dictionary-rewrite-threshold = 1000000
+            [previous-master-key]
+            type = "plaintext"
+            [master-key]
+            type = "kms"
+            key-id = "key_id"
+            region = "region"
+            endpoint = "endpoint"
         "#;
-        let cfg: EncryptionConfig = toml::from_str(kms_str).unwrap();
-        assert_eq!(
-            cfg,
-            kms_cfg,
-            "\n{}\n",
-            toml::to_string_pretty(&kms_cfg).unwrap()
-        );
+        // KMS with azure
+        let kms_str_azure = r#"
+            data-encryption-method = 'aes128-ctr'
+            data-key-rotation-period = '14d'
+            enable-file-dictionary-log = true
+            file-dictionary-rewrite-threshold = 1000000
+
+            [master-key]
+            type = 'kms'
+            key-id = 'key_id'
+            region = 'region'
+            endpoint = 'endpoint'
+            vendor = 'azure'
+
+            [master-key.azure]
+            tenant-id = 'tenant_id'
+            client-id = 'client_id'
+            keyvault-url = 'keyvault_url'
+            hsm-name = 'hsm_name'
+            hsm-url = 'hsm_url'
+
+            [previous-master-key]
+            type = 'plaintext'
+        "#;
+        for (kms_cfg, kms_str) in [(kms_config, kms_str), (kms_config_azure, kms_str_azure)] {
+            let cfg: EncryptionConfig = toml::from_str(kms_str).unwrap();
+            assert_eq!(
+                cfg,
+                kms_cfg.clone(),
+                "\n{}\n",
+                toml::to_string_pretty(&kms_cfg).unwrap()
+            );
+        }
     }
 }

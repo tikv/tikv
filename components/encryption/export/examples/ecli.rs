@@ -2,10 +2,11 @@
 
 use std::io::{Read, Write};
 
+use azure::STORAGE_VENDOR_NAME_AZURE;
 pub use cloud::kms::Config as CloudConfig;
 #[cfg(feature = "cloud-aws")]
 use encryption_export::{create_cloud_backend, KmsConfig};
-use encryption_export::{AzureKmsConfig, Backend, Error, Result};
+use encryption_export::{AzureConfig, Backend, Error, Result};
 use file_system::{File, OpenOptions};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
@@ -63,22 +64,19 @@ struct KmsCommand {
     region: Option<String>,
     /// Azure KMS
     #[structopt(subcommand)]
-    azure: Option<KmsCommandAzure>,
+    azure: Option<KmsSubCommandAzure>,
 }
 
 #[derive(StructOpt)]
 #[structopt(rename_all = "kebab-case")]
 /// Command for KeyVault backend.
-struct KmsCommandAzure {
+struct KmsSubCommandAzure {
     /// Tenant id.
     #[structopt(long)]
     tenant_id: String,
     /// Client id.
     #[structopt(long)]
     client_id: String,
-    /// Name of key in KeyVault backend.
-    #[structopt(long)]
-    key_name: String,
     /// Remote endpoint of KeyVault
     #[structopt(long)]
     url: String,
@@ -95,13 +93,13 @@ fn create_kms_backend(
 
     // Azure KMS.
     if let Some(azure_cmd) = cmd.azure.as_ref() {
-        let mut config = AzureKmsConfig::default();
-        config.tenant_id = azure_cmd.tenant_id.to_owned();
-        config.client_id = azure_cmd.client_id.to_owned();
-        config.key_name = azure_cmd.key_name.to_owned();
-        config.keyvault_url = azure_cmd.url.to_owned();
-        config.client_secret = azure_cmd.secret.to_owned();
-        config.client_certificate_path = if let Some(cred) = credential_file.clone() {
+        config.vendor = STORAGE_VENDOR_NAME_AZURE.to_owned();
+        let mut azure_cfg = AzureConfig::default();
+        azure_cfg.tenant_id = azure_cmd.tenant_id.to_owned();
+        azure_cfg.client_id = azure_cmd.client_id.to_owned();
+        azure_cfg.keyvault_url = azure_cmd.url.to_owned();
+        azure_cfg.client_secret = azure_cmd.secret.to_owned();
+        azure_cfg.client_certificate_path = if let Some(cred) = credential_file.clone() {
             Some(cred.clone())
         } else {
             None
@@ -120,6 +118,7 @@ fn create_kms_backend(
     if let Some(ref endpoint) = cmd.endpoint {
         config.endpoint = endpoint.to_string();
     }
+    config.key_id = cmd.key_id.to_owned();
     create_cloud_backend(&config)
 }
 
@@ -132,9 +131,10 @@ fn process() -> Result<()> {
     file.read_to_end(&mut content)?;
 
     let credential_file = opt.credential_file.as_ref();
-    let backend = match opt.command {
-        Command::Kms(ref cmd) => create_kms_backend(cmd, credential_file)?,
-        _ => unreachable!(),
+    let backend = if let Command::Kms(ref cmd) = opt.command {
+        create_kms_backend(cmd, credential_file)?
+    } else {
+        unreachable!()
     };
 
     let output = match opt.operation {

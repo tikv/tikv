@@ -9,7 +9,7 @@ use cloud::kms::Config as CloudConfig;
 #[cfg(feature = "cloud-aws")]
 pub use encryption::KmsBackend;
 pub use encryption::{
-    clean_up_dir, clean_up_trash, from_engine_encryption_method, trash_dir_all, AzureKmsConfig,
+    clean_up_dir, clean_up_trash, from_engine_encryption_method, trash_dir_all, AzureConfig,
     Backend, DataKeyImporter, DataKeyManager, DataKeyManagerArgs, DecrypterReader,
     EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
 };
@@ -82,4 +82,36 @@ fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
         }
         MasterKeyConfig::Kms { config } => return create_cloud_backend(config),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "cloud-azure")]
+    fn test_kms_cloud_backend_azure() {
+        let config = KmsConfig {
+            key_id: "key_id".to_owned(),
+            region: "region".to_owned(),
+            endpoint: "endpoint".to_owned(),
+            vendor: STORAGE_VENDOR_NAME_AZURE.to_owned(),
+            azure: Some(AzureConfig {
+                tenant_id: "tenant_id".to_owned(),
+                client_id: "client_id".to_owned(),
+                keyvault_url: "https://keyvault_url.vault.azure.net".to_owned(),
+                hsm_name: "hsm_name".to_owned(),
+                hsm_url: "https://hsm_url.managedhsm.azure.net/".to_owned(),
+                client_secret: Some("client_secret".to_owned()),
+                ..AzureConfig::default()
+            }),
+        };
+        let invalid_config = KmsConfig {
+            azure: None,
+            ..config.clone()
+        };
+        assert!(create_cloud_backend(&invalid_config).is_err());
+        let backend = create_cloud_backend(&config).unwrap();
+        assert!(backend.is_secure());
+    }
 }
