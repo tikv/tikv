@@ -112,11 +112,13 @@ impl ReplayWatch {
 
 impl Drop for ReplayWatch {
     fn drop(&mut self) {
-        info!(self.logger, 
+        info!(
+            self.logger, 
             "The raft log replay completed"; 
             "skipped" => self.skipped.load(Ordering::Relaxed), 
             "paused" => self.paused.load(Ordering::Relaxed), 
-            "elapsed" => ?self.timer.elapsed());
+            "elapsed" => ?self.timer.elapsed()
+        );
     }
 }
 
