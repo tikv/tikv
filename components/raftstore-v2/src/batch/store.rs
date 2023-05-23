@@ -54,7 +54,9 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
+    operation::{
+        ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+    },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     worker::{checkpoint, cleanup, pd, tablet},
@@ -359,6 +361,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
         let mut meta = self.store_meta.lock().unwrap();
+        self.engine.optimize_for(true);
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
@@ -703,7 +706,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
-            raft_engine,
+            raft_engine.clone(),
             tablet_registry,
             trans,
             router.clone(),
@@ -747,8 +750,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router.register_all(mailboxes);
 
         // Make sure Msg::Start is the first message each FSM received.
+        let watch = Arc::new(ReplayWatch::new(Box::new(raft_engine), self.logger.clone()));
         for addr in address {
-            router.force_send(addr, PeerMsg::Start).unwrap();
+            router
+                .force_send(addr, PeerMsg::Start(Some(watch.clone())))
+                .unwrap();
         }
         router.send_control(StoreMsg::Start).unwrap();
         Ok(())

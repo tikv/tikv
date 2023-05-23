@@ -21,9 +21,17 @@ mod apply_trace;
 mod async_writer;
 mod snapshot;
 
-use std::{cmp, time::Instant};
+use std::{
+    cmp,
+    fmt::{self, Debug, Formatter},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, RaftEngineReadOnly};
 use error_code::ErrorCodeExt;
 use kvproto::{
     metapb,
@@ -41,7 +49,7 @@ use raftstore::{
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
-use slog::{debug, error, info, trace, warn};
+use slog::{debug, error, info, trace, warn, Logger};
 use tikv_util::{
     log::SlogFormat,
     slog_panic,
@@ -61,9 +69,57 @@ use crate::{
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
     worker::tablet,
+    TabletTask,
 };
 
 const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
+
+pub struct ReplayWatch {
+    raft_engine: Box<dyn RaftEngineReadOnly>,
+    skipped: AtomicUsize,
+    paused: AtomicUsize,
+    logger: Logger,
+    timer: Instant,
+}
+
+impl Debug for ReplayWatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReplayWatch")
+            .field("skipped", &self.skipped)
+            .field("paused", &self.paused)
+            .field("logger", &self.logger)
+            .field("timer", &self.timer)
+            .finish()
+    }
+}
+
+impl ReplayWatch {
+    pub fn new(raft_engine: Box<dyn RaftEngineReadOnly>, logger: Logger) -> Self {
+        raft_engine.optimize_for(true);
+        Self {
+            raft_engine,
+            skipped: AtomicUsize::new(0),
+            paused: AtomicUsize::new(0),
+            logger,
+            timer: Instant::now(),
+        }
+    }
+
+    pub fn record_skipped(&self) {
+        self.skipped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_paused(&self) {
+        self.paused.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Drop for ReplayWatch {
+    fn drop(&mut self) {
+        info!(self.logger, "replay stop"; "skipped" => self.skipped.load(Ordering::Relaxed), "paused" => self.paused.load(Ordering::Relaxed), "elapsed" => ?self.timer.elapsed());
+        self.raft_engine.optimize_for(false);
+    }
+}
 
 impl Store {
     pub fn on_store_unreachable<EK, ER, T>(
@@ -115,7 +171,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn maybe_pause_for_recovery<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) -> bool {
+    pub fn maybe_pause_for_recovery<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        watch: Option<Arc<ReplayWatch>>,
+    ) -> bool {
         // The task needs to be scheduled even if the tablet may be replaced during
         // recovery. Otherwise if there are merges during recovery, the FSM may
         // be paused forever.
@@ -139,14 +199,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // it may block for ever when there is unapplied conf change.
             self.set_has_ready();
         }
-        if committed_index > applied_index + PAUSE_FOR_RECOVERY_GAP {
+        if committed_index > applied_index + PAUSE_FOR_RECOVERY_GAP && let Some(w) = watch {
             // If there are too many the missing logs, we need to skip ticking otherwise
             // it may block the raftstore thread for a long time in reading logs for
             // election timeout.
-            info!(self.logger, "pause for recovery"; "applied" => applied_index, "committed" => committed_index);
-            self.set_pause_for_recovery(true);
+            info!(self.logger, "pause for replay"; "applied" => applied_index, "committed" => committed_index);
+            w.record_paused();
+            self.set_replay_watch(Some(w));
             true
         } else {
+            if let Some(w) = watch {
+                w.record_skipped();
+            }
             false
         }
     }
@@ -189,7 +253,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
-        if self.pause_for_recovery() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+        if self.pause_for_replay() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
             ctx.raft_metrics.message_dropped.recovery.inc();
             return;
         }
@@ -224,13 +288,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if util::is_epoch_stale(region_epoch, self.region().get_region_epoch()) {
                         return;
                     }
-                    let _ = ctx
-                        .schedulers
-                        .tablet
-                        .schedule(crate::worker::tablet::Task::Flush {
-                            region_id: self.region().get_id(),
-                            cb: None,
-                        });
+                    let _ = ctx.schedulers.tablet.schedule(TabletTask::Flush {
+                        region_id: self.region().get_id(),
+                        cf: None,
+                        cb: None,
+                    });
                     return;
                 }
                 ExtraMessageType::MsgWantRollbackMerge => return,

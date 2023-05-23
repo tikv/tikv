@@ -3061,7 +3061,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tonyxuqqi/rust-rocksdb.git?branch=limit-compaction-concurrency#2dfd9c949707e11c732b963c349c205810457273"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -3080,7 +3080,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tonyxuqqi/rust-rocksdb.git?branch=limit-compaction-concurrency#2dfd9c949707e11c732b963c349c205810457273"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4432,9 +4432,10 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/busyjay/raft-engine.git?branch=add-lru-cache#02f4c853a2cd39cfc48ec23b82ed68b26e15362a"
 dependencies = [
  "byteorder",
+ "bytes",
  "crc32fast",
  "crossbeam",
  "fail",
@@ -4466,7 +4467,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/busyjay/raft-engine.git?branch=add-lru-cache#02f4c853a2cd39cfc48ec23b82ed68b26e15362a"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -5031,7 +5032,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tonyxuqqi/rust-rocksdb.git?branch=limit-compaction-concurrency#2dfd9c949707e11c732b963c349c205810457273"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

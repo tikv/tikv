@@ -456,7 +456,7 @@ impl Store {
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
         if ctx
             .router
-            .send_and_register(region_id, mailbox, PeerMsg::Start)
+            .send_and_register(region_id, mailbox, PeerMsg::Start(None))
             .is_err()
         {
             panic!(

@@ -1,15 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
+
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
+    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+    CF_RAFT, CF_WRITE,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
     engine::RocksEngine, r2e, rocks_metrics::RocksStatisticsReporter, rocks_metrics_defs::*,
-    sst::RocksSstWriterBuilder, util, RocksSstWriter,
+    sst::RocksSstWriterBuilder, util, RocksSstWriter, MANUAL_FLUSH_COUNTER,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -130,13 +133,23 @@ impl MiscExt for RocksEngine {
 
     fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()> {
         let mut handles = vec![];
-        for cf in cfs {
-            handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        let mut cfs = Cow::Borrowed(cfs);
+        if cfs.is_empty() {
+            cfs = Cow::Owned(self.cf_names());
         }
-        if handles.is_empty() {
-            for cf in self.cf_names() {
-                handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        for cf in cfs.iter() {
+            if *cf == CF_DEFAULT {
+                MANUAL_FLUSH_COUNTER.default.inc();
+            } else if *cf == CF_WRITE {
+                MANUAL_FLUSH_COUNTER.write.inc();
+            } else if *cf == CF_LOCK {
+                MANUAL_FLUSH_COUNTER.lock.inc();
+            } else if *cf == CF_RAFT {
+                MANUAL_FLUSH_COUNTER.raft.inc();
             }
+        }
+        for cf in cfs.iter() {
+            handles.push(util::get_cf_handle(self.as_inner(), cf)?);
         }
         self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
     }
