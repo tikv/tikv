@@ -296,6 +296,27 @@ impl PeerMsg {
             sub,
         )
     }
+
+    #[cfg(feature = "testexport")]
+    pub fn request_split_with_callback(
+        epoch: metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: String,
+        f: Box<dyn FnOnce(&mut kvproto::raft_cmdpb::RaftCmdResponse) + Send>,
+    ) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::with_callback(f);
+        (
+            PeerMsg::RequestSplit {
+                request: RequestSplit {
+                    epoch,
+                    split_keys,
+                    source: source.into(),
+                },
+                ch,
+            },
+            sub,
+        )
+    }
 }
 
 #[derive(Debug)]

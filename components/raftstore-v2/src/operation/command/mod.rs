@@ -547,6 +547,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
+        fail::fail_point!("on_handle_apply_2", self.peer_id() == 2, |_| {});
         let now = std::time::Instant::now();
         let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
         for (e, ch) in ce.entry_and_proposals {
@@ -736,7 +737,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             self.use_delete_range(),
                         )?;
                     }
-                    _ => unimplemented!(),
+                    _ => slog_panic!(
+                        self.logger,
+                        "unimplemented";
+                        "request_type" => ?r.get_cmd_type(),
+                    ),
                 }
             }
             let resp = new_response(req.get_header());
