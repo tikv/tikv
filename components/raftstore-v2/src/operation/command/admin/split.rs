@@ -239,6 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_update_region_keys(&mut self, keys: u64) {
+        fail_point!("on_update_region_keys");
         self.split_flow_control_mut().approximate_keys = Some(keys);
         self.add_pending_tick(PeerTick::SplitRegionCheck);
         self.add_pending_tick(PeerTick::PdHeartbeat);
@@ -398,6 +399,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         fail_point!(
             "on_apply_batch_split",
             self.peer().get_store_id() == 3,
+            |_| { unreachable!() }
+        );
+        fail_point!(
+            "apply_before_split_1_3",
+            self.peer_id() == 3 && self.region_id() == 1,
             |_| { unreachable!() }
         );
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();

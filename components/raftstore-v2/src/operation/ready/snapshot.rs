@@ -267,7 +267,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group_mut().advance_apply_to(snapshot_index);
             if self.proposal_control().is_merging() {
                 // After applying a snapshot, merge is rollbacked implicitly.
-                // TODO: self.rollback_merge(ctx);
+                self.rollback_merge(ctx);
             }
             let read_tablet = SharedReadTablet::new(tablet.clone());
             {
@@ -661,6 +661,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let reg = reg.clone();
         let key_manager = snap_mgr.key_manager().clone();
         let hook = move || {
+            fail::fail_point!("region_apply_snap");
             if !install_tablet(&reg, key_manager.as_deref(), &path, region_id, last_index) {
                 slog_panic!(
                     logger,

@@ -3,7 +3,6 @@
 use std::{
     fmt::Write,
     path::Path,
-    result::Result as StdResult,
     str::FromStr,
     sync::{mpsc, Arc, Mutex},
     thread,
@@ -21,7 +20,7 @@ use engine_traits::{
     CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::{channel::oneshot, executor::block_on, future::BoxFuture};
+use futures::{executor::block_on, future::BoxFuture, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     encryptionpb::EncryptionMethod,
@@ -56,7 +55,9 @@ use tikv::{
     },
 };
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
-use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
+use tikv_util::{
+    config::*, escape, mpsc::future, time::ThreadReadId, worker::LazyWorker, HandyRwLock,
+};
 use txn_types::Key;
 
 use crate::{Cluster, Config, RawEngine, ServerCluster, Simulator};
@@ -365,7 +366,7 @@ impl Drop for CallbackLeakDetector {
     }
 }
 
-pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
+pub fn check_raft_cmd_request(cmd: &RaftCmdRequest) -> bool {
     let mut is_read = cmd.has_status_request();
     let mut is_write = cmd.has_admin_request();
     for req in cmd.get_requests() {
@@ -378,8 +379,14 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
         }
     }
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
+    is_read
+}
 
-    let (tx, rx) = mpsc::channel();
+pub fn make_cb(
+    cmd: &RaftCmdRequest,
+) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
+    let is_read = check_raft_cmd_request(cmd);
+    let (tx, rx) = future::bounded(1, future::WakePolicy::Immediately);
     let mut detector = CallbackLeakDetector::default();
     let cb = if is_read {
         Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
@@ -401,7 +408,7 @@ pub fn make_cb_ext(
     cmd: &RaftCmdRequest,
     proposed: Option<ExtCallback>,
     committed: Option<ExtCallback>,
-) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
+) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
     let (cb, receiver) = make_cb(cmd);
     if let Callback::Write { cb, .. } = cb {
         (Callback::write_ext(cb, proposed, committed), receiver)
@@ -436,7 +443,7 @@ pub fn async_read_on_peer<T: Simulator>(
     key: &[u8],
     read_quorum: bool,
     replica_read: bool,
-) -> BoxFuture<'static, StdResult<RaftCmdResponse, oneshot::Canceled>> {
+) -> BoxFuture<'static, RaftCmdResponse> {
     let node_id = peer.get_store_id();
     let mut request = new_request(
         region.get_id(),
@@ -446,10 +453,13 @@ pub fn async_read_on_peer<T: Simulator>(
     );
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
-    let (tx, rx) = oneshot::channel();
+    let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
     cluster.sim.wl().async_read(node_id, None, request, cb);
-    Box::pin(async move { rx.await })
+    Box::pin(async move {
+        let fut = rx.next();
+        fut.await.unwrap()
+    })
 }
 
 pub fn batch_read_on_peer<T: Simulator>(
@@ -509,7 +519,7 @@ pub fn async_read_index_on_peer<T: Simulator>(
     region: metapb::Region,
     key: &[u8],
     read_quorum: bool,
-) -> mpsc::Receiver<RaftCmdResponse> {
+) -> BoxFuture<'static, RaftCmdResponse> {
     let node_id = peer.get_store_id();
     let mut cmd = new_read_index_cmd();
     cmd.mut_read_index().set_start_ts(u64::MAX);
@@ -523,10 +533,30 @@ pub fn async_read_index_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
     cluster.sim.wl().async_read(node_id, None, request, cb);
-    rx
+    Box::pin(async move {
+        let fut = rx.next();
+        fut.await.unwrap()
+    })
+}
+
+pub fn async_command_on_node<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    node_id: u64,
+    request: RaftCmdRequest,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    let (cb, mut rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(node_id, request, cb)
+        .unwrap();
+    Box::pin(async move {
+        let fut = rx.next();
+        fut.await.unwrap()
+    })
 }
 
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
@@ -841,6 +871,32 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert!(!get_resp.has_error(), "{:?}", get_resp.get_error());
     assert!(!get_resp.get_not_found());
     assert_eq!(get_resp.take_value(), val);
+}
+
+pub fn must_kv_read_not_found(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.set_key(key);
+    get_req.set_version(ts);
+
+    for _ in 1..250 {
+        let get_resp = client.kv_get(&get_req).unwrap();
+        if get_resp.has_region_error() || get_resp.has_error() {
+            thread::sleep(Duration::from_millis(20));
+        } else if get_resp.get_not_found() {
+            return;
+        }
+    }
+
+    // Last try
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(
+        !get_resp.has_region_error(),
+        "{:?}",
+        get_resp.get_region_error()
+    );
+    assert!(!get_resp.has_error(), "{:?}", get_resp.get_error());
+    assert!(get_resp.get_not_found());
 }
 
 pub fn write_and_read_key(

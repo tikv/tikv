@@ -1237,6 +1237,9 @@ fn test_isolation_inc() {
         let (punch_card, store, oracle) =
             (Arc::clone(&punch_card), store.clone(), Arc::clone(&oracle));
         threads.push(thread::spawn(move || {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &store;
             for _ in 0..INC_PER_THREAD {
                 let number = inc(&store.store, &oracle, b"key").unwrap() as usize;
                 let mut punch = punch_card.lock().unwrap();
@@ -1326,6 +1329,9 @@ fn test_isolation_multi_inc() {
     for _ in 0..THREAD_NUM {
         let (store, oracle) = (store.clone(), Arc::clone(&oracle));
         threads.push(thread::spawn(move || {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &store;
             for _ in 0..INC_PER_THREAD {
                 assert!(inc_multi(&store.store, &oracle, KEY_NUM));
             }

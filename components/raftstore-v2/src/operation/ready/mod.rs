@@ -296,13 +296,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         });
                     return;
                 }
-                ExtraMessageType::MsgWantRollbackMerge => {
-                    if self.is_leader() {
-                        // TODO:
-                        // self.merge_context_mut().maybe_add_rollback_peer();
-                        return;
-                    }
-                }
+                ExtraMessageType::MsgWantRollbackMerge => return,
                 ExtraMessageType::MsgAvailabilityRequest => {
                     self.on_availability_request(
                         ctx,
@@ -350,7 +344,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         if msg.has_extra_msg() {
-            unimplemented!();
+            warn!(
+                self.logger,
+                "unimplemented extra msg, ignore it now";
+                "extra_msg_type" => ?msg.get_extra_msg().get_type(),
+            );
+            return;
         }
 
         // TODO: drop all msg append when the peer is uninitialized and has conflict
@@ -361,7 +360,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if self.is_leader() {
                 self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
             }
-            // We only cache peer with an vaild ID.
+            // We only cache peer with an valid ID.
             // It prevents cache peer(0,0) which is sent by region split.
             self.insert_peer_cache(from_peer);
         }
@@ -369,6 +368,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
         } else {
+            // As this peer is already created, the empty split message is meaningless.
+            if is_empty_split_message(&msg) {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
             if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
@@ -379,13 +384,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
-            // As this peer is already created, the empty split message is meaningless.
-            if is_empty_split_message(&msg) {
-                ctx.raft_metrics.message_dropped.stale_msg.inc();
-                return;
-            }
 
-            if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.is_leader()
+                && self.on_step_read_index(ctx, msg.mut_message())
+            {
+                // Read index has respond in `on_step_read_index`,
+                // No need to step again.
+            } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
                 error!(self.logger, "raft step error"; "err" => ?e);
             } else {
                 let committed_index = self.raft_group().raft.raft_log.committed;
@@ -673,6 +679,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             || true,
             |entry| entry.index == self.raft_group().raft.raft_log.last_index()
         ));
+
+        fail::fail_point!(
+            "before_handle_snapshot_ready_3",
+            self.peer_id() == 3 && self.get_pending_snapshot().is_some(),
+            |_| ()
+        );
 
         self.on_role_changed(ctx, &ready);
 
@@ -966,7 +978,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
-                    self.leader_lease_mut().expire();
+                    self.expire_lease_on_became_follower(&ctx.store_meta);
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
