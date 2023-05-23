@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-// #[PerformanceCriticalPath]
 
+// #[PerformanceCriticalPath]
 use std::mem;
 
 use tikv_kv::ScanMode;
