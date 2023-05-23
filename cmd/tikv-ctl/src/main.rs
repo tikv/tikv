@@ -730,7 +730,7 @@ fn flashback_whole_cluster(
         });
     }
 
-    match block_on(runtime.spawn(async move {
+    match runtime.block_on(runtime.spawn(async move {
         let mut store_set = HashSet::default();
         while let Some(store_id) = rx.recv().await {
             store_set.insert(store_id);

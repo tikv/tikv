@@ -8,7 +8,6 @@ use futures::{
     sink::SinkExt,
     stream::{self, TryStreamExt},
 };
-use futures_executor::block_on;
 use grpcio::{
     Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
@@ -581,7 +580,10 @@ where
         let region_leaders = tmp.read().unwrap();
 
         // Prepare flashback for specified regions.
-        let start_ts = block_on(self.pd_client.get_tso()).unwrap();
+        let start_ts = self
+            .pool
+            .block_on(self.pd_client.get_tso())
+            .expect("failed to get timestamp from PD");
         let version = req.get_version();
         let key_range = build_key_range(req.get_start_key(), req.get_end_key(), false);
         let (prepare_tx, mut prepare_rx) = channel(region_leaders.len());
@@ -629,10 +631,13 @@ where
             });
 
         // Flashback to version.
-        let commit_ts = block_on(self.pd_client.get_tso()).unwrap();
+        let commit_ts = self
+            .pool
+            .block_on(self.pd_client.get_tso())
+            .expect("failed to get timestamp from PD");
         let (flashback_tx, mut flashback_rx) = channel(flashback_region_num);
         let mut prepare_set = HashSet::default();
-        while let Some(region_id) = block_on(prepare_rx.recv()) {
+        while let Some(region_id) = self.pool.block_on(prepare_rx.recv()) {
             prepare_set.insert(region_id);
             let debugger = self.debugger.clone();
             let flashback_tx_clone = flashback_tx.clone();
