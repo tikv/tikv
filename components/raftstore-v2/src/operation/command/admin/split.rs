@@ -239,6 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_update_region_keys(&mut self, keys: u64) {
+        fail_point!("on_update_region_keys");
         self.split_flow_control_mut().approximate_keys = Some(keys);
         self.add_pending_tick(PeerTick::SplitRegionCheck);
         self.add_pending_tick(PeerTick::PdHeartbeat);
