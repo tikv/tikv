@@ -128,21 +128,21 @@ impl AzureKms {
                 .map_err(|e| CloudError::Other(e))?,
             );
             Self::new_with_credentials(config, keyvault_credential, hsm_credential)
-        } else if let Some(_) = azure_cfg.client_secret.clone() {
+        } else if let Some(client_secret) = azure_cfg.client_secret.clone() {
             // Client secret to access KeyVault.
             let (keyvault_credential, hsm_credential) = (
                 ClientSecretCredential::new(
                     new_http_client(),
                     azure_cfg.tenant_id.clone(),
                     azure_cfg.client_id.clone(),
-                    azure_cfg.client_secret.clone().unwrap(),
+                    client_secret.clone(),
                     TokenCredentialOptions::default(),
                 ),
                 ClientSecretCredential::new(
                     new_http_client(),
                     azure_cfg.tenant_id.clone(),
                     azure_cfg.client_id.clone(),
-                    azure_cfg.client_secret.clone().unwrap(),
+                    client_secret,
                     TokenCredentialOptions::default(),
                 ),
             );
@@ -249,4 +249,48 @@ fn convert_azure_error(err: AzureError) -> CloudError {
         ))
     };
     CloudError::KmsError(KmsError::Other(err_msg))
+}
+
+#[cfg(test)]
+mod tests {
+    use cloud::kms::{Location, SubConfigAzure};
+
+    use super::*;
+
+    #[test]
+    fn test_azure_kms() {
+        let err_azure_cfg = SubConfigAzure {
+            tenant_id: "tenant_id".to_owned(),
+            client_id: "client_id".to_owned(),
+            keyvault_url: "https://keyvault_url.vault.azure.net".to_owned(),
+            hsm_name: "hsm_name".to_owned(),
+            hsm_url: "https://hsm_url.managedhsm.azure.net/".to_owned(),
+            ..SubConfigAzure::default()
+        };
+        let err_config = Config {
+            key_id: KeyId::new("test_key_id".to_string()).unwrap(),
+            vendor: STORAGE_VENDOR_NAME_AZURE.to_owned(),
+            location: Location {
+                region: "southeast".to_string(),
+                endpoint: String::new(),
+            },
+            azure: Some(err_azure_cfg.clone()),
+        };
+        assert!(AzureKms::new(err_config.clone()).is_err());
+        let azure_cfg = SubConfigAzure {
+            client_secret: Some("client_secret".to_owned()),
+            ..err_azure_cfg
+        };
+        let config = Config {
+            azure: Some(azure_cfg),
+            ..err_config
+        };
+        let azure_kms = AzureKms::new(config).unwrap();
+        assert_eq!(
+            azure_kms.name(),
+            STORAGE_VENDOR_NAME_AZURE,
+            "{:?}",
+            azure_kms
+        );
+    }
 }
