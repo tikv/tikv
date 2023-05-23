@@ -233,13 +233,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         });
                     return;
                 }
-                ExtraMessageType::MsgWantRollbackMerge => {
-                    if self.is_leader() {
-                        // TODO:
-                        // self.merge_context_mut().maybe_add_rollback_peer();
-                        return;
-                    }
-                }
+                ExtraMessageType::MsgWantRollbackMerge => return,
                 ExtraMessageType::MsgAvailabilityRequest => {
                     self.on_availability_request(
                         ctx,
