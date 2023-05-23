@@ -1110,7 +1110,7 @@ mod tests {
             min_commit_ts: TimeStamp(127), use_async_commit: true, \
             secondaries: [7365636F6E646172795F6B31, 7365636F6E646172795F6B6B6B6B6B32, \
             7365636F6E646172795F6B336B336B336B336B336B33, 7365636F6E646172795F6B34], rollback_ts: [], \
-            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0 }"
+            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0, is_locked_with_conflict: false }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -1120,7 +1120,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, \
             short_value: ?, for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [?, ?, ?, ?], rollback_ts: [], \
-            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0 }"
+            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0, is_locked_with_conflict: false }"
         );
 
         lock.short_value = None;
@@ -1130,7 +1130,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: 706B, start_ts: TimeStamp(100), ttl: 3, short_value: , \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [], last_change_ts: TimeStamp(80), \
-            versions_to_last_change: 4, txn_source: 0 }"
+            versions_to_last_change: 4, txn_source: 0, is_locked_with_conflict: false }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -1140,7 +1140,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [], last_change_ts: TimeStamp(80), \
-            versions_to_last_change: 4, txn_source: 0 }"
+            versions_to_last_change: 4, txn_source: 0, is_locked_with_conflict: false }"
         );
     }
 
