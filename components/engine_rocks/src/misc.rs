@@ -4,7 +4,7 @@ use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
 };
-use rocksdb::Range as RocksRange;
+use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
@@ -138,9 +138,10 @@ impl MiscExt for RocksEngine {
                 handles.push(util::get_cf_handle(self.as_inner(), cf)?);
             }
         }
-        self.as_inner()
-            .flush_cfs(&handles, wait, false)
-            .map_err(r2e)
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(wait);
+        fopts.set_allow_write_stall(true);
+        self.as_inner().flush_cfs(&handles, &fopts).map_err(r2e)
     }
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
@@ -179,7 +180,7 @@ impl MiscExt for RocksEngine {
             fopts.set_expected_oldest_key_time(time);
             return self
                 .as_inner()
-                .flush_cf(handle, wait, Some(time))
+                .flush_cf(handle, &fopts)
                 .map_err(r2e);
         }
         Ok(())

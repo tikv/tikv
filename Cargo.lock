@@ -3050,7 +3050,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#ad723fbb456a43b854b16a195c6a2e18c6c6c56a"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#10126128264cbc597bd911db024edbbd6e626f4d"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -3069,7 +3069,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#ad723fbb456a43b854b16a195c6a2e18c6c6c56a"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#10126128264cbc597bd911db024edbbd6e626f4d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5020,7 +5020,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#ad723fbb456a43b854b16a195c6a2e18c6c6c56a"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230506-light-purge#10126128264cbc597bd911db024edbbd6e626f4d"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

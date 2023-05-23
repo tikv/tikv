@@ -1479,7 +1479,7 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_rocks::{util::get_cf_handle, RocksEngine};
+    use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ApiVersion, metapb::Peer};
