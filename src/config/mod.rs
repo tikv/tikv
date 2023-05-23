@@ -108,6 +108,7 @@ pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
 const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 /// Tentative value.
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.25;
+const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(15).0;
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
@@ -1326,9 +1327,12 @@ impl DbConfig {
                 self.enable_multi_batch_write.get_or_insert(false);
                 self.allow_concurrent_memtable_write.get_or_insert(false);
                 let total_mem = SysQuota::memory_limit_in_bytes() as f64;
-                self.write_buffer_limit.get_or_insert(ReadableSize(
+                // purge-threshold is set to twice the limit. Too large limit will cause trouble
+                // to raft log replay.
+                self.write_buffer_limit.get_or_insert(ReadableSize(cmp::min(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
-                ));
+                    WRITE_BUFFER_MEMORY_LIMIT_MAX,
+                )));
                 // In RaftKv2, every region uses its own rocksdb instance, it's actually the
                 // even stricter compaction guard, so use the same output file size base.
                 self.writecf
