@@ -541,6 +541,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
+        cmd.incr_cmd_metric();
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
             .get(priority_tag)
