@@ -16,10 +16,12 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
-use merge::{commit::CommitMergeResult, prepare::PrepareMergeResult};
+use merge::{
+    commit::CommitMergeResult, prepare::PrepareMergeResult, rollback::RollbackMergeResult,
+};
 pub use merge::{
     commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
-    MergeContext, MERGE_SOURCE_PREFIX,
+    merge_source_path, MergeContext, MERGE_SOURCE_PREFIX,
 };
 use protobuf::Message;
 use raftstore::{
@@ -59,6 +61,7 @@ pub enum AdminCmdResult {
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
     Flashback(FlashbackResult),
+    RollbackMerge(RollbackMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
