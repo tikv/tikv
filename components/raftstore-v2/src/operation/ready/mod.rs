@@ -287,7 +287,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         if msg.has_extra_msg() {
-            unimplemented!();
+            warn!(
+                self.logger,
+                "unimplemented extra msg, ignore it now";
+                "extra_msg_type" => ?msg.get_extra_msg().get_type(),
+            );
+            return;
         }
 
         // TODO: drop all msg append when the peer is uninitialized and has conflict

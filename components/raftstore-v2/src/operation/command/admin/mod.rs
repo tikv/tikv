@@ -37,7 +37,7 @@ pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
     SplitInit, SPLIT_PREFIX,
 };
-use tikv_util::{box_err, log::SlogFormat};
+use tikv_util::{box_err, log::SlogFormat, slog_panic};
 use txn_types::WriteBatchFlags;
 
 use self::flashback::FlashbackResult;
@@ -270,7 +270,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                     self.propose_flashback(ctx, req)
                 }
-                _ => unimplemented!("{:?}", req),
+                _ => slog_panic!(
+                    self.logger,
+                    "unimplemented";
+                    "admin_type" => ?cmd_type,
+                ),
             }
         };
         match &res {

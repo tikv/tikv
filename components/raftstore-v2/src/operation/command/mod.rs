@@ -735,7 +735,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             self.use_delete_range(),
                         )?;
                     }
-                    _ => unimplemented!(),
+                    _ => slog_panic!(
+                        self.logger,
+                        "unimplemented";
+                        "request_type" => ?r.get_cmd_type(),
+                    ),
                 }
             }
             let resp = new_response(req.get_header());
