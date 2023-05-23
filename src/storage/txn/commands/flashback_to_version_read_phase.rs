@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-// #[PerformanceCriticalPath]
 
+// #[PerformanceCriticalPath]
 use std::ops::Bound;
 
 use txn_types::{Key, Lock, TimeStamp};
