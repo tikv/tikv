@@ -19,6 +19,7 @@ use raftstore::{
     },
 };
 use slog::info;
+use txn_types::WriteBatchFlags;
 
 use crate::{
     fsm::{ApplyResReporter, PeerFsmDelegate},
@@ -31,19 +32,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
 {
     pub fn on_leader_callback(&mut self, ch: QueryResChannel) {
         let peer = self.fsm.peer();
-        let msg = new_read_index_request(
+        let mut msg = new_read_index_request(
             peer.region_id(),
             peer.region().get_region_epoch().clone(),
             peer.peer().clone(),
         );
+
+        // Allow to capture change even is in flashback state.
+        // TODO: add a test case for this kind of situation.
+        if self.fsm.peer().region().get_is_in_flashback() {
+            let mut flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
+            flags.insert(WriteBatchFlags::FLASHBACK);
+            msg.mut_header().set_flags(flags.bits());
+        }
+
         self.on_query(msg, ch);
     }
 
     pub fn on_capture_change(&mut self, capture_change: CaptureChange) {
         fail_point!("raft_on_capture_change");
-
-        // TODO: Allow to capture change even is in flashback state.
-        // TODO: add a test case for this kind of situation.
 
         let apply_router = self.fsm.peer().apply_scheduler().unwrap().clone();
         let (ch, _) = QueryResChannel::with_callback(Box::new(move |res| {

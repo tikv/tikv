@@ -873,6 +873,32 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert_eq!(get_resp.take_value(), val);
 }
 
+pub fn must_kv_read_not_found(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.set_key(key);
+    get_req.set_version(ts);
+
+    for _ in 1..250 {
+        let get_resp = client.kv_get(&get_req).unwrap();
+        if get_resp.has_region_error() || get_resp.has_error() {
+            thread::sleep(Duration::from_millis(20));
+        } else if get_resp.get_not_found() {
+            return;
+        }
+    }
+
+    // Last try
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(
+        !get_resp.has_region_error(),
+        "{:?}",
+        get_resp.get_region_error()
+    );
+    assert!(!get_resp.has_error(), "{:?}", get_resp.get_error());
+    assert!(get_resp.get_not_found());
+}
+
 pub fn write_and_read_key(
     client: &TikvClient,
     ctx: &Context,
