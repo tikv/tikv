@@ -5,6 +5,7 @@ use tikv_kv::SnapshotExt;
 use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
 use crate::storage::{
+    mvcc,
     mvcc::{
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
         MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
@@ -12,9 +13,99 @@ use crate::storage::{
     Snapshot, TxnStatus,
 };
 
-// Check whether there's an overlapped write record, and then perform rollback.
-// The actual behavior to do the rollback differs according to whether there's
-// an overlapped write record.
+fn check_txn_status_from_pessimistic_primary_lock(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    primary_key: Key,
+    lock: &Lock,
+    current_ts: TimeStamp,
+    resolving_pessimistic_lock: bool,
+) -> Result<(TxnStatus, Option<ReleasedLock>)> {
+    assert!(lock.is_pessimistic_lock());
+    // Check the storage information first in case the force lock could be stale.
+    // See https://github.com/pingcap/tidb/issues/43540 for more details.
+    if lock.is_pessimistic_lock_with_conflict() {
+        let (txn_status, is_current_lock_stale) = match check_txn_status_missing_lock(
+            txn,
+            reader,
+            primary_key.clone(),
+            None,
+            MissingLockAction::ReturnError,
+            resolving_pessimistic_lock,
+        ) {
+            Ok(txn_status) => match txn_status {
+                t @ TxnStatus::RolledBack | t @ TxnStatus::Committed { .. } => (t, true),
+                _ => {
+                    return Err(ErrorInner::Other(box_err!(
+                        "unexpected result={:?} checking persist information \
+                            for pessimistic lock with conflict lock={:?}",
+                        &txn_status,
+                        lock
+                    ))
+                    .into());
+                }
+            },
+            Err(err) => match err {
+                // Continue to process if there's no corresponding persistent information.
+                // In this case the pessimistic primary lock should not be stale lock with conflict.
+                mvcc::Error(box ErrorInner::TxnNotFound { .. }) => {
+                    (TxnStatus::LockNotExistDoNothing, false)
+                }
+                _ => {
+                    return Err(err);
+                }
+            },
+        };
+        if is_current_lock_stale {
+            info!("unlock stale pessimistic primary lock";
+                "primary_key" => ?&primary_key,
+                "lock" => ?&lock,
+                "current_ts" => current_ts,
+                "resolving_pessimistic_lock" => ?resolving_pessimistic_lock,
+            );
+            let released = txn.unlock_key(primary_key, true, TimeStamp::zero());
+            MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
+            return Ok((txn_status, released));
+        }
+    }
+
+    if lock.ts.physical() + lock.ttl < current_ts.physical() {
+        // The primary pessimistic lock has expired.
+        // If the resolving lock is a prewrite lock, the transaction must already be in
+        // the commit phase, the primary lock would no longer change in this
+        // case.
+        return if resolving_pessimistic_lock {
+            let released = txn.unlock_key(primary_key, true, TimeStamp::zero());
+            MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
+            Ok((TxnStatus::PessimisticRollBack, released))
+        } else {
+            let released = rollback_lock(txn, reader, primary_key, lock, true, true)?;
+            MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+            Ok((TxnStatus::TtlExpire, released))
+        };
+    }
+
+    // Just use LockNotExistDoNothing to avoid clone the lock, it would not be used.
+    Ok((TxnStatus::LockNotExistDoNothing, None))
+}
+
+/// Evaluate transaction status if a lock exists with the anticipated
+/// 'start_ts'. 1. Validate whether the existing lock indeed corresponds to the
+/// primary lock. The primary key    may switch under certain circumstances. If
+/// it's a stale lock, the transaction status should    not be determined by it. Refer to https://github.com/tikv/tikv/issues/14636 for additional information.
+///    Note that the primary key should remain unaltered if the transaction is
+/// already in the commit or 2PC phase. 2. Manage the check in accordance with
+/// the primary lock type:   2.1 For the pessimistic type:
+///     2.1.1 If it's a forced lock, validate the storage data initially to
+/// ensure the forced lock isn't stale.     2.1.2 If it's a regular lock, verify
+/// the lock's TTL and the current timestamp to determine the status. If the
+///           `resolving_pessimistic` parameter is true, perform a pessimistic
+/// rollback, else carry out a real rollback.   2.2 For the prewrite type,
+/// verify the lock's TTL and the current timestamp to establish the status.
+/// 3. Perform required operations on the valid primary lock, such as
+/// incrementing `min_commit_ts`. The actual procedure for executing the
+/// rollback differs based on the presence or absence of an overlapping write
+/// record.
 pub fn check_txn_status_lock_exists(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -25,12 +116,46 @@ pub fn check_txn_status_lock_exists(
     force_sync_commit: bool,
     resolving_pessimistic_lock: bool,
     verify_is_primary: bool,
+    rollback_if_not_exist: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
     if verify_is_primary && !primary_key.is_encoded_from(&lock.primary) {
-        // Return the current lock info to tell the client what the actual primary is.
-        return Err(
-            ErrorInner::PrimaryMismatch(lock.into_lock_info(primary_key.into_raw()?)).into(),
-        );
+        // If the resolving lock is a prewrite lock and the current lock is a
+        // pessimistic lock, the pessimistic primary lock must be invalid.
+        return match (resolving_pessimistic_lock, lock.is_pessimistic_lock()) {
+            (false, true) => {
+                info!("unlock invalid pessimistic primary lock";
+                    "primary_key" => ?&primary_key,
+                    "lock" => ?&lock,
+                    "current_ts" => current_ts,
+                    "resolving_pessimistic_lock" => ?resolving_pessimistic_lock,
+                );
+                let txn_status = check_txn_status_missing_lock(
+                    txn,
+                    reader,
+                    primary_key.clone(),
+                    None,
+                    MissingLockAction::rollback(rollback_if_not_exist),
+                    resolving_pessimistic_lock,
+                )?;
+                let released = txn.unlock_key(primary_key, true, TimeStamp::zero());
+                MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
+                Ok((txn_status, released))
+            }
+            _ => {
+                warn!("mismatch primary key and lock";
+                    "primary_key" => ?&primary_key,
+                    "lock" => ?&lock,
+                    "current_ts" => current_ts,
+                    "resolving_pessimistic_lock" => ?resolving_pessimistic_lock,
+                    "rollback_if_not_exist" => rollback_if_not_exist,
+                );
+                // Return the current lock info to tell the client what the actual primary is.
+                Err(
+                    ErrorInner::PrimaryMismatch(lock.into_lock_info(primary_key.into_raw()?))
+                        .into(),
+                )
+            }
+        };
     }
 
     // Never rollback or push forward min_commit_ts in check_txn_status if it's
@@ -49,20 +174,23 @@ pub fn check_txn_status_lock_exists(
     }
 
     let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-    if lock.ts.physical() + lock.ttl < current_ts.physical() {
-        // If the lock is expired, clean it up.
-        // If the resolving and primary key lock are both pessimistic locks, just unlock
-        // the primary pessimistic lock and do not write rollback records.
-        return if resolving_pessimistic_lock && lock.lock_type == LockType::Pessimistic {
-            let released = txn.unlock_key(primary_key, is_pessimistic_txn, TimeStamp::zero());
-            MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
-            Ok((TxnStatus::PessimisticRollBack, released))
-        } else {
-            let released =
-                rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
-            MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-            Ok((TxnStatus::TtlExpire, released))
-        };
+    if lock.is_pessimistic_lock() {
+        let (status, released) = check_txn_status_from_pessimistic_primary_lock(
+            txn,
+            reader,
+            primary_key.clone(),
+            &lock,
+            current_ts,
+            resolving_pessimistic_lock,
+        )?;
+        // Return if the primary lock is stale or the transaction status is decided.
+        if (status.is_decided() || status == TxnStatus::PessimisticRollBack) && released.is_some() {
+            return Ok((status, released));
+        }
+    } else if lock.ts.physical() + lock.ttl < current_ts.physical() {
+        let released = rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
+        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+        return Ok((TxnStatus::TtlExpire, released));
     }
 
     // If lock.min_commit_ts is 0, it's not a large transaction and we can't push
