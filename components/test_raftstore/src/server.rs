@@ -491,12 +491,13 @@ impl ServerCluster {
         );
 
         let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
-            DebuggerImpl::new(engines.clone(), ConfigController::default(), None, None);
+            DebuggerImpl::new(engines.clone(), ConfigController::default(), None);
         let debug_thread_handle = debug_thread_pool.handle().clone();
         let debug_service = DebugService::new(
             debugger,
             debug_thread_handle,
             extension,
+            self.pd_client.clone(),
             region_info_accessor.clone(),
         );
 

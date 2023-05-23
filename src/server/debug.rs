@@ -29,7 +29,6 @@ use kvproto::{
     metapb::{PeerRole, Region},
     raft_serverpb::*,
 };
-use pd_client::{PdClient, RpcClient};
 use protobuf::Message;
 use raft::{self, eraftpb::Entry, RawNode};
 use raftstore::{
@@ -42,6 +41,7 @@ use tikv_util::{
     config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
     sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
+use tokio::sync::mpsc::Sender;
 use txn_types::Key;
 
 use super::service::{future_flashback_to_version, future_prepare_flashback_to_version};
@@ -187,7 +187,14 @@ pub trait Debugger {
 
     fn reset_to_version(&self, version: u64);
 
-    fn flashback_to_version(&self, region_ids: Vec<u64>, version: u64) -> Result<()>;
+    fn flashback_to_version(
+        &self,
+        region_id: u64,
+        version: u64,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        tx: Sender<u64>,
+    ) -> Result<()>;
 
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
 
@@ -210,7 +217,6 @@ where
     reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
     storage: Option<Storage<E, L, K>>,
-    pd_client: Option<Arc<RpcClient>>,
 }
 
 impl<ER, E, L, K> InnerRocksEngineExtractor for DebuggerImpl<ER, E, L, K>
@@ -255,7 +261,6 @@ where
         engines: Engines<RocksEngine, ER>,
         cfg_controller: ConfigController,
         storage: Option<Storage<E, L, K>>,
-        pd_client: Option<Arc<RpcClient>>,
     ) -> DebuggerImpl<ER, E, L, K> {
         let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
         DebuggerImpl {
@@ -265,7 +270,6 @@ where
             reset_to_version_manager,
             cfg_controller,
             storage,
-            pd_client,
         }
     }
 
@@ -796,9 +800,9 @@ where
         }
     }
 
-    fn exec_flashback(
+    fn exec_flashback_region(
         &self,
-        mut need_flashback_regions: Vec<u64>,
+        region_id: u64,
         version: u64,
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
@@ -810,64 +814,47 @@ where
         let mut ctx = Context::default();
         let store_id = self.get_store_ident().unwrap().get_store_id();
         loop {
-            let mut regions_to_retry = Vec::new();
-            let mut index = 0;
+            let r = self.region_info(region_id).unwrap();
+            let region = r
+                .region_local_state
+                .as_ref()
+                .map(|s| s.get_region().clone())
+                .unwrap();
 
-            while index < need_flashback_regions.len() {
-                let region_id = need_flashback_regions[index];
-                let r = self.region_info(region_id).unwrap();
-                let region = r
-                    .region_local_state
-                    .as_ref()
-                    .map(|s| s.get_region().clone())
-                    .unwrap();
+            ctx.set_region_id(region.get_id());
+            ctx.set_region_epoch(region.get_region_epoch().to_owned());
+            let peer = find_peer(&region, store_id).unwrap();
+            ctx.set_peer(peer.clone());
 
-                ctx.set_region_id(region.get_id());
-                ctx.set_region_epoch(region.get_region_epoch().to_owned());
-                let peer = find_peer(&region, store_id).unwrap();
-                ctx.set_peer(peer.clone());
+            // Flashback will encode the key, so we need to use raw key.
+            let start_key = Key::from_encoded_slice(region.get_start_key())
+                .to_raw()
+                .unwrap_or_default();
+            let end_key = Key::from_encoded_slice(region.get_end_key())
+                .to_raw()
+                .unwrap_or_default();
 
-                // Flashback will encode the key, so we need to use raw key.
-                let start_key = Key::from_encoded_slice(region.get_start_key())
-                    .to_raw()
-                    .unwrap_or_default();
-                let end_key = Key::from_encoded_slice(region.get_end_key())
-                    .to_raw()
-                    .unwrap_or_default();
-
-                match f(
-                    self,
-                    version,
-                    start_key,
-                    end_key,
-                    ctx.clone(),
-                    region.get_is_in_flashback(),
-                    start_ts,
-                    commit_ts,
-                ) {
-                    Ok(_) => {}
-                    Err(err) => match err {
-                        Error::FlashbackFailed(ref msg) => {
-                            error!("flashback failed"; "region_id" => ?region_id, "err" => ?msg);
-                            regions_to_retry.push(region_id);
-                            return Err(err);
-                        }
-                        Error::NotPreparedFlashback(ref msg) => {
-                            error!("region is not in flashback state"; "region_id" => ?region_id, "err" => ?msg);
-                            regions_to_retry.push(region_id);
-                        }
-                        _ => return Err(err),
-                    },
-                }
-
-                index += 1;
+            match f(
+                self,
+                version,
+                start_key,
+                end_key,
+                ctx.clone(),
+                region.get_is_in_flashback(),
+                start_ts,
+                commit_ts,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(err) => match err {
+                    Error::FlashbackFailed(ref msg) => {
+                        error!("flashback failed"; "region_id" => ?region_id, "err" => ?msg);
+                    }
+                    Error::NotPreparedFlashback(ref msg) => {
+                        error!("region is not in flashback state"; "region_id" => ?region_id, "err" => ?msg);
+                    }
+                    _ => return Err(err),
+                },
             }
-
-            if regions_to_retry.is_empty() {
-                return Ok(());
-            }
-
-            need_flashback_regions = regions_to_retry;
 
             let elapsed_time = start_time.elapsed();
             if elapsed_time >= timeout {
@@ -1186,25 +1173,32 @@ where
         self.reset_to_version_manager.start(version.into());
     }
 
-    fn flashback_to_version(&self, region_ids: Vec<u64>, version: u64) -> Result<()> {
-        // TODO: before flashback start, close PD Schedule.
-        let start_ts = block_on(self.pd_client.clone().unwrap().get_tso()).unwrap();
-        self.exec_flashback(
-            region_ids.clone(),
-            version,
-            start_ts,
-            0.into(),
-            DebuggerImpl::prepare_flashback,
-        )?;
-
-        let commit_ts = block_on(self.pd_client.clone().unwrap().get_tso()).unwrap();
-        self.exec_flashback(
-            region_ids,
-            version,
-            start_ts,
-            commit_ts,
-            DebuggerImpl::flashback_to_version,
-        )?;
+    fn flashback_to_version(
+        &self,
+        region_id: u64,
+        version: u64,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        tx: Sender<u64>,
+    ) -> Result<()> {
+        if commit_ts.is_zero() {
+            self.exec_flashback_region(
+                region_id,
+                version,
+                start_ts,
+                0.into(),
+                DebuggerImpl::prepare_flashback,
+            )?;
+        } else {
+            self.exec_flashback_region(
+                region_id,
+                version,
+                start_ts,
+                commit_ts,
+                DebuggerImpl::flashback_to_version,
+            )?;
+        }
+        block_on(tx.send(region_id)).unwrap();
         Ok(())
     }
 
@@ -1850,7 +1844,7 @@ mod tests {
 
         let engines = Engines::new(engine.clone(), engine);
 
-        DebuggerImpl::new(engines, ConfigController::default(), None, None)
+        DebuggerImpl::new(engines, ConfigController::default(), None)
     }
 
     impl<E, L, K> DebuggerImpl<RocksEngine, E, L, K>

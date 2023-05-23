@@ -1,10 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
+use collections::HashSet;
 use futures::{
     future::{Future, FutureExt, TryFutureExt},
     sink::SinkExt,
     stream::{self, TryStreamExt},
 };
+use futures_executor::block_on;
 use grpcio::{
     Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
@@ -13,12 +17,16 @@ use kvproto::{
     debugpb::{self, *},
     kvrpcpb::KeyRange,
 };
+use pd_client::PdClient;
 use raftstore::{store::util::build_key_range, RegionInfoAccessor};
 use tikv_kv::RaftExtension;
 use tikv_util::metrics;
-use tokio::runtime::Handle;
+use tokio::{runtime::Handle, sync::mpsc::channel};
 
-use crate::server::debug::{Debugger, Error, Result};
+use crate::{
+    server::debug::{Debugger, Error, Result},
+    storage::mvcc::TimeStamp,
+};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -52,6 +60,7 @@ where
     pool: Handle,
     debugger: D,
     raft_router: T,
+    pd_client: Arc<dyn PdClient>,
     region_info_accessor: RegionInfoAccessor,
 }
 
@@ -66,12 +75,14 @@ where
         debugger: D,
         pool: Handle,
         raft_router: T,
+        pd_client: Arc<dyn PdClient>,
         region_info_accessor: RegionInfoAccessor,
     ) -> Self {
         Service {
             pool,
             debugger,
             raft_router,
+            pd_client,
             region_info_accessor,
         }
     }
@@ -566,43 +577,104 @@ where
         req: FlashbackToVersionRequest,
         sink: UnarySink<FlashbackToVersionResponse>,
     ) {
-        let debugger = self.debugger.clone();
-        let tmp = self.region_info_accessor.clone().region_leaders();
+        let tmp = self.region_info_accessor.region_leaders();
         let region_leaders = tmp.read().unwrap();
-        let region_ids = req.get_region_ids();
 
-        let filtered_region_ids = region_leaders
+        // Prepare flashback for specified regions.
+        let start_ts = block_on(self.pd_client.get_tso()).unwrap();
+        let version = req.get_version();
+        let key_range = build_key_range(req.get_start_key(), req.get_end_key(), false);
+        let (prepare_tx, mut prepare_rx) = channel(region_leaders.len());
+
+        let mut flashback_region_num = 0;
+        region_leaders
             .iter()
-            .filter_map(|region_id| {
-                if region_ids.is_empty() || region_ids.contains(region_id) {
-                    let r = debugger.region_info(*region_id).unwrap();
-                    let region = r
-                        .region_local_state
-                        .as_ref()
-                        .map(|s| s.get_region().clone())
-                        .unwrap();
-
-                    if check_intersect_of_range(
-                        &build_key_range(region.get_start_key(), region.get_end_key(), false),
-                        &build_key_range(req.get_start_key(), req.get_end_key(), false),
-                    ) {
-                        Some(*region_id)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+            .filter(|region_id| {
+                req.get_region_ids().is_empty() || req.get_region_ids().contains(region_id)
             })
-            .collect::<Vec<_>>();
+            .filter(|&region_id| {
+                let r = self.debugger.region_info(*region_id).unwrap();
+                let region = r
+                    .region_local_state
+                    .as_ref()
+                    .map(|s| s.get_region().clone())
+                    .unwrap();
+                check_intersect_of_range(
+                    &build_key_range(region.get_start_key(), region.get_end_key(), false),
+                    &key_range.clone(),
+                )
+            })
+            .for_each(|&region_id| {
+                flashback_region_num += 1;
+                let debugger = self.debugger.clone();
+                let prepare_tx_clone = prepare_tx.clone();
+                self.pool.spawn(async move {
+                    match debugger.flashback_to_version(
+                        region_id,
+                        version.clone(),
+                        start_ts.clone(),
+                        TimeStamp::zero(),
+                        prepare_tx_clone,
+                    ) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            return Err(Error::FlashbackFailed(format!(
+                                "prepare flashback failed err is {}",
+                                err
+                            )));
+                        }
+                    }
+                    Ok(())
+                });
+            });
 
-        let res = self.pool.spawn(async move {
-            let req = req;
-            debugger
-                .flashback_to_version(filtered_region_ids, req.get_version())
-                .map(|_| FlashbackToVersionResponse::default())
-        });
-        let f = async move { res.await.unwrap() };
+        // Flashback to version.
+        let commit_ts = block_on(self.pd_client.get_tso()).unwrap();
+        let (flashback_tx, mut flashback_rx) = channel(flashback_region_num);
+        let mut prepare_set = HashSet::default();
+        while let Some(region_id) = block_on(prepare_rx.recv()) {
+            prepare_set.insert(region_id);
+            let debugger = self.debugger.clone();
+            let flashback_tx_clone = flashback_tx.clone();
+            self.pool.spawn(async move {
+                match debugger.flashback_to_version(
+                    region_id,
+                    version,
+                    start_ts.clone(),
+                    commit_ts.clone(),
+                    flashback_tx_clone,
+                ) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        return Err(Error::FlashbackFailed(format!(
+                            "flashback failed err is {}",
+                            err
+                        )));
+                    }
+                }
+                Ok(())
+            });
+            if prepare_set.len() == flashback_region_num {
+                break;
+            }
+        }
+        // Wait for finish.
+        let f = self
+            .pool
+            .spawn(async move {
+                let mut finish_set = HashSet::default();
+                while let Some(region_id) = flashback_rx.recv().await {
+                    finish_set.insert(region_id);
+                    if finish_set.len() == flashback_region_num {
+                        return Ok(FlashbackToVersionResponse::default());
+                    }
+                }
+                Err(Error::FlashbackFailed(
+                    "wait flashback finish failed".into(),
+                ))
+            })
+            .map(|res| res.unwrap());
+
         self.handle_response(ctx, sink, f, "debug_flashback_to_version");
     }
 }

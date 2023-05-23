@@ -1075,6 +1075,7 @@ pub fn must_new_cluster_and_debug_client() -> (
                 debugger.clone(),
                 debug_thread_handle,
                 raft_extension,
+                cluster.pd_client.clone(),
                 RegionInfoAccessor::new(&mut host),
             ))
         }));

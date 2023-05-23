@@ -19,6 +19,8 @@ use kvproto::{
 use nom::AsBytes;
 use raft::prelude::Entry;
 use raftstore::store::util::check_key_in_region;
+use tokio::sync::mpsc::Sender;
+use txn_types::TimeStamp;
 
 use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use crate::{
@@ -447,7 +449,14 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         self.raft_statistics = s;
     }
 
-    fn flashback_to_version(&self, _region_ids: Vec<u64>, _version: u64) -> Result<()> {
+    fn flashback_to_version(
+        &self,
+        _region_id: u64,
+        _version: u64,
+        _start_ts: TimeStamp,
+        _commit_ts: TimeStamp,
+        _tx: Sender<u64>,
+    ) -> Result<()> {
         unimplemented!()
     }
 }

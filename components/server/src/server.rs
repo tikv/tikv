@@ -995,7 +995,6 @@ where
             engines.engines.clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
             Some(storage),
-            Some(self.pd_client.clone()),
         );
         debugger.set_kv_statistics(self.kv_statistics.clone());
         debugger.set_raft_statistics(self.raft_statistics.clone());
@@ -1004,6 +1003,7 @@ where
             debugger,
             server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
+            self.pd_client.clone(),
             self.region_info_accessor.clone(),
         );
         info!("start register debug service");

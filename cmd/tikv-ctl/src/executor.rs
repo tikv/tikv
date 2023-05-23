@@ -107,7 +107,7 @@ pub fn new_debug_executor(
         };
 
         let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
-            DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None, None);
+            DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
 
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
@@ -126,7 +126,7 @@ pub fn new_debug_executor(
                 };
 
                 let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
-                    DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None, None);
+                    DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
                 Box::new(debugger) as Box<dyn DebugExecutor>
             }
             EngineType::RaftKv2 => {

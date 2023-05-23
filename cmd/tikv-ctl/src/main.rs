@@ -22,6 +22,7 @@ use std::{
     u64,
 };
 
+use collections::HashSet;
 use encryption_export::{
     create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
     DecrypterReader, Iv,
@@ -47,6 +48,7 @@ use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
 use tikv::{config::TikvConfig, server::debug::BottommostLevelCompaction};
 use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
+use tokio::sync::mpsc::channel;
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
@@ -705,25 +707,44 @@ fn flashback_whole_cluster(
             .get_all_stores(true) // Exclude tombstone stores.
             .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
-    stores
-        .iter()
-        .map(|s| {
-            let cfg = cfg.clone();
-            let mgr = Arc::clone(&mgr);
-            let addr = s.address.clone();
-            let region_ids = region_ids.clone();
-            let start_key = start_key.clone();
-            let end_key = end_key.clone();
+    let stores_num = stores.len();
+    let (tx, mut rx) = channel(stores_num);
 
-            thread::Builder::new()
-                .name(format!("flashback-{}", addr))
-                .spawn_wrapper(move || {
-                    let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
-                    debug_executor.flashback_to_version(region_ids, version, start_key, end_key);
-                })
-                .unwrap()
-        })
-        .for_each(|h| h.join().unwrap());
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name(format!("flashback"))
+        .build()
+        .unwrap();
+    for s in stores {
+        let cfg = cfg.clone();
+        let mgr = Arc::clone(&mgr);
+        let addr = s.address.clone();
+        let region_ids = region_ids.clone();
+        let start_key = start_key.clone();
+        let end_key = end_key.clone();
+        let tx = tx.clone();
+
+        runtime.spawn(async move {
+            let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
+            debug_executor.flashback_to_version(region_ids, version, start_key, end_key);
+            block_on(tx.send(s.id)).unwrap();
+        });
+    }
+
+    match block_on(runtime.spawn(async move {
+        let mut store_set = HashSet::default();
+        while let Some(store_id) = rx.recv().await {
+            store_set.insert(store_id);
+            if store_set.len() == stores_num {
+                println!("flashback all stores success");
+                return;
+            }
+        }
+    })) {
+        Ok(_) => {}
+        Err(e) => {
+            println!("flashback failed: {:?}", e);
+        }
+    }
 }
 
 fn read_fail_file(path: &str) -> Vec<(String, String)> {
