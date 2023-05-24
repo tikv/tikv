@@ -31,6 +31,12 @@ pub struct WrappedEncryptionKeyManager<T: EncryptionKeyManager> {
     manager: Arc<T>,
 }
 
+impl<T: EncryptionKeyManager> WrappedEncryptionKeyManager<T> {
+    pub fn new(manager: Arc<T>) -> Self {
+        Self { manager }
+    }
+}
+
 impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyManager<T> {
     fn get_file(&self, fname: &str) -> Result<DBFileEncryptionInfo> {
         self.manager
