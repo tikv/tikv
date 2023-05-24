@@ -36,7 +36,7 @@ use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
         needs_evict_entry_cache,
-        util::{self, is_initial_msg},
+        util::{self, is_first_message, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
@@ -301,6 +301,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // It prevents cache peer(0,0) which is sent by region split.
             self.insert_peer_cache(from_peer);
         }
+
+        // Delay first message and wait for split snapshot, so that slow split
+        // does not trigger leader to send a snapshot.
+        if !self.storage().is_initialized() && is_first_message(msg.get_message()) {
+            if self.split_pending_msg_mut().replace(msg).is_some() {
+                // We consider a message is too early if a message is replaced.
+                ctx.raft_metrics.message_dropped.region_nonexistent.inc();
+            }
+            return;
+        }
+
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
