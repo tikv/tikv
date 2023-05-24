@@ -53,6 +53,7 @@ impl std::fmt::Debug for AzureKms {
 }
 
 impl AzureKms {
+    #[inline]
     fn new_with_credentials<Creds>(
         config: Config,
         keyvault_credentials: Creds,
@@ -200,10 +201,10 @@ impl KmsProvider for AzureKms {
             .await
             .map_err(convert_azure_error)
             .and_then(|response| {
-                let plaintext_key = response.result;
+                let ciphertext = response.result;
                 Ok(DataKeyPair {
-                    encrypted: EncryptedKey::new(random_bytes)?,
-                    plaintext: PlainKey::new(plaintext_key, CryptographyType::AesGcm256)?,
+                    encrypted: EncryptedKey::new(ciphertext)?,
+                    plaintext: PlainKey::new(random_bytes, CryptographyType::AesGcm256)?,
                 })
             })
     }
@@ -258,7 +259,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_azure_kms() {
+    fn test_init_azure_kms() {
         let err_azure_cfg = SubConfigAzure {
             tenant_id: "tenant_id".to_owned(),
             client_id: "client_id".to_owned(),
@@ -292,5 +293,46 @@ mod tests {
             "{:?}",
             azure_kms
         );
+    }
+
+    #[tokio::test]
+    async fn test_azure_kms() {
+        // TODO: this is End2End test for testing the API connectivity
+        // and validity of AzureKms. And if you wanna to use
+        // this case, you should set a valid configuration for it.
+        let azure_cfg = SubConfigAzure {
+            tenant_id: "tenant_id".to_owned(),
+            client_id: "client_id".to_owned(),
+            keyvault_url: "https://keyvault_url.vault.azure.net".to_owned(),
+            hsm_name: "hsm_name".to_owned(),
+            hsm_url: "https://hsm_url.managedhsm.azure.net/".to_owned(),
+            client_certificate: Some("client_certificate".to_owned()),
+            client_certificate_path: Some("client_certificate_path".to_owned()),
+            client_secret: Some("client_secret".to_owned()),
+            ..SubConfigAzure::default()
+        };
+        let config = Config {
+            key_id: KeyId::new("ExampleKey".to_string()).unwrap(),
+            vendor: "STORAGE_VENDOR_NAME_AZURE".to_owned(),
+            location: Location {
+                region: "us-west".to_string(),
+                endpoint: String::new(),
+            },
+            azure: Some(azure_cfg),
+        };
+        if config.vendor != STORAGE_VENDOR_NAME_AZURE {
+            assert!(AzureKms::new(config).is_ok());
+        } else {
+            // Unless the configurations of Azure KMS is valid, following
+            // codes could be executed.
+            let azure_kms = AzureKms::new(config).unwrap();
+            let data_key = azure_kms.generate_data_key().await.unwrap();
+            let encrypted_data_key = EncryptedKey::new(data_key.encrypted.to_vec()).unwrap();
+            let decrypt_data_key = azure_kms
+                .decrypt_data_key(&encrypted_data_key)
+                .await
+                .unwrap();
+            assert_eq!(*data_key.plaintext, decrypt_data_key);
+        }
     }
 }
