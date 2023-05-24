@@ -24,7 +24,7 @@ pub const MERGE_SOURCE_PREFIX: &str = "merge-source";
 
 // `index` is the commit index of `PrepareMergeRequest`, `commit` field of
 // `CommitMergeRequest`.
-fn merge_source_path<EK>(
+pub fn merge_source_path<EK>(
     registry: &TabletRegistry<EK>,
     source_region_id: u64,
     index: u64,
@@ -72,6 +72,15 @@ impl MergeContext {
     pub fn max_compact_log_index(&self) -> Option<u64> {
         if let Some(PrepareStatus::WaitForFence { ctx, .. }) = self.prepare_status.as_ref() {
             Some(ctx.min_matched)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn prepare_merge_index(&self) -> Option<u64> {
+        if let Some(PrepareStatus::Applied(state)) = self.prepare_status.as_ref() {
+            Some(state.get_commit())
         } else {
             None
         }
