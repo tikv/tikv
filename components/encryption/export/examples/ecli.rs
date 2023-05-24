@@ -99,11 +99,7 @@ fn create_kms_backend(
         azure_cfg.client_id = azure_cmd.client_id.to_owned();
         azure_cfg.keyvault_url = azure_cmd.url.to_owned();
         azure_cfg.client_secret = azure_cmd.secret.to_owned();
-        azure_cfg.client_certificate_path = if let Some(cred) = credential_file.clone() {
-            Some(cred.clone())
-        } else {
-            None
-        };
+        azure_cfg.client_certificate_path = credential_file.cloned();
     }
     if let Some(credential_file) = credential_file {
         let ini = Ini::load_from_file(credential_file)

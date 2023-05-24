@@ -110,7 +110,7 @@ mod tests {
             azure: None,
             ..config.clone()
         };
-        assert!(create_cloud_backend(&invalid_config).is_err());
+        create_cloud_backend(&invalid_config).unwrap_err();
         let backend = create_cloud_backend(&config).unwrap();
         assert!(backend.is_secure());
     }

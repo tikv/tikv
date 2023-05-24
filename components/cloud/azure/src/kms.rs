@@ -64,20 +64,8 @@ impl AzureKms {
     {
         assert!(config.azure.is_some());
         let azure_cfg = config.azure.unwrap();
-        let keyvault_client = KeyClient::new(
-            &azure_cfg.keyvault_url,
-            Arc::new(AutoRefreshingTokenCredential::new(Arc::new(
-                keyvault_credentials,
-            ))),
-        )
-        .map_err(|e| CloudError::Other(Box::new(e)))?;
-        let hsm_client = KeyClient::new(
-            &azure_cfg.hsm_url,
-            Arc::new(AutoRefreshingTokenCredential::new(Arc::new(
-                hsm_credentials,
-            ))),
-        )
-        .map_err(|e| CloudError::Other(Box::new(e)))?;
+        let keyvault_client = new_key_client(&azure_cfg.keyvault_url, keyvault_credentials)?;
+        let hsm_client = new_key_client(&azure_cfg.hsm_url, hsm_credentials)?;
         Ok(Self {
             client: keyvault_client,
             current_key_id: config.key_id,
@@ -106,7 +94,7 @@ impl AzureKms {
                 ),
                 ClientCertificateCredentialExt::new(
                     azure_cfg.tenant_id.clone(),
-                    azure_cfg.client_id.clone(),
+                    azure_cfg.client_id,
                     certificate,
                     "".to_owned(),
                 ),
@@ -123,7 +111,7 @@ impl AzureKms {
                 .map_err(|e| CloudError::Other(e))?,
                 ClientCertificateCredentialExt::build(
                     azure_cfg.tenant_id.clone(),
-                    azure_cfg.client_id.clone(),
+                    azure_cfg.client_id,
                     certificate_path,
                 )
                 .map_err(|e| CloudError::Other(e))?,
@@ -142,7 +130,7 @@ impl AzureKms {
                 ClientSecretCredential::new(
                     new_http_client(),
                     azure_cfg.tenant_id.clone(),
-                    azure_cfg.client_id.clone(),
+                    azure_cfg.client_id,
                     client_secret,
                     TokenCredentialOptions::default(),
                 ),
@@ -252,6 +240,18 @@ fn convert_azure_error(err: AzureError) -> CloudError {
     CloudError::KmsError(KmsError::Other(err_msg))
 }
 
+#[inline]
+fn new_key_client<Creds>(url: &str, credentials: Creds) -> Result<KeyClient>
+where
+    Creds: TokenCredential + Send + Sync + 'static,
+{
+    KeyClient::new(
+        url,
+        Arc::new(AutoRefreshingTokenCredential::new(Arc::new(credentials))),
+    )
+    .map_err(|e| CloudError::Other(Box::new(e)))
+}
+
 #[cfg(test)]
 mod tests {
     use cloud::kms::{Location, SubConfigAzure};
@@ -277,7 +277,7 @@ mod tests {
             },
             azure: Some(err_azure_cfg.clone()),
         };
-        assert!(AzureKms::new(err_config.clone()).is_err());
+        AzureKms::new(err_config.clone()).unwrap_err();
         let azure_cfg = SubConfigAzure {
             client_secret: Some("client_secret".to_owned()),
             ..err_azure_cfg
@@ -309,7 +309,6 @@ mod tests {
             client_certificate: Some("client_certificate".to_owned()),
             client_certificate_path: Some("client_certificate_path".to_owned()),
             client_secret: Some("client_secret".to_owned()),
-            ..SubConfigAzure::default()
         };
         let config = Config {
             key_id: KeyId::new("ExampleKey".to_string()).unwrap(),
@@ -321,7 +320,7 @@ mod tests {
             azure: Some(azure_cfg),
         };
         if config.vendor != STORAGE_VENDOR_NAME_AZURE {
-            assert!(AzureKms::new(config).is_ok());
+            AzureKms::new(config).unwrap();
         } else {
             // Unless the configurations of Azure KMS is valid, following
             // codes could be executed.
