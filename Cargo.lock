@@ -3932,9 +3932,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e20150f965e0e4c925982b9356da71c84bcd56cb66ef4e894825837cbcf6613e"
+checksum = "196ded5d4be535690899a4631cc9f18cdc41b7ebf24a79400f46f48e49a11059"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -3942,7 +3942,7 @@ dependencies = [
  "inferno",
  "libc 0.2.139",
  "log",
- "nix 0.24.1",
+ "nix 0.26.2",
  "once_cell",
  "parking_lot 0.12.0",
  "protobuf",
@@ -5477,6 +5477,7 @@ dependencies = [
  "dashmap",
  "encryption",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -5490,6 +5491,7 @@ dependencies = [
  "log_wrappers",
  "openssl",
  "prometheus",
+ "protobuf",
  "rand 0.8.5",
  "serde",
  "serde_derive",
@@ -6238,7 +6240,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.1"
+version = "6.5.2"
 dependencies = [
  "anyhow",
  "api_version",

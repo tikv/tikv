@@ -419,7 +419,10 @@ impl<Store: MetaStore> MetadataClient<Store> {
         let stream = watcher
             .stream
             .filter_map(|item| match item {
-                Ok(kv_event) => MetadataEvent::from_watch_pause_event(&kv_event),
+                Ok(kv_event) => {
+                    debug!("watch pause event"; "raw" => ?kv_event);
+                    MetadataEvent::from_watch_pause_event(&kv_event)
+                }
                 Err(err) => Some(MetadataEvent::Error { err }),
             })
             .map(|event| {

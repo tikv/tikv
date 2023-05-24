@@ -1079,6 +1079,7 @@ pub enum ObserveOp {
         region: Region,
         handle: ObserveHandle,
         err: Box<Error>,
+        has_failed_for: u8,
     },
     ResolveRegions {
         callback: ResolveRegionsCallback,
@@ -1109,11 +1110,13 @@ impl std::fmt::Debug for ObserveOp {
                 region,
                 handle,
                 err,
+                has_failed_for,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
                 .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
+                .field("has_failed_for", has_failed_for)
                 .finish(),
             Self::ResolveRegions { min_ts, .. } => f
                 .debug_struct("ResolveRegions")

@@ -158,6 +158,10 @@ impl MetaKey {
         Self(format!("{}{}/{}", PREFIX, PATH_PAUSE, name).into_bytes())
     }
 
+    pub fn last_errors_of(name: &str) -> Self {
+        Self(format!("{}{}/{}", PREFIX, PATH_LAST_ERROR, name).into_bytes())
+    }
+
     pub fn last_error_of(name: &str, store: u64) -> Self {
         Self(format!("{}{}/{}/{}", PREFIX, PATH_LAST_ERROR, name, store).into_bytes())
     }
