@@ -445,12 +445,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                                     * end where last scan is finished */
         )?;
 
-        let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
-            EncodeType::TypeDefault
-        } else {
-            req.get_encode_type()
-        };
-
         // Check output offsets
         let output_offsets = req.take_output_offsets();
         let schema_len = out_most_executor.schema().len();
@@ -463,6 +457,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 ));
             }
         }
+
+        // Only check output schema field types
+        let new_schema_vec: Vec<FieldType> = output_offsets
+            .iter()
+            .filter_map(|&i| out_most_executor.schema().get(i as usize).cloned())
+            .collect();
+        let new_schema: &[FieldType] = &new_schema_vec[..];
+        let encode_type = if !is_arrow_encodable(new_schema) {
+            EncodeType::TypeDefault
+        } else {
+            req.get_encode_type()
+        };
 
         let exec_stats = ExecuteStats::new(executors_len);
 
