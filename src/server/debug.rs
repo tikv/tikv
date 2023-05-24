@@ -16,9 +16,9 @@ use engine_rocks::{
     RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
 };
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, MiscExt, Mutable, MvccProperties,
-    Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    Engines, Error as EngineTraitError, IterOptions, Iterable, Iterator as EngineIterator, MiscExt,
+    Mutable, MvccProperties, Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt,
+    SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
     debugpb::{self, Db as DbType},
@@ -58,6 +58,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
+
+    #[error("Engine error {0}")]
+    EngineTrait(#[from] EngineTraitError),
 }
 
 /// Describes the meta information of a Region.
