@@ -33,7 +33,7 @@ use crate::{
     errors::{ContextualResultExt, Error, Result},
     metrics,
     router::{ApplyEvent, ApplyEvents, Router},
-    subscription_track::{SubscriptionTracer, TwoPhaseResolver},
+    subscription_track::{Ref, RefMut, SubscriptionTracer, TwoPhaseResolver},
     try_send,
     utils::{self, RegionPager},
     Task,

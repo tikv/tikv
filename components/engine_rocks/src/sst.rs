@@ -3,8 +3,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use engine_traits::{
-    Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstCompressionType,
-    SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    EncryptionKeyManager, Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result,
+    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
 };
 use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
@@ -13,8 +13,11 @@ use rocksdb::{
     EnvOptions, ExternalSstFileInfo as RawExternalSstFileInfo, SequentialFile, SstFileReader,
     SstFileWriter, DB,
 };
+use tikv_util::box_err;
 
-use crate::{engine::RocksEngine, options::RocksReadOptions, r2e};
+use crate::{
+    encryption::WrappedEncryptionKeyManager, engine::RocksEngine, options::RocksReadOptions, r2e,
+};
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
@@ -62,6 +65,14 @@ impl RocksSstReader {
 impl SstReader for RocksSstReader {
     fn open(path: &str) -> Result<Self> {
         Self::open_with_env(path, None)
+    }
+    fn open_encrypted<E: EncryptionKeyManager>(path: &str, mgr: Arc<E>) -> Result<Self> {
+        let env = Env::new_key_managed_encrypted_env(
+            Arc::default(),
+            WrappedEncryptionKeyManager::new(mgr),
+        )
+        .map_err(|err| Error::Other(box_err!("failed to open encrypted env: {}", err)))?;
+        Self::open_with_env(path, Some(Arc::new(env)))
     }
     fn verify_checksum(&self) -> Result<()> {
         self.inner.verify_checksum().map_err(r2e)?;

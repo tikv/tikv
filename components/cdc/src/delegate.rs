@@ -39,6 +39,7 @@ use crate::{
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::ConnId,
+    txn_souce::TxnSource,
     Error, Result,
 };
 
@@ -535,8 +536,10 @@ impl Delegate {
                     row_size = 0;
                 }
             }
-            // if the `txn_source` is not 0 and we should filter it out, skip this event.
-            if row.txn_source != 0 && filter_loop {
+            let lossy_ddl_filter = TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source);
+            let cdc_write_filter =
+                TxnSource::is_cdc_write_source_set(row.txn_source) && filter_loop;
+            if lossy_ddl_filter || cdc_write_filter {
                 continue;
             }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
@@ -633,6 +636,14 @@ impl Delegate {
             return Ok(());
         }
 
+        // Filter the entries which are lossy DDL events.
+        // We don't need to send them to downstream.
+        let entries = entries
+            .iter()
+            .filter(|x| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source))
+            .cloned()
+            .collect::<Vec<EventRow>>();
+
         let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
@@ -648,13 +659,13 @@ impl Delegate {
             }
         }
 
-        // collect the change event cause by user write, which is `txn_source` = 0.
-        // for changefeed which only need the user write, send the `filtered`, or else,
-        // send them all.
+        // Collect the change event cause by user write, which cdc write source is not
+        // set. For changefeed which only need the user write,
+        // send the `filtered_entries`, or else, send them all.
         let filtered = if need_filter {
             let filtered = entries
                 .iter()
-                .filter(|x| x.txn_source == 0)
+                .filter(|x| !TxnSource::is_cdc_write_source_set(x.txn_source))
                 .cloned()
                 .collect::<Vec<EventRow>>();
             if filtered.is_empty() {
@@ -1068,6 +1079,7 @@ mod tests {
     use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
 
     use super::*;
+    use crate::channel::{channel, recv_timeout, MemoryQuota};
 
     #[test]
     fn test_error() {
@@ -1299,5 +1311,99 @@ mod tests {
                 assert_eq!(row.expire_ts_unix_secs, 0);
             }
         }
+    }
+
+    fn test_downstream_txn_source_filter(txn_source: TxnSource, filter_loop: bool) {
+        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+        let mut delegate = Delegate::new(1, txn_extra_op);
+        assert!(delegate.handle.is_observing());
+
+        let mut map = HashMap::default();
+        for k in b'a'..=b'e' {
+            let mut put = PutRequest::default();
+            put.key = Key::from_raw(&[k]).into_encoded();
+            put.cf = "lock".to_owned();
+            let mut lock = Lock::new(
+                LockType::Put,
+                put.key.clone(),
+                1.into(),
+                10,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+            );
+            // Only the key `a` is a normal write.
+            if k != b'a' {
+                lock = lock.set_txn_source(txn_source.into());
+            }
+            put.value = lock.to_bytes();
+            delegate
+                .sink_txn_put(
+                    put,
+                    false,
+                    &mut map,
+                    |_: &mut EventRow, _: TimeStamp| Ok(()),
+                )
+                .unwrap();
+        }
+        assert_eq!(map.len(), 5);
+
+        let (sink, mut drain) = channel(1, MemoryQuota::new(1024));
+        let downstream = Downstream {
+            id: DownstreamId::new(),
+            req_id: 1,
+            conn_id: ConnId::new(),
+            peer: String::new(),
+            region_epoch: RegionEpoch::default(),
+            sink: Some(sink),
+            state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            kv_api: ChangeDataRequestKvApi::TiDb,
+            filter_loop,
+        };
+        delegate.add_downstream(downstream);
+        let entries = map.values().map(|(r, _)| r).cloned().collect();
+        delegate
+            .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
+            .unwrap();
+
+        let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.spawn(async move {
+            drain.forward(&mut tx).await.unwrap();
+        });
+        let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(e.events[0].get_entries().get_entries().len(), 1, "{:?}", e);
+    }
+
+    #[test]
+    fn test_downstream_filter_cdc_write_entires() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+
+        test_downstream_txn_source_filter(txn_source, true);
+    }
+
+    #[test]
+    fn test_downstream_filter_lossy_ddl_entires() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_downstream_txn_source_filter(txn_source, false);
+
+        // With cdr write source and filter loop is false, we should still ignore lossy
+        // ddl changes.
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_downstream_txn_source_filter(txn_source, false);
+
+        // With cdr write source and filter loop is true, we should still ignore some
+        // events.
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_downstream_txn_source_filter(txn_source, true);
     }
 }
