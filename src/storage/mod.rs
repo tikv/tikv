@@ -1502,7 +1502,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         });
 
         fail_point!("storage_drop_message", |_| Ok(()));
-        cmd.incr_cmd_metric();
         self.sched.run_cmd(cmd, T::callback(callback));
 
         Ok(())
@@ -1515,7 +1514,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<T>,
     ) {
         let cmd: Command = cmd.into();
-        cmd.incr_cmd_metric();
         sched.run_cmd(cmd, T::callback(callback));
     }
 
