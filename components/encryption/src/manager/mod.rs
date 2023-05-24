@@ -809,14 +809,20 @@ impl DataKeyManager {
         if !scan.exists() {
             return Ok(());
         }
-        let mut iter = walkdir::WalkDir::new(scan).into_iter().peekable();
+        let mut iter = walkdir::WalkDir::new(scan)
+            .into_iter()
+            .filter(|e| e.as_ref().map_or(true, |e| !e.path().is_dir()))
+            .peekable();
         while let Some(e) = iter.next() {
             let e = e?;
-            if e.path_is_symlink() {
+            if e.path().is_symlink() {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("unexpected symbolic link: {}", e.path().display()),
                 ));
+            }
+            if e.path().is_dir() {
+                continue;
             }
             let fname = e.path().to_str().unwrap();
             let sync = iter.peek().is_none();
@@ -891,11 +897,7 @@ impl EncryptionKeyManager for DataKeyManager {
         // which internally calls `LinkFile` and `DeleteFile`.
         let path = Path::new(fname);
         if path.is_dir() {
-            let mut iter = walkdir::WalkDir::new(path).into_iter().peekable();
-            while let Some(e) = iter.next() {
-                self.dicts
-                    .delete_file(e?.path().to_str().unwrap(), iter.peek().is_none())?;
-            }
+            self.remove_dir(path, None)?;
         } else {
             self.dicts.delete_file(fname, true)?;
         }
@@ -912,7 +914,7 @@ impl EncryptionKeyManager for DataKeyManager {
                 .peekable();
             while let Some(e) = iter.next() {
                 let e = e?;
-                if e.path_is_symlink() {
+                if e.path().is_symlink() {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
                         format!("unexpected symbolic link: {}", e.path().display()),

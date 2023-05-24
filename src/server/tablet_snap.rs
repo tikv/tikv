@@ -520,12 +520,12 @@ async fn recv_snap_imp<'a>(
     }
     fs::rename(&path, &final_path).map_err(|e| {
         if let Some(m) = snap_mgr.key_manager() {
-            let _ = m.delete_file(final_path.to_str().unwrap());
+            let _ = m.remove_dir(&final_path, Some(&path));
         }
         e
     })?;
     if let Some(m) = snap_mgr.key_manager() {
-        m.delete_file(path.to_str().unwrap())?;
+        m.remove_dir(&path, Some(&final_path))?;
     }
     Ok(context)
 }

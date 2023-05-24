@@ -2,7 +2,7 @@
 
 //! Constructor tests
 
-use std::fs;
+use std::{fs, path::Path};
 
 use encryption_export::data_key_manager_from_config;
 use engine_test::{
@@ -118,7 +118,9 @@ fn new_engine_opt_renamed_dir() {
     let new_path = root_path.join("new").to_str().unwrap().to_owned();
     key_manager.link_file(&path, &new_path).unwrap();
     fs::rename(&path, &new_path).unwrap();
-    key_manager.delete_file(&path).unwrap();
+    key_manager
+        .remove_dir(Path::new(&path), Some(Path::new(&new_path)))
+        .unwrap();
     {
         let db =
             KvTestEngine::new_kv_engine_opt(&new_path, db_opts.clone(), cf_opts.clone()).unwrap();
