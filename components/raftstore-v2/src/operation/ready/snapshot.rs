@@ -34,6 +34,7 @@ use engine_traits::{
     EncryptionKeyManager, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
     ALL_CFS,
 };
+use fail::fail_point;
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, StateRole};
@@ -287,11 +288,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 !s.scheduled || snapshot_index != RAFT_INIT_LOG_INDEX
             }) {
                 info!(self.logger, "apply tablet snapshot completely");
+                // Tablet sent from region leader should have already be trimmed.
+                self.storage_mut().set_has_dirty_data(false);
                 SNAP_COUNTER.apply.success.inc();
+
+                fail_point!("apply_snapshot_complete");
             }
             if let Some(init) = split {
                 info!(self.logger, "init split with snapshot finished");
                 self.post_split_init(ctx, init);
+
+                fail_point!("post_split_init_complete");
             }
             self.schedule_apply_fsm(ctx);
             if self.remove_tombstone_tablets(snapshot_index) {
