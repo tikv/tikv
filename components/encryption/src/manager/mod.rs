@@ -821,9 +821,6 @@ impl DataKeyManager {
                     format!("unexpected symbolic link: {}", e.path().display()),
                 ));
             }
-            if e.path().is_dir() {
-                continue;
-            }
             let fname = e.path().to_str().unwrap();
             let sync = iter.peek().is_none();
             if let Some(p) = physical {
