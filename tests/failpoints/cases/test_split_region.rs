@@ -3,7 +3,8 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc::{self, channel},
+        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -1272,4 +1273,86 @@ impl Filter for TeeFilter {
         }
         Ok(())
     }
+}
+
+// Split regions as well as parent will set has_dirty_data be true after
+// applying batch split. And after completing tablet trim, has_dirty_data will
+// be reset to be false. We encounterred a case where has_dirty_data may be true
+// forever which leads to it unable to send snapshot after it becomes leader:
+//
+// 1. split region
+// 2. the splitted region set has_dirty_data be true in `apply_snapshot`
+// 3. the splitted region schedule tablet trim task in `on_applied_snapshot`
+//    with tablet index 5
+// 4. the splitted region received a snapshot sent from its
+//    leader
+// 5. after finishing applying this snapshot, the tablet index in storage
+//    changed to 6
+// 6. tablet trim complete and callbacked to raftstore
+// 7. tablet index cannot be matched, so fail to reset has_dirty_data
+#[test]
+fn test_not_reset_has_dirty_data_due_to_slow_split() {
+    let mut cluster = test_raftstore_v2::new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(15);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    // split will be blocked for store 3
+    fail::cfg("apply_before_split_1_3", "pause").unwrap();
+    fail::cfg("finish_receiving_snapshot", "pause").unwrap();
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k0080");
+
+    cluster.add_recv_filter_on_node(3, Box::new(DropMessageFilter::new(Arc::new(|_| false))));
+
+    // prepare some data and split
+    for i in 0..40 {
+        let k = format!("k{:04}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+
+    fail::cfg("tablet_trimmed_finished", "pause").unwrap();
+    cluster.clear_recv_filter_on_node(3);
+
+    fail::remove("apply_before_split_1_3");
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("post_split_init_complete", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(50)).unwrap();
+    fail::remove("finish_receiving_snapshot");
+
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("apply_snapshot_complete", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(50)).unwrap();
+
+    let split_region = cluster.get_region(b"k0010");
+    cluster.must_transfer_leader(
+        split_region.get_id(),
+        split_region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == 3)
+            .unwrap()
+            .clone(),
+    );
+
+    // ensure node 3 can send snapshot to node 1
+    cluster.stop_node(1);
+    for i in 40..80 {
+        let k = format!("k{:04}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+    cluster.stop_node(2);
+    cluster.run_node(1).unwrap();
+
+    cluster.must_put(b"k00001", b"val");
 }
