@@ -240,7 +240,7 @@ mod tests {
                     key_id: "key_id".to_owned(),
                     region: "region".to_owned(),
                     endpoint: "endpoint".to_owned(),
-                    vendor: "Azure".to_owned(),
+                    vendor: "azure".to_owned(),
                     azure: Some(AzureConfig {
                         tenant_id: "tenant_id".to_owned(),
                         client_id: "client_id".to_owned(),
