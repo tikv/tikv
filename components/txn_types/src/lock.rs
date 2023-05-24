@@ -27,7 +27,6 @@ const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_PESSIMISTIC: u8 = b'S';
-const FLAG_PESSIMISTIC_WITH_CONFLICT: u8 = b'F';
 
 const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 const TXN_SIZE_PREFIX: u8 = b't';
@@ -36,6 +35,7 @@ const ASYNC_COMMIT_PREFIX: u8 = b'a';
 const ROLLBACK_TS_PREFIX: u8 = b'r';
 const LAST_CHANGE_PREFIX: u8 = b'l';
 const TXN_SOURCE_PREFIX: u8 = b's';
+const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -246,7 +246,7 @@ impl Lock {
             b.encode_var_u64(self.txn_source).unwrap();
         }
         if self.is_locked_with_conflict {
-            b.push(FLAG_PESSIMISTIC_WITH_CONFLICT);
+            b.push(PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX);
         }
         b
     }
@@ -367,7 +367,7 @@ impl Lock {
                 TXN_SOURCE_PREFIX => {
                     txn_source = number::decode_var_u64(&mut b)?;
                 }
-                FLAG_PESSIMISTIC_WITH_CONFLICT => {
+                PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX => {
                     is_locked_with_conflict = true;
                 }
                 _ => {
@@ -535,7 +535,7 @@ impl Lock {
     }
 
     pub fn is_pessimistic_lock_with_conflict(&self) -> bool {
-        self.is_locked_with_conflict
+        self.is_pessimistic_lock() && self.is_locked_with_conflict
     }
 }
 

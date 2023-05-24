@@ -25,6 +25,10 @@ fn check_txn_status_from_pessimistic_primary_lock(
     // Check the storage information first in case the force lock could be stale.
     // See https://github.com/pingcap/tidb/issues/43540 for more details.
     if lock.is_pessimistic_lock_with_conflict() {
+        // Use `check_txn_status_missing_lock` to check if there exists a commit or
+        // rollback record in the write CF, if so the current primary
+        // pessimistic lock is stale. Otherwise the primary pessimistic lock is
+        // regarded as valid, and the transaction status is determined by it.
         let (txn_status, is_current_lock_stale) = match check_txn_status_missing_lock(
             txn,
             reader,
