@@ -2555,6 +2555,7 @@ pub mod tests {
         assert_eq!(res.0.write_type, WriteType::Put);
         assert_eq!(res.1, 2.into());
         assert_eq!(reader.statistics.write.seek, 1);
-        assert_eq!(reader.statistics.write.next, 0);
+        assert_eq!(reader.statistics.write.next, 2);
+        assert_eq!(reader.statistics.write.get, 1);
     }
 }
