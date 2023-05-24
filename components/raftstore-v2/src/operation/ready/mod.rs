@@ -208,11 +208,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             // when committed_index > applied_index + PAUSE_FOR_REPLAY_GAP, the peer must be
             // created from StoreSystem on TiKV Start
-            assert!(watch.is_some());
-            if let Some(w) = watch {
-                w.record_paused();
-                self.set_replay_watch(Some(w));
-            }
+            let w = watch.unwrap();
+            w.record_paused();
+            self.set_replay_watch(Some(w));
             true
         } else {
             if let Some(w) = watch {
