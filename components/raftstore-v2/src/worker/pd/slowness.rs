@@ -82,7 +82,7 @@ where
         // Record a fairly great value when tick
         self.slowness_stats
             .slow_cause
-            .record(500_000, Instant::now()); // 500ms
+            .record(100_000, Instant::now()); // 100ms
 
         if !self.slowness_stats.last_tick_finished && self.is_store_heartbeat_delayed() {
             // If the last slowness tick already reached abnormal state and was delayed for
