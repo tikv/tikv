@@ -163,7 +163,7 @@ pub fn install_tablet<EK: KvEngine>(
     }
     if let Err(e) = fs::rename(source, &target_path) {
         if let Some(m) = &key_manager {
-            m.delete_file(&target_path, Some(source)).unwrap();
+            m.remove_dir(&target_path, Some(source)).unwrap();
         }
         panic!(
             "failed to rename tablet {} => {}: {:?}",
@@ -173,7 +173,7 @@ pub fn install_tablet<EK: KvEngine>(
         );
     }
     if let Some(m) = &key_manager {
-        m.delete_file(source, Some(&target_path)).unwrap();
+        m.remove_dir(source, Some(&target_path)).unwrap();
     }
     true
 }

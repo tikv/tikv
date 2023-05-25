@@ -804,7 +804,7 @@ impl DataKeyManager {
     /// Then `remove_dir` with `physical` set to the trash directory name.
     /// Finally remove the trash directory. This is the safest way to delete a
     /// directory.
-    pub(crate) fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
+    pub fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
         let scan = physical.unwrap_or(logical);
         debug_assert!(scan.is_dir());
         if let Some(p) = physical {
