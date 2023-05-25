@@ -66,6 +66,8 @@ pub struct AzureConfig {
     pub client_certificate: Option<String>,
     /// Path of local authorized certificate
     pub client_certificate_path: Option<String>,
+    /// Password for the certificate
+    pub client_certificate_password: String,
     /// Secret of the client.
     pub client_secret: Option<String>,
 }
@@ -105,6 +107,7 @@ impl KmsConfig {
                 hsm_url: cfg.hsm_url,
                 client_certificate: cfg.client_certificate,
                 client_certificate_path: cfg.client_certificate_path,
+                client_certificate_password: cfg.client_certificate_password,
                 client_secret: cfg.client_secret,
             }
         };

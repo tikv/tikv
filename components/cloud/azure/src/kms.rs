@@ -90,13 +90,13 @@ impl AzureKms {
                     azure_cfg.tenant_id.clone(),
                     azure_cfg.client_id.clone(),
                     certificate.clone(),
-                    "".to_owned(),
+                    azure_cfg.client_certificate_password.clone(),
                 ),
                 ClientCertificateCredentialExt::new(
                     azure_cfg.tenant_id.clone(),
                     azure_cfg.client_id,
                     certificate,
-                    "".to_owned(),
+                    azure_cfg.client_certificate_password,
                 ),
             );
             Self::new_with_credentials(config, keyvault_credential, hsm_credential)
@@ -107,12 +107,14 @@ impl AzureKms {
                     azure_cfg.tenant_id.clone(),
                     azure_cfg.client_id.clone(),
                     certificate_path.clone(),
+                    azure_cfg.client_certificate_password.clone(),
                 )
                 .map_err(|e| CloudError::Other(e))?,
                 ClientCertificateCredentialExt::build(
                     azure_cfg.tenant_id.clone(),
                     azure_cfg.client_id,
                     certificate_path,
+                    azure_cfg.client_certificate_password,
                 )
                 .map_err(|e| CloudError::Other(e))?,
             );
@@ -156,6 +158,9 @@ impl KmsProvider for AzureKms {
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
         let decrypt_params = DecryptParameters {
             ciphertext: data_key.clone().into_inner(),
+            // TODO: the final choice of encryption algorithm for Azure waited
+            // to be discussed. And as the AesGcm only valid for HSM,
+            // encrypt/decrypt just uses the Rsa256 as default currently.
             decrypt_parameters_encryption: CryptographParamtersEncryption::Rsa(
                 RsaEncryptionParameters::new(EncryptionAlgorithm::RsaOaep256).unwrap(),
             ),
@@ -309,6 +314,7 @@ mod tests {
             client_certificate: Some("client_certificate".to_owned()),
             client_certificate_path: Some("client_certificate_path".to_owned()),
             client_secret: Some("client_secret".to_owned()),
+            ..SubConfigAzure::default()
         };
         let config = Config {
             key_id: KeyId::new("ExampleKey".to_string()).unwrap(),

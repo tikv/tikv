@@ -29,6 +29,8 @@ pub struct SubConfigAzure {
     pub client_certificate: Option<String>,
     /// Path of local authorized certificate
     pub client_certificate_path: Option<String>,
+    /// Password for the certificate
+    pub client_certificate_password: String,
     /// Secret of the client.
     pub client_secret: Option<String>,
 }
