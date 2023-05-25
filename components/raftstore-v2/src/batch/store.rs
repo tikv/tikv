@@ -623,10 +623,13 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let router = router.clone();
             let registry = tablet_registry.clone();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
-                let limiter = Limiter::new(0.0);
+                let limiter = Limiter::new(MIN_MANUAL_FLUSH_RATE);
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(mut regions) => {
+                        if regions.is_empty() {
+                            continue;
+                        }
                         warn!(logger, "flushing oldest cf of regions {regions:?}");
                         // Try to finish flush in 1m.
                         let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
