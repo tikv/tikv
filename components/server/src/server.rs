@@ -534,6 +534,7 @@ where
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
+                .enable_time()
                 .worker_threads(1)
                 .after_start_wrapper(move || {
                     tikv_alloc::add_thread_memory_accessor();
@@ -1060,7 +1061,6 @@ where
         {
             fatal!("failed to register debug service");
         }
-        info!("start register debug service");
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(

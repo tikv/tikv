@@ -22,7 +22,7 @@ use engine_traits::{
     Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use futures_executor::block_on;
+use futures::future::Future;
 use kvproto::{
     debugpb::{self, Db as DbType},
     kvrpcpb::{self, Context, MvccInfo},
@@ -41,7 +41,6 @@ use tikv_util::{
     config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
     sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
-use tokio::sync::mpsc::Sender;
 use txn_types::Key;
 
 use super::service::{future_flashback_to_version, future_prepare_flashback_to_version};
@@ -56,7 +55,7 @@ use crate::{
     },
 };
 
-const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
+pub const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -187,14 +186,13 @@ pub trait Debugger {
 
     fn reset_to_version(&self, version: u64);
 
-    fn flashback_to_version(
+    fn region_flashback_to_version(
         &self,
         region_id: u64,
         version: u64,
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
-        tx: Sender<u64>,
-    ) -> Result<()>;
+    ) -> impl Future<Output = Result<()>> + Send;
 
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
 
@@ -799,144 +797,6 @@ where
             None => Err(Error::NotFound(format!("region {}", region_id))),
         }
     }
-
-    fn exec_flashback_region(
-        &self,
-        region_id: u64,
-        version: u64,
-        start_ts: TimeStamp,
-        commit_ts: TimeStamp,
-        f: impl Fn(&Self, u64, Vec<u8>, Vec<u8>, Context, bool, TimeStamp, TimeStamp) -> Result<()>,
-    ) -> Result<()> {
-        let timeout = Duration::from_secs(FLASHBACK_TIMEOUT);
-        let start_time = Instant::now();
-
-        let mut ctx = Context::default();
-        let store_id = self.get_store_ident().unwrap().get_store_id();
-        loop {
-            let r = self.region_info(region_id).unwrap();
-            let region = r
-                .region_local_state
-                .as_ref()
-                .map(|s| s.get_region().clone())
-                .unwrap();
-
-            ctx.set_region_id(region.get_id());
-            ctx.set_region_epoch(region.get_region_epoch().to_owned());
-            let peer = find_peer(&region, store_id).unwrap();
-            ctx.set_peer(peer.clone());
-
-            // Flashback will encode the key, so we need to use raw key.
-            let start_key = Key::from_encoded_slice(region.get_start_key())
-                .to_raw()
-                .unwrap_or_default();
-            let end_key = Key::from_encoded_slice(region.get_end_key())
-                .to_raw()
-                .unwrap_or_default();
-
-            match f(
-                self,
-                version,
-                start_key,
-                end_key,
-                ctx.clone(),
-                region.get_is_in_flashback(),
-                start_ts,
-                commit_ts,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(err) => match err {
-                    // Both error need to be retried.
-                    Error::FlashbackFailed(ref msg) => {
-                        error!("flashback failed"; "region_id" => ?region_id, "err" => ?msg);
-                    }
-                    Error::NotPreparedFlashback(ref msg) => {
-                        error!("region is not in flashback state"; "region_id" => ?region_id, "err" => ?msg);
-                    }
-                    _ => return Err(err),
-                },
-            }
-
-            let elapsed_time = start_time.elapsed();
-            if elapsed_time >= timeout {
-                error!("Execute flashback timeout. Exiting the loop.");
-                return Err(Error::Other(
-                    "Flashback timeout reached. Exiting the loop.".into(),
-                ));
-            }
-        }
-    }
-
-    fn prepare_flashback(
-        &self,
-        version: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-        ctx: Context,
-        is_in_flashback: bool,
-        start_ts: TimeStamp,
-        _commit_ts: TimeStamp,
-    ) -> Result<()> {
-        if is_in_flashback {
-            return Ok(());
-        }
-
-        let mut req = kvrpcpb::PrepareFlashbackToVersionRequest::new();
-        req.set_version(version);
-        req.set_start_key(start_key);
-        req.set_end_key(end_key);
-        req.set_context(ctx);
-        req.set_start_ts(start_ts.into_inner());
-
-        let resp = block_on(future_prepare_flashback_to_version(
-            self.storage.as_ref().unwrap(),
-            req,
-        ))
-        .unwrap();
-        if !resp.get_error().is_empty() || resp.has_region_error() {
-            error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-            return Err(Error::NotPreparedFlashback(resp.get_error().to_string()));
-        }
-
-        Ok(())
-    }
-
-    fn flashback_to_version(
-        &self,
-        version: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-        ctx: Context,
-        is_in_flashback: bool,
-        start_ts: TimeStamp,
-        commit_ts: TimeStamp,
-    ) -> Result<()> {
-        if !is_in_flashback {
-            return Err(Error::NotPreparedFlashback(
-                "not in flashback state".to_owned(),
-            ));
-        }
-
-        let mut req = kvrpcpb::FlashbackToVersionRequest::new();
-        req.set_version(version);
-        req.set_start_key(start_key);
-        req.set_end_key(end_key);
-        req.set_context(ctx);
-        req.set_start_ts(start_ts.into_inner());
-        req.set_commit_ts(commit_ts.into_inner());
-
-        let resp = block_on(future_flashback_to_version(
-            self.storage.as_ref().unwrap(),
-            req,
-        ))
-        .unwrap();
-        if !resp.get_error().is_empty() || resp.has_region_error() {
-            error!("exec flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-            return Err(Error::FlashbackFailed(resp.get_error().to_string()));
-        }
-
-        Ok(())
-    }
 }
 
 impl<ER, E, L, K> Debugger for DebuggerImpl<ER, E, L, K>
@@ -1174,33 +1034,98 @@ where
         self.reset_to_version_manager.start(version.into());
     }
 
-    fn flashback_to_version(
+    fn region_flashback_to_version(
         &self,
         region_id: u64,
         version: u64,
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
-        tx: Sender<u64>,
-    ) -> Result<()> {
-        if commit_ts.is_zero() {
-            self.exec_flashback_region(
-                region_id,
-                version,
-                start_ts,
-                0.into(),
-                DebuggerImpl::prepare_flashback,
-            )?;
-        } else {
-            self.exec_flashback_region(
-                region_id,
-                version,
-                start_ts,
-                commit_ts,
-                DebuggerImpl::flashback_to_version,
-            )?;
+    ) -> impl Future<Output = Result<()>> + Send {
+        let store_id = self.get_store_ident().unwrap().get_store_id();
+        let r = self.region_info(region_id).unwrap();
+        let region = r
+            .region_local_state
+            .as_ref()
+            .map(|s| s.get_region().clone())
+            .unwrap();
+
+        let mut ctx = Context::default();
+        ctx.set_region_id(region.get_id());
+        ctx.set_region_epoch(region.get_region_epoch().to_owned());
+        let peer = find_peer(&region, store_id).unwrap();
+        ctx.set_peer(peer.clone());
+
+        // Flashback will encode the key, so we need to use raw key.
+        let start_key = Key::from_encoded_slice(region.get_start_key())
+            .to_raw()
+            .unwrap_or_default();
+        let end_key = Key::from_encoded_slice(region.get_end_key())
+            .to_raw()
+            .unwrap_or_default();
+
+        let storage = self.storage.clone().unwrap();
+        let is_in_flashback = region.get_is_in_flashback();
+        async move {
+            let timeout = Duration::from_secs(FLASHBACK_TIMEOUT);
+            let start_time = Instant::now();
+
+            // Loop for single region.
+            loop {
+                let elapsed_time = start_time.elapsed();
+                if elapsed_time >= timeout {
+                    error!("Execute flashback timeout. Exiting the loop.");
+                    return Err(Error::Other(
+                        "Flashback timeout reached. Exiting the loop.".into(),
+                    ));
+                }
+
+                let storage_clone = storage.clone();
+                // Means now is prepare flashback.
+                if commit_ts.is_zero() {
+                    if is_in_flashback {
+                        return Ok(());
+                    }
+                    let mut req = kvrpcpb::PrepareFlashbackToVersionRequest::new();
+                    req.set_version(version);
+                    req.set_start_key(start_key.clone());
+                    req.set_end_key(end_key.clone());
+                    req.set_context(ctx.clone());
+                    req.set_start_ts(start_ts.into_inner());
+
+                    let resp = future_prepare_flashback_to_version(storage_clone, req.into())
+                        .await
+                        .unwrap();
+                    if !resp.get_error().is_empty() || resp.has_region_error() {
+                        error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+                        continue;
+                    }
+                    return Ok(());
+                } else {
+                    if !is_in_flashback {
+                        return Err(Error::NotPreparedFlashback(
+                            "not in flashback state".to_owned(),
+                        ));
+                    }
+
+                    let mut req = kvrpcpb::FlashbackToVersionRequest::new();
+                    req.set_version(version);
+                    req.set_start_key(start_key.clone());
+                    req.set_end_key(end_key.clone());
+                    req.set_context(ctx.clone());
+                    req.set_start_ts(start_ts.into_inner());
+                    req.set_commit_ts(commit_ts.into_inner());
+
+                    let resp = future_flashback_to_version(storage_clone, req.into())
+                        .await
+                        .unwrap();
+                    if !resp.get_error().is_empty() || resp.has_region_error() {
+                        error!("exec flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+                        continue;
+                    }
+                    return Ok(());
+                }
+            }
         }
-        block_on(tx.send(region_id)).unwrap();
-        Ok(())
     }
 
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {

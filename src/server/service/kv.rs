@@ -423,7 +423,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let begin_instant = Instant::now();
 
         let source = req.mut_context().take_request_source();
-        let resp = future_prepare_flashback_to_version(&self.storage, req);
+        let resp = future_prepare_flashback_to_version(self.storage.clone(), req);
         let task = async move {
             let resp = resp.await?;
             let elapsed = begin_instant.saturating_elapsed();
@@ -454,7 +454,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let begin_instant = Instant::now();
 
         let source = req.mut_context().take_request_source();
-        let resp = future_flashback_to_version(&self.storage, req);
+        let resp = future_flashback_to_version(self.storage.clone(), req);
         let task = async move {
             let resp = resp.await?;
             let elapsed = begin_instant.saturating_elapsed();
@@ -1259,8 +1259,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
         Gc, future_gc(), kv_gc;
         DeleteRange, future_delete_range(storage), kv_delete_range;
-        PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage), kv_prepare_flashback_to_version;
-        FlashbackToVersion, future_flashback_to_version(storage), kv_flashback_to_version;
+        PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage.clone()), kv_prepare_flashback_to_version;
+        FlashbackToVersion, future_flashback_to_version(storage.clone()), kv_flashback_to_version;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
         RawPut, future_raw_put(storage), raw_put;
         RawBatchPut, future_raw_batch_put(storage), raw_batch_put;
@@ -1580,7 +1580,7 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 // be between any transactions that have not been fully committed.
 pub fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     // Keep this param to hint the type of E for the compiler.
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
     let storage = storage.clone();
@@ -1612,7 +1612,7 @@ pub fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvForma
 // make sure the region is "locked" by `PrepareFlashbackToVersion` first,
 // otherwise this request will fail.
 pub fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
     let storage = storage.clone();

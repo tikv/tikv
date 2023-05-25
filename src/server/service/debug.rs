@@ -1,13 +1,19 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
-use collections::HashSet;
 use futures::{
     future::{Future, FutureExt, TryFutureExt},
     sink::SinkExt,
     stream::{self, TryStreamExt},
 };
+use futures_util::future::BoxFuture;
 use grpcio::{
     Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
@@ -20,10 +26,13 @@ use pd_client::PdClient;
 use raftstore::{store::util::build_key_range, RegionInfoAccessor};
 use tikv_kv::RaftExtension;
 use tikv_util::metrics;
-use tokio::{runtime::Handle, sync::mpsc::channel};
+use tokio::{
+    runtime::Handle,
+    sync::{oneshot, Mutex},
+};
 
 use crate::{
-    server::debug::{Debugger, Error, Result},
+    server::debug::{Debugger, Error, Result, FLASHBACK_TIMEOUT},
     storage::mvcc::TimeStamp,
 };
 
@@ -578,105 +587,120 @@ where
     ) {
         let tmp = self.region_info_accessor.region_leaders();
         let region_leaders = tmp.read().unwrap();
-
-        // Prepare flashback for specified regions.
-        let start_ts = self
-            .pool
-            .block_on(self.pd_client.get_tso())
-            .expect("failed to get timestamp from PD");
-        let version = req.get_version();
         let key_range = build_key_range(req.get_start_key(), req.get_end_key(), false);
-        let (prepare_tx, mut prepare_rx) = channel(region_leaders.len());
 
-        let mut flashback_region_num = 0;
-        region_leaders
+        let region_ids = req.get_region_ids();
+        let filtered_region_ids = region_leaders
             .iter()
-            .filter(|region_id| {
-                req.get_region_ids().is_empty() || req.get_region_ids().contains(region_id)
-            })
-            .filter(|&region_id| {
-                let r = self.debugger.region_info(*region_id).unwrap();
-                let region = r
-                    .region_local_state
-                    .as_ref()
-                    .map(|s| s.get_region().clone())
-                    .unwrap();
-                check_intersect_of_range(
-                    &build_key_range(region.get_start_key(), region.get_end_key(), false),
-                    &key_range.clone(),
-                )
-            })
-            .for_each(|&region_id| {
-                flashback_region_num += 1;
-                let debugger = self.debugger.clone();
-                let prepare_tx_clone = prepare_tx.clone();
-                self.pool.spawn(async move {
-                    match debugger.flashback_to_version(
-                        region_id,
-                        version.clone(),
-                        start_ts.clone(),
-                        TimeStamp::zero(),
-                        prepare_tx_clone,
-                    ) {
-                        Ok(_) => {}
-                        Err(err) => {
-                            return Err(Error::NotPreparedFlashback(format!(
-                                "prepare flashback failed err is {}",
-                                err
-                            )));
-                        }
-                    }
-                    Ok(())
-                });
-            });
+            .filter_map(|region_id| {
+                if region_ids.is_empty() || region_ids.contains(region_id) {
+                    let debugger = self.debugger.clone();
+                    let r = debugger.region_info(*region_id).unwrap();
+                    let region = r
+                        .region_local_state
+                        .as_ref()
+                        .map(|s| s.get_region().clone())
+                        .unwrap();
 
-        // Flashback to version.
-        let commit_ts = self
-            .pool
-            .block_on(self.pd_client.get_tso())
-            .expect("failed to get timestamp from PD");
-        let (flashback_tx, mut flashback_rx) = channel(flashback_region_num);
-        let mut prepare_set = HashSet::default();
-        while let Some(region_id) = self.pool.block_on(prepare_rx.recv()) {
-            prepare_set.insert(region_id);
-            let debugger = self.debugger.clone();
-            let flashback_tx_clone = flashback_tx.clone();
-            self.pool.spawn(async move {
-                match debugger.flashback_to_version(
-                    region_id,
-                    version,
-                    start_ts.clone(),
-                    commit_ts.clone(),
-                    flashback_tx_clone,
-                ) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        return Err(Error::FlashbackFailed(format!(
-                            "flashback failed err is {}",
-                            err
-                        )));
+                    if check_intersect_of_range(
+                        &build_key_range(region.get_start_key(), region.get_end_key(), false),
+                        &key_range,
+                    ) {
+                        Some(*region_id)
+                    } else {
+                        None
                     }
+                } else {
+                    None
                 }
-                Ok(())
-            });
-            if prepare_set.len() == flashback_region_num {
-                break;
-            }
-        }
-        // Wait for finish.
+            })
+            .collect::<Vec<_>>();
+
+        let version = req.get_version();
+        let debugger = Arc::new(Mutex::new(self.debugger.clone()));
+        let filtered_region_ids_clone = filtered_region_ids.clone();
+        let pd_client = self.pd_client.clone();
+        let runtime = self.pool.clone();
         let f = self
             .pool
             .spawn(async move {
-                let mut finish_set = HashSet::default();
-                while let Some(region_id) = flashback_rx.recv().await {
-                    finish_set.insert(region_id);
-                    if finish_set.len() == flashback_region_num {
-                        return Ok(FlashbackToVersionResponse::default());
-                    }
-                }
-                Err(Error::FlashbackFailed(
-                    "wait flashback finish failed".into(),
-                ))
+                let start_ts = pd_client
+                    .get_tso()
+                    .await
+                    .expect("failed to get commit_ts from PD");
+                // Prepare flashback for specified regions.
+                let prepare_wg = WaitGroup::new();
+                filtered_region_ids_clone.iter().for_each(|&region_id| {
+                    let debugger = debugger.clone();
+                    let wg = prepare_wg.clone();
+                    runtime.spawn(async move {
+                        let work = wg.work();
+                        let debugger = debugger.lock().await;
+                        let check = debugger.region_flashback_to_version(
+                            region_id,
+                            version.clone(),
+                            start_ts.clone(),
+                            TimeStamp::zero(),
+                        );
+                        match check.await {
+                            Ok(_) => {}
+                            Err(err) => {
+                                return Err(Error::NotPreparedFlashback(format!(
+                                    "prepare flashback failed err is {}",
+                                    err
+                                )));
+                            }
+                        }
+                        drop(work);
+                        Ok(())
+                    });
+                });
+                // Wait for finishing prepare flashback.
+                tokio::time::timeout(Duration::from_secs(FLASHBACK_TIMEOUT), prepare_wg.wait())
+                    .map_err(|e| {
+                        Error::NotPreparedFlashback(format!(
+                            "prepare flashback timeout err is {}",
+                            e
+                        ))
+                    })
+                    .await?;
+
+                let commit_ts = pd_client
+                    .get_tso()
+                    .await
+                    .expect("failed to get commit_ts from PD");
+                // Flashback to version.
+                let debugger = debugger.lock().await;
+                let flashback_wg = WaitGroup::new();
+                filtered_region_ids.iter().for_each(|&region_id| {
+                    let debugger = debugger.clone();
+                    let work = flashback_wg.clone().work();
+                    runtime.spawn(async move {
+                        let check = debugger.region_flashback_to_version(
+                            region_id,
+                            version,
+                            start_ts.clone(),
+                            commit_ts.clone(),
+                        );
+                        match check.await {
+                            Ok(_) => {}
+                            Err(err) => {
+                                return Err(Error::FlashbackFailed(format!(
+                                    "flashback failed err is {}",
+                                    err
+                                )));
+                            }
+                        }
+                        drop(work);
+                        Ok(())
+                    });
+                });
+
+                // Wait for finish.
+                tokio::time::timeout(Duration::from_secs(FLASHBACK_TIMEOUT), flashback_wg.wait())
+                    .map_err(|e| Error::FlashbackFailed(format!("flashback timeout err is {}", e)))
+                    .await?;
+                Ok(FlashbackToVersionResponse::default())
             })
             .map(|res| res.unwrap());
 
@@ -706,4 +730,72 @@ mod region_size_response {
 
 mod list_fail_points_response {
     pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
+}
+
+pub struct WaitGroup {
+    running: AtomicUsize,
+    on_finish_all: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send + 'static>>>,
+}
+
+impl WaitGroup {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            running: AtomicUsize::new(0),
+            on_finish_all: std::sync::Mutex::default(),
+        })
+    }
+
+    fn work_done(&self) {
+        let last = self.running.fetch_sub(1, Ordering::SeqCst);
+        if last == 1 {
+            self.on_finish_all
+                .lock()
+                .unwrap()
+                .drain(..)
+                .for_each(|x| x())
+        }
+    }
+
+    /// wait until all running tasks done.
+    pub fn wait(&self) -> BoxFuture<()> {
+        // Fast path: no uploading.
+        if self.running.load(Ordering::SeqCst) == 0 {
+            return Box::pin(futures::future::ready(()));
+        }
+
+        let (tx, rx) = oneshot::channel();
+        self.on_finish_all.lock().unwrap().push(Box::new(move || {
+            // The waiter may timed out.
+            let _ = tx.send(());
+        }));
+        // try to acquire the lock again.
+        if self.running.load(Ordering::SeqCst) == 0 {
+            return Box::pin(futures::future::ready(()));
+        }
+        Box::pin(rx.map(|_| ()))
+    }
+
+    /// make a work, as long as the return value held, mark a work in the group
+    /// is running.
+    pub fn work(self: Arc<Self>) -> Work {
+        self.running.fetch_add(1, Ordering::SeqCst);
+        Work(self)
+    }
+}
+
+pub struct Work(Arc<WaitGroup>);
+
+impl Drop for Work {
+    fn drop(&mut self) {
+        self.0.work_done();
+    }
+}
+
+impl std::fmt::Debug for WaitGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let running = self.running.load(Ordering::Relaxed);
+        f.debug_struct("WaitGroup")
+            .field("running", &running)
+            .finish()
+    }
 }

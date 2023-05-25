@@ -9,6 +9,7 @@ use engine_traits::{
     CachedTablet, Iterable, Peekable, RaftEngine, TabletContext, TabletRegistry, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
 };
+use futures::future::Future;
 use keys::{data_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
 use kvproto::{
     debugpb::Db as DbType,
@@ -19,7 +20,6 @@ use kvproto::{
 use nom::AsBytes;
 use raft::prelude::Entry;
 use raftstore::store::util::check_key_in_region;
-use tokio::sync::mpsc::Sender;
 use txn_types::TimeStamp;
 
 use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
@@ -449,15 +449,14 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         self.raft_statistics = s;
     }
 
-    fn flashback_to_version(
+    fn region_flashback_to_version(
         &self,
         _region_id: u64,
         _version: u64,
         _start_ts: TimeStamp,
         _commit_ts: TimeStamp,
-        _tx: Sender<u64>,
-    ) -> Result<()> {
-        unimplemented!()
+    ) -> impl Future<Output = Result<()>> + Send {
+        async move { unimplemented!() }
     }
 }
 

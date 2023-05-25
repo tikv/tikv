@@ -1,8 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, str, string::ToString, sync::Arc,
-    time::Duration, u64,
+    borrow::ToOwned,
+    cmp::Ordering,
+    path::Path,
+    pin::Pin,
+    str,
+    string::ToString,
+    sync::{Arc, Mutex},
+    time::Duration,
+    u64,
 };
 
 use api_version::{ApiV1, KvFormat};
