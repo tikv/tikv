@@ -552,6 +552,7 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
                     context.io_type == IoType::LoadBalance,
                 )?;
             }
+            fail_point!("finish_receiving_snapshot");
             context.finish(raft_router)
         });
     match res {

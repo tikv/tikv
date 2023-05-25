@@ -1325,7 +1325,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
         // todo(SpadeA): modify
         let resp = self
-            .call_command_on_leader(transfer_leader, Duration::from_secs(500))
+            .call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
         assert_eq!(
             resp.get_admin_response().get_cmd_type(),
@@ -1371,29 +1371,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         &mut self,
         region: &metapb::Region,
         split_key: &[u8],
-        mut cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksSnapshot>,
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let split_key = split_key.to_vec();
-        let (split_region_req, mut sub) = PeerMsg::request_split(
+        let (split_region_req, _) = PeerMsg::request_split_with_callback(
             region.get_region_epoch().clone(),
             vec![split_key],
             "test".into(),
+            Box::new(move |resp| {
+                cb.invoke_with_response(resp.clone());
+            }),
         );
 
         router
             .check_send(region.get_id(), split_region_req)
             .unwrap();
-
-        block_on(async {
-            sub.wait_proposed().await;
-            cb.invoke_proposed();
-            sub.wait_committed().await;
-            cb.invoke_committed();
-            let res = sub.result().await.unwrap();
-            cb.invoke_with_response(res)
-        });
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
