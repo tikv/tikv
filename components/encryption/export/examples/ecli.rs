@@ -143,9 +143,8 @@ fn process() -> Result<()> {
 
     let credential_file = opt.credential_file.as_ref();
     let backend = match opt.command {
-        Command::Aws(ref cmd) => create_aws_backend(cmd, credential_file),
-        Command::Azure(ref cmd) => create_azure_backend(cmd, credential_file),
-        _ => unreachable!(),
+        Command::Aws(ref cmd) => create_aws_backend(cmd, credential_file)?,
+        Command::Azure(ref cmd) => create_azure_backend(cmd, credential_file)?,
     };
 
     let output = match opt.operation {
