@@ -1140,7 +1140,7 @@ mod tests {
                     .iter()
                     .enumerate()
                     .map(|(_, &sid)| Peer {
-                        id: region_id as u64,
+                        id: region_id,
                         store_id: sid,
                         ..Default::default()
                     })

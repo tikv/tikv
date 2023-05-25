@@ -1250,11 +1250,13 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     }
 
     fn check_region_consistency(&self, _: u64) {
-        unimplemented!()
+        println!("only support remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn modify_tikv_config(&self, _config_name: &str, _config_value: &str) {
-        unimplemented!()
+        println!("only support remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn dump_region_properties(&self, _region_id: u64) {
