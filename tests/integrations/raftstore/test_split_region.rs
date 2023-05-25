@@ -1264,9 +1264,9 @@ fn test_catch_up_peers_after_split() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_split_region_keep_records() {
-    let mut cluster = test_raftstore_v2::new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -1340,11 +1340,7 @@ fn test_node_slow_split_does_not_cause_snapshot() {
     cluster.must_transfer_leader(region_id, new_peer(3, 3));
 
     let new_region = pd_client.get_region(b"").unwrap();
-    let new_peer3 = new_region
-        .get_peers()
-        .iter()
-        .find(|p| p.get_store_id() == 3)
-        .unwrap();
+    let new_peer3 = find_peer(&new_region, 3).unwrap();
     cluster.must_transfer_leader(new_region.get_id(), new_peer3.clone());
 
     notify_rx.try_recv().unwrap_err();

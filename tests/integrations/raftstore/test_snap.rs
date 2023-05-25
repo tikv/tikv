@@ -31,7 +31,10 @@ use security::SecurityManager;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use test_raftstore_v2::WrapFactory;
-use tikv::server::{snap::send_snap, tablet_snap::send_snap as send_snap_v2};
+use tikv::{
+    server::{snap::send_snap, tablet_snap::send_snap as send_snap_v2},
+    storage::config::EngineType,
+};
 use tikv_util::{
     config::*,
     time::{Instant, Limiter, UnixSecs},
@@ -264,6 +267,16 @@ fn test_concurrent_snap() {
     // Split the region range and then there should be another snapshot for the
     // split ranges.
     cluster.must_split(&region, b"k2");
+    // For raftstore v2, after split, follower delays first messages (see
+    // is_first_message() for details), so leader does not send snapshot to
+    // follower and CollectSnapshotFilter holds parent region snapshot forever.
+    // We need to make a transfer leader to trigger new leader sending snapshot
+    // and thus CollectSnapshotFilter can send parent region snapshot.
+    if cluster.cfg.storage.engine == EngineType::RaftKv2 {
+        let new_region = cluster.get_region(b"k1");
+        let new_peer2 = find_peer(&new_region, 2).unwrap();
+        cluster.must_transfer_leader(new_region.get_id(), new_peer2.clone());
+    }
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
     // Ensure the regions work after split.
     cluster.must_put(b"k11", b"v11");
