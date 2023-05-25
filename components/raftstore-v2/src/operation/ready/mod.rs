@@ -21,7 +21,15 @@ mod apply_trace;
 mod async_writer;
 mod snapshot;
 
-use std::{cmp, time::Instant};
+use std::{
+    cmp,
+    fmt::{self, Debug, Formatter},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
@@ -41,7 +49,7 @@ use raftstore::{
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
-use slog::{debug, error, info, trace, warn};
+use slog::{debug, error, info, trace, warn, Logger};
 use tikv_util::{
     log::SlogFormat,
     slog_panic,
@@ -63,7 +71,56 @@ use crate::{
     worker::tablet,
 };
 
-const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
+const PAUSE_FOR_REPLAY_GAP: u64 = 128;
+
+pub struct ReplayWatch {
+    normal_peers: AtomicUsize,
+    paused_peers: AtomicUsize,
+    logger: Logger,
+    timer: Instant,
+}
+
+impl Debug for ReplayWatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReplayWatch")
+            .field("normal_peers", &self.normal_peers)
+            .field("paused_peers", &self.paused_peers)
+            .field("logger", &self.logger)
+            .field("timer", &self.timer)
+            .finish()
+    }
+}
+
+impl ReplayWatch {
+    pub fn new(logger: Logger) -> Self {
+        Self {
+            normal_peers: AtomicUsize::new(0),
+            paused_peers: AtomicUsize::new(0),
+            logger,
+            timer: Instant::now(),
+        }
+    }
+
+    pub fn inc_normal_peer(&self) {
+        self.normal_peers.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_paused_peer(&self) {
+        self.paused_peers.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Drop for ReplayWatch {
+    fn drop(&mut self) {
+        info!(
+            self.logger,
+            "The raft log replay completed";
+            "normal_peers" => self.normal_peers.load(Ordering::Relaxed),
+            "paused_peers" => self.paused_peers.load(Ordering::Relaxed),
+            "elapsed" => ?self.timer.elapsed()
+        );
+    }
+}
 
 impl Store {
     pub fn on_store_unreachable<EK, ER, T>(
@@ -115,7 +172,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn maybe_pause_for_recovery<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) -> bool {
+    pub fn maybe_pause_for_replay<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        watch: Option<Arc<ReplayWatch>>,
+    ) -> bool {
         // The task needs to be scheduled even if the tablet may be replaced during
         // recovery. Otherwise if there are merges during recovery, the FSM may
         // be paused forever.
@@ -139,14 +200,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // it may block for ever when there is unapplied conf change.
             self.set_has_ready();
         }
-        if committed_index > applied_index + PAUSE_FOR_RECOVERY_GAP {
+        if committed_index > applied_index + PAUSE_FOR_REPLAY_GAP {
             // If there are too many the missing logs, we need to skip ticking otherwise
             // it may block the raftstore thread for a long time in reading logs for
             // election timeout.
-            info!(self.logger, "pause for recovery"; "applied" => applied_index, "committed" => committed_index);
-            self.set_pause_for_recovery(true);
+            info!(self.logger, "pause for replay"; "applied" => applied_index, "committed" => committed_index);
+
+            // when committed_index > applied_index + PAUSE_FOR_REPLAY_GAP, the peer must be
+            // created from StoreSystem on TiKV Start
+            let w = watch.unwrap();
+            w.inc_paused_peer();
+            self.set_replay_watch(Some(w));
             true
         } else {
+            if let Some(w) = watch {
+                w.inc_normal_peer();
+            }
             false
         }
     }
@@ -189,7 +258,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
-        if self.pause_for_recovery() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+        if self.pause_for_replay() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
             ctx.raft_metrics.message_dropped.recovery.inc();
             return;
         }
