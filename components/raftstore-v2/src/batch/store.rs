@@ -63,7 +63,9 @@ use crate::{
     Error, Result,
 };
 
-const MAX_MANUAL_FLUSH_RATE: f64 = 0.3;
+const MIN_MANUAL_FLUSH_RATE: f64 = 0.3;
+const MAX_MANUAL_FLUSH_RATE: f64 = 1.0;
+const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(60);
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
@@ -621,13 +623,17 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let router = router.clone();
             let registry = tablet_registry.clone();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
-                let limiter = Limiter::new(MAX_MANUAL_FLUSH_RATE);
+                let limiter = Limiter::new(0.0);
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(mut regions) => {
                         warn!(logger, "flushing oldest cf of regions {regions:?}");
-                        // Refresh the list at least every 60s.
-                        regions.truncate((MAX_MANUAL_FLUSH_RATE * 60.0) as usize);
+                        // Try to finish flush in 1m.
+                        let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
+                        let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, MAX_MANUAL_FLUSH_RATE);
+                        limiter.set_speed_limit(rate);
+                        // Return early if there're too many regions.
+                        regions.truncate((rate * MAX_MANUAL_FLUSH_PERIOD.as_secs_f64()) as usize);
                         // Skip tablets that are flushed elsewhere.
                         let threshold = std::time::SystemTime::now() - Duration::from_secs(60 * 2);
                         for r in regions {
