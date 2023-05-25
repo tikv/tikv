@@ -3,6 +3,7 @@
 use std::{
     cmp,
     ffi::CString,
+    marker::PhantomData,
     sync::{
         atomic::{AtomicI32, Ordering},
         Arc,
@@ -49,7 +50,7 @@ const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); 
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
 const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
-pub struct AdvanceTsWorker {
+pub struct AdvanceTsWorker<T: 'static + CdcHandle<E>, E: KvEngine> {
     pd_client: Arc<dyn PdClient>,
     advance_ts_interval: Duration,
     timer: SteadyTimer,
@@ -58,14 +59,17 @@ pub struct AdvanceTsWorker {
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
+    cdc_handler: T,
+    _phantom: PhantomData<E>,
 }
 
-impl AdvanceTsWorker {
+impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
     pub fn new(
         advance_ts_interval: Duration,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
+        cdc_handler: T,
     ) -> Self {
         let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
@@ -82,11 +86,13 @@ impl AdvanceTsWorker {
             advance_ts_interval,
             timer: SteadyTimer::default(),
             concurrency_manager,
+            cdc_handler,
+            _phantom: Default::default(),
         }
     }
 }
 
-impl AdvanceTsWorker {
+impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
     // Advance ts asynchronously and register RegisterAdvanceEvent when its done.
     pub fn advance_ts_for_regions(
         &self,
@@ -103,6 +109,7 @@ impl AdvanceTsWorker {
             DEFAULT_CHECK_LEADER_TIMEOUT_DURATION,
             self.advance_ts_interval,
         ));
+        let cdc_handler = self.cdc_handler.clone();
 
         let fut = async move {
             // Ignore get tso errors since we will retry every `advdance_ts_interval`.
@@ -119,7 +126,16 @@ impl AdvanceTsWorker {
                 }
             }
 
-            let regions = leader_resolver.resolve(regions, min_ts).await;
+            let regions = if false {
+                leader_resolver.resolve(regions, min_ts).await
+            } else {
+                // Possible optimization here.
+                // 1. Use `resolve_by_raft` to get regions with valid leader states.
+                // 2. Send `CheckLeaderRequest` requests with as less information as possible
+                //  for valid leader regions, for example raft information like `term`,
+                // `epoch` could be saved. The proto needs to be changed accordingly.
+                resolve_by_raft(regions, min_ts, cdc_handler).await
+            };
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
                     regions,
