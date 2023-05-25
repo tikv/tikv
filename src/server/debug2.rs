@@ -17,8 +17,11 @@ use kvproto::{
     raft_serverpb::{PeerState, RegionLocalState, StoreIdent},
 };
 use nom::AsBytes;
-use raft::prelude::Entry;
+use raft::{prelude::Entry, RawNode};
 use raftstore::store::util::check_key_in_region;
+use raftstore_v2::Storage;
+use slog::o;
+use tikv_util::{config::ReadableSize, store::find_peer, worker::Worker};
 
 use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use crate::{
@@ -210,6 +213,70 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             kv_statistics: None,
             raft_statistics: None,
         }
+    }
+
+    pub fn bad_regions(&self) -> Result<Vec<(u64, Error)>> {
+        let store_id = self.get_store_ident()?.get_store_id();
+        let mut res = Vec::new();
+        let fake_read_worker = Worker::new("fake-read-worker").lazy_build("fake-read-worker");
+
+        let logger = slog_global::borrow_global().new(o!());
+        let check_region_state = |region_id: u64| -> Result<()> {
+            let region_state =
+                box_try!(self.raft_engine.get_region_state(region_id, u64::MAX)).unwrap();
+            match region_state.get_state() {
+                PeerState::Tombstone | PeerState::Applying => return Ok(()),
+                _ => {}
+            }
+
+            let region = region_state.get_region();
+            let peer_id = find_peer(region, store_id)
+                .map(|peer| peer.get_id())
+                .ok_or_else(|| {
+                    Error::Other(
+                        format!(
+                            "RegionLocalState doesn't contains peer itself, {:?}",
+                            region_state
+                        )
+                        .into(),
+                    )
+                })?;
+
+            let logger = logger.new(o!("region_id" => region_id, "peer_id" => peer_id));
+            let storage = box_try!(Storage::<RocksEngine, ER>::new(
+                region_id,
+                store_id,
+                self.raft_engine.clone(),
+                fake_read_worker.scheduler(),
+                &logger
+            ))
+            .unwrap();
+
+            let raft_cfg = raft::Config {
+                id: peer_id,
+                election_tick: 10,
+                heartbeat_tick: 2,
+                max_size_per_msg: ReadableSize::mb(1).0,
+                max_inflight_msgs: 256,
+                check_quorum: true,
+                skip_bcast_commit: true,
+                ..Default::default()
+            };
+
+            box_try!(RawNode::new(&raft_cfg, storage, &logger));
+            Ok(())
+        };
+
+        self.raft_engine
+            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                if let Err(e) = check_region_state(region_id) {
+                    res.push((region_id, e));
+                }
+
+                Ok(())
+            });
+
+        Ok(res)
     }
 }
 
@@ -1035,4 +1102,7 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_bad_regions() {}
 }
