@@ -5,7 +5,6 @@ use tikv_kv::SnapshotExt;
 use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc,
     mvcc::{
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
         MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
@@ -29,38 +28,8 @@ fn check_txn_status_from_pessimistic_primary_lock(
         // rollback record in the write CF, if so the current primary
         // pessimistic lock is stale. Otherwise the primary pessimistic lock is
         // regarded as valid, and the transaction status is determined by it.
-        let (txn_status, is_current_lock_stale) = match check_txn_status_missing_lock(
-            txn,
-            reader,
-            primary_key.clone(),
-            None,
-            MissingLockAction::ReturnError,
-            resolving_pessimistic_lock,
-        ) {
-            Ok(txn_status) => match txn_status {
-                t @ TxnStatus::RolledBack | t @ TxnStatus::Committed { .. } => (t, true),
-                _ => {
-                    return Err(ErrorInner::Other(box_err!(
-                        "unexpected result={:?} checking persist information \
-                            for pessimistic lock with conflict lock={:?}",
-                        &txn_status,
-                        lock
-                    ))
-                    .into());
-                }
-            },
-            Err(err) => match err {
-                // Continue to process if there's no corresponding persistent information.
-                // In this case the pessimistic primary lock should not be stale lock with conflict.
-                mvcc::Error(box ErrorInner::TxnNotFound { .. }) => {
-                    (TxnStatus::LockNotExistDoNothing, false)
-                }
-                _ => {
-                    return Err(err);
-                }
-            },
-        };
-        if is_current_lock_stale {
+        let (txn_status, is_status_decided) = check_txn_status_from_storage(reader, &primary_key)?;
+        if is_status_decided {
             info!("unlock stale pessimistic primary lock";
                 "primary_key" => ?&primary_key,
                 "lock" => ?&lock,
@@ -73,11 +42,16 @@ fn check_txn_status_from_pessimistic_primary_lock(
         }
     }
 
+    // The primary pessimistic lock has expired, and this lock is regarded as valid
+    // primary lock. If `resolving_pessimistic_lock` is false, it means the
+    // secondary lock is a prewrite lock and the transaction must already be in
+    // commit phase, thus the primary key must NOT change any more. In this case
+    // if primary lock expires, unlock it and put a rollback record.
+    // If `resolving_pessimistic_lock` is true. The transaction may still be ongoing
+    // and it's not in commit phase, the primary key could still change. If the
+    // primary lock expires, just pessimistically rollback it but do NOT put an
+    // rollback record.
     if lock.ts.physical() + lock.ttl < current_ts.physical() {
-        // The primary pessimistic lock has expired.
-        // If the resolving lock is a prewrite lock, the transaction must already be in
-        // the commit phase, the primary lock would no longer change in this
-        // case.
         return if resolving_pessimistic_lock {
             let released = txn.unlock_key(primary_key, true, TimeStamp::zero());
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
@@ -97,9 +71,9 @@ fn check_txn_status_from_pessimistic_primary_lock(
 /// 'start_ts'.
 ///
 /// 1. Validate whether the existing lock indeed corresponds to the
-/// primary lock. The primary key    may switch under certain circumstances. If
-/// it's a stale lock, the transaction status should    not be determined by it.
-/// Refer to https://github.com/tikv/tikv/issues/14636 for additional information.
+/// primary lock. The primary key may switch under certain circumstances. If
+/// it's a stale lock, the transaction status should not be determined by it.
+/// Refer to https://github.com/pingcap/tidb/issues/42937 for additional information.
 ///    Note that the primary key should remain unaltered if the transaction is
 /// already in the commit or 2PC phase.
 ///
@@ -131,7 +105,9 @@ pub fn check_txn_status_lock_exists(
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
     if verify_is_primary && !primary_key.is_encoded_from(&lock.primary) {
         // If the resolving lock is a prewrite lock and the current lock is a
-        // pessimistic lock, the pessimistic primary lock must be invalid.
+        // pessimistic lock, the primary key in the prewrite lock must be valid.
+        // So if the current lock dose not match it must be invalid, unlock the
+        // invalid lock and check the transaction status with the lock missing path.
         return match (resolving_pessimistic_lock, lock.is_pessimistic_lock()) {
             (false, true) => {
                 info!("unlock invalid pessimistic primary lock";
@@ -198,6 +174,7 @@ pub fn check_txn_status_lock_exists(
         if (status.is_decided() || status == TxnStatus::PessimisticRollBack) && released.is_some() {
             return Ok((status, released));
         }
+        assert!(released.is_none());
     } else if lock.ts.physical() + lock.ttl < current_ts.physical() {
         let released = rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
@@ -232,6 +209,27 @@ pub fn check_txn_status_lock_exists(
         || caller_start_ts.is_max();
 
     Ok((TxnStatus::uncommitted(lock, min_commit_ts_pushed), None))
+}
+
+// Check transaction status from storage for the primary key, this function
+// would have impact on the transaction status, it is read only and would not
+// write anything.
+pub fn check_txn_status_from_storage(
+    reader: &mut SnapshotReader<impl Snapshot>,
+    primary_key: &Key,
+) -> Result<(TxnStatus, bool)> {
+    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
+    match reader.get_txn_commit_record(primary_key)? {
+        TxnCommitRecord::SingleRecord { commit_ts, write } => {
+            if write.write_type == WriteType::Rollback {
+                Ok((TxnStatus::RolledBack, true))
+            } else {
+                Ok((TxnStatus::committed(commit_ts), true))
+            }
+        }
+        TxnCommitRecord::OverlappedRollback { .. } => Ok((TxnStatus::RolledBack, true)),
+        TxnCommitRecord::None { .. } => Ok((TxnStatus::LockNotExistDoNothing, false)),
+    }
 }
 
 pub fn check_txn_status_missing_lock(
