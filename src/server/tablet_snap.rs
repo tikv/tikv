@@ -298,7 +298,7 @@ async fn cleanup_cache(
         let ft = entry.file_type()?;
         if ft.is_dir() {
             if let Some(m) = key_manager {
-                m.remove_dir(&entry.path(), None)?;
+                m.delete_file(&entry.path(), None)?;
             }
             fs::remove_dir_all(entry.path())?;
             continue;
@@ -490,7 +490,7 @@ async fn recv_snap_imp<'a>(
     info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
     if path.exists() {
         if let Some(m) = snap_mgr.key_manager() {
-            m.remove_dir(&path, None)?;
+            m.delete_file(&path, None)?;
         }
         fs::remove_dir_all(&path)?;
     }
@@ -520,12 +520,12 @@ async fn recv_snap_imp<'a>(
     }
     fs::rename(&path, &final_path).map_err(|e| {
         if let Some(m) = snap_mgr.key_manager() {
-            let _ = m.remove_dir(&final_path, Some(&path));
+            let _ = m.delete_file(&final_path, Some(&path));
         }
         e
     })?;
     if let Some(m) = snap_mgr.key_manager() {
-        m.remove_dir(&path, Some(&final_path))?;
+        m.delete_file(&path, Some(&final_path))?;
     }
     Ok(context)
 }
@@ -1027,12 +1027,12 @@ pub fn copy_tablet_snapshot(
     }
     fs::rename(&recv_path, &final_path).map_err(|e| {
         if let Some(m) = recver_snap_mgr.key_manager() {
-            let _ = m.delete_file(final_path.to_str().unwrap());
+            let _ = m.delete_file(final_path.to_str().unwrap(), Some(&recv_path));
         }
         e
     })?;
     if let Some(m) = recver_snap_mgr.key_manager() {
-        m.delete_file(recv_path.to_str().unwrap())?;
+        m.delete_file(recv_path.to_str().unwrap(), Some(&final_path))?;
     }
 
     Ok(())

@@ -438,7 +438,7 @@ where
             if r && let Some(cb) = cb.take() {
                 cb();
             }
-            r
+            !r
         });
     }
 

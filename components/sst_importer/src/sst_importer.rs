@@ -1149,7 +1149,7 @@ impl SstImporter {
                 key_manager.link_file(temp_str, save_str)?;
                 let r = file_system::rename(&path.temp, &path.save);
                 let del_file = if r.is_ok() { temp_str } else { save_str };
-                if let Err(e) = key_manager.delete_file(del_file) {
+                if let Err(e) = key_manager.delete_file(del_file, None) {
                     warn!("fail to remove encryption metadata during 'do_download'"; "err" => ?e);
                 }
                 r?;

@@ -37,7 +37,7 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     // rocksdb is not atomic, thus the file may be deleted but key in key
     // manager is not.
     if let Some(key_manager) = encryption_key_manager {
-        key_manager.delete_file(clone)?;
+        key_manager.delete_file(clone, None)?;
     }
 
     #[cfg(unix)]
@@ -172,7 +172,9 @@ mod tests {
         // Since we are not using key_manager in db, simulate the db deleting the file
         // from key_manager.
         if let Some(manager) = key_manager {
-            manager.delete_file(sst_clone.to_str().unwrap()).unwrap();
+            manager
+                .delete_file(sst_clone.to_str().unwrap(), None)
+                .unwrap();
         }
 
         // The second ingestion will copy sst_path to sst_clone.

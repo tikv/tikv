@@ -236,6 +236,7 @@ impl Dicts {
 
             match file_dict.files.remove(fname) {
                 Some(file_info) => {
+                    info!("delete encrypted file"; "fname" => fname);
                     let file_num = file_dict.files.len() as _;
                     (file_info, file_num)
                 }
@@ -803,9 +804,23 @@ impl DataKeyManager {
     /// Then `remove_dir` with `physical` set to the trash directory name.
     /// Finally remove the trash directory. This is the safest way to delete a
     /// directory.
-    pub fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
+    pub(crate) fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
         let scan = physical.unwrap_or(logical);
         debug_assert!(scan.is_dir());
+        if let Some(p) = physical {
+            info!(
+                "remove_dir {}, {}, scan.exists={}",
+                logical.display(),
+                p.display(),
+                scan.exists()
+            );
+        } else {
+            info!(
+                "remove_dir {}, scan.exists={}",
+                logical.display(),
+                scan.exists()
+            );
+        }
         if !scan.exists() {
             return Ok(());
         }
@@ -840,6 +855,11 @@ impl DataKeyManager {
     /// Return which method this manager is using.
     pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
         crypter::to_engine_encryption_method(self.method)
+    }
+
+    /// For tests.
+    pub fn file_count(&self) -> usize {
+        self.dicts.file_dict.lock().unwrap().files.len()
     }
 }
 
@@ -886,18 +906,26 @@ impl EncryptionKeyManager for DataKeyManager {
         Ok(encrypted_file)
     }
 
-    fn delete_file(&self, fname: &str) -> IoResult<()> {
+    // See comments of `remove_dir` for more details when using this with a
+    // directory.
+    fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
             std::io::ErrorKind::Other.into()
         ));
-        // `RemoveDir` is not managed, but RocksDB may use `RenameFile` on a directory,
-        // which internally calls `LinkFile` and `DeleteFile`.
-        let path = Path::new(fname);
-        if path.is_dir() {
-            self.remove_dir(path, None)?;
+        if let Some(physical) = physical_fname {
+            let physical_path = Path::new(physical);
+            if physical_path.is_dir() {
+                self.remove_dir(Path::new(fname), Some(physical_path))?;
+                return Ok(());
+            }
         } else {
-            self.dicts.delete_file(fname, true)?;
+            let path = Path::new(fname);
+            if path.is_dir() {
+                self.remove_dir(path, None)?;
+                return Ok(());
+            }
         }
+        self.dicts.delete_file(fname, true)?;
         Ok(())
     }
 
@@ -1077,7 +1105,7 @@ mod tests {
     };
 
     lazy_static::lazy_static! {
-        static ref LOCK_FOR_GAUGE: Mutex<i32> = Mutex::new(1);
+        static ref LOCK_FOR_GAUGE: Mutex<()> = Mutex::new(());
     }
 
     fn new_mock_backend() -> Box<MockBackend> {
@@ -1322,9 +1350,9 @@ mod tests {
         let new_file = manager.new_file("foo").unwrap();
         let get_file = manager.get_file("foo").unwrap();
         assert_eq!(new_file, get_file);
-        manager.delete_file("foo").unwrap();
-        manager.delete_file("foo").unwrap();
-        manager.delete_file("foo1").unwrap();
+        manager.delete_file("foo", None).unwrap();
+        manager.delete_file("foo", None).unwrap();
+        manager.delete_file("foo1", None).unwrap();
 
         // Must be plaintext if file not found.
         assert_eq!(manager.get_file_exists("foo").unwrap(), None,);
@@ -1386,14 +1414,14 @@ mod tests {
         let file = manager.new_file("foo").unwrap();
 
         manager.link_file("foo", "foo1").unwrap();
-        manager.delete_file("foo").unwrap();
+        manager.delete_file("foo", None).unwrap();
 
         // Must be the same.
         let file1 = manager.get_file("foo1").unwrap();
         assert_eq!(file1, file);
 
         manager.link_file("foo", "foo2").unwrap();
-        manager.delete_file("foo").unwrap();
+        manager.delete_file("foo", None).unwrap();
 
         assert_eq!(manager.get_file_exists("foo").unwrap(), None);
         assert_eq!(manager.get_file_exists("foo2").unwrap(), None);
@@ -1740,7 +1768,7 @@ mod tests {
         manager
             .link_file(subdir.to_str().unwrap(), dstdir.to_str().unwrap())
             .unwrap();
-        manager.delete_file(subdir.to_str().unwrap()).unwrap();
+        manager.delete_file(subdir.to_str().unwrap(), None).unwrap();
 
         assert_eq!(
             manager
@@ -1845,5 +1873,25 @@ mod tests {
         importer.commit().unwrap();
         assert_eq!(manager.get_file("1").unwrap(), file0);
         assert_eq!(manager.get_file("2").unwrap().key, key2);
+    }
+
+    #[test]
+    fn test_trash_encrypted_dir() {
+        let tmp_dir = tempfile::Builder::new()
+            .prefix("test_trash_encrypted_dir")
+            .tempdir()
+            .unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+        let data_path = tmp_dir.path();
+        let sub_dir = data_path.join("sub_dir");
+        file_system::create_dir_all(&sub_dir).unwrap();
+        let file_path = sub_dir.join("f");
+        file_system::File::create(&file_path).unwrap();
+        manager.new_file(file_path.to_str().unwrap()).unwrap();
+        file_system::create_dir_all(sub_dir.join("deep_dir")).unwrap();
+        assert_eq!(manager.file_count(), 1);
+
+        crate::trash_dir_all(&sub_dir, Some(&manager)).unwrap();
+        assert_eq!(manager.file_count(), 0);
     }
 }
