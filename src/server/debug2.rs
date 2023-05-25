@@ -267,14 +267,16 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             Ok(())
         };
 
-        self.raft_engine
-            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
-                if let Err(e) = check_region_state(region_id) {
-                    res.push((region_id, e));
-                }
+        box_try!(
+            self.raft_engine
+                .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                    if let Err(e) = check_region_state(region_id) {
+                        res.push((region_id, e));
+                    }
 
-                Ok(())
-            });
+                    Ok(())
+                })
+        );
 
         Ok(res)
     }
@@ -491,7 +493,13 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     }
 
     fn get_store_ident(&self) -> Result<StoreIdent> {
-        unimplemented!()
+        self.raft_engine
+            .get_store_ident()
+            .map_err(|e| Error::Other(Box::new(e)))
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(ident),
+                None => Err(Error::NotFound("No store ident key".to_owned())),
+            })
     }
 
     fn get_region_properties(&self, _region_id: u64) -> Result<Vec<(String, String)>> {
@@ -681,10 +689,14 @@ fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
 mod tests {
     use std::path::Path;
 
-    use engine_traits::{RaftLogBatch, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use kvproto::{metapb, raft_serverpb::*};
+    use engine_traits::{RaftLogBatch, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use kvproto::{
+        metapb::{self, Peer},
+        raft_serverpb::*,
+    };
     use raft::prelude::EntryType;
     use raft_log_engine::RaftLogEngine;
+    use raftstore::store::RAFT_INIT_LOG_INDEX;
 
     use super::*;
     use crate::{
@@ -713,6 +725,16 @@ mod tests {
         let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
 
         DebuggerImplV2::new(reg, raft_engine, ConfigController::default())
+    }
+
+    impl<ER: RaftEngine> DebuggerImplV2<ER> {
+        fn set_store_id(&self, store_id: u64) {
+            let mut ident = self.get_store_ident().unwrap_or_default();
+            ident.set_store_id(store_id);
+            let mut lb = self.raft_engine.log_batch(3);
+            lb.put_store_ident(&ident).unwrap();
+            self.raft_engine.consume(&mut lb, true).unwrap();
+        }
     }
 
     #[test]
@@ -1100,5 +1122,80 @@ mod tests {
     }
 
     #[test]
-    fn test_bad_regions() {}
+    fn test_bad_regions() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+        let store_id = 1;
+        debugger.set_store_id(store_id);
+
+        let mut lb = debugger.raft_engine.log_batch(30);
+
+        let put_region_state =
+            |lb: &mut raft_log_engine::RaftLogBatch, region_id: u64, peers: &[u64]| {
+                let mut region_state = RegionLocalState::default();
+                region_state.set_state(PeerState::Normal);
+                let region = region_state.mut_region();
+                region.set_id(region_id);
+                let peers = peers
+                    .iter()
+                    .enumerate()
+                    .map(|(_, &sid)| Peer {
+                        id: region_id as u64,
+                        store_id: sid,
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>();
+                region.set_peers(peers.into());
+                lb.put_region_state(region_id, 5, &region_state).unwrap();
+            };
+
+        let put_apply_state =
+            |lb: &mut raft_log_engine::RaftLogBatch, region_id: u64, apply_index: u64| {
+                let mut apply_state = RaftApplyState::default();
+                apply_state.set_applied_index(apply_index);
+                lb.put_apply_state(region_id, apply_index, &apply_state)
+                    .unwrap();
+
+                for cf in ALL_CFS {
+                    lb.put_flushed_index(region_id, cf, 5, apply_index).unwrap();
+                }
+            };
+
+        let put_raft_state = |lb: &mut raft_log_engine::RaftLogBatch,
+                              region_id: u64,
+                              last_index: u64,
+                              commit_index: u64| {
+            let mut raft_state = RaftLocalState::default();
+            raft_state.set_last_index(last_index);
+            raft_state.mut_hard_state().set_commit(commit_index);
+            lb.put_raft_state(region_id, &raft_state).unwrap();
+        };
+
+        for &region_id in &[10, 11, 12] {
+            put_region_state(&mut lb, region_id, &[store_id]);
+        }
+
+        // last index < commit index
+        put_raft_state(&mut lb, 10, 100, 110);
+        put_apply_state(&mut lb, 10, RAFT_INIT_LOG_INDEX);
+
+        // commit index < last index < apply index, or commit index < apply index < last
+        // index.
+        put_raft_state(&mut lb, 11, 100, 90);
+        put_apply_state(&mut lb, 11, 110);
+        put_raft_state(&mut lb, 12, 100, 90);
+        put_apply_state(&mut lb, 12, 95);
+
+        // region state doesn't contains the peer itself.
+        put_region_state(&mut lb, 13, &[]);
+
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+
+        let mut bad_regions = debugger.bad_regions().unwrap();
+        bad_regions.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(bad_regions.len(), 4);
+        for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
+            assert_eq!(region_id, (10 + i) as u64);
+        }
+    }
 }
