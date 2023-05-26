@@ -386,8 +386,8 @@ dependencies = [
 
 [[package]]
 name = "azure_core"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "async-trait",
  "base64 0.21.0",
@@ -412,8 +412,8 @@ dependencies = [
 
 [[package]]
 name = "azure_identity"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -432,8 +432,8 @@ dependencies = [
 
 [[package]]
 name = "azure_security_keyvault"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -447,8 +447,8 @@ dependencies = [
 
 [[package]]
 name = "azure_storage"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -469,8 +469,8 @@ dependencies = [
 
 [[package]]
 name = "azure_storage_blobs"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#56c32bb5ac3637456fa429f181bfcfcef95cb73a"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "RustyXML",
  "azure_core",
