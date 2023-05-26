@@ -18,9 +18,12 @@ use kvproto::{
 };
 use nom::AsBytes;
 use raft::prelude::Entry;
-use raftstore::{coprocessor::get_region_approximate_middle, store::util::check_key_in_region};
+use raftstore::{
+    coprocessor::{get_region_approximate_middle, get_region_approximate_size},
+    store::util::check_key_in_region,
+};
 
-use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use super::debug::{recover_mvcc_for_range, BottommostLevelCompaction, Debugger, RegionInfo};
 use crate::{
     config::ConfigController,
     server::debug::{dump_default_cf_properties, dump_write_cf_properties, Error, Result},
@@ -211,6 +214,49 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             raft_statistics: None,
         }
     }
+
+    pub fn recover_regions(
+        &self,
+        regions: Vec<metapb::Region>,
+        read_only: bool,
+    ) -> Result<Vec<(u64, Error)>> {
+        let mut errors = Vec::with_capacity(regions.len());
+        for region in regions {
+            let region_id = region.get_id();
+            let region_state = box_try!(self.raft_engine.get_region_state(region_id, u64::MAX))
+                .ok_or_else(|| Error::NotFound(format!("Not found region {:?}", region_id)))?;
+            if region_state.get_state() != PeerState::Normal {
+                info!(
+                    "skip region";
+                    "region_id" => region_id,
+                    "peer_state" => ?region_state.get_state(),
+                );
+                continue;
+            }
+
+            let mut tablet_cache =
+                get_tablet_cache(&self.tablet_reg, region_id, Some(region_state))?;
+            let tablet = tablet_cache.latest().unwrap();
+
+            if let Err(e) = recover_mvcc_for_range(
+                tablet,
+                region.get_start_key(),
+                region.get_end_key(),
+                read_only,
+                0,
+            ) {
+                errors.push((region_id, e));
+            }
+        }
+
+        Ok(errors)
+    }
+
+    pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
+        info!("Calculating split keys...");
+
+        Ok(())
+    }
 }
 
 impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
@@ -303,20 +349,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             ));
         }
 
-        let mut region_states = vec![];
-        self.raft_engine
-            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
-                let region_state = self
-                    .raft_engine
-                    .get_region_state(region_id, u64::MAX)
-                    .unwrap()
-                    .unwrap();
-                if region_state.state == PeerState::Normal {
-                    region_states.push(region_state);
-                }
-                Ok(())
-            })
-            .unwrap();
+        let mut region_states = get_all_region_states_with_normal_state(&self.raft_engine);
 
         region_states.sort_by(|r1, r2| {
             r1.get_region()
@@ -673,6 +706,85 @@ fn get_tablet_cache(
     }
 }
 
+fn get_all_region_states_with_normal_state<ER: RaftEngine>(
+    raft_engine: &ER,
+) -> Vec<RegionLocalState> {
+    let mut region_states = vec![];
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+            let region_state = raft_engine
+                .get_region_state(region_id, u64::MAX)
+                .unwrap()
+                .unwrap();
+            if region_state.state == PeerState::Normal {
+                region_states.push(region_state);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    region_states
+}
+
+// This method devide all regions into `threads` of groups where each group has
+// similar data volume so that we use `threads` of threads to execute them
+// concurrently.
+fn deivde_regions_for_concurrency<ER: RaftEngine>(
+    raft_engine: &ER,
+    registry: &TabletRegistry<RocksEngine>,
+    threads: u64,
+) -> Result<Vec<Vec<metapb::Region>>> {
+    let region_states = get_all_region_states_with_normal_state(raft_engine);
+
+    if threads == 1 {
+        return Ok(vec![
+            region_states
+                .into_iter()
+                .map(|mut r| r.take_region())
+                .collect(),
+        ]);
+    }
+
+    let mut regions_groups = vec![];
+    let mut total_size = 0;
+    let mut region_sizes = vec![];
+    for region_state in &region_states {
+        let mut tablet_cache = get_tablet_cache(
+            &registry,
+            region_state.get_region().get_id(),
+            Some(region_state.clone()),
+        )?;
+        let tablet = tablet_cache.latest().unwrap();
+        let region_size = box_try!(get_region_approximate_size(
+            tablet,
+            region_state.get_region(),
+            0
+        ));
+        region_sizes.push(region_size);
+        total_size += region_size;
+    }
+
+    let group_size = (total_size + threads - 1) / threads;
+    let mut cur_group = vec![];
+    let mut cur_size = 0;
+    for (mut region_state, region_size) in region_states.into_iter().zip(region_sizes.into_iter()) {
+        cur_group.push(region_state.take_region());
+        cur_size += region_size;
+        if cur_size >= group_size {
+            cur_size = 0;
+            regions_groups.push(cur_group);
+            cur_group = vec![];
+        }
+    }
+    if !cur_group.is_empty() {
+        regions_groups.push(cur_group);
+    }
+
+    assert_eq!(regions_groups.len(), threads as usize);
+
+    Ok(regions_groups)
+}
+
 // `key1` and `key2` should both be start_key or end_key.
 fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
     if end_key && key1.is_empty() {
@@ -705,10 +817,11 @@ fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
 mod tests {
     use std::path::Path;
 
-    use engine_traits::{RaftLogBatch, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{RaftLogBatch, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
     use kvproto::{metapb, raft_serverpb::*};
     use raft::prelude::EntryType;
     use raft_log_engine::RaftLogEngine;
+    use tikv_util::store::new_peer;
 
     use super::*;
     use crate::{
@@ -1121,5 +1234,47 @@ mod tests {
                 range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).is_none()
             );
         }
+    }
+
+    #[test]
+    fn test_divide_regions() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+
+        let mut lb = debugger.raft_engine.log_batch(30);
+        for i in 0..20 {
+            let mut region = metapb::Region::default();
+            region.set_peers(vec![new_peer(1, i + 1)].into());
+            region.set_id(i + 1);
+            let ctx = TabletContext::new(&region, Some(5));
+            let mut cache = debugger.tablet_reg.load(ctx, true).unwrap();
+            let tablet = cache.latest().unwrap();
+            for j in 0..10 {
+                // (6 + 3) * 10
+                let k = format!("zk{:04}", i * 100 + j);
+                tablet.put(k.as_bytes(), b"val").unwrap();
+            }
+            tablet.flush_cfs(DATA_CFS, true).unwrap();
+
+            let mut region_state = RegionLocalState::default();
+            region_state.set_region(region);
+            region_state.set_tablet_index(5);
+            lb.put_region_state(i + 1, 5, &region_state).unwrap();
+        }
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 4).unwrap();
+
+        for g in groups {
+            assert_eq!(g.len(), 5);
+        }
+
+        let mut groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 3).unwrap();
+        groups.sort_by(|a, b| a.len().cmp(&b.len()));
+        assert_eq!(groups[0].len(), 6);
+        assert_eq!(groups[1].len(), 7);
+        assert_eq!(groups[2].len(), 7);
     }
 }
