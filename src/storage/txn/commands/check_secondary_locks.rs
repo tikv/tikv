@@ -55,8 +55,9 @@ enum SecondaryLockStatus {
 }
 
 // The returned `bool` indicates whether the rollback record should be written,
-// it should be false if and only if the txn commit record is not found.
-fn check_status_from_store<S: Snapshot>(
+// it should be true if and only if the txn commit record is not found, thus
+// a rollback record would be written later.
+fn check_determined_txn_status<S: Snapshot>(
     reader: &mut ReaderWithStats<'_, S>,
     key: &Key,
 ) -> Result<(SecondaryLockStatus, bool, Option<OverlappedWrite>)> {
@@ -95,10 +96,11 @@ fn check_status_from_lock<S: Snapshot>(
     Option<OverlappedWrite>,
     Option<ReleasedLock>,
 )> {
+    let mut overlapped_write = None;
     if lock.is_pessimistic_lock_with_conflict() {
         assert!(lock.is_pessimistic_lock());
         let (status, need_rollback, rollback_overlapped_write) =
-            check_status_from_store(reader, key)?;
+            check_determined_txn_status(reader, key)?;
         // If there exists commit or rollback record, the pessimistic lock is stale, in
         // this case the returned need_rollback is false.
         if !need_rollback {
@@ -110,15 +112,20 @@ fn check_status_from_lock<S: Snapshot>(
                 released_lock,
             ));
         }
+        overlapped_write = rollback_overlapped_write;
     }
 
     if lock.is_pessimistic_lock() {
         let released_lock = txn.unlock_key(key.clone(), true, TimeStamp::zero());
-        let overlapped_write = reader.get_txn_commit_record(key)?.unwrap_none(region_id);
+        let overlapped_write_res = if lock.is_pessimistic_lock_with_conflict() {
+            overlapped_write
+        } else {
+            reader.get_txn_commit_record(key)?.unwrap_none(region_id)
+        };
         Ok((
             SecondaryLockStatus::RolledBack,
             true,
-            overlapped_write,
+            overlapped_write_res,
             released_lock,
         ))
     } else {
@@ -157,7 +164,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                 // timestamp (0 if the lock is not committed).
                 l => {
                     mismatch_lock = l;
-                    check_status_from_store(&mut reader, &key)?
+                    check_determined_txn_status(&mut reader, &key)?
                 }
             };
             // If the lock does not exist or is a pessimistic lock, to prevent the

@@ -12,6 +12,8 @@ use crate::storage::{
     Snapshot, TxnStatus,
 };
 
+// The returned `TxnStatus` is Some(..) if the transaction status is already
+// determined.
 fn check_txn_status_from_pessimistic_primary_lock(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -19,7 +21,7 @@ fn check_txn_status_from_pessimistic_primary_lock(
     lock: &Lock,
     current_ts: TimeStamp,
     resolving_pessimistic_lock: bool,
-) -> Result<(TxnStatus, Option<ReleasedLock>)> {
+) -> Result<(Option<TxnStatus>, Option<ReleasedLock>)> {
     assert!(lock.is_pessimistic_lock());
     // Check the storage information first in case the force lock could be stale.
     // See https://github.com/pingcap/tidb/issues/43540 for more details.
@@ -28,8 +30,7 @@ fn check_txn_status_from_pessimistic_primary_lock(
         // rollback record in the write CF, if so the current primary
         // pessimistic lock is stale. Otherwise the primary pessimistic lock is
         // regarded as valid, and the transaction status is determined by it.
-        let (txn_status, is_status_decided) = check_txn_status_from_storage(reader, &primary_key)?;
-        if is_status_decided {
+        if let Some(txn_status) = check_determined_txn_status(reader, &primary_key)? {
             info!("unlock stale pessimistic primary lock";
                 "primary_key" => ?&primary_key,
                 "lock" => ?&lock,
@@ -38,7 +39,7 @@ fn check_txn_status_from_pessimistic_primary_lock(
             );
             let released = txn.unlock_key(primary_key, true, TimeStamp::zero());
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
-            return Ok((txn_status, released));
+            return Ok((Some(txn_status), released));
         }
     }
 
@@ -55,16 +56,15 @@ fn check_txn_status_from_pessimistic_primary_lock(
         return if resolving_pessimistic_lock {
             let released = txn.unlock_key(primary_key, true, TimeStamp::zero());
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
-            Ok((TxnStatus::PessimisticRollBack, released))
+            Ok((Some(TxnStatus::PessimisticRollBack), released))
         } else {
             let released = rollback_lock(txn, reader, primary_key, lock, true, true)?;
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-            Ok((TxnStatus::TtlExpire, released))
+            Ok((Some(TxnStatus::TtlExpire), released))
         };
     }
 
-    // Just use LockNotExistDoNothing to avoid clone the lock, it would not be used.
-    Ok((TxnStatus::LockNotExistDoNothing, None))
+    Ok((None, None))
 }
 
 /// Evaluate transaction status if a lock exists with the anticipated
@@ -162,7 +162,7 @@ pub fn check_txn_status_lock_exists(
 
     let is_pessimistic_txn = !lock.for_update_ts.is_zero();
     if lock.is_pessimistic_lock() {
-        let (status, released) = check_txn_status_from_pessimistic_primary_lock(
+        let check_result = check_txn_status_from_pessimistic_primary_lock(
             txn,
             reader,
             primary_key.clone(),
@@ -171,10 +171,10 @@ pub fn check_txn_status_lock_exists(
             resolving_pessimistic_lock,
         )?;
         // Return if the primary lock is stale or the transaction status is decided.
-        if (status.is_decided() || status == TxnStatus::PessimisticRollBack) && released.is_some() {
-            return Ok((status, released));
+        if let (Some(txn_status), Some(released_lock)) = check_result {
+            return Ok((txn_status, Some(released_lock)));
         }
-        assert!(released.is_none());
+        assert!(check_result.0.is_none() && check_result.1.is_none());
     } else if lock.ts.physical() + lock.ttl < current_ts.physical() {
         let released = rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
@@ -212,23 +212,24 @@ pub fn check_txn_status_lock_exists(
 }
 
 // Check transaction status from storage for the primary key, this function
-// would have impact on the transaction status, it is read only and would not
-// write anything.
-pub fn check_txn_status_from_storage(
+// would have no impact on the transaction status, it is read only and would not
+// write anything. The returned `TxnStatus` is Some(..) if it's already
+// determined.
+pub fn check_determined_txn_status(
     reader: &mut SnapshotReader<impl Snapshot>,
     primary_key: &Key,
-) -> Result<(TxnStatus, bool)> {
+) -> Result<Option<TxnStatus>> {
     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
     match reader.get_txn_commit_record(primary_key)? {
         TxnCommitRecord::SingleRecord { commit_ts, write } => {
             if write.write_type == WriteType::Rollback {
-                Ok((TxnStatus::RolledBack, true))
+                Ok(Some(TxnStatus::RolledBack))
             } else {
-                Ok((TxnStatus::committed(commit_ts), true))
+                Ok(Some(TxnStatus::committed(commit_ts)))
             }
         }
-        TxnCommitRecord::OverlappedRollback { .. } => Ok((TxnStatus::RolledBack, true)),
-        TxnCommitRecord::None { .. } => Ok((TxnStatus::LockNotExistDoNothing, false)),
+        TxnCommitRecord::OverlappedRollback { .. } => Ok(Some(TxnStatus::RolledBack)),
+        TxnCommitRecord::None { .. } => Ok(None),
     }
 }
 
