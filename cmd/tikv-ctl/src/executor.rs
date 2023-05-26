@@ -1085,7 +1085,8 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImpl<ER> {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!("only available for online mode");
+        println!("only available for online mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn check_region_consistency(&self, _: u64) {
@@ -1243,7 +1244,8 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!("only available for online mode");
+        println!("only available for online mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn check_region_consistency(&self, _: u64) {

@@ -421,11 +421,12 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     }
 
     fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
-        let region_state = self
-            .raft_engine
-            .get_region_state(region_id, u64::MAX)
-            .unwrap()
-            .unwrap();
+        let region_state = match self.raft_engine.get_region_state(region_id, u64::MAX) {
+            Ok(Some(region_state)) => region_state,
+            Ok(None) => return Err(Error::NotFound(format!("none region {:?}", region_id))),
+            Err(e) => return Err(Error::EngineTrait(e)),
+        };
+
         if region_state.state != PeerState::Normal {
             return Err(Error::NotFound(format!("none region {:?}", region_id)));
         }
