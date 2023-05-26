@@ -173,6 +173,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg.get_header(), self.term()) {
+            info!(
+                self.logger,
+                "stale command";
+                "req" => msg.get_header().get_term(),
+                "self" => self.term(),
+                "status.hs" => ?self.raft_group().status().hs,
+                "status.ss" => ?self.raft_group().status().ss,
+                "status.applied" => self.raft_group().status().applied,
+                "status.progress.conf" => ?self.raft_group().status().progress.map(|p| p.conf()),
+                "status.progress" => ?self.raft_group().status().progress.map(|p| p.iter().collect::<Vec<_>>()),
+            );
             raft_metrics.invalid_proposal.stale_command.inc();
             return Err(e);
         }
