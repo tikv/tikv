@@ -622,13 +622,13 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let logger = self.logger.clone();
             let router = router.clone();
             let registry = tablet_registry.clone();
+            let limiter = Limiter::new(MIN_MANUAL_FLUSH_RATE);
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
-                let limiter = Limiter::new(MIN_MANUAL_FLUSH_RATE);
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(mut regions) => {
                         if regions.is_empty() {
-                            continue;
+                            return;
                         }
                         warn!(logger, "flushing oldest cf of regions {regions:?}");
                         // Try to finish flush in 1m.
