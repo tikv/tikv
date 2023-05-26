@@ -6,8 +6,8 @@ use engine_rocks::{
     raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator, RocksStatistics,
 };
 use engine_traits::{
-    CachedTablet, Iterable, Peekable, RaftEngine, TabletContext, TabletRegistry, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
+    CachedTablet, Iterable, MiscExt, Peekable, RaftEngine, TabletContext, TabletRegistry,
+    CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use keys::{data_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
 use kvproto::{
@@ -18,12 +18,12 @@ use kvproto::{
 };
 use nom::AsBytes;
 use raft::prelude::Entry;
-use raftstore::store::util::check_key_in_region;
+use raftstore::{coprocessor::get_region_approximate_middle, store::util::check_key_in_region};
 
 use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use crate::{
     config::ConfigController,
-    server::debug::{Error, Result},
+    server::debug::{dump_default_cf_properties, dump_write_cf_properties, Error, Result},
     storage::mvcc::{MvccInfoCollector, MvccInfoScanner},
 };
 
@@ -193,7 +193,7 @@ pub struct DebuggerImplV2<ER: RaftEngine> {
     raft_engine: ER,
     kv_statistics: Option<Arc<RocksStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
-    _cfg_controller: ConfigController,
+    cfg_controller: ConfigController,
 }
 
 impl<ER: RaftEngine> DebuggerImplV2<ER> {
@@ -206,7 +206,7 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
         DebuggerImplV2 {
             tablet_reg,
             raft_engine,
-            _cfg_controller: cfg_controller,
+            cfg_controller,
             kv_statistics: None,
             raft_statistics: None,
         }
@@ -346,38 +346,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         if db == DbType::Raft {
             return Err(box_err!("Get raft db is not allowed"));
         }
-        let mut compactions = vec![];
-        self.raft_engine
-            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
-                let region_state = self
-                    .raft_engine
-                    .get_region_state(region_id, u64::MAX)
-                    .unwrap()
-                    .unwrap();
-                if region_state.state != PeerState::Normal {
-                    return Ok(());
-                }
-
-                if let Some((start_key, end_key)) =
-                    range_in_region((start, end), region_state.get_region())
-                {
-                    let start = if start_key.is_empty() {
-                        None
-                    } else {
-                        Some(data_key(start_key))
-                    };
-                    let end = if end_key.is_empty() {
-                        None
-                    } else {
-                        Some(data_key(end_key))
-                    };
-                    compactions.push((region_id, start, end, region_state));
-                };
-
-                Ok(())
-            })
-            .unwrap();
-
+        let compactions = find_region_states_by_key_range(&self.raft_engine, start, end);
         for (region_id, start_key, end_key, region_state) in compactions {
             let mut tablet_cache =
                 get_tablet_cache(&self.tablet_reg, region_id, Some(region_state))?;
@@ -412,27 +381,82 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     }
 
     fn dump_kv_stats(&self) -> Result<String> {
-        unimplemented!()
+        let mut kv_str = String::new();
+        self.tablet_reg.for_each_opened_tablet(|_, cached| {
+            if let Some(tablet) = cached.latest() {
+                let str = MiscExt::dump_stats(tablet).unwrap();
+                kv_str.push_str(&str);
+            }
+            true
+        });
+        if let Some(s) = self.kv_statistics.as_ref() && let Some(s) = s.to_string() {
+            kv_str.push_str(&s);
+        }
+        Ok(kv_str)
     }
 
     fn dump_raft_stats(&self) -> Result<String> {
-        unimplemented!()
+        let mut raft_str = box_try!(RaftEngine::dump_stats(&self.raft_engine));
+        if let Some(s) = self.raft_statistics.as_ref() && let Some(s) = s.to_string() {
+            raft_str.push_str(&s);
+        }
+        Ok(raft_str)
     }
 
-    fn modify_tikv_config(&self, _config_name: &str, _config_value: &str) -> Result<()> {
-        unimplemented!()
+    fn modify_tikv_config(&self, config_name: &str, config_value: &str) -> Result<()> {
+        if let Err(e) = self.cfg_controller.update_config(config_name, config_value) {
+            return Err(Error::Other(
+                format!("failed to update config, err: {:?}", e).into(),
+            ));
+        }
+        Ok(())
     }
 
     fn get_store_ident(&self) -> Result<StoreIdent> {
-        unimplemented!()
+        self.raft_engine
+            .get_store_ident()
+            .transpose()
+            .unwrap()
+            .map_err(|e| Error::EngineTrait(e))
     }
 
-    fn get_region_properties(&self, _region_id: u64) -> Result<Vec<(String, String)>> {
-        unimplemented!()
-    }
+    fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
+        let region_state = match self.raft_engine.get_region_state(region_id, u64::MAX) {
+            Ok(Some(region_state)) => region_state,
+            Ok(None) => return Err(Error::NotFound(format!("none region {:?}", region_id))),
+            Err(e) => return Err(Error::EngineTrait(e)),
+        };
 
-    fn get_range_properties(&self, _: &[u8], _: &[u8]) -> Result<Vec<(String, String)>> {
-        unimplemented!()
+        if region_state.state != PeerState::Normal {
+            return Err(Error::NotFound(format!("none region {:?}", region_id)));
+        }
+        let region = region_state.get_region();
+        let start = keys::enc_start_key(region);
+        let end = keys::enc_end_key(region);
+
+        let mut tablet_cache =
+            get_tablet_cache(&self.tablet_reg, region.id, Some(region_state.clone())).unwrap();
+        let tablet = tablet_cache.latest().unwrap();
+        let mut res = dump_write_cf_properties(tablet, &start, &end)?;
+        let mut res1 = dump_default_cf_properties(tablet, &start, &end)?;
+        res.append(&mut res1);
+
+        let middle_key = match box_try!(get_region_approximate_middle(tablet, region)) {
+            Some(data_key) => keys::origin_key(&data_key).to_vec(),
+            None => Vec::new(),
+        };
+
+        res.push((
+            "region.start_key".to_owned(),
+            hex::encode(&region.start_key),
+        ));
+        res.push(("region.end_key".to_owned(), hex::encode(&region.end_key)));
+        res.push((
+            "region.middle_key_by_approximate_size".to_owned(),
+            hex::encode(middle_key),
+        ));
+
+        Ok(res)
     }
 
     fn reset_to_version(&self, _version: u64) {
@@ -445,6 +469,32 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
 
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.raft_statistics = s;
+    }
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        let mut props = vec![];
+        let start = &keys::data_key(start);
+        let end = &keys::data_end_key(end);
+        let regions = find_region_states_by_key_range(&self.raft_engine, start, end);
+        for (region_id, start_key, end_key, region_state) in regions {
+            let mut tablet_cache =
+                get_tablet_cache(&self.tablet_reg, region_id, Some(region_state)).unwrap();
+            let talbet = tablet_cache.latest().unwrap();
+            let mut prop = dump_write_cf_properties(
+                talbet,
+                start_key.as_ref().map(|k| (k.as_bytes())).unwrap_or(start),
+                end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
+            )
+            .unwrap();
+            props.append(&mut prop);
+            let mut prop = dump_default_cf_properties(
+                talbet,
+                start_key.as_ref().map(|k| k.as_bytes()).unwrap_or(start),
+                end_key.as_ref().map(|k| k.as_bytes()).unwrap_or(end),
+            )?;
+            props.append(&mut prop);
+        }
+        Ok(props)
     }
 }
 
@@ -482,7 +532,6 @@ fn range_in_region<'a>(
     } else {
         DATA_PREFIX_KEY
     };
-
     if range_start == DATA_PREFIX_KEY && range_end == DATA_PREFIX_KEY {
         return Some((region.get_start_key(), region.get_end_key()));
     } else if range_start == DATA_PREFIX_KEY {
@@ -531,6 +580,44 @@ fn range_in_region<'a>(
         }
         None
     }
+}
+
+fn find_region_states_by_key_range<ER: RaftEngine>(
+    raft_engine: &ER,
+    start: &[u8],
+    end: &[u8],
+) -> Vec<(u64, Option<Vec<u8>>, Option<Vec<u8>>, RegionLocalState)> {
+    let mut regions = vec![];
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+            let region_state = raft_engine
+                .get_region_state(region_id, u64::MAX)
+                .unwrap()
+                .unwrap();
+            if region_state.state != PeerState::Normal {
+                return Ok(());
+            }
+
+            if let Some((start_key, end_key)) =
+                range_in_region((start, end), region_state.get_region())
+            {
+                let start = if start_key.is_empty() {
+                    None
+                } else {
+                    Some(data_key(start_key))
+                };
+                let end = if end_key.is_empty() {
+                    None
+                } else {
+                    Some(data_key(end_key))
+                };
+                regions.push((region_id, start, end, region_state));
+            };
+
+            Ok(())
+        })
+        .unwrap();
+    regions
 }
 
 fn find_region_state_by_key<ER: RaftEngine>(
