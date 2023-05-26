@@ -942,7 +942,7 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_debug_client)]
-// #[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
 fn test_debug_store() {
     let (mut cluster, debug_client, store_id) = new_cluster();
     let cluster_id = cluster.id();
@@ -989,7 +989,6 @@ fn test_debug_store() {
 
     let mut req = debugpb::GetRangePropertiesRequest::default();
     req.set_start_key(b"d".to_vec());
-    req.set_end_key(b"".to_vec());
     let resp = debug_client.get_range_properties(&req).unwrap();
     resp.get_properties()
         .iter()

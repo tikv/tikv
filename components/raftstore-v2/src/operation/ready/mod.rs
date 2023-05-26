@@ -71,11 +71,11 @@ use crate::{
     worker::tablet,
 };
 
-const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
+const PAUSE_FOR_REPLAY_GAP: u64 = 128;
 
 pub struct ReplayWatch {
-    skipped: AtomicUsize,
-    paused: AtomicUsize,
+    normal_peers: AtomicUsize,
+    paused_peers: AtomicUsize,
     logger: Logger,
     timer: Instant,
 }
@@ -83,8 +83,8 @@ pub struct ReplayWatch {
 impl Debug for ReplayWatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReplayWatch")
-            .field("skipped", &self.skipped)
-            .field("paused", &self.paused)
+            .field("normal_peers", &self.normal_peers)
+            .field("paused_peers", &self.paused_peers)
             .field("logger", &self.logger)
             .field("timer", &self.timer)
             .finish()
@@ -94,29 +94,31 @@ impl Debug for ReplayWatch {
 impl ReplayWatch {
     pub fn new(logger: Logger) -> Self {
         Self {
-            skipped: AtomicUsize::new(0),
-            paused: AtomicUsize::new(0),
+            normal_peers: AtomicUsize::new(0),
+            paused_peers: AtomicUsize::new(0),
             logger,
             timer: Instant::now(),
         }
     }
 
-    pub fn record_skipped(&self) {
-        self.skipped.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_normal_peer(&self) {
+        self.normal_peers.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn record_paused(&self) {
-        self.paused.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_paused_peer(&self) {
+        self.paused_peers.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 impl Drop for ReplayWatch {
     fn drop(&mut self) {
-        info!(self.logger,
-            "The raft log replay completed"; 
-            "skipped" => self.skipped.load(Ordering::Relaxed), 
-            "paused" => self.paused.load(Ordering::Relaxed), 
-            "elapsed" => ?self.timer.elapsed());
+        info!(
+            self.logger,
+            "The raft log replay completed";
+            "normal_peers" => self.normal_peers.load(Ordering::Relaxed),
+            "paused_peers" => self.paused_peers.load(Ordering::Relaxed),
+            "elapsed" => ?self.timer.elapsed()
+        );
     }
 }
 
@@ -170,7 +172,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn maybe_pause_for_recovery<T>(
+    pub fn maybe_pause_for_replay<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         watch: Option<Arc<ReplayWatch>>,
@@ -198,17 +200,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // it may block for ever when there is unapplied conf change.
             self.set_has_ready();
         }
-        if committed_index > applied_index + PAUSE_FOR_RECOVERY_GAP && let Some(w) = watch {
+        if committed_index > applied_index + PAUSE_FOR_REPLAY_GAP {
             // If there are too many the missing logs, we need to skip ticking otherwise
             // it may block the raftstore thread for a long time in reading logs for
             // election timeout.
-            info!(self.logger, "pause for recovery"; "applied" => applied_index, "committed" => committed_index);
-            w.record_paused();
+            info!(self.logger, "pause for replay"; "applied" => applied_index, "committed" => committed_index);
+
+            // when committed_index > applied_index + PAUSE_FOR_REPLAY_GAP, the peer must be
+            // created from StoreSystem on TiKV Start
+            let w = watch.unwrap();
+            w.inc_paused_peer();
             self.set_replay_watch(Some(w));
             true
         } else {
             if let Some(w) = watch {
-                w.record_skipped();
+                w.inc_normal_peer();
             }
             false
         }
