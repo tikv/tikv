@@ -99,6 +99,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        let is_transfer_leader = cmd_type == AdminCmdType::TransferLeader;
         let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
             && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
                 .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL);
@@ -119,7 +120,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
+        // Do not check conflict for transfer leader, otherwise we may not
+        // transfer leadership out of busy nodes in time.
+        if !is_transfer_leader && let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
             return;
         }
