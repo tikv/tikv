@@ -489,7 +489,7 @@ impl ServerCluster {
                 .unwrap(),
         );
 
-        let debugger = DebuggerImpl::new(engines.clone(), ConfigController::default());
+        let debugger = DebuggerImpl::new(engines.clone(), ConfigController::new(cfg.tikv.clone()));
         let debug_thread_handle = debug_thread_pool.handle().clone();
         let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
 
