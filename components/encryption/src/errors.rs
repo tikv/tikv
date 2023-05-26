@@ -7,6 +7,7 @@ use std::{
     result,
 };
 
+use cloud::error::Error as CloudError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
@@ -107,4 +108,39 @@ impl RetryError for Error {
             Error::Other(_) => true,
         }
     }
+}
+
+// CloudConverError adapts cloud errors to encryption errors
+// As the abstract RetryCodedError
+#[derive(Debug)]
+pub struct CloudConvertError(CloudError, String);
+
+impl RetryCodedError for CloudConvertError {}
+
+impl std::fmt::Display for CloudConvertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{} {}", &self.0, &self.1))
+    }
+}
+
+impl std::convert::From<CloudConvertError> for Error {
+    fn from(err: CloudConvertError) -> Error {
+        Error::RetryCodedError(Box::new(err) as Box<dyn RetryCodedError>)
+    }
+}
+
+impl RetryError for CloudConvertError {
+    fn is_retryable(&self) -> bool {
+        self.0.is_retryable()
+    }
+}
+
+impl ErrorCodeExt for CloudConvertError {
+    fn error_code(&self) -> ErrorCode {
+        self.0.error_code()
+    }
+}
+
+pub fn cloud_convert_error(msg: String) -> Box<dyn FnOnce(CloudError) -> CloudConvertError> {
+    Box::new(|err: CloudError| CloudConvertError(err, msg))
 }
