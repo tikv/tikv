@@ -44,7 +44,7 @@ use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
         needs_evict_entry_cache,
-        util::{self, is_first_message, is_initial_msg},
+        util::{self, is_first_append_entry, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
@@ -371,9 +371,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.insert_peer_cache(from_peer);
         }
 
-        // Delay first message and wait for split snapshot, so that slow split
-        // does not trigger leader to send a snapshot.
-        if !self.storage().is_initialized() && is_first_message(msg.get_message()) {
+        // Delay first append message and wait for split snapshot,
+        // so that slow split does not trigger leader to send a snapshot.
+        if !self.storage().is_initialized() && is_first_append_entry(msg.get_message()) {
             if self.split_pending_msg_mut().is_none() {
                 self.split_pending_msg_mut().replace((msg, Instant::now()));
                 return;
