@@ -396,8 +396,20 @@ impl<L: LockManager> TxnSchedulerInner<L> {
             return Err((cmd.group_name(), cmd.priority(), e.into()));
         }
         if self.latches.acquire(&mut tctx.lock, cid) {
+            info!(
+                "acquire_lock_on_wakeup: latch acquired success";
+                "acquired_latches" => ?&tctx.lock.required_hashes[0..tctx.lock.owned_count],
+                "cid" => cid,
+            );
             tctx.on_schedule();
             return Ok(tctx.task.take());
+        } else {
+            info!(
+                "acquire_lock_on_wakeup: latch acquired failed";
+                "acquired_latches" => ?&tctx.lock.required_hashes[0..tctx.lock.owned_count],
+                "not_acquired_latches" => ?&tctx.lock.required_hashes[tctx.lock.owned_count..],
+                "cid" => cid,
+            );
         }
         Ok(None)
     }
@@ -520,6 +532,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .inner
             .latches
             .release(&lock, cid, keep_latches_for_next_cmd);
+        info!(
+            "release latches";
+            "latches" => ?&lock.required_hashes[0..lock.owned_count],
+            "cid" => cid,
+        );
         for wcid in wakeup_list {
             self.try_to_wake_up(wcid);
         }
@@ -550,12 +567,24 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
 
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
+            info!(
+                "schedule_command: latch acquired success";
+                "acquired_latches" => ?&tctx.lock.required_hashes[0..tctx.lock.owned_count],
+                "cid" => cid,
+            );
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
             let task = tctx.task.take().unwrap();
             drop(task_slot);
             self.execute(task);
             return;
+        } else {
+            info!(
+                "schedule_command: latch acquired failed";
+                "acquired_latches" => ?&tctx.lock.required_hashes[0..tctx.lock.owned_count],
+                "not_acquired_latches" => ?&tctx.lock.required_hashes[tctx.lock.owned_count..],
+                "cid" => cid,
+            );
         }
         let task = tctx.task.as_ref().unwrap();
         self.fail_fast_or_check_deadline(cid, &task.cmd);
