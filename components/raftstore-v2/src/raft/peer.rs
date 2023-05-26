@@ -104,7 +104,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// split Regions should be step after peer steps snapshot from split,
     /// otherwise leader may send an unnecessary snapshot. So the messages are
     /// recorded temporarily and will be handled later.
-    split_pending_msg: Option<Box<RaftMessage>>,
+    split_pending_msg: Option<(Box<RaftMessage>, Instant)>,
 
     /// Apply related State changes that needs to be persisted to raft engine.
     ///
@@ -802,7 +802,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self.split_trace
     }
 
-    pub fn split_pending_msg_mut(&mut self) -> &mut Option<Box<RaftMessage>> {
+    pub fn split_pending_msg_mut(&mut self) -> &mut Option<(Box<RaftMessage>, Instant)> {
         &mut self.split_pending_msg
     }
 

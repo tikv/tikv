@@ -305,11 +305,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Delay first message and wait for split snapshot, so that slow split
         // does not trigger leader to send a snapshot.
         if !self.storage().is_initialized() && is_first_message(msg.get_message()) {
-            if self.split_pending_msg_mut().replace(msg).is_some() {
-                // We consider a message is too early if a message is replaced.
-                ctx.raft_metrics.message_dropped.region_nonexistent.inc();
+            if self.split_pending_msg_mut().is_none() {
+                self.split_pending_msg_mut().replace((msg, Instant::now()));
+                return;
+            } else {
+                let logger = self.logger.clone();
+                let pending_msg = self.split_pending_msg_mut();
+                let dur = pending_msg.as_ref().unwrap().1.elapsed();
+                if dur < ctx.cfg.snap_wait_split_duration.0 {
+                    pending_msg.as_mut().unwrap().0 = msg;
+                    // We consider a message is too early if a message is replaced.
+                    ctx.raft_metrics.message_dropped.region_nonexistent.inc();
+                    return;
+                }
+                pending_msg.take();
+                warn!(logger, "handle first message now, split may be slow";
+                        "duration" => ?dur);
             }
-            return;
         }
 
         let pre_committed_index = self.raft_group().raft.raft_log.committed;

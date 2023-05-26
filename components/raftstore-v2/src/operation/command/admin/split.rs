@@ -744,13 +744,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let prev = self.storage_mut().split_init_mut().replace(split_init);
         assert!(prev.is_none(), "{:?}", prev);
-
-        if let Some(mut msg) = self.split_pending_msg_mut().take() {
-            if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
-                error!(self.logger, "raft step error"; "err" => ?e);
-            }
-        }
-
         self.set_has_ready();
     }
 
