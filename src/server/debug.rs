@@ -4,6 +4,7 @@ use std::{
     error::Error as StdError,
     iter::FromIterator,
     path::Path,
+    pin::Pin,
     result,
     sync::Arc,
     thread::{Builder as ThreadBuilder, JoinHandle},
@@ -58,6 +59,7 @@ use crate::{
 pub const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
 
 pub type Result<T> = result::Result<T, Error>;
+pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -1092,7 +1094,7 @@ where
                     req.set_context(ctx.clone());
                     req.set_start_ts(start_ts.into_inner());
 
-                    let resp = future_prepare_flashback_to_version(storage_clone, req.into())
+                    let resp = future_prepare_flashback_to_version(storage_clone, req)
                         .await
                         .unwrap();
                     if !resp.get_error().is_empty() || resp.has_region_error() {
@@ -1115,7 +1117,7 @@ where
                     req.set_start_ts(start_ts.into_inner());
                     req.set_commit_ts(commit_ts.into_inner());
 
-                    let resp = future_flashback_to_version(storage_clone, req.into())
+                    let resp = future_flashback_to_version(storage_clone, req)
                         .await
                         .unwrap();
                     if !resp.get_error().is_empty() || resp.has_region_error() {

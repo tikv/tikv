@@ -13,7 +13,6 @@ use futures::{
     sink::SinkExt,
     stream::{self, TryStreamExt},
 };
-use futures_util::future::BoxFuture;
 use grpcio::{
     Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
@@ -32,7 +31,7 @@ use tokio::{
 };
 
 use crate::{
-    server::debug::{Debugger, Error, Result, FLASHBACK_TIMEOUT},
+    server::debug::{BoxFuture, Debugger, Error, Result, FLASHBACK_TIMEOUT},
     storage::mvcc::TimeStamp,
 };
 
@@ -638,8 +637,8 @@ where
                         let debugger = debugger.lock().await;
                         let check = debugger.region_flashback_to_version(
                             region_id,
-                            version.clone(),
-                            start_ts.clone(),
+                            version,
+                            start_ts,
                             TimeStamp::zero(),
                         );
                         match check.await {
@@ -676,12 +675,8 @@ where
                     let debugger = debugger.clone();
                     let work = flashback_wg.clone().work();
                     runtime.spawn(async move {
-                        let check = debugger.region_flashback_to_version(
-                            region_id,
-                            version,
-                            start_ts.clone(),
-                            commit_ts.clone(),
-                        );
+                        let check = debugger
+                            .region_flashback_to_version(region_id, version, start_ts, commit_ts);
                         match check.await {
                             Ok(_) => {}
                             Err(err) => {
