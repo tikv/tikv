@@ -305,12 +305,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Delay first append message and wait for split snapshot,
         // so that slow split does not trigger leader to send a snapshot.
         if !self.storage().is_initialized() && is_first_append_entry(msg.get_message()) {
-            if self.split_pending_msg_mut().is_none() {
-                self.split_pending_msg_mut().replace((msg, Instant::now()));
+            if self.split_pending_append_msg_mut().is_none() {
+                self.split_pending_append_msg_mut()
+                    .replace((msg, Instant::now()));
                 return;
             } else {
                 let logger = self.logger.clone();
-                let pending_msg = self.split_pending_msg_mut();
+                let pending_msg = self.split_pending_append_msg_mut();
                 let dur = pending_msg.as_ref().unwrap().1.elapsed();
                 if dur < ctx.cfg.snap_wait_split_duration.0 {
                     pending_msg.as_mut().unwrap().0 = msg;
