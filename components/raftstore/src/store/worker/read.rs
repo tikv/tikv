@@ -23,7 +23,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
+    debug, error, info,
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
@@ -799,10 +799,11 @@ where
 
         // Check term.
         if let Err(e) = util::check_term(req.get_header(), delegate.term) {
-            debug!(
+            info!(
                 "check term";
                 "delegate_term" => delegate.term,
                 "header_term" => req.get_header().get_term(),
+                "tag" => &delegate.tag,
             );
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.term_mismatch.inc());
             return Err(e);
