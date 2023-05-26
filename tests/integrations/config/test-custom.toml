@@ -159,6 +159,7 @@ raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
 raft-log-reserve-max-ticks = 100
 raft-engine-purge-interval = "20m"
+max-manual-flush-rate = 5.0
 raft-entry-cache-life-time = "12s"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "20MB"
