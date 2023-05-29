@@ -185,6 +185,7 @@ pub fn prewrite_flashback_key(
             TimeStamp::zero(),
             1,
             TimeStamp::zero(),
+            false,
         ),
         false, // Assuming flashback transactions won't participate any lock conflicts.
     );

@@ -916,6 +916,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -925,6 +926,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();

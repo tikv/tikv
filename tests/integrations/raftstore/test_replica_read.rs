@@ -375,6 +375,7 @@ fn test_read_index_retry_lock_checking() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
