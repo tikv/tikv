@@ -708,6 +708,7 @@ fn test_read_index_lock_checking_on_follower() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
@@ -787,6 +788,7 @@ fn test_read_index_lock_checking_on_false_leader() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));

@@ -403,6 +403,7 @@ fn test_read_index_lock_checking_on_follower() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     // Set a memory lock which is in the coprocessor query range on the leader
