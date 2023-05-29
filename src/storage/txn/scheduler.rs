@@ -1618,6 +1618,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             "before_async_write";
             "tag" => ?tag,
             "cid" => cid,
+            "region_id" => ctx.get_region_id(),
         );
 
         let mut res = unsafe {
@@ -1630,6 +1631,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         while let Some(ev) = res.next().await {
             match ev {
                 WriteEvent::Committed => {
+                    info!(
+                        "async write committed";
+                        "tag" => ?tag,
+                        "cid" => cid,
+                        "region_id" => ctx.get_region_id(),
+                    );
                     let early_return = (|| {
                         fail_point!("before_async_apply_prewrite_finish", |_| false);
                         true
@@ -1648,6 +1655,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                 }
                 WriteEvent::Proposed => {
+                    info!(
+                        "async write proposed";
+                        "tag" => ?tag,
+                        "cid" => cid,
+                        "region_id" => ctx.get_region_id(),
+                    );
                     let early_return = (|| {
                         fail_point!("before_pipelined_write_finish", |_| false);
                         true
@@ -1674,6 +1687,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                 }
                 WriteEvent::Finished(res) => {
+                    info!(
+                        "async write finished";
+                        "tag" => ?tag,
+                        "cid" => cid,
+                        "region_id" => ctx.get_region_id(),
+                    );
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
 
@@ -1705,6 +1724,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 }
             }
         }
+
+        warn!(
+            "unexpected exit road";
+            "tag" => ?tag,
+            "cid" => cid,
+            "region_id" => ctx.get_region_id(),
+        );
         // If it's not finished while the channel is closed, it means the write
         // is undeterministic. in this case, we don't know whether the
         // request is finished or not, so we should not release latch as
