@@ -117,6 +117,10 @@ fn check_status_from_lock<S: Snapshot>(
 
     if lock.is_pessimistic_lock() {
         let released_lock = txn.unlock_key(key.clone(), true, TimeStamp::zero());
+        // If the `is_pessimistic_lock_with_conflict` is true, the `overlapped_write` is
+        // already fetched in the above `check_determined_txn_status` call. So
+        // we don't need to fetch it again and the `overlapped_write` could be
+        // reused here.
         let overlapped_write_res = if lock.is_pessimistic_lock_with_conflict() {
             overlapped_write
         } else {
