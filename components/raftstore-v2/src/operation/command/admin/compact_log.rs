@@ -338,6 +338,35 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ));
     }
 
+    #[inline]
+    pub fn record_tombstone_tablet_path_callback<T>(
+        &mut self,
+        ctx: &StoreContext<EK, ER, T>,
+        old_tablet: PathBuf,
+        new_tablet_index: u64,
+        cb: impl FnOnce() + Send + 'static,
+    ) {
+        info!(
+            self.logger,
+            "record tombstone tablet";
+            "prev_tablet_path" => old_tablet.display(),
+            "new_tablet_index" => new_tablet_index
+        );
+        let compact_log_context = self.compact_log_context_mut();
+        compact_log_context
+            .tombstone_tablets_wait_index
+            .push(new_tablet_index);
+        let _ = ctx
+            .schedulers
+            .tablet
+            .schedule(tablet::Task::prepare_destroy_path_callback(
+                old_tablet,
+                self.region_id(),
+                new_tablet_index,
+                cb,
+            ));
+    }
+
     /// Returns if there's any tombstone being removed.
     #[inline]
     pub fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
