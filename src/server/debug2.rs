@@ -1342,7 +1342,7 @@ mod tests {
 
         let groups =
             deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 4).unwrap();
-
+        assert_eq!(groups.len(), 4);
         for g in groups {
             assert_eq!(g.len(), 5);
         }
@@ -1389,6 +1389,8 @@ mod tests {
         debugger.raft_engine.consume(&mut lb, true).unwrap();
 
         let check_group = |groups: Vec<Vec<metapb::Region>>, group_size_threshold| {
+            let count = groups.iter().fold(0, |count, group| count + group.len());
+            assert_eq!(count, 20);
             for (i, group) in groups.iter().enumerate() {
                 let mut current_group_size = 0;
                 for region in group {
