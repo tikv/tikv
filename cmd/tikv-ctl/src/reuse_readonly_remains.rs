@@ -27,19 +27,19 @@ pub fn run(config: &TikvConfig, agent_dir: &str, reuse_snaps: &str, reuse_rocksd
     }
     println!("create agent directory success");
 
-    if let Err(e) = dup_snaps(&config, agent_dir, reuse_snaps == "symlink") {
+    if let Err(e) = dup_snaps(config, agent_dir, reuse_snaps == "symlink") {
         eprintln!("dup snapshot files fail: {}", e);
         process::exit(-1);
     }
     println!("dup snapshot files success");
 
-    if let Err(e) = dup_kv_engine_files(&config, agent_dir, reuse_rocksdb_files == "symlink") {
+    if let Err(e) = dup_kv_engine_files(config, agent_dir, reuse_rocksdb_files == "symlink") {
         eprintln!("dup kv engine files fail: {}", e);
         process::exit(-1);
     }
     println!("dup kv engine files success");
 
-    if let Err(e) = dup_raft_engine_files(&config, agent_dir, reuse_rocksdb_files == "symlink") {
+    if let Err(e) = dup_raft_engine_files(config, agent_dir, reuse_rocksdb_files == "symlink") {
         eprintln!("dup raft engine fail: {}", e);
         process::exit(-1);
     }
@@ -107,10 +107,8 @@ fn dup_kv_engine_files(
         if use_symlink {
             replace_symlink_with_copy(&config.rocksdb.wal_dir, &dst, rocksdb_files_should_copy)?;
         }
-    } else {
-        if use_symlink {
-            replace_symlink_with_copy(&src, &dst, rocksdb_files_should_copy)?;
-        }
+    } else if use_symlink {
+        replace_symlink_with_copy(&src, &dst, rocksdb_files_should_copy)?;
     }
 
     Ok(())
@@ -155,10 +153,8 @@ fn dup_raft_engine_files(
             if use_symlink {
                 replace_symlink_with_copy(&config.raftdb.wal_dir, &dst, rocksdb_files_should_copy)?;
             }
-        } else {
-            if use_symlink {
-                replace_symlink_with_copy(&src, &dst, rocksdb_files_should_copy)?;
-            }
+        } else if use_symlink {
+            replace_symlink_with_copy(&src, &dst, rocksdb_files_should_copy)?;
         }
     }
 

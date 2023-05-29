@@ -241,11 +241,11 @@ fn main() {
             split_region(&pd_client, mgr, region_id, key);
         }
         Cmd::ShowClusterId { data_dir } => {
-            if !opt.config.is_some() {
+            if opt.config.is_none() {
                 eprintln!("tikv-ctl parameter config must be specified");
                 process::exit(-1);
             }
-            if data_dir == "" {
+            if data_dir.is_empty() {
                 eprintln!("reuse-readonly-remains parameter data-dir must be specified");
                 process::exit(-1);
             }
@@ -274,11 +274,11 @@ fn main() {
             snaps,
             rocksdb_files,
         } => {
-            if !opt.config.is_some() {
+            if opt.config.is_none() {
                 eprintln!("tikv-ctl parameter config must be specified");
                 process::exit(-1);
             }
-            if data_dir == "" {
+            if data_dir.is_empty() {
                 eprintln!("reuse-readonly-remains parameter data-dir must be specified");
                 process::exit(-1);
             }
