@@ -50,6 +50,7 @@ use structopt::{clap::ErrorKind, StructOpt};
 use tikv::{
     config::TikvConfig,
     server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
+    storage::config::EngineType,
 };
 use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
 use txn_types::Key;
@@ -283,6 +284,10 @@ fn main() {
                 process::exit(-1);
             }
             cfg.storage.data_dir = data_dir;
+            if cfg.storage.engine == EngineType::RaftKv2 {
+                eprintln!("storage.engine should be raftkv on the remained TiKV");
+                process::exit(-1);
+            }
             if cfg.raft_engine.config().enable_log_recycle {
                 eprintln!("raft-engine.enable-log-recycle is true on the remained TiKV");
                 process::exit(-1);
