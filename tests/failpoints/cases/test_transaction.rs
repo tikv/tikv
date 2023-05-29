@@ -616,7 +616,7 @@ fn test_read_index_with_max_ts() {
     // Increase the election tick to make this test case running reliably.
     // Use async apply prewrite to let tikv response before applying on the leader
     // peer.
-    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
     cluster.cfg.storage.enable_async_apply_prewrite = true;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
