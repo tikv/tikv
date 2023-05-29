@@ -184,13 +184,6 @@ pub struct SplitPendingAppend {
 }
 
 impl SplitPendingAppend {
-    pub fn new() -> SplitPendingAppend {
-        SplitPendingAppend {
-            append_msg: None,
-            range_overlapped: true,
-        }
-    }
-
     pub fn set_range_overlapped(&mut self, range_overlapped: bool) {
         if self.range_overlapped {
             self.range_overlapped = range_overlapped;
@@ -199,6 +192,15 @@ impl SplitPendingAppend {
 
     pub fn take_append_message(&mut self) -> Option<Box<RaftMessage>> {
         self.append_msg.take().map(|(msg, _)| msg)
+    }
+}
+
+impl Default for SplitPendingAppend {
+    fn default() -> SplitPendingAppend {
+        SplitPendingAppend {
+            append_msg: None,
+            range_overlapped: true,
+        }
     }
 }
 
@@ -576,7 +578,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn ready_to_handle_first_append_message<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        msg: &Box<RaftMessage>,
+        msg: &RaftMessage,
     ) -> bool {
         // The peer does not overlap with other regions. It means the parent
         // region in this node might be stale and has been removed, so there is
@@ -588,14 +590,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.split_pending_append_mut().append_msg.is_none() {
             self.split_pending_append_mut()
                 .append_msg
-                .replace((msg.clone(), Instant::now_coarse()));
+                .replace((msg.clone().into(), Instant::now_coarse()));
             return false;
         }
         let logger = self.logger.clone();
         let append_msg = &mut self.split_pending_append_mut().append_msg;
         let dur = append_msg.as_ref().unwrap().1.saturating_elapsed();
         if dur < store_ctx.cfg.snap_wait_split_duration.0 {
-            append_msg.as_mut().unwrap().0 = msg.clone();
+            append_msg.as_mut().unwrap().0 = msg.clone().into();
             // We consider a message is too early if it is replaced.
             store_ctx
                 .raft_metrics

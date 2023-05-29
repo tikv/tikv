@@ -382,10 +382,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 });
                 self.split_pending_append_mut()
                     .set_range_overlapped(is_overlapped);
-            } else if is_first_append_entry(msg.get_message()) {
-                if !self.ready_to_handle_first_append_message(ctx, &msg) {
-                    return;
-                }
+            } else if is_first_append_entry(msg.get_message())
+                && !self.ready_to_handle_first_append_message(ctx, &msg)
+            {
+                return;
             }
         }
 

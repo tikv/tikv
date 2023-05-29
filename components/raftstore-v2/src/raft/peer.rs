@@ -204,7 +204,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
-            split_pending_append: SplitPendingAppend::new(),
+            split_pending_append: SplitPendingAppend::default(),
             state_changes: None,
             flush_state,
             sst_apply_state,
