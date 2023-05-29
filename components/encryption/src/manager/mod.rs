@@ -236,7 +236,6 @@ impl Dicts {
 
             match file_dict.files.remove(fname) {
                 Some(file_info) => {
-                    info!("delete encrypted file"; "fname" => fname);
                     let file_num = file_dict.files.len() as _;
                     (file_info, file_num)
                 }
@@ -807,20 +806,6 @@ impl DataKeyManager {
     pub fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
         let scan = physical.unwrap_or(logical);
         debug_assert!(scan.is_dir());
-        if let Some(p) = physical {
-            info!(
-                "remove_dir {}, {}, scan.exists={}",
-                logical.display(),
-                p.display(),
-                scan.exists()
-            );
-        } else {
-            info!(
-                "remove_dir {}, scan.exists={}",
-                logical.display(),
-                scan.exists()
-            );
-        }
         if !scan.exists() {
             return Ok(());
         }

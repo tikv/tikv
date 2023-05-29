@@ -1096,7 +1096,7 @@ pub fn check_conf_change(
             .inc();
 
         Err(box_err!(
-            "{:?}: before: {:?} ||| {:?}, after: {:?} ||| {:?}, first index {}, promoted commit index {}",
+            "{:?}: before: {:?}, {:?}; after: {:?}, {:?}; first index {}; promoted commit index {}",
             change_peers,
             current_progress.conf(),
             current_progress.iter().collect::<Vec<_>>(),
