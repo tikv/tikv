@@ -6,7 +6,7 @@ use txn_types::{Key, TimeStamp, Write, WriteType};
 use crate::storage::{
     mvcc::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-        ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
+        ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
     },
     Snapshot,
 };
@@ -47,7 +47,7 @@ pub fn commit<S: Snapshot>(
             // lock request, and the transaction need not to acquire this lock again(due to
             // WriteConflict). If the transaction is committed, we should remove the
             // pessimistic lock (like pessimistic_rollback) instead of committing.
-            if lock.lock_type == LockType::Pessimistic {
+            if lock.is_pessimistic_lock() {
                 warn!(
                     "rollback a pessimistic lock when trying to commit";
                     "key" => %key,
@@ -92,7 +92,7 @@ pub fn commit<S: Snapshot>(
     if !commit {
         // Rollback a stale pessimistic lock. This function must be called by
         // resolve-lock in this case.
-        assert_eq!(lock.lock_type, LockType::Pessimistic);
+        assert!(lock.is_pessimistic_lock());
         return Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero()));
     }
 

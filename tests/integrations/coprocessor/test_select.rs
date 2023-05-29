@@ -2324,6 +2324,7 @@ fn test_batch_request() {
                     TimeStamp::zero(),
                     1,
                     TimeStamp::zero(),
+                    false,
                 );
                 cluster.must_put_cf(CF_LOCK, lock_key.as_encoded(), lock.to_bytes().as_slice());
             }

@@ -1348,6 +1348,7 @@ fn test_debug_scan_mvcc() {
             TimeStamp::zero(),
             0,
             TimeStamp::zero(),
+            false,
         )
         .to_bytes();
         engine.put_cf(CF_LOCK, k.as_slice(), &v).unwrap();
@@ -1924,6 +1925,7 @@ fn test_with_memory_lock_cluster(
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     guard.with_lock(|l| {
