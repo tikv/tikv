@@ -1208,12 +1208,30 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
-    fn set_region_tombstone(&self, _regions: Vec<Region>) {
-        unimplemented!()
+    fn set_region_tombstone(&self, regions: Vec<Region>) {
+        let ret = self
+            .set_region_tombstone(regions)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
     }
 
-    fn set_region_tombstone_by_id(&self, _regions: Vec<u64>) {
-        unimplemented!()
+    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
+        let ret = self
+            .set_region_tombstone_by_id(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
     }
 
     fn recover_regions(&self, _regions: Vec<Region>, _read_only: bool) {
