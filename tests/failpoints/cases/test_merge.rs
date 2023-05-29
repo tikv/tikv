@@ -1347,6 +1347,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
                 for_update_ts: 20.into(),
                 min_commit_ts: 30.into(),
                 last_change: LastChange::make_exist(15.into(), 3),
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();
@@ -1435,6 +1436,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
         last_change: LastChange::make_exist(15.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1515,6 +1517,7 @@ fn test_retry_pending_prepare_merge_fail() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
         last_change: LastChange::make_exist(15.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1590,6 +1593,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
         last_change: LastChange::make_exist(15.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks

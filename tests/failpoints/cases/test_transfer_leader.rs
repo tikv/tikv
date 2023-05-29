@@ -135,6 +135,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
                 for_update_ts: 10.into(),
                 min_commit_ts: 20.into(),
                 last_change: LastChange::make_exist(5.into(), 3),
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();
@@ -213,6 +214,7 @@ fn test_delete_lock_proposed_before_proposing_locks() {
                 for_update_ts: 10.into(),
                 min_commit_ts: 20.into(),
                 last_change: LastChange::make_exist(5.into(), 3),
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();
@@ -296,6 +298,7 @@ fn test_read_lock_after_become_follower() {
                 for_update_ts,
                 min_commit_ts: for_update_ts,
                 last_change: LastChange::make_exist(start_ts.prev(), 1),
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();

@@ -834,6 +834,7 @@ fn test_leader_drop_with_pessimistic_lock() {
                 for_update_ts: 10.into(),
                 min_commit_ts: 10.into(),
                 last_change: LastChange::make_exist(5.into(), 3),
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();

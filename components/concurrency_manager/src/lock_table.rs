@@ -183,6 +183,7 @@ mod test {
             10.into(),
             1,
             10.into(),
+            false,
         );
         let guard = lock_table.lock_key(&key_k).await;
         guard.with_lock(|l| {
@@ -212,6 +213,7 @@ mod test {
             20.into(),
             1,
             20.into(),
+            false,
         );
         let guard = lock_table.lock_key(&Key::from_raw(b"k")).await;
         guard.with_lock(|l| {
@@ -227,6 +229,7 @@ mod test {
             10.into(),
             1,
             10.into(),
+            false,
         );
         let guard = lock_table.lock_key(&Key::from_raw(b"l")).await;
         guard.with_lock(|l| {
@@ -284,6 +287,7 @@ mod test {
             20.into(),
             1,
             20.into(),
+            false,
         );
         let guard_a = lock_table.lock_key(&Key::from_raw(b"a")).await;
         guard_a.with_lock(|l| {
@@ -304,6 +308,7 @@ mod test {
             30.into(),
             2,
             30.into(),
+            false,
         )
         .use_async_commit(vec![b"c".to_vec()]);
         let guard_b = lock_table.lock_key(&Key::from_raw(b"b")).await;

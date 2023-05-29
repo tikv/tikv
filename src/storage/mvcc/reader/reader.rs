@@ -1680,6 +1680,7 @@ pub mod tests {
                     for_update_ts,
                     0,
                     TimeStamp::zero(),
+                    false,
                 )
                 .set_last_change(LastChange::deserialize(
                     TimeStamp::zero(),

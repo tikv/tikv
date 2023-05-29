@@ -21,6 +21,7 @@ fn error_to_status(e: Error) -> RpcStatus {
         Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
         Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
         Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
+        Error::EngineTrait(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
     };
     RpcStatus::with_message(code, msg)
 }

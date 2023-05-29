@@ -1355,6 +1355,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
         last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1372,6 +1373,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
         last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1482,6 +1484,7 @@ fn test_merge_pessimistic_locks_repeated_merge() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
         last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks

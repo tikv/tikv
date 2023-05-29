@@ -1228,6 +1228,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
                 0.into(),
                 1,
                 ts.into(),
+                false,
             ))
         });
         guard

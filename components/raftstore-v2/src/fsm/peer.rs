@@ -2,7 +2,7 @@
 
 //! This module contains the peer implementation for batch system.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
@@ -20,6 +20,7 @@ use tikv_util::{
 
 use crate::{
     batch::StoreContext,
+    operation::ReplayWatch,
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick, QueryResult},
     Result,
@@ -187,8 +188,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         self.store_ctx.tick_batch[idx].ticks.push(cb);
     }
 
-    fn on_start(&mut self) {
-        if !self.fsm.peer.maybe_pause_for_recovery(self.store_ctx) {
+    fn on_start(&mut self, watch: Option<Arc<ReplayWatch>>) {
+        if !self.fsm.peer.maybe_pause_for_replay(self.store_ctx, watch) {
             self.schedule_tick(PeerTick::Raft);
         }
         self.schedule_tick(PeerTick::SplitRegionCheck);
@@ -269,7 +270,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::SplitInitFinish(region_id) => {
                     self.fsm.peer.on_split_init_finish(region_id)
                 }
-                PeerMsg::Start => self.on_start(),
+                PeerMsg::Start(w) => self.on_start(w),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {
                     peer_id,
@@ -338,9 +339,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::AckCommitMerge { index, target_id } => {
                     self.fsm.peer_mut().on_ack_commit_merge(index, target_id)
                 }
-                PeerMsg::RejectCommitMerge { index } => {
-                    self.fsm.peer_mut().on_reject_commit_merge(index)
-                }
+                PeerMsg::RejectCommitMerge { index } => self
+                    .fsm
+                    .peer_mut()
+                    .on_reject_commit_merge(self.store_ctx, index),
                 PeerMsg::RedirectCatchUpLogs(c) => self
                     .fsm
                     .peer_mut()

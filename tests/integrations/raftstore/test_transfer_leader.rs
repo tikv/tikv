@@ -272,6 +272,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
         last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     {
@@ -314,6 +315,7 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
         last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     txn_ext

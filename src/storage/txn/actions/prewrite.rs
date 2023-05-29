@@ -339,7 +339,7 @@ impl<'a> PrewriteMutation<'a> {
 
         self.last_change = lock.last_change.clone();
 
-        if lock.lock_type == LockType::Pessimistic {
+        if lock.is_pessimistic_lock() {
             // TODO: remove it in future
             if !self.txn_props.is_pessimistic() {
                 return Err(ErrorInner::LockTypeNotMatch {
@@ -526,6 +526,7 @@ impl<'a> PrewriteMutation<'a> {
             for_update_ts_to_write,
             self.txn_props.txn_size,
             self.min_commit_ts,
+            false,
         )
         .set_txn_source(self.txn_props.txn_source);
         // Only Lock needs to record `last_change_ts` in its write record, Put or Delete
@@ -2545,6 +2546,7 @@ pub mod tests {
                 ts.into(),
                 5,
                 ts.into(),
+                false,
             )
             .set_last_change(LastChange::deserialize(
                 last_change_ts.into(),
