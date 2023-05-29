@@ -9,6 +9,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
+    metrics::{CommandKind, KV_COMMAND_COUNTER_VEC_STATIC},
     mvcc::{MvccReader, MvccTxn},
     txn::{
         actions::flashback_to_version::{
@@ -40,7 +41,6 @@ command! {
 
 impl CommandExt for FlashbackToVersion {
     ctx!();
-    tag!(flashback_to_version);
     request_type!(KvFlashbackToVersion);
 
     fn gen_lock(&self) -> latch::Lock {
@@ -65,6 +65,28 @@ impl CommandExt for FlashbackToVersion {
                 keys.iter().map(|key| key.as_encoded().len()).sum()
             }
             FlashbackToVersionState::Commit { key_to_commit } => key_to_commit.as_encoded().len(),
+        }
+    }
+
+    fn tag(&self) -> CommandKind {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                CommandKind::flashback_to_version_rollback_lock
+            }
+            _ => CommandKind::flashback_to_version_write,
+        }
+    }
+
+    fn incr_cmd_metric(&self) {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                KV_COMMAND_COUNTER_VEC_STATIC
+                    .flashback_to_version_rollback_lock
+                    .inc();
+            }
+            _ => KV_COMMAND_COUNTER_VEC_STATIC
+                .flashback_to_version_write
+                .inc(),
         }
     }
 }
