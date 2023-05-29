@@ -122,6 +122,14 @@ impl TxnStatus {
     pub fn committed(commit_ts: TimeStamp) -> Self {
         Self::Committed { commit_ts }
     }
+
+    // Returns if the transaction is already committed or rolled back.
+    pub fn is_decided(&self) -> bool {
+        matches!(
+            self,
+            TxnStatus::RolledBack | TxnStatus::TtlExpire | TxnStatus::Committed { .. }
+        )
+    }
 }
 
 #[derive(Debug)]

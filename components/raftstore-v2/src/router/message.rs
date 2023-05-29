@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::sync::Arc;
 
 use kvproto::{
     import_sstpb::SstMeta,
@@ -21,7 +22,7 @@ use super::response_channel::{
     QueryResSubscriber,
 };
 use crate::{
-    operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SplitInit},
+    operation::{CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit},
     router::ApplyRes,
 };
 
@@ -169,7 +170,7 @@ pub enum PeerMsg {
     LogsFetched(FetchedLogs),
     SnapshotGenerated(GenSnapRes),
     /// Start the FSM.
-    Start,
+    Start(Option<Arc<ReplayWatch>>),
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
     SplitInitFinish(u64),
@@ -284,6 +285,27 @@ impl PeerMsg {
         source: String,
     ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
+        (
+            PeerMsg::RequestSplit {
+                request: RequestSplit {
+                    epoch,
+                    split_keys,
+                    source: source.into(),
+                },
+                ch,
+            },
+            sub,
+        )
+    }
+
+    #[cfg(feature = "testexport")]
+    pub fn request_split_with_callback(
+        epoch: metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: String,
+        f: Box<dyn FnOnce(&mut kvproto::raft_cmdpb::RaftCmdResponse) + Send>,
+    ) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::with_callback(f);
         (
             PeerMsg::RequestSplit {
                 request: RequestSplit {

@@ -107,6 +107,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_ingest(&mut self, index: u64, ssts: Vec<SstMeta>) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let mut infos = Vec::with_capacity(ssts.len());
+        let mut size: i64 = 0;
+        let mut keys: u64 = 0;
         for sst in &ssts {
             // This may not be enough as ingest sst may not trigger flush at all.
             let off = data_cf_offset(sst.get_cf_name());
@@ -125,7 +127,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 return Err(e);
             }
             match self.sst_importer().validate(sst) {
-                Ok(meta_info) => infos.push(meta_info),
+                Ok(meta_info) => {
+                    size += meta_info.total_bytes as i64;
+                    keys += meta_info.total_kvs;
+                    infos.push(meta_info)
+                }
                 Err(e) => {
                     slog_panic!(self.logger, "corrupted sst"; "sst" => ?sst, "error" => ?e);
                 }
@@ -143,6 +149,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .map(|info| info.meta.get_uuid().to_vec())
             .collect::<Vec<_>>();
         self.set_sst_applied_index(uuids, index);
+
+        self.metrics.size_diff_hint += size;
+        self.metrics.written_bytes += size as u64;
+        self.metrics.written_keys += keys;
         Ok(())
     }
 }

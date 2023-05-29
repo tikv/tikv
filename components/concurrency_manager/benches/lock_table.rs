@@ -32,6 +32,7 @@ fn prepare_cm() -> ConcurrencyManager {
                 10.into(),
                 1,
                 20.into(),
+                false,
             ));
         });
         // Leak the guard so the lock won't be removed.

@@ -230,6 +230,14 @@
 ## The path to RocksDB directory.
 # data-dir = "./"
 
+## Specifies the engine type. This configuration can only be specified when creating a new cluster
+## and cannot be modifies once being specified.
+##
+## Available types are:
+## "raft-kv": The default engine type in versions earlier than TiDB v6.6.0.
+## "partitioned-raft-kv": The new storage engine type introduced in TiDB v6.6.0.
+# engine = "raft-kv"
+
 ## The number of slots in Scheduler latches, which controls write concurrency.
 ## In most cases you can use the default value. When importing data, you can set it to a larger
 ## value.
@@ -630,7 +638,12 @@
 
 ## Memory usage limit for Raft Engine. Undersized write buffers will be flushed to satisfy the
 ## requirement.
+##
 ## No limit when not specified.
+##
+## When storage.engine is "raft-kv", default is no limit.
+## When storage.engine is "partitioned-raft-kv", default value is 25% of available system memory or
+## 15GiB, whichever is smaller.
 # write-buffer-limit = "1GB"
 
 ## Options for `Titan`.
