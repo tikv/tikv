@@ -624,10 +624,7 @@ impl LastChange {
                 LastChange::Unknown
             }
         } else {
-            LastChange::Exist(LastChangePosition {
-                last_change_ts,
-                estimated_versions_to_last_change,
-            })
+            Self::make_exist(last_change_ts, estimated_versions_to_last_change)
         }
     }
 }
