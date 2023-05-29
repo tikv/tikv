@@ -16,7 +16,7 @@ use crate::{
     fsm::{ApplyResReporter, Store, StoreFsmDelegate},
     raft::{Apply, Peer},
     router::{PeerMsg, StoreTick},
-    worker::tablet_gc,
+    worker::tablet,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
@@ -53,7 +53,7 @@ impl Store {
             if let Err(TrySendError::Disconnected(msg)) = ctx.router.send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
                 && !ctx.router.is_shutdown() {
                 let PeerMsg::CleanupImportSst(ssts) = msg else { unreachable!() };
-                let _ = ctx.schedulers.tablet_gc.schedule(tablet_gc::Task::CleanupImportSst(ssts));
+                let _ = ctx.schedulers.tablet.schedule(tablet::Task::CleanupImportSst(ssts));
             }
         }
 
@@ -67,16 +67,38 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         ssts: Box<[SstMeta]>,
     ) {
-        let epoch = self.region().get_region_epoch();
         let mut stale_ssts = Vec::from(ssts);
-        stale_ssts.retain(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch));
+        let epoch = self.region().get_region_epoch();
+        stale_ssts.retain(|sst| {
+            fail::fail_point!("on_cleanup_import_sst", |_| true);
+            util::is_epoch_stale(sst.get_region_epoch(), epoch)
+        });
+
+        // some sst needs to be kept if the log didn't flush the disk.
+        let flushed_indexes = self.storage().apply_trace().flushed_indexes();
+        stale_ssts.retain(|sst| {
+            let off = data_cf_offset(sst.get_cf_name());
+            let uuid = sst.get_uuid().to_vec();
+            let sst_index = self.sst_apply_state().sst_applied_index(&uuid);
+            if let Some(index) = sst_index {
+                return flushed_indexes.as_ref()[off] >= index;
+            }
+            true
+        });
+
+        fail::fail_point!("on_cleanup_import_sst_schedule");
         if stale_ssts.is_empty() {
             return;
         }
+        let uuids = stale_ssts
+            .iter()
+            .map(|sst| sst.get_uuid().to_vec())
+            .collect();
+        self.sst_apply_state().delete_ssts(uuids);
         let _ = ctx
             .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::CleanupImportSst(stale_ssts.into()));
+            .tablet
+            .schedule(tablet::Task::CleanupImportSst(stale_ssts.into()));
     }
 }
 
@@ -85,6 +107,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_ingest(&mut self, index: u64, ssts: Vec<SstMeta>) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let mut infos = Vec::with_capacity(ssts.len());
+        let mut size: i64 = 0;
+        let mut keys: u64 = 0;
         for sst in &ssts {
             // This may not be enough as ingest sst may not trigger flush at all.
             let off = data_cf_offset(sst.get_cf_name());
@@ -103,7 +127,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 return Err(e);
             }
             match self.sst_importer().validate(sst) {
-                Ok(meta_info) => infos.push(meta_info),
+                Ok(meta_info) => {
+                    size += meta_info.total_bytes as i64;
+                    keys += meta_info.total_kvs;
+                    infos.push(meta_info)
+                }
                 Err(e) => {
                     slog_panic!(self.logger, "corrupted sst"; "sst" => ?sst, "error" => ?e);
                 }
@@ -116,6 +144,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 slog_panic!(self.logger, "ingest fail"; "ssts" => ?ssts, "error" => ?e);
             }
         }
+        let uuids = infos
+            .iter()
+            .map(|info| info.meta.get_uuid().to_vec())
+            .collect::<Vec<_>>();
+        self.set_sst_applied_index(uuids, index);
+
+        self.metrics.size_diff_hint += size;
+        self.metrics.written_bytes += size as u64;
+        self.metrics.written_keys += keys;
         Ok(())
     }
 }

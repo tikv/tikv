@@ -26,10 +26,10 @@ use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions}
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
-use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_proto::ConfChangeI;
 use raftstore::{
+    coprocessor::ObserveLevel,
     store::{
         cmd_resp,
         fsm::{
@@ -37,13 +37,16 @@ use raftstore::{
             Proposal,
         },
         local_metrics::RaftMetrics,
-        metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
+        metrics::{
+            APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM, STORE_APPLY_LOG_HISTOGRAM,
+        },
         msg::ErrorCallback,
-        util, Config, Transport, WriteCallback,
+        util::{self, check_flashback_state},
+        Config, Transport, WriteCallback,
     },
     Error, Result,
 };
-use slog::{debug, error, info, warn};
+use slog::{debug, error, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -55,7 +58,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerTick},
+    router::{ApplyRes, ApplyTask, CmdResChannel},
 };
 
 mod admin;
@@ -63,19 +66,25 @@ mod control;
 mod write;
 
 pub use admin::{
-    report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs, CompactLogContext,
-    MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
+    merge_source_path, report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs,
+    CompactLogContext, MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
     MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
 };
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};
-pub use write::{
-    SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder, SimpleWriteReqEncoder,
-};
+use protobuf::Message;
+pub use write::{SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder};
+pub type SimpleWriteReqEncoder =
+    raftstore::store::simple_write::SimpleWriteReqEncoder<CmdResChannel>;
 
 use self::write::SimpleWrite;
 
-fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64, term: u64) -> M {
+pub(crate) fn parse_at<M: Message + Default>(
+    logger: &slog::Logger,
+    buf: &[u8],
+    index: u64,
+    term: u64,
+) -> M {
     let mut m = M::default();
     match m.merge_from_bytes(buf) {
         Ok(()) => m,
@@ -93,8 +102,7 @@ fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64,
 pub struct CommittedEntries {
     /// Entries need to be applied. Note some entries may not be included for
     /// flow control.
-    entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
-    committed_time: Instant,
+    pub entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
 }
 
 fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {
@@ -129,6 +137,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let buckets = self.region_buckets_info().bucket_stat().clone();
+        let sst_apply_state = self.sst_apply_state().clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             &store_ctx.cfg,
             self.peer().clone(),
@@ -136,11 +145,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             mailbox,
             store_ctx.tablet_registry.clone(),
             read_scheduler,
+            store_ctx.schedulers.checkpoint.clone(),
             self.flush_state().clone(),
+            sst_apply_state,
             self.storage().apply_trace().log_recovery(),
             self.entry_storage().applied_term(),
             buckets,
             store_ctx.sst_importer.clone(),
+            store_ctx.coprocessor_host.clone(),
             logger,
         );
 
@@ -148,6 +160,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
             .unwrap();
+        fail::fail_point!("delay_set_apply_scheduler", |_| {});
         self.set_apply_scheduler(apply_scheduler);
     }
 
@@ -178,6 +191,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Error::EpochNotMatch(_, _new_regions) = &mut e {
                 // TODO: query sibling regions.
                 metrics.invalid_proposal.epoch_not_match.inc();
+            }
+            return Err(e);
+        }
+        // Check whether the region is in the flashback state and the request could be
+        // proposed. Skip the not prepared error because the
+        // `self.region().is_in_flashback` may not be the latest right after applying
+        // the `PrepareFlashback` admin command, we will let it pass here and check in
+        // the apply phase and because a read-only request doesn't need to be applied,
+        // so it will be allowed during the flashback progress, for example, a snapshot
+        // request.
+        if let Err(e) = util::check_flashback_state(
+            self.region().get_is_in_flashback(),
+            self.region().get_flashback_start_ts(),
+            header,
+            admin_type,
+            self.region_id(),
+            true,
+        ) {
+            match e {
+                Error::FlashbackInProgress(..) => {
+                    metrics.invalid_proposal.flashback_in_progress.inc()
+                }
+                _ => unreachable!("{:?}", e),
             }
             return Err(e);
         }
@@ -298,7 +334,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // memtables in kv engine is flushed.
         let apply = CommittedEntries {
             entry_and_proposals,
-            committed_time: Instant::now(),
         };
         assert!(
             self.apply_scheduler().is_some() || ctx.router.is_shutdown(),
@@ -361,6 +396,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
                 AdminCmdResult::CommitMerge(res) => self.on_apply_res_commit_merge(ctx, res),
+                AdminCmdResult::Flashback(res) => self.on_apply_res_flashback(ctx, res),
+                AdminCmdResult::RollbackMerge(res) => self.on_apply_res_rollback_merge(ctx, res),
             }
         }
         self.region_buckets_info_mut()
@@ -393,18 +430,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
-        if self.pause_for_recovery()
-            && self.storage().entry_storage().commit_index() <= apply_res.applied_index
-        {
-            info!(self.logger, "recovery completed"; "apply_index" => apply_res.applied_index);
-            self.set_pause_for_recovery(false);
-            // Flush to avoid recover again and again.
-            if let Some(scheduler) = self.apply_scheduler() {
-                scheduler.send(ApplyTask::ManualFlush);
-            }
-            self.add_pending_tick(PeerTick::Raft);
-        }
-        if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
+        self.try_compelete_recovery();
+        if !self.pause_for_replay() && self.storage_mut().apply_trace_mut().should_flush() {
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
             }
@@ -462,7 +489,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
-        let decoder = match SimpleWriteReqDecoder::new(&self.logger, &data, u64::MAX, u64::MAX) {
+        let decoder = match SimpleWriteReqDecoder::new(
+            |buf, index, term| parse_at(&self.logger, buf, index, term),
+            &self.logger,
+            &data,
+            u64::MAX,
+            u64::MAX,
+        ) {
             Ok(decoder) => decoder,
             Err(req) => unreachable!("unexpected request: {:?}", req),
         };
@@ -481,6 +514,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         dr.start_key,
                         dr.end_key,
                         dr.notify_only,
+                        self.use_delete_range(),
                     );
                 }
                 SimpleWrite::Ingest(_) => {
@@ -513,21 +547,25 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
-        APPLY_TASK_WAIT_TIME_HISTOGRAM
-            .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
+        fail::fail_point!("on_handle_apply_2", self.peer_id() == 2, |_| {});
+        let now = std::time::Instant::now();
+        let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
                 apply::notify_req_region_removed(self.region_id(), ch);
                 continue;
             }
             if !e.get_data().is_empty() {
+                for tracker in ch.write_trackers() {
+                    tracker.observe(now, &apply_wait_time, |t| &mut t.metrics.apply_wait_nanos);
+                }
                 let mut set_save_point = false;
                 if let Some(wb) = &mut self.write_batch {
                     wb.set_save_point();
                     set_save_point = true;
                 }
-                let resp = match self.apply_entry(&e).await {
-                    Ok(resp) => resp,
+                let (req, resp) = match self.apply_entry(&e).await {
+                    Ok(req_resp) => req_resp,
                     Err(e) => {
                         if let Some(wb) = &mut self.write_batch {
                             if set_save_point {
@@ -536,9 +574,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 wb.clear();
                             }
                         }
-                        cmd_resp::new_error(e)
+                        (RaftCmdRequest::default(), cmd_resp::new_error(e))
                     }
                 };
+                self.observe_apply(e.get_index(), e.get_term(), req, &resp);
                 self.callbacks_mut().push((ch, resp));
             } else {
                 assert!(ch.is_empty());
@@ -550,17 +589,25 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 
     #[inline]
-    async fn apply_entry(&mut self, entry: &Entry) -> Result<RaftCmdResponse> {
+    async fn apply_entry(&mut self, entry: &Entry) -> Result<(RaftCmdRequest, RaftCmdResponse)> {
         let mut conf_change = None;
         let log_index = entry.get_index();
         let req = match entry.get_entry_type() {
             EntryType::EntryNormal => match SimpleWriteReqDecoder::new(
+                |buf, index, term| parse_at(&self.logger, buf, index, term),
                 &self.logger,
                 entry.get_data(),
                 log_index,
                 entry.get_term(),
             ) {
                 Ok(decoder) => {
+                    fail::fail_point!(
+                        "on_apply_write_cmd",
+                        cfg!(release) || self.peer_id() == 3,
+                        |_| {
+                            unimplemented!();
+                        }
+                    );
                     util::compare_region_epoch(
                         decoder.header().get_region_epoch(),
                         self.region(),
@@ -568,7 +615,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         true,
                         true,
                     )?;
-                    let res = Ok(new_response(decoder.header()));
+                    let mut req = RaftCmdRequest::default();
+                    if self.observe().level != ObserveLevel::None {
+                        req = decoder.to_raft_cmd_request();
+                    }
+                    let resp = new_response(decoder.header());
                     for req in decoder {
                         match req {
                             SimpleWrite::Put(put) => {
@@ -584,6 +635,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
+                                    self.use_delete_range(),
                                 )?;
                             }
                             SimpleWrite::Ingest(ssts) => {
@@ -591,7 +643,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             }
                         }
                     }
-                    return res;
+                    return Ok((req, resp));
                 }
                 Err(req) => req,
             },
@@ -614,15 +666,25 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         };
 
         util::check_req_region_epoch(&req, self.region(), true)?;
+        let header = req.get_header();
+        let admin_type = req.admin_request.as_ref().map(|req| req.get_cmd_type());
+        check_flashback_state(
+            self.region().get_is_in_flashback(),
+            self.region().get_flashback_start_ts(),
+            header,
+            admin_type,
+            self.region_id(),
+            false,
+        )?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
-                AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
-                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
+                AdminCmdType::Split => self.apply_split(admin_req, log_index).await?,
+                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index).await?,
                 AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
                 AdminCmdType::CommitMerge => self.apply_commit_merge(admin_req, log_index).await?,
-                AdminCmdType::RollbackMerge => unimplemented!(),
+                AdminCmdType::RollbackMerge => self.apply_rollback_merge(admin_req, log_index)?,
                 AdminCmdType::TransferLeader => {
                     self.apply_transfer_leader(admin_req, entry.term)?
                 }
@@ -634,8 +696,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
                 AdminCmdType::ComputeHash => unimplemented!(),
                 AdminCmdType::VerifyHash => unimplemented!(),
-                AdminCmdType::PrepareFlashback => unimplemented!(),
-                AdminCmdType::FinishFlashback => unimplemented!(),
+                AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+                    self.apply_flashback(log_index, admin_req)?
+                }
                 AdminCmdType::BatchSwitchWitness => unimplemented!(),
                 AdminCmdType::UpdateGcPeer => self.apply_update_gc_peer(log_index, admin_req),
                 AdminCmdType::InvalidAdmin => {
@@ -649,7 +712,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             }
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);
-            Ok(resp)
+            Ok((req, resp))
         } else {
             for r in req.get_requests() {
                 match r.get_cmd_type() {
@@ -671,12 +734,18 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
+                            self.use_delete_range(),
                         )?;
                     }
-                    _ => unimplemented!(),
+                    _ => slog_panic!(
+                        self.logger,
+                        "unimplemented";
+                        "request_type" => ?r.get_cmd_type(),
+                    ),
                 }
             }
-            Ok(new_response(req.get_header()))
+            let resp = new_response(req.get_header());
+            Ok((req, resp))
         }
     }
 
@@ -764,6 +833,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             buckets.clear_stats();
         }
 
+        // Call it before invoking callback for preventing Commit is executed before
+        // Prewrite is observed.
+        self.flush_observed_apply();
+
         // Report result first and then invoking callbacks. This may delays callback a
         // little bit, but can make sure all following messages must see the side
         // effect of admin commands.
@@ -772,7 +845,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let apply_time = APPLY_TIME_HISTOGRAM.local();
         for (ch, resp) in callbacks.drain(..) {
             for tracker in ch.write_trackers() {
-                tracker.observe(now, &apply_time, |t| &mut t.metrics.apply_time_nanos);
+                let mut apply_wait_nanos = 0_u64;
+                let apply_time_nanos = tracker.observe(now, &apply_time, |t| {
+                    apply_wait_nanos = t.metrics.apply_wait_nanos;
+                    &mut t.metrics.apply_time_nanos
+                });
+                STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(Duration::from_nanos(
+                    apply_time_nanos - apply_wait_nanos,
+                )));
             }
             ch.set_result(resp);
         }

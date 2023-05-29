@@ -3,13 +3,16 @@
 use std::{mem, sync::Arc};
 
 use engine_traits::{
-    FlushState, KvEngine, PerfContextKind, TabletRegistry, WriteBatch, DATA_CFS_LEN,
+    FlushState, KvEngine, PerfContextKind, SstApplyState, TabletRegistry, WriteBatch, DATA_CFS_LEN,
 };
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
-use raftstore::store::{
-    fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
-    Config, ReadTask,
+use raftstore::{
+    coprocessor::{Cmd, CmdObserveInfo, CoprocessorHost, ObserveLevel},
+    store::{
+        fsm::{apply::DEFAULT_APPLY_WB_SIZE, ApplyMetrics},
+        Config, ReadTask,
+    },
 };
 use slog::Logger;
 use sst_importer::SstImporter;
@@ -18,7 +21,14 @@ use tikv_util::{log::SlogFormat, worker::Scheduler};
 use crate::{
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::CmdResChannel,
+    worker::checkpoint,
 };
+
+pub(crate) struct Observe {
+    pub info: CmdObserveInfo,
+    pub level: ObserveLevel,
+    pub cmds: Vec<Cmd>,
+}
 
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
@@ -47,6 +57,7 @@ pub struct Apply<EK: KvEngine, R> {
     modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
     flush_state: Arc<FlushState>,
+    sst_apply_state: SstApplyState,
     /// The flushed indexes of each column family before being restarted.
     ///
     /// If an apply index is less than the flushed index, the log can be
@@ -59,6 +70,14 @@ pub struct Apply<EK: KvEngine, R> {
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
     sst_importer: Arc<SstImporter>,
+    observe: Observe,
+    coprocessor_host: CoprocessorHost<EK>,
+
+    checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+
+    // Whether to use the delete range API instead of deleting one by one.
+    use_delete_range: bool,
+
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -74,10 +93,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
         flush_state: Arc<FlushState>,
+        sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
+        coprocessor_host: CoprocessorHost<EK>,
+        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -106,10 +128,19 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             key_buffer: vec![],
             res_reporter,
             flush_state,
+            sst_apply_state,
             log_recovery,
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
+            checkpoint_scheduler,
+            use_delete_range: cfg.use_delete_range,
+            observe: Observe {
+                info: CmdObserveInfo::default(),
+                level: ObserveLevel::None,
+                cmds: vec![],
+            },
+            coprocessor_host,
             logger,
         }
     }
@@ -178,6 +209,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn region_id(&self) -> u64 {
         self.region().get_id()
+    }
+
+    #[allow(unused)]
+    #[inline]
+    pub fn peer_id(&self) -> u64 {
+        self.peer.get_id()
     }
 
     /// The tablet can't be public yet, otherwise content of latest tablet
@@ -252,6 +289,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
+    pub fn set_sst_applied_index(&mut self, uuid: Vec<Vec<u8>>, apply_index: u64) {
+        self.sst_apply_state.registe_ssts(uuid, apply_index);
+    }
+
+    #[inline]
     pub fn log_recovery(&self) -> &Option<Box<DataTrace>> {
         &self.log_recovery
     }
@@ -268,5 +310,35 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn sst_importer(&self) -> &SstImporter {
         &self.sst_importer
+    }
+
+    #[inline]
+    pub(crate) fn observe(&mut self) -> &Observe {
+        &self.observe
+    }
+
+    #[inline]
+    pub(crate) fn observe_mut(&mut self) -> &mut Observe {
+        &mut self.observe
+    }
+
+    #[inline]
+    pub fn term(&self) -> u64 {
+        self.applied_term
+    }
+
+    #[inline]
+    pub fn coprocessor_host(&self) -> &CoprocessorHost<EK> {
+        &self.coprocessor_host
+    }
+
+    #[inline]
+    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
+        &self.checkpoint_scheduler
+    }
+
+    #[inline]
+    pub fn use_delete_range(&self) -> bool {
+        self.use_delete_range
     }
 }

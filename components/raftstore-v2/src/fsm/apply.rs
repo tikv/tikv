@@ -7,11 +7,14 @@ use std::{
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{FlushState, KvEngine, TabletRegistry};
+use engine_traits::{FlushState, KvEngine, SstApplyState, TabletRegistry};
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
-use raftstore::store::{Config, ReadTask};
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{Config, ReadTask},
+};
 use slog::Logger;
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -24,6 +27,7 @@ use crate::{
     operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
+    worker::checkpoint,
 };
 
 /// A trait for reporting apply result.
@@ -48,6 +52,7 @@ impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for M
 }
 
 /// Schedule task to `ApplyFsm`.
+#[derive(Clone)]
 pub struct ApplyScheduler {
     sender: Sender<ApplyTask>,
 }
@@ -73,11 +78,14 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         flush_state: Arc<FlushState>,
+        sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
+        coprocessor_host: CoprocessorHost<EK>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
@@ -89,10 +97,13 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             tablet_registry,
             read_scheduler,
             flush_state,
+            sst_apply_state,
             log_recovery,
             applied_term,
             buckets,
             sst_importer,
+            coprocessor_host,
+            checkpoint_scheduler,
             logger,
         );
         (
@@ -135,6 +146,9 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
                     ApplyTask::RefreshBucketStat(bucket_meta) => {
                         self.apply.on_refresh_buckets(bucket_meta)
+                    }
+                    ApplyTask::CaptureApply(capture_change) => {
+                        self.apply.on_capture_apply(capture_change)
                     }
                 }
 

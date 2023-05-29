@@ -250,7 +250,7 @@ impl SubscriptionTracer {
                 SubscribeState::Running(sub) => {
                     let contains = rs.contains(&region_id);
                     if !contains {
-                        crate::metrics::LOST_LEADER_REGION.inc();
+                        crate::metrics::MISC_EVENTS.skip_resolve_non_leader.inc();
                     }
                     contains.then(|| ResolveResult::resolve(sub, min_ts))
                 }

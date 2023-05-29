@@ -225,6 +225,13 @@ fn main() {
         process::exit(0);
     }
 
+    // engine config needs to be validated
+    // so that it can adjust the engine type before too late
+    if let Err(e) = config.storage.validate_engine_type() {
+        println!("invalid storage.engine configuration: {}", e);
+        process::exit(1)
+    }
+
     // This is for creating a shadow instance from exists data, which is specified
     // by `config.data_dir`. When duplicating all data files, *symlink* will be used
     // if possible, otherwise *copy* will be used instead.

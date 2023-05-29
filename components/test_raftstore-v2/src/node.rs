@@ -150,7 +150,7 @@ pub struct NodeCluster<EK: KvEngine> {
     nodes: HashMap<u64, NodeV2<TestPdClient, EK, RaftTestEngine>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
-    // snap_mgrs: HashMap<u64, TabletSnapManager>,
+    snap_mgrs: HashMap<u64, TabletSnapManager>,
 }
 
 impl<EK: KvEngine> NodeCluster<EK> {
@@ -161,8 +161,12 @@ impl<EK: KvEngine> NodeCluster<EK> {
             nodes: HashMap::default(),
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
-            // snap_mgrs: HashMap::default(),
+            snap_mgrs: HashMap::default(),
         }
+    }
+
+    pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
+        self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 }
 
@@ -200,6 +204,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(true);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
@@ -231,12 +236,16 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_path = tmp.path().to_str().unwrap().to_owned();
-            (TabletSnapManager::new(snap_path)?, Some(tmp))
+            (
+                TabletSnapManager::new(snap_path, key_manager.clone())?,
+                Some(tmp),
+            )
         } else {
             let trans = self.trans.core.lock().unwrap();
             let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         let raft_router = RaftRouter::new_with_store_meta(node.router().clone(), store_meta);
         // Create coprocessor.
@@ -272,7 +281,13 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let importer = {
             let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
-                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
+                SstImporter::new(
+                    &cfg.import,
+                    dir,
+                    key_manager.clone(),
+                    cfg.storage.api_version(),
+                )
+                .unwrap(),
             )
         };
 
@@ -294,6 +309,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             Arc::new(VersionTrack::new(raft_store)),
             &state,
             importer,
+            key_manager,
         )?;
         assert!(
             raft_engine
@@ -308,6 +324,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
+        raftstore_cfg.optimize_for(true);
         raftstore_cfg
             .validate(region_split_size, enable_region_bucket, region_bucket_size)
             .unwrap();
@@ -344,10 +361,11 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
     fn async_snapshot(
         &mut self,
+        node_id: u64,
         request: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
-    {
-        let node_id = request.get_header().get_peer().get_store_id();
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
+    + Send
+    + 'static {
         if !self
             .trans
             .core
@@ -419,6 +437,10 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn get_snap_mgr(&self, node_id: u64) -> &TabletSnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
     }
 
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {

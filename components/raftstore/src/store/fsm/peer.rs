@@ -64,6 +64,7 @@ use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
+use super::life::forward_destroy_to_source_peer;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
 use crate::{
@@ -2740,6 +2741,25 @@ where
         }
     }
 
+    // In v1, gc_peer_request is handled to be compatible with v2.
+    // Note: it needs to be consistent with Peer::on_gc_peer_request in v2.
+    fn on_gc_peer_request(&mut self, msg: RaftMessage) {
+        let extra_msg = msg.get_extra_msg();
+
+        if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
+            // Corrupted message.
+            return;
+        }
+        if self.fsm.peer.get_store().applied_index() < extra_msg.get_index() {
+            // Merge not finish.
+            return;
+        }
+
+        forward_destroy_to_source_peer(&msg, |m| {
+            let _ = self.ctx.router.send_raft_message(m);
+        });
+    }
+
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
@@ -2795,9 +2815,15 @@ where
             ExtraMessageType::MsgVoterReplicatedIndexResponse => {
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
+            ExtraMessageType::MsgGcPeerRequest => {
+                // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
+                // it needs to response GcPeerResponse.
+                if self.ctx.cfg.enable_v2_compatible_learner {
+                    self.on_gc_peer_request(msg);
+                }
+            }
             // It's v2 only message and ignore does no harm.
-            ExtraMessageType::MsgGcPeerRequest | ExtraMessageType::MsgGcPeerResponse => (),
-            ExtraMessageType::MsgFlushMemtable => (),
+            ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
         }
     }
 
@@ -4986,7 +5012,7 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
+                ExecResult::Flashback { region } => self.on_set_flashback_state(region),
                 ExecResult::BatchSwitchWitness(switches) => {
                     self.on_ready_batch_switch_witness(switches)
                 }
@@ -5234,10 +5260,13 @@ where
         // the apply phase and because a read-only request doesn't need to be applied,
         // so it will be allowed during the flashback progress, for example, a snapshot
         // request.
+        let header = msg.get_header();
+        let admin_type = msg.admin_request.as_ref().map(|req| req.get_cmd_type());
         if let Err(e) = util::check_flashback_state(
             self.region().is_in_flashback,
             self.region().flashback_start_ts,
-            msg,
+            header,
+            admin_type,
             region_id,
             true,
         ) {
@@ -5254,7 +5283,7 @@ where
                     .invalid_proposal
                     .flashback_not_prepared
                     .inc(),
-                _ => unreachable!(),
+                _ => unreachable!("{:?}", e),
             }
             return Err(e);
         }

@@ -1,7 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp,
     ops::{Deref, DerefMut},
+    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -16,8 +18,9 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::TrySendError;
+use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use file_system::{set_io_type, IoType};
+use file_system::{set_io_type, IoType, WithIoType};
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::{StateRole, INVALID_ID};
@@ -43,7 +46,7 @@ use tikv_util::{
     sys::SysQuota,
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    worker::{Builder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
@@ -51,10 +54,12 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
+    operation::{
+        ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+    },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{pd, tablet_flush, tablet_gc},
+    worker::{checkpoint, cleanup, pd, tablet},
     Error, Result,
 };
 
@@ -92,6 +97,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
     pub sst_importer: Arc<SstImporter>,
+    pub key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -117,7 +123,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             self.cfg.report_region_buckets_tick_interval.0;
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
-        self.tick_batch[PeerTick::GcPeer as usize].wait_duration = Duration::from_secs(60);
+        self.tick_batch[PeerTick::GcPeer as usize].wait_duration =
+            60 * cmp::min(Duration::from_secs(1), self.cfg.raft_base_tick_interval.0);
     }
 }
 
@@ -219,6 +226,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
     }
 
     fn handle_normal(&mut self, fsm: &mut impl DerefMut<Target = PeerFsm<EK, ER>>) -> HandleResult {
+        fail::fail_point!(
+            "pause_on_peer_collect_message",
+            fsm.deref_mut().peer().peer_id() == 1,
+            |_| unreachable!()
+        );
+        fail::fail_point!(
+            "on_peer_collect_message_2",
+            fsm.deref_mut().peer().peer_id() == 2,
+            |_| unreachable!()
+        );
         debug_assert!(self.peer_msg_buf.is_empty());
         let batch_size = self.messages_per_tick();
         let received_cnt = fsm.recv(&mut self.peer_msg_buf, batch_size);
@@ -288,6 +305,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     snap_mgr: TabletSnapManager,
     global_stat: GlobalStoreStat,
     sst_importer: Arc<SstImporter>,
+    key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -305,6 +323,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
         sst_importer: Arc<SstImporter>,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -333,6 +352,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             coprocessor_host,
             global_stat,
             sst_importer,
+            key_manager,
         }
     }
 
@@ -364,8 +384,13 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 }
                 meta.set_region(storage.region(), storage.is_initialized(), &self.logger);
 
-                let (sender, peer_fsm) =
-                    PeerFsm::new(&cfg, &self.tablet_registry, &self.snap_mgr, storage)?;
+                let (sender, peer_fsm) = PeerFsm::new(
+                    &cfg,
+                    &self.tablet_registry,
+                    self.key_manager.as_deref(),
+                    &self.snap_mgr,
+                    storage,
+                )?;
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
 
@@ -383,17 +408,25 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         Ok(regions)
     }
 
+    #[inline]
+    fn remove_dir(&self, p: &Path) -> Result<()> {
+        if let Some(m) = &self.key_manager {
+            m.remove_dir(p, None)?;
+        }
+        file_system::remove_dir_all(p)?;
+        Ok(())
+    }
+
     fn clean_up_tablets(&self, peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
         for entry in file_system::read_dir(self.tablet_registry.tablet_root())? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().map_or(false, |s| s == "tmp") {
                 // The directory may be generated by an aborted checkpoint.
-                file_system::remove_dir_all(&path)?;
+                self.remove_dir(&path)?;
                 continue;
             }
             let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
-            // Keep the checkpoint even if source is destroyed.
             if prefix == MERGE_SOURCE_PREFIX {
                 continue;
             }
@@ -402,20 +435,20 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 None => {
                     // The peer is either destroyed or not created yet. It will be
                     // recovered by leader heartbeats.
-                    file_system::remove_dir_all(&path)?;
+                    self.remove_dir(&path)?;
                     continue;
                 }
             };
             // Valid split tablet should be installed during recovery.
             if prefix == SPLIT_PREFIX {
-                file_system::remove_dir_all(&path)?;
+                self.remove_dir(&path)?;
                 continue;
             } else if prefix == MERGE_IN_PROGRESS_PREFIX {
                 continue;
             } else if prefix.is_empty() {
                 // Stale split data can be deleted.
                 if fsm.peer().storage().tablet_index() > tablet_index {
-                    file_system::remove_dir_all(&path)?;
+                    self.remove_dir(&path)?;
                 }
             } else {
                 debug_assert!(false, "unexpected tablet prefix: {}", path.display());
@@ -461,6 +494,7 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             sst_importer: self.sst_importer.clone(),
+            key_manager: self.key_manager.clone(),
         };
         poll_ctx.update_ticks_timeout();
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
@@ -472,9 +506,10 @@ where
 pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
-    pub tablet_gc: Scheduler<tablet_gc::Task<EK>>,
+    pub tablet: Scheduler<tablet::Task<EK>>,
+    pub checkpoint: Scheduler<checkpoint::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
-    pub tablet_flush: Scheduler<tablet_flush::Task>,
+    pub cleanup: Scheduler<cleanup::Task>,
 
     // Following is not maintained by raftstore itself.
     pub split_check: Scheduler<SplitCheckTask>,
@@ -484,7 +519,7 @@ impl<EK: KvEngine, ER: RaftEngine> Schedulers<EK, ER> {
     fn stop(&self) {
         self.read.stop();
         self.pd.stop();
-        self.tablet_gc.stop();
+        self.tablet.stop();
         self.split_check.stop();
     }
 }
@@ -495,10 +530,11 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read: Worker,
     pd: LazyWorker<pd::Task>,
-    tablet_gc: Worker,
+    tablet: Worker,
+    checkpoint: Worker,
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
-    tablet_flush: Worker,
+    cleanup_worker: Worker,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
@@ -506,16 +542,15 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
     fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
-        let tablet_flush = WorkerBuilder::new("tablet-flush-worker")
-            .thread_count(2)
-            .create();
+        let checkpoint = Builder::new("checkpoint-worker").thread_count(2).create();
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
-            tablet_gc: Worker::new("tablet-gc-worker"),
+            tablet: Worker::new("tablet-worker"),
+            checkpoint,
             async_write: StoreWriters::new(None),
             purge,
-            tablet_flush,
+            cleanup_worker: Worker::new("cleanup-worker"),
             background,
         }
     }
@@ -524,8 +559,8 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         self.async_write.shutdown();
         self.async_read.stop();
         self.pd.stop();
-        self.tablet_gc.stop();
-        self.tablet_flush.stop();
+        self.tablet.stop();
+        self.checkpoint.stop();
         if let Some(w) = self.purge {
             w.stop();
         }
@@ -561,6 +596,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
         sst_importer: Arc<SstImporter>,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -582,6 +618,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let logger = self.logger.clone();
             let router = router.clone();
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
                     Ok(regions) => {
                         for r in regions {
@@ -635,27 +672,34 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let tablet_gc_scheduler = workers.tablet_gc.start_with_timer(
-            "tablet-gc-worker",
-            tablet_gc::Runner::new(
+        let tablet_scheduler = workers.tablet.start_with_timer(
+            "tablet-worker",
+            tablet::Runner::new(
                 tablet_registry.clone(),
                 sst_importer.clone(),
                 self.logger.clone(),
             ),
         );
 
-        let tablet_flush_scheduler = workers.tablet_flush.start(
-            "tablet-flush-worker",
-            tablet_flush::Runner::new(router.clone(), tablet_registry.clone(), self.logger.clone()),
+        let compact_runner =
+            cleanup::CompactRunner::new(tablet_registry.clone(), self.logger.clone());
+        let cleanup_worker_scheduler = workers
+            .cleanup_worker
+            .start("cleanup-worker", cleanup::Runner::new(compact_runner));
+
+        let checkpoint_scheduler = workers.checkpoint.start(
+            "checkpoint-worker",
+            checkpoint::Runner::new(self.logger.clone(), tablet_registry.clone()),
         );
 
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
-            tablet_gc: tablet_gc_scheduler,
+            tablet: tablet_scheduler,
+            checkpoint: checkpoint_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
-            tablet_flush: tablet_flush_scheduler,
+            cleanup: cleanup_worker_scheduler,
         };
 
         let builder = StorePollerBuilder::new(
@@ -672,6 +716,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             snap_mgr,
             coprocessor_host,
             sst_importer,
+            key_manager,
         );
         self.workers = Some(workers);
         self.schedulers = Some(schedulers);
@@ -704,8 +749,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router.register_all(mailboxes);
 
         // Make sure Msg::Start is the first message each FSM received.
+        let watch = Arc::new(ReplayWatch::new(self.logger.clone()));
         for addr in address {
-            router.force_send(addr, PeerMsg::Start).unwrap();
+            router
+                .force_send(addr, PeerMsg::Start(Some(watch.clone())))
+                .unwrap();
         }
         router.send_control(StoreMsg::Start).unwrap();
         Ok(())

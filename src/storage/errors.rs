@@ -176,6 +176,13 @@ pub enum ErrorHeaderKind {
     StaleCommand,
     StoreNotMatch,
     RaftEntryTooLarge,
+    ReadIndexNotReady,
+    ProposalInMergeMode,
+    DataNotReady,
+    RegionNotInitialized,
+    DiskFull,
+    RecoveryInProgress,
+    FlashbackInProgress,
     Other,
 }
 
@@ -193,6 +200,13 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
             ErrorHeaderKind::RaftEntryTooLarge => "raft_entry_too_large",
+            ErrorHeaderKind::ReadIndexNotReady => "read_index_not_ready",
+            ErrorHeaderKind::ProposalInMergeMode => "proposal_in_merge_mode",
+            ErrorHeaderKind::DataNotReady => "data_not_ready",
+            ErrorHeaderKind::RegionNotInitialized => "region_not_initialized",
+            ErrorHeaderKind::DiskFull => "disk_full",
+            ErrorHeaderKind::RecoveryInProgress => "recovery_in_progress",
+            ErrorHeaderKind::FlashbackInProgress => "flashback_in_progress",
             ErrorHeaderKind::Other => "other",
         }
     }
@@ -227,6 +241,20 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::StoreNotMatch
     } else if header.has_raft_entry_too_large() {
         ErrorHeaderKind::RaftEntryTooLarge
+    } else if header.has_read_index_not_ready() {
+        ErrorHeaderKind::ReadIndexNotReady
+    } else if header.has_proposal_in_merging_mode() {
+        ErrorHeaderKind::ProposalInMergeMode
+    } else if header.has_data_is_not_ready() {
+        ErrorHeaderKind::DataNotReady
+    } else if header.has_region_not_initialized() {
+        ErrorHeaderKind::RegionNotInitialized
+    } else if header.has_disk_full() {
+        ErrorHeaderKind::DiskFull
+    } else if header.has_recovery_in_progress() {
+        ErrorHeaderKind::RecoveryInProgress
+    } else if header.has_flashback_in_progress() {
+        ErrorHeaderKind::FlashbackInProgress
     } else {
         ErrorHeaderKind::Other
     }
@@ -423,6 +451,13 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             assertion_failed.set_existing_start_ts(existing_start_ts.into_inner());
             assertion_failed.set_existing_commit_ts(existing_commit_ts.into_inner());
             key_error.set_assertion_failed(assertion_failed);
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::PrimaryMismatch(lock_info),
+        ))))) => {
+            let mut primary_mismatch = kvrpcpb::PrimaryMismatch::default();
+            primary_mismatch.set_lock_info(lock_info.clone());
+            key_error.set_primary_mismatch(primary_mismatch);
         }
         _ => {
             error!(?*err; "txn aborts");

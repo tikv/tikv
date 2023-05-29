@@ -1,18 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    marker::PhantomData,
-    sync::{atomic::Ordering, Arc},
-    time::Duration,
-};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
-    router::RaftStoreRouter,
-    store::{fsm::ChangeObserver, Callback, SignificantMsg},
+    router::CdcHandle,
+    store::{fsm::ChangeObserver, Callback},
 };
 use tikv::storage::{
     kv::StatisticsSummary,
@@ -204,7 +200,7 @@ impl<E, R, RT> InitialDataLoader<E, R, RT>
 where
     E: KvEngine,
     R: RegionInfoProvider + Clone + 'static,
-    RT: RaftStoreRouter<E>,
+    RT: CdcHandle<E>,
 {
     pub fn new(
         router: RT,
@@ -292,33 +288,33 @@ where
 
         let (callback, fut) =
             tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
+
         self.router
-            .significant_send(
-                region.id,
-                SignificantMsg::CaptureChange {
-                    cmd,
-                    region_epoch: region.get_region_epoch().clone(),
-                    callback: Callback::read(Box::new(|snapshot| {
-                        if snapshot.response.get_header().has_error() {
-                            callback(Err(Error::RaftRequest(
-                                snapshot.response.get_header().get_error().clone(),
-                            )));
-                            return;
-                        }
-                        if let Some(snap) = snapshot.snapshot {
-                            callback(Ok(snap));
-                            return;
-                        }
-                        callback(Err(Error::Other(box_err!(
-                            "PROBABLY BUG: the response contains neither error nor snapshot"
-                        ))))
-                    })),
-                },
+            .capture_change(
+                region.get_id(),
+                region.get_region_epoch().clone(),
+                cmd,
+                Callback::read(Box::new(|snapshot| {
+                    if snapshot.response.get_header().has_error() {
+                        callback(Err(Error::RaftRequest(
+                            snapshot.response.get_header().get_error().clone(),
+                        )));
+                        return;
+                    }
+                    if let Some(snap) = snapshot.snapshot {
+                        callback(Ok(snap));
+                        return;
+                    }
+                    callback(Err(Error::Other(box_err!(
+                        "PROBABLY BUG: the response contains neither error nor snapshot"
+                    ))))
+                })),
             )
             .context(format_args!(
                 "failed to register the observer to region {}",
                 region.get_id()
             ))?;
+
         let snap = block_on(fut)
             .map_err(|err| {
                 annotate!(
@@ -488,13 +484,10 @@ where
                 // is still little chance to lost data: For example, if a region cannot elect
                 // the leader for long time. (say, net work partition) At that time, we have
                 // nowhere to record the lock status of this region.
-                let success = try_send!(
+                try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::Start { region: r.region })
                 );
-                if success {
-                    crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_add(1, Ordering::SeqCst);
-                }
             }
         }
         Ok(())

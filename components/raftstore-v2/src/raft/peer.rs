@@ -7,35 +7,38 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
+use encryption_export::DataKeyManager;
 use engine_traits::{
-    CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
+    CachedTablet, FlushState, KvEngine, RaftEngine, SstApplyState, TabletContext, TabletRegistry,
 };
 use kvproto::{
     metapb::{self, PeerRole},
     pdpb,
-    raft_serverpb::{RaftMessage, RegionLocalState},
+    raft_serverpb::RaftMessage,
 };
-use raft::{RawNode, StateRole};
+use raft::{eraftpb, RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         fsm::ApplyMetrics,
+        metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
         TabletSnapManager, WriteTask,
     },
 };
-use slog::Logger;
-use tikv_util::slog_panic;
+use slog::{debug, info, Logger};
+use tikv_util::{slog_panic, time::duration_to_sec};
 
 use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
-        AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress, GcPeerContext,
-        MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl, TxnContext,
+        AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
+        GcPeerContext, MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder,
+        SplitFlowControl, TxnContext,
     },
-    router::{CmdResChannel, PeerTick, QueryResChannel},
+    router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
 
@@ -73,7 +76,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     /// Sometimes there is no ready at all, but we need to trigger async write.
     has_extra_write: bool,
-    pause_for_recovery: bool,
+    replay_watch: Option<Arc<ReplayWatch>>,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -104,6 +107,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// advancing apply index.
     state_changes: Option<Box<ER::LogBatch>>,
     flush_state: Arc<FlushState>,
+    sst_apply_state: SstApplyState,
 
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     leader_transferee: u64,
@@ -115,6 +119,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_messages: Vec<RaftMessage>,
 
     gc_peer_context: GcPeerContext,
+
+    abnormal_peer_context: AbnormalPeerContext,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -124,6 +130,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_registry: &TabletRegistry<EK>,
+        key_manager: Option<&DataKeyManager>,
         snap_mgr: &TabletSnapManager,
         storage: Storage<EK, ER>,
     ) -> Result<Self> {
@@ -141,11 +148,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
 
         let flush_state: Arc<FlushState> = Arc::new(FlushState::new(applied_index));
+        let sst_apply_state = SstApplyState::default();
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
         if tablet_index != 0 {
-            raft_group.store().recover_tablet(tablet_registry, snap_mgr);
+            raft_group
+                .store()
+                .recover_tablet(tablet_registry, key_manager, snap_mgr);
             let mut ctx = TabletContext::new(&region, Some(tablet_index));
             ctx.flush_state = Some(flush_state.clone());
             // TODO: Perhaps we should stop create the tablet automatically.
@@ -169,7 +179,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_scheduler: None,
             has_ready: false,
             has_extra_write: false,
-            pause_for_recovery: false,
+            replay_watch: None,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -191,6 +201,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             split_trace: vec![],
             state_changes: None,
             flush_state,
+            sst_apply_state,
             split_flow_control: SplitFlowControl::default(),
             leader_transferee: raft::INVALID_ID,
             long_uncommitted_threshold: cmp::max(
@@ -199,6 +210,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
+            abnormal_peer_context: AbnormalPeerContext::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -252,11 +264,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.leader_lease.expire_remote_lease();
         }
 
-        let mut region_state = RegionLocalState::default();
-        region_state.set_region(region.clone());
-        region_state.set_tablet_index(tablet_index);
-        region_state.set_state(self.storage().region_state().get_state());
-        self.storage_mut().set_region_state(region_state);
+        self.storage_mut()
+            .region_state_mut()
+            .set_region(region.clone());
+        self.storage_mut()
+            .region_state_mut()
+            .set_tablet_index(tablet_index);
 
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a
@@ -272,7 +285,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Some(progress) = self
                 .leader_lease
                 .maybe_new_remote_lease(self.term())
-                .map(ReadProgress::leader_lease)
+                .map(ReadProgress::set_leader_lease)
             {
                 self.maybe_update_read_progress(reader, progress);
             }
@@ -420,6 +433,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
+        self.raft_group.snap()
+    }
+
+    #[inline]
     pub fn self_stat(&self) -> &PeerStat {
         &self.self_stat
     }
@@ -455,13 +473,36 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn set_pause_for_recovery(&mut self, pause: bool) {
-        self.pause_for_recovery = pause;
+    pub fn set_replay_watch(&mut self, watch: Option<Arc<ReplayWatch>>) {
+        self.replay_watch = watch;
     }
 
     #[inline]
-    pub fn pause_for_recovery(&self) -> bool {
-        self.pause_for_recovery
+    pub fn pause_for_replay(&self) -> bool {
+        self.replay_watch.is_some()
+    }
+
+    #[inline]
+    // we may have skipped scheduling raft tick when start due to noticable gap
+    // between commit index and apply index. We should scheduling it when raft log
+    // apply catches up.
+    pub fn try_compelete_recovery(&mut self) {
+        if self.pause_for_replay()
+            && self.storage().entry_storage().commit_index()
+                <= self.storage().entry_storage().applied_index()
+        {
+            info!(
+                self.logger,
+                "recovery completed";
+                "apply_index" =>  self.storage().entry_storage().applied_index()
+            );
+            self.set_replay_watch(None);
+            // Flush to avoid recover again and again.
+            if let Some(scheduler) = self.apply_scheduler() {
+                scheduler.send(ApplyTask::ManualFlush);
+            }
+            self.add_pending_tick(PeerTick::Raft);
+        }
     }
 
     #[inline]
@@ -538,8 +579,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         )
     }
 
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
+    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
         let mut down_peers = Vec::new();
+        let mut down_peer_ids = Vec::new();
         let now = Instant::now();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer_id() {
@@ -552,9 +594,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(elapsed.as_secs());
                     down_peers.push(stats);
+                    down_peer_ids.push(p.get_id());
                 }
             }
         }
+        *self.abnormal_peer_context_mut().down_peers_mut() = down_peer_ids;
         // TODO: `refill_disk_full_peers`
         down_peers
     }
@@ -757,6 +801,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.flush_state
     }
 
+    #[inline]
+    pub fn sst_apply_state(&self) -> &SstApplyState {
+        &self.sst_apply_state
+    }
+
     pub fn reset_flush_state(&mut self, index: u64) {
         self.flush_state = Arc::new(FlushState::new(index));
     }
@@ -808,6 +857,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn add_message(&mut self, msg: RaftMessage) {
         self.pending_messages.push(msg);
+        self.set_has_ready();
     }
 
     #[inline]
@@ -848,5 +898,55 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Ok(t) => t,
             Err(e) => slog_panic!(self.logger, "failed to load term"; "index" => idx, "err" => ?e),
         }
+    }
+
+    #[inline]
+    pub fn abnormal_peer_context_mut(&mut self) -> &mut AbnormalPeerContext {
+        &mut self.abnormal_peer_context
+    }
+
+    #[inline]
+    pub fn abnormal_peer_context(&self) -> &AbnormalPeerContext {
+        &self.abnormal_peer_context
+    }
+
+    pub fn any_new_peer_catch_up(&mut self, from_peer_id: u64) -> bool {
+        // no pending or down peers
+        if self.abnormal_peer_context.is_empty() {
+            return false;
+        }
+        if !self.is_leader() {
+            self.abnormal_peer_context.reset();
+            return false;
+        }
+
+        if self
+            .abnormal_peer_context
+            .down_peers()
+            .contains(&from_peer_id)
+        {
+            return true;
+        }
+
+        let logger = self.logger.clone();
+        self.abnormal_peer_context
+            .retain_pending_peers(|(peer_id, pending_after)| {
+                // TODO check wait data peers here
+                let truncated_idx = self.raft_group.store().entry_storage().truncated_index();
+                if let Some(progress) = self.raft_group.raft.prs().get(*peer_id) {
+                    if progress.matched >= truncated_idx {
+                        let elapsed = duration_to_sec(pending_after.saturating_elapsed());
+                        RAFT_PEER_PENDING_DURATION.observe(elapsed);
+                        debug!(
+                            logger,
+                            "peer has caught up logs";
+                            "from_peer_id" => %from_peer_id,
+                            "takes" => %elapsed,
+                        );
+                        return false;
+                    }
+                }
+                true
+            })
     }
 }

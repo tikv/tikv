@@ -538,6 +538,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
+        cmd.incr_cmd_metric();
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
             .get(priority_tag)
@@ -628,7 +629,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 let this = self.clone();
                 self.get_sched_pool()
                     .spawn(&group_name, pri, async move {
-                        this.finish_with_err(cid, err);
+                        this.finish_with_err(cid, err, None);
                     })
                     .unwrap();
             }
@@ -670,7 +671,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         self.get_sched_pool()
             .spawn(&task.cmd.group_name(), task.cmd.priority(), async move {
                 fail_point!("scheduler_start_execute");
-                if sched.check_task_deadline_exceeded(&task) {
+                if sched.check_task_deadline_exceeded(&task, None) {
                     return;
                 }
 
@@ -704,7 +705,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                             .unwrap()
                             .try_own()
                         {
-                            sched.finish_with_err(task.cid, StorageErrorInner::DeadlineExceeded);
+                            sched.finish_with_err(
+                                task.cid,
+                                StorageErrorInner::DeadlineExceeded,
+                                None,
+                            );
                             return;
                         }
 
@@ -724,7 +729,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
                         info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                        sched.finish_with_err(task.cid, Error::from(err));
+                        sched.finish_with_err(task.cid, Error::from(err), None);
                     }
                 }
             })
@@ -732,7 +737,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     /// Calls the callback with an error.
-    fn finish_with_err<ER>(&self, cid: u64, err: ER)
+    fn finish_with_err<ER>(&self, cid: u64, err: ER, sched_details: Option<&SchedulerDetails>)
     where
         StorageError: From<ER>,
     {
@@ -744,6 +749,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
+        if let Some(details) = sched_details {
+            GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
+                tracker.metrics.scheduler_process_nanos = details
+                    .start_process_instant
+                    .saturating_elapsed()
+                    .as_nanos() as u64;
+                tracker.metrics.scheduler_throttle_nanos =
+                    details.flow_control_nanos + details.quota_limit_delay_nanos;
+            });
+        }
         if let Some(cb) = tctx.cb {
             cb.execute(pr);
         }
@@ -1075,7 +1090,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     /// Process the task in the current thread.
     async fn process(self, snapshot: E::Snap, task: Task) {
-        if self.check_task_deadline_exceeded(&task) {
+        if self.check_task_deadline_exceeded(&task, None) {
             return;
         }
 
@@ -1184,7 +1199,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         .await;
         if let Err(err) = raw_ext {
             info!("get_raw_ext failed"; "cid" => cid, "err" => ?err);
-            scheduler.finish_with_err(cid, err);
+            scheduler.finish_with_err(cid, err, Some(sched_details));
             return;
         }
         let raw_ext = raw_ext.unwrap();
@@ -1265,7 +1280,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
                 debug!("write command failed"; "cid" => cid, "err" => ?err);
-                scheduler.finish_with_err(cid, err);
+                scheduler.finish_with_err(cid, err, Some(sched_details));
                 return;
             }
             // Initiates an async write operation on the storage engine, there'll be a
@@ -1352,6 +1367,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // Safety: `self.sched_pool` ensures a TLS engine exists.
             unsafe {
                 with_tls_engine(|engine: &mut E| {
+                    // Migrated to 2021 migration. This let statement is probably not needed, see
+                    //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+                    let _ = &to_be_write;
                     // We skip writing the raftstore, but to improve CDC old value hit rate,
                     // we should send the old values to the CDC scheduler.
                     engine.schedule_txn_extra(to_be_write.extra);
@@ -1411,7 +1429,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         break;
                     }
                     if now >= deadline.inner() {
-                        scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
+                        scheduler.finish_with_err(
+                            cid,
+                            StorageErrorInner::DeadlineExceeded,
+                            Some(sched_details),
+                        );
                         self.inner.flow_controller.unconsume(region_id, write_size);
                         SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                         return;
@@ -1621,9 +1643,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// If the task has expired, return `true` and call the callback of
     /// the task with a `DeadlineExceeded` error.
     #[inline]
-    fn check_task_deadline_exceeded(&self, task: &Task) -> bool {
+    fn check_task_deadline_exceeded(
+        &self,
+        task: &Task,
+        sched_details: Option<&SchedulerDetails>,
+    ) -> bool {
         if let Err(e) = task.cmd.deadline().check() {
-            self.finish_with_err(task.cid, e);
+            self.finish_with_err(task.cid, e, sched_details);
             true
         } else {
             false

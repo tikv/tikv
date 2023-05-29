@@ -10,13 +10,13 @@ use std::{
 };
 
 use engine_rocks::RocksSnapshot;
-use kvproto::{kvrpcpb::Op, metapb};
+use kvproto::metapb;
 use more_asserts::assert_le;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's
@@ -430,7 +430,7 @@ fn test_node_callback_when_destroyed() {
     let get = new_get_cmd(b"k1");
     let mut req = new_request(1, epoch, vec![get], true);
     req.mut_header().set_peer(leader);
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster
         .sim
         .rl()
@@ -500,8 +500,8 @@ fn test_read_index_stale_in_suspect_lease() {
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Ensure peer 3 is ready to become leader.
-    let rx = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
-    let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
+    let resp = block_on_timeout(resp_ch, Duration::from_secs(3)).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_eq!(
         resp.get_responses()[0].get_get().get_value(),
@@ -649,7 +649,7 @@ fn test_not_leader_read_lease() {
         true,
     );
     req.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.must_transfer_leader(region_id, new_peer(3, 3));
@@ -716,7 +716,7 @@ fn test_read_index_after_write() {
     );
     req.mut_header()
         .set_peer(new_peer(1, region_on_store1.get_id()));
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.sim.wl().clear_recv_filters(2);
@@ -827,48 +827,4 @@ fn test_node_local_read_renew_lease() {
         assert_le!(detector.ctx.rl().len(), max_renew_lease_time + 1, "{}", i);
         thread::sleep(request_wait);
     }
-}
-
-#[test]
-fn test_stale_read_with_ts0() {
-    let mut cluster = new_server_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    cluster.cfg.resolved_ts.enable = true;
-    cluster.run();
-
-    let leader = new_peer(1, 1);
-    cluster.must_transfer_leader(1, leader.clone());
-    let mut leader_client = PeerClient::new(&cluster, 1, leader);
-
-    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
-
-    // Set the `stale_read` flag
-    leader_client.ctx.set_stale_read(true);
-    follower_client2.ctx.set_stale_read(true);
-
-    let commit_ts1 = leader_client.must_kv_write(
-        &pd_client,
-        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
-        b"key1".to_vec(),
-    );
-
-    let commit_ts2 = leader_client.must_kv_write(
-        &pd_client,
-        vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
-        b"key1".to_vec(),
-    );
-
-    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
-    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
-    assert!(
-        follower_client2
-            .kv_read(b"key1".to_vec(), 0)
-            .region_error
-            .into_option()
-            .unwrap()
-            .not_leader
-            .is_some()
-    );
-    assert!(leader_client.kv_read(b"key1".to_vec(), 0).not_found);
 }

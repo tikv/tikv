@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fs::File, io::Write, time::Duration};
+use std::{fs::File, io::Write, path::Path, time::Duration};
 
 use encryption_export::{
     create_backend, DataKeyManager, DataKeyManagerArgs, EncryptionConfig, FileConfig,
@@ -15,15 +15,15 @@ pub fn create_test_key_file(path: &str) {
         .unwrap();
 }
 
-fn new_test_file_master_key(tmp: &tempfile::TempDir) -> MasterKeyConfig {
-    let key_path = tmp.path().join("test_key").to_str().unwrap().to_owned();
+pub fn new_test_file_master_key(tmp: &Path) -> MasterKeyConfig {
+    let key_path = tmp.join("test_key").to_str().unwrap().to_owned();
     create_test_key_file(&key_path);
     MasterKeyConfig::File {
         config: FileConfig { path: key_path },
     }
 }
 
-pub fn new_file_security_config(dir: &tempfile::TempDir) -> EncryptionConfig {
+pub fn new_file_security_config(dir: &Path) -> EncryptionConfig {
     let master_key_cfg = new_test_file_master_key(dir);
     EncryptionConfig {
         data_encryption_method: EncryptionMethod::Aes256Ctr,
@@ -41,7 +41,7 @@ pub fn new_test_key_manager(
     master_key: Option<MasterKeyConfig>,
     previous_master_key: Option<MasterKeyConfig>,
 ) -> Result<Option<DataKeyManager>> {
-    let default_config = new_test_file_master_key(tmp_dir);
+    let default_config = new_test_file_master_key(tmp_dir.path());
     let master_key = master_key.unwrap_or_else(|| default_config.clone());
     let previous_master_key = previous_master_key.unwrap_or(default_config);
     DataKeyManager::new(
@@ -52,7 +52,7 @@ pub fn new_test_key_manager(
             rotation_period: Duration::from_secs(60),
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 2,
-            dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
+            dict_path: tmp_dir.path().to_str().unwrap().to_string(),
         },
     )
 }

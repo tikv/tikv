@@ -14,6 +14,7 @@
 use std::{
     cmp,
     collections::HashMap,
+    marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{atomic::AtomicU64, mpsc, Arc},
@@ -22,7 +23,12 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
+use backup_stream::{
+    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
+    BackupStreamResolver,
+};
 use causal_ts::CausalTsProviderImpl;
+use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
@@ -31,11 +37,15 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{
-    brpb::create_backup, deadlock::create_deadlock, diagnosticspb::create_diagnostics,
-    import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion,
+    brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
+    debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
+    import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion, logbackuppb::create_log_backup,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use pd_client::{PdClient, RpcClient};
+use pd_client::{
+    meta_storage::{Checked, Sourced},
+    PdClient, RpcClient,
+};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
@@ -63,16 +73,19 @@ use tikv::{
     },
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
+        debug::Debugger,
+        debug2::DebuggerImplV2,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::DiagnosticsService,
+        service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         KvEngineFactoryBuilder, NodeV2, RaftKv2, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
+        config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
@@ -87,7 +100,7 @@ use tikv_util::{
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
     yatp_pool::CleanupMethod,
     Either,
 };
@@ -186,7 +199,10 @@ struct TikvServer<ER: RaftEngine> {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
-    check_leader_worker: Worker,
+    cdc_worker: Option<Box<LazyWorker<cdc::Task>>>,
+    cdc_scheduler: Option<Scheduler<cdc::Task>>,
+    cdc_memory_quota: Option<MemoryQuota>,
+    backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
@@ -295,10 +311,6 @@ where
             info!("Causal timestamp provider startup.");
         }
 
-        // Run check leader in a dedicate thread, because it is time sensitive
-        // and crucial to TiCDC replication lag.
-        let check_leader_worker = WorkerBuilder::new("check-leader").thread_count(1).create();
-
         TikvServer {
             core: TikvServerCore {
                 config,
@@ -325,7 +337,10 @@ where
             coprocessor_host: None,
             concurrency_manager,
             env,
-            check_leader_worker,
+            cdc_worker: None,
+            cdc_scheduler: None,
+            cdc_memory_quota: None,
+            backup_stream_scheduler: None,
             sst_worker: None,
             quota_limiter,
             resource_manager,
@@ -381,7 +396,7 @@ where
         );
         lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
-        let engines = self.engines.as_ref().unwrap();
+        let engines = self.engines.as_mut().unwrap();
 
         let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = raftstore_v2::PdReporter::new(
@@ -518,10 +533,11 @@ where
             .unwrap()
             .to_owned();
 
-        let snap_mgr = match TabletSnapManager::new(&snap_path) {
-            Ok(mgr) => mgr,
-            Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
-        };
+        let snap_mgr =
+            match TabletSnapManager::new(&snap_path, self.core.encryption_key_manager.clone()) {
+                Ok(mgr) => mgr,
+                Err(e) => fatal!("failed to create snapshot manager at {}: {}", snap_path, e),
+            };
 
         // Create coprocessor endpoint.
         let cop_read_pool_handle = if self.core.config.readpool.coprocessor.use_unified_pool() {
@@ -551,16 +567,122 @@ where
             unified_read_pool_scale_receiver = Some(rx);
         }
 
+        // Run check leader in a dedicate thread, because it is time sensitive
+        // and crucial to TiCDC replication lag.
+        let check_leader_worker =
+            Box::new(WorkerBuilder::new("check-leader").thread_count(1).create());
+        // Create check leader runer.
         let check_leader_runner = CheckLeaderRunner::new(
             self.router.as_ref().unwrap().store_meta().clone(),
             self.coprocessor_host.clone().unwrap(),
         );
-        let check_leader_scheduler = self
-            .check_leader_worker
-            .start("check-leader", check_leader_runner);
+        let check_leader_scheduler = check_leader_worker.start("check-leader", check_leader_runner);
+        self.core.to_stop.push(check_leader_worker);
+
+        // Create cdc worker.
+        let mut cdc_worker = self.cdc_worker.take().unwrap();
+        let cdc_scheduler = self.cdc_scheduler.clone().unwrap();
+        // Register cdc observer.
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register cdc config manager.
+        cfg_controller.register(
+            tikv::config::Module::Cdc,
+            Box::new(CdcConfigManager(cdc_scheduler.clone())),
+        );
+        // Start cdc endpoint.
+        let cdc_memory_quota = MemoryQuota::new(self.core.config.cdc.sink_memory_quota.0 as _);
+        let cdc_endpoint = cdc::Endpoint::new(
+            self.core.config.server.cluster_id,
+            &self.core.config.cdc,
+            self.core.config.storage.engine == EngineType::RaftKv2,
+            self.core.config.storage.api_version(),
+            self.pd_client.clone(),
+            cdc_scheduler,
+            self.router.clone().unwrap(),
+            LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
+            cdc_ob,
+            self.router.as_ref().unwrap().store_meta().clone(),
+            self.concurrency_manager.clone(),
+            self.env.clone(),
+            self.security_mgr.clone(),
+            cdc_memory_quota.clone(),
+            self.causal_ts_provider.clone(),
+        );
+        cdc_worker.start_with_timer(cdc_endpoint);
+        self.core.to_stop.push(cdc_worker);
+        self.cdc_memory_quota = Some(cdc_memory_quota);
+
+        // Create resolved ts.
+        if self.core.config.resolved_ts.enable {
+            let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
+            // Register the resolved ts observer
+            let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager for resolved ts worker
+            cfg_controller.register(
+                tikv::config::Module::ResolvedTs,
+                Box::new(resolved_ts::ResolvedTsConfigManager::new(
+                    rts_worker.scheduler(),
+                )),
+            );
+            let rts_endpoint = resolved_ts::Endpoint::new(
+                &self.core.config.resolved_ts,
+                rts_worker.scheduler(),
+                self.router.clone().unwrap(),
+                self.router.as_ref().unwrap().store_meta().clone(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+            );
+            rts_worker.start_with_timer(rts_endpoint);
+            self.core.to_stop.push(rts_worker);
+        }
+
+        // Start backup stream
+        self.backup_stream_scheduler = if self.core.config.log_backup.enable {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register backup-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::BackupStream,
+                Box::new(BackupStreamConfigManager::new(
+                    backup_stream_worker.scheduler(),
+                    self.core.config.log_backup.clone(),
+                )),
+            );
+
+            let backup_stream_endpoint = backup_stream::Endpoint::new(
+                self.node.as_ref().unwrap().id(),
+                PdStore::new(Checked::new(Sourced::new(
+                    Arc::clone(&self.pd_client),
+                    pd_client::meta_storage::Source::LogBackup,
+                ))),
+                self.core.config.log_backup.clone(),
+                backup_stream_scheduler.clone(),
+                backup_stream_ob,
+                self.region_info_accessor.as_ref().unwrap().clone(),
+                self.router.clone().unwrap(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
+            self.core.to_stop.push(backup_stream_worker);
+            Some(backup_stream_scheduler)
+        } else {
+            None
+        };
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
+        self.core.config.raft_store.optimize_for(true);
         self.core
             .config
             .raft_store
@@ -587,7 +709,7 @@ where
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
-                Arc::clone(&self.quota_limiter),
+                self.quota_limiter.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
@@ -598,6 +720,7 @@ where
             unified_read_pool,
             debug_thread_pool,
             health_service,
+            self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -690,6 +813,7 @@ where
                 raft_store,
                 &state,
                 importer.clone(),
+                self.core.encryption_key_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -770,10 +894,55 @@ where
             fatal!("failed to register import service");
         }
 
+        if let Some(sched) = self.backup_stream_scheduler.take() {
+            let pitr_service = backup_stream::Service::new(sched);
+            if servers
+                .server
+                .register_service(create_log_backup(pitr_service))
+                .is_some()
+            {
+                fatal!("failed to register log backup service");
+            }
+        }
+
         self.cfg_controller
             .as_mut()
             .unwrap()
             .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
+
+        let mut debugger = DebuggerImplV2::new(
+            self.tablet_registry.clone().unwrap(),
+            self.engines.as_ref().unwrap().raft_engine.clone(),
+            self.cfg_controller.as_ref().unwrap().clone(),
+        );
+        debugger.set_kv_statistics(self.kv_statistics.clone());
+        debugger.set_raft_statistics(self.raft_statistics.clone());
+
+        // Debug service.
+        let debug_service = DebugService::new(
+            debugger,
+            servers.server.get_debug_thread_pool().clone(),
+            engines.engine.raft_extension(),
+        );
+        if servers
+            .server
+            .register_service(create_debug(debug_service))
+            .is_some()
+        {
+            fatal!("failed to register debug service");
+        }
+
+        let cdc_service = cdc::Service::new(
+            self.cdc_scheduler.as_ref().unwrap().clone(),
+            self.cdc_memory_quota.as_ref().unwrap().clone(),
+        );
+        if servers
+            .server
+            .register_service(create_change_data(cdc_service))
+            .is_some()
+        {
+            fatal!("failed to register cdc service");
+        }
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
@@ -1152,7 +1321,14 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         );
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
-        let engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+        let cdc_worker = Box::new(LazyWorker::new("cdc"));
+        let cdc_scheduler = cdc_worker.scheduler();
+        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
+
+        let mut engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
+        // Set txn extra scheduler immediately to make sure every clone has the
+        // scheduler.
+        engine.set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
         self.engines = Some(TikvEngines {
             raft_engine,
@@ -1162,6 +1338,8 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         self.node = Some(node);
         self.coprocessor_host = Some(coprocessor_host);
         self.region_info_accessor = Some(region_info_accessor);
+        self.cdc_worker = Some(cdc_worker);
+        self.cdc_scheduler = Some(cdc_scheduler);
 
         engines_info
     }

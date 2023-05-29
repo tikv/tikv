@@ -1855,7 +1855,7 @@ mod tests {
             must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
             must_commit(&mut prefixed_engine, &k, 151, 152);
         }
-        db.flush_cf(cf, true).unwrap();
+        db.flush_cf(cf, true, false).unwrap();
 
         db.compact_range_cf(cf, None, None);
         for i in 0..100 {
@@ -1930,7 +1930,7 @@ mod tests {
             must_commit(&mut prefixed_engine, &k, 151, 152);
             keys.push(Key::from_raw(&k));
         }
-        db.flush_cf(cf, true).unwrap();
+        db.flush_cf(cf, true, false).unwrap();
 
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek, 0);
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.next, 0);
@@ -2088,7 +2088,7 @@ mod tests {
         for i in 10u64..30 {
             must_rollback(&mut prefixed_engine, b"k2\x00", i, true);
         }
-        db.flush_cf(cf, true).unwrap();
+        db.flush_cf(cf, true, false).unwrap();
         must_gc(&mut prefixed_engine, b"k2\x00", 30);
 
         // Test tombstone counter works
@@ -2147,7 +2147,7 @@ mod tests {
             must_prewrite_put(&mut prefixed_engine, b"k2", b"v2", b"k2", start_ts);
             must_commit(&mut prefixed_engine, b"k2", start_ts, commit_ts);
         }
-        db.flush_cf(cf, true).unwrap();
+        db.flush_cf(cf, true, false).unwrap();
         let safepoint = versions as u64 * 2;
 
         runner
@@ -2180,7 +2180,7 @@ mod tests {
         must_commit(&mut engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
-        db.flush_cf(cf, true).unwrap();
+        db.flush_cf(cf, true, false).unwrap();
 
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();

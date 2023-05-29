@@ -117,7 +117,7 @@ where
     Snap(RegionSnapshot<S>),
 }
 
-fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
+pub fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
         return Err(Error::RequestFailed(resp.take_header().take_error()));
     }
@@ -160,7 +160,11 @@ pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
     }
     header.set_sync_log(ctx.get_sync_log());
     header.set_replica_read(ctx.get_replica_read());
-    header.set_resource_group_name(ctx.get_resource_group_name().to_owned());
+    header.set_resource_group_name(
+        ctx.get_resource_control_context()
+            .get_resource_group_name()
+            .to_owned(),
+    );
     header
 }
 
@@ -731,7 +735,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     start_key.as_ref(),
                     end_key.as_ref(),
                     |key, lock| {
-                        txn_types::Lock::check_ts_conflict(
+                        txn_types::Lock::check_ts_conflict_for_replica_read(
                             Cow::Borrowed(lock),
                             key,
                             start_ts,

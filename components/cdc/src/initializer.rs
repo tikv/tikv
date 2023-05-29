@@ -17,10 +17,10 @@ use kvproto::{
 };
 use raftstore::{
     coprocessor::ObserveId,
-    router::RaftStoreRouter,
+    router::CdcHandle,
     store::{
         fsm::ChangeObserver,
-        msg::{Callback, ReadResponse, SignificantMsg},
+        msg::{Callback, ReadResponse},
     },
 };
 use resolved_ts::Resolver;
@@ -75,7 +75,7 @@ pub(crate) enum Scanner<S: Snapshot> {
 }
 
 pub(crate) struct Initializer<E> {
-    pub(crate) engine: E,
+    pub(crate) tablet: Option<E>,
     pub(crate) sched: Scheduler<Task>,
     pub(crate) sink: crate::channel::Sink,
 
@@ -102,10 +102,10 @@ pub(crate) struct Initializer<E> {
 }
 
 impl<E: KvEngine> Initializer<E> {
-    pub(crate) async fn initialize<T: 'static + RaftStoreRouter<E>>(
+    pub(crate) async fn initialize<T: 'static + CdcHandle<E>>(
         &mut self,
-        change_cmd: ChangeObserver,
-        raft_router: T,
+        change_observer: ChangeObserver,
+        cdc_handle: T,
         concurrency_semaphore: Arc<Semaphore>,
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
@@ -142,24 +142,22 @@ impl<E: KvEngine> Initializer<E> {
         let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
             tikv_util::future::paired_future_callback();
         let barrier = CdcEvent::Barrier(Some(incremental_scan_barrier_cb));
-        if let Err(e) = raft_router.significant_send(
+        if let Err(e) = cdc_handle.capture_change(
             self.region_id,
-            SignificantMsg::CaptureChange {
-                cmd: change_cmd,
-                region_epoch,
-                callback: Callback::read(Box::new(move |resp| {
-                    if let Err(e) = sched.schedule(Task::InitDownstream {
-                        region_id,
-                        downstream_id,
-                        downstream_state,
-                        sink,
-                        incremental_scan_barrier: barrier,
-                        cb: Box::new(move || cb(resp)),
-                    }) {
-                        error!("cdc schedule cdc task failed"; "error" => ?e);
-                    }
-                })),
-            },
+            region_epoch,
+            change_observer,
+            Callback::read(Box::new(move |resp| {
+                if let Err(e) = sched.schedule(Task::InitDownstream {
+                    region_id,
+                    downstream_id,
+                    downstream_state,
+                    sink,
+                    incremental_scan_barrier: barrier,
+                    cb: Box::new(move || cb(resp)),
+                }) {
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
+                }
+            })),
         ) {
             warn!("cdc send capture change cmd failed";
             "region_id" => self.region_id, "error" => ?e);
@@ -515,7 +513,11 @@ impl<E: KvEngine> Initializer<E> {
         let start_key = data_key(snap.lower_bound().unwrap_or_default());
         let end_key = data_end_key(snap.upper_bound().unwrap_or_default());
         let range = Range::new(&start_key, &end_key);
-        let collection = match self.engine.table_properties_collection(CF_WRITE, &[range]) {
+        let tablet = match self.tablet.as_ref() {
+            Some(t) => t,
+            None => return false,
+        };
+        let collection = match tablet.table_properties_collection(CF_WRITE, &[range]) {
             Ok(collection) => collection,
             Err(_) => return false,
         };
@@ -572,7 +574,7 @@ mod tests {
         cdcpb::{EventLogType, Event_oneof_event},
         errorpb::Error as ErrorHeader,
     };
-    use raftstore::{coprocessor::ObserveHandle, store::RegionSnapshot};
+    use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
     use test_raftstore::MockRaftStoreRouter;
     use tikv::storage::{
         kv::Engine,
@@ -589,6 +591,7 @@ mod tests {
     use tokio::runtime::{Builder, Runtime};
 
     use super::*;
+    use crate::txn_source::TxnSource;
 
     struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
@@ -636,12 +639,11 @@ mod tests {
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
         let initializer = Initializer {
-            engine: engine.unwrap_or_else(|| {
+            tablet: engine.or_else(|| {
                 TestEngineBuilder::new()
                     .build_without_cache()
                     .unwrap()
                     .kv_engine()
-                    .unwrap()
             }),
             sched: receiver_worker.scheduler(),
             sink,
@@ -785,18 +787,16 @@ mod tests {
         worker.stop();
     }
 
-    #[test]
-    fn test_initializer_filter_loop() {
+    fn test_initializer_txn_source_filter(txn_source: TxnSource, filter_loop: bool) {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
         let mut total_bytes = 0;
-
         for i in 10..100 {
             let (k, v) = (&[b'k', i], &[b'v', i]);
             total_bytes += k.len();
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
-            must_prewrite_put_with_txn_soucre(&mut engine, k, v, k, ts, 1);
+            must_prewrite_put_with_txn_soucre(&mut engine, k, v, k, ts, txn_source.into());
         }
 
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -807,7 +807,7 @@ mod tests {
             buffer,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
-            true,
+            filter_loop,
         );
         let th = pool.spawn(async move {
             initializer
@@ -830,6 +830,34 @@ mod tests {
         }
         block_on(th).unwrap();
         worker.stop();
+    }
+
+    #[test]
+    fn test_initializer_cdc_write_filter() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+        test_initializer_txn_source_filter(txn_source, true);
+    }
+
+    #[test]
+    fn test_initializer_lossy_ddl_filter() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, false);
+
+        // With cdr write source and filter loop is false, we should still ignore lossy
+        // ddl changes.
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, false);
+
+        // With cdr write source and filter loop is true, we should still ignore all
+        // events.
+        let mut txn_source = TxnSource::default();
+        txn_source.set_cdc_write_source(1);
+        txn_source.set_lossy_ddl_reorg_source(1);
+        test_initializer_txn_source_filter(txn_source, true);
     }
 
     // Test `hint_min_ts` works fine with `ExtraOp::ReadOldValue`.
@@ -978,7 +1006,7 @@ mod tests {
             mock_initializer(total_bytes, buffer, None, kv_api, false);
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-        let raft_router = MockRaftStoreRouter::new();
+        let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
         let concurrency_semaphore = Arc::new(Semaphore::new(1));
 
         initializer.downstream_state.store(DownstreamState::Stopped);
@@ -1002,6 +1030,14 @@ mod tests {
         let (tx1, rx1) = sync_channel(1);
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = (
+                &initializer,
+                &change_cmd,
+                &raft_router,
+                &concurrency_semaphore,
+            );
             let res = initializer
                 .initialize(change_cmd, raft_router, concurrency_semaphore)
                 .await;

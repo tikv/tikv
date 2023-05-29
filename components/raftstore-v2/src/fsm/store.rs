@@ -13,7 +13,7 @@ use futures::{compat::Future01CompatExt, FutureExt};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raftstore::store::{
-    fsm::store::StoreRegionMeta, Config, RegionReadProgressRegistry, Transport,
+    fsm::store::StoreRegionMeta, Config, ReadDelegate, RegionReadProgressRegistry, Transport,
 };
 use slog::{info, o, Logger};
 use tikv_util::{
@@ -133,10 +133,16 @@ impl<EK: Send> StoreRegionMeta for StoreMeta<EK> {
             }
         }
     }
+
+    #[inline]
+    fn reader(&self, region_id: u64) -> Option<&ReadDelegate> {
+        self.readers.get(&region_id).map(|e| &e.0)
+    }
 }
 
 pub struct Store {
     id: u64,
+    last_compact_checked_key: Vec<u8>,
     // Unix time when it's started.
     start_time: Option<u64>,
     logger: Logger,
@@ -146,6 +152,7 @@ impl Store {
     pub fn new(id: u64, logger: Logger) -> Store {
         Store {
             id,
+            last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             start_time: None,
             logger: logger.new(o!("store_id" => id)),
         }
@@ -153,6 +160,14 @@ impl Store {
 
     pub fn store_id(&self) -> u64 {
         self.id
+    }
+
+    pub fn last_compact_checked_key(&self) -> &Vec<u8> {
+        &self.last_compact_checked_key
+    }
+
+    pub fn set_last_compact_checked_key(&mut self, key: Vec<u8>) {
+        self.last_compact_checked_key = key;
     }
 
     pub fn start_time(&self) -> Option<u64> {
@@ -234,6 +249,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             StoreTick::CleanupImportSst,
             self.store_ctx.cfg.cleanup_import_sst_interval.0,
         );
+        self.register_compact_check_tick();
     }
 
     pub fn schedule_tick(&mut self, tick: StoreTick, timeout: Duration) {
@@ -258,7 +274,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst(),
-            _ => unimplemented!(),
+            StoreTick::CompactCheck => self.on_compact_check_tick(),
+            _ => slog_panic!(
+                self.store_ctx.logger,
+                "unimplemented";
+                "tick" => ?tick,
+            ),
         }
     }
 

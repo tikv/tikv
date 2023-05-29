@@ -2,6 +2,7 @@
 
 mod compact_log;
 mod conf_change;
+mod flashback;
 mod merge;
 mod split;
 mod transfer_leader;
@@ -15,10 +16,12 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
-use merge::{commit::CommitMergeResult, prepare::PrepareMergeResult};
+use merge::{
+    commit::CommitMergeResult, prepare::PrepareMergeResult, rollback::RollbackMergeResult,
+};
 pub use merge::{
     commit::{CatchUpLogs, MERGE_IN_PROGRESS_PREFIX},
-    MergeContext, MERGE_SOURCE_PREFIX,
+    merge_source_path, MergeContext, MERGE_SOURCE_PREFIX,
 };
 use protobuf::Message;
 use raftstore::{
@@ -36,10 +39,15 @@ pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
     SplitInit, SPLIT_PREFIX,
 };
-use tikv_util::{box_err, log::SlogFormat};
+use tikv_util::{box_err, log::SlogFormat, slog_panic};
 use txn_types::WriteBatchFlags;
 
-use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
+use self::flashback::FlashbackResult;
+use crate::{
+    batch::StoreContext,
+    raft::Peer,
+    router::{CmdResChannel, PeerMsg, RaftRequest},
+};
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
@@ -52,6 +60,8 @@ pub enum AdminCmdResult {
     UpdateGcPeers(UpdateGcPeersResult),
     PrepareMerge(PrepareMergeResult),
     CommitMerge(CommitMergeResult),
+    Flashback(FlashbackResult),
+    RollbackMerge(RollbackMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -89,6 +99,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        let is_transfer_leader = cmd_type == AdminCmdType::TransferLeader;
         let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
             && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
                 .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL);
@@ -109,7 +120,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
+        // Do not check conflict for transfer leader, otherwise we may not
+        // transfer leadership out of busy nodes in time.
+        if !is_transfer_leader && let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
             return;
         }
@@ -147,9 +160,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // the follower so that they can flush memtalbes in advance too.
                         //
                         // 2. When the task finishes, it will propose a batch split with
-                        // `SPLIT_SECOND_PHASE` flag.
+                        // `PRE_FLUSH_FINISHED` flag.
                         if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
-                            .contains(WriteBatchFlags::SPLIT_SECOND_PHASE)
+                            .contains(WriteBatchFlags::PRE_FLUSH_FINISHED)
                         {
                             if self.tablet_being_flushed() {
                                 return;
@@ -161,14 +174,42 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 self.logger,
                                 "Schedule flush tablet";
                             );
-                            if let Err(e) = ctx.schedulers.tablet_flush.schedule(
-                                crate::TabletFlushTask::TabletFlush {
+
+                            let mailbox = match ctx.router.mailbox(region_id) {
+                                Some(mailbox) => mailbox,
+                                None => {
+                                    // None means the node is shutdown concurrently and thus the
+                                    // mailboxes in router have been cleared
+                                    assert!(
+                                        ctx.router.is_shutdown(),
+                                        "{} router should have been closed",
+                                        SlogFormat(&self.logger)
+                                    );
+                                    return;
+                                }
+                            };
+
+                            let logger = self.logger.clone();
+                            let on_flush_finish = move || {
+                                req.mut_header()
+                                    .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
+                                if let Err(e) = mailbox
+                                    .try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
+                                {
+                                    error!(
+                                        logger,
+                                        "send split request fail after pre-flush finished";
+                                        "err" => ?e,
+                                    );
+                                }
+                            };
+
+                            if let Err(e) =
+                                ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
                                     region_id,
-                                    req: Some(req),
-                                    is_leader: true,
-                                    ch: Some(ch),
-                                },
-                            ) {
+                                    cb: Some(Box::new(on_flush_finish)),
+                                })
+                            {
                                 error!(
                                     self.logger,
                                     "Fail to schedule flush task";
@@ -176,6 +217,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 )
                             }
 
+                            // Notify followers to flush their relevant memtables
                             let peers = self.region().get_peers().to_vec();
                             for p in peers {
                                 if p == *self.peer()
@@ -231,7 +273,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
-                _ => unimplemented!(),
+                AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+                    self.propose_flashback(ctx, req)
+                }
+                _ => slog_panic!(
+                    self.logger,
+                    "unimplemented";
+                    "admin_type" => ?cmd_type,
+                ),
             }
         };
         match &res {

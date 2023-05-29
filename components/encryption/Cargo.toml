@@ -1,7 +1,7 @@
 [package]
 name = "encryption"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
@@ -11,6 +11,7 @@ failpoints = ["fail/failpoints"]
 async-trait = "0.1"
 byteorder = "1.2"
 bytes = "1.0"
+cloud = { workspace = true }
 crc32fast = "1.2"
 crossbeam = "0.8"
 derive_more = "0.99.3"
@@ -37,6 +38,7 @@ thiserror = "1.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "rt"] }
+walkdir = "2"
 
 [dev-dependencies]
 matches = "0.1.8"
