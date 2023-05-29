@@ -7,6 +7,7 @@ extern crate log;
 
 mod cmd;
 mod executor;
+mod reuse_readonly_remains;
 mod util;
 
 use std::{
@@ -14,7 +15,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Read},
     path::Path,
-    str,
+    process, str,
     string::ToString,
     sync::Arc,
     thread,
@@ -27,7 +28,7 @@ use encryption_export::{
     DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
-use engine_traits::EncryptionKeyManager;
+use engine_traits::{EncryptionKeyManager, Peekable};
 use file_system::calc_crc32;
 use futures::executor::block_on;
 use gag::BufferRedirect;
@@ -36,16 +37,20 @@ use kvproto::{
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
-    raft_serverpb::SnapshotMeta,
+    raft_serverpb::{SnapshotMeta, StoreIdent},
     tikvpb::TikvClient,
 };
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
+use raft_engine::RecoveryMode;
 use raft_log_engine::ManagedFileSystem;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
-use tikv::{config::TikvConfig, server::debug::BottommostLevelCompaction};
+use tikv::{
+    config::TikvConfig,
+    server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
+};
 use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
 use txn_types::Key;
 
@@ -234,6 +239,71 @@ fn main() {
             let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
             let key = unescape(&key);
             split_region(&pd_client, mgr, region_id, key);
+        }
+        Cmd::ShowClusterId { data_dir } => {
+            if !opt.config.is_some() {
+                eprintln!("tikv-ctl parameter config must be specified");
+                process::exit(-1);
+            }
+            if data_dir == "" {
+                eprintln!("reuse-readonly-remains parameter data-dir must be specified");
+                process::exit(-1);
+            }
+            cfg.storage.data_dir = data_dir;
+            // Disable auto compactions and GCs to avoid modifications.
+            cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+            cfg.rocksdb.writecf.disable_auto_compactions = true;
+            cfg.rocksdb.lockcf.disable_auto_compactions = true;
+            cfg.rocksdb.raftcf.disable_auto_compactions = true;
+            cfg.raftdb.defaultcf.disable_auto_compactions = true;
+            cfg.rocksdb.titan.disable_gc = true;
+            match read_cluster_id(&cfg) {
+                Ok(id) => {
+                    println!("cluster-id: {}", id);
+                    process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("read cluster ID fail: {}", e);
+                    process::exit(-1);
+                }
+            }
+        }
+        Cmd::ReuseReadonlyRemains {
+            data_dir,
+            agent_dir,
+            snaps,
+            rocksdb_files,
+        } => {
+            if !opt.config.is_some() {
+                eprintln!("tikv-ctl parameter config must be specified");
+                process::exit(-1);
+            }
+            if data_dir == "" {
+                eprintln!("reuse-readonly-remains parameter data-dir must be specified");
+                process::exit(-1);
+            }
+            cfg.storage.data_dir = data_dir;
+            if cfg.raft_engine.config().enable_log_recycle {
+                eprintln!("raft-engine.enable-log-recycle is true on the remained TiKV");
+                process::exit(-1);
+            }
+            if cfg.raft_engine.config().recovery_mode != RecoveryMode::TolerateTailCorruption {
+                eprintln!(
+                    "raft-engine.recovery-mode should be tolerate-tail-corruption on the remained TiKV"
+                );
+                process::exit(-1);
+            }
+            if snaps != "symlink" && snaps != "copy" {
+                eprintln!("reuse-readonly-remains parameter snaps should be symlink or copy");
+                process::exit(-1);
+            }
+            if rocksdb_files != "symlink" && rocksdb_files != "copy" {
+                eprintln!(
+                    "reuse-readonly-remains parameter rocksdb_files should be symlink or copy"
+                );
+                process::exit(-1);
+            }
+            reuse_readonly_remains::run(&cfg, &agent_dir, &snaps, &rocksdb_files)
         }
         // Commands below requires either the data dir or the host.
         cmd => {
@@ -934,4 +1004,23 @@ fn flush_std_buffer_to_log(
     err_buffer.read_to_string(&mut err).unwrap();
     out_buffer.read_to_string(&mut out).unwrap();
     println!("{}, err redirect:{}, out redirect:{}", msg, err, out);
+}
+
+fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
+    let env = config
+        .build_shared_rocks_env(None, None)
+        .map_err(|e| format!("build_shared_rocks_env fail: {}", e))?;
+    let cache = config
+        .storage
+        .block_cache
+        .build_shared_cache(config.storage.engine);
+    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache)
+        .build()
+        .create_shared_db(&config.storage.data_dir)
+        .map_err(|e| format!("create_shared_db fail: {}", e))?;
+    let ident = kv_engine
+        .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+        .unwrap()
+        .unwrap();
+    Ok(ident.cluster_id)
 }

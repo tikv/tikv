@@ -2,20 +2,13 @@
 
 #![feature(proc_macro_hygiene)]
 
-mod fork;
-
 use std::{path::Path, process};
 
 use clap::{crate_authors, App, Arg};
-use encryption_export::data_key_manager_from_config;
-use engine_traits::Peekable;
-use fork::{create_dir, dup_kv_engine_files, dup_raft_engine_files, symlink_snaps};
-use kvproto::raft_serverpb::StoreIdent;
 use serde_json::{Map, Value};
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::{
     config::{to_flatten_config_info, TikvConfig},
-    server::KvEngineFactoryBuilder,
     storage::config::EngineType,
 };
 
@@ -28,14 +21,6 @@ fn main() {
         .author(crate_authors!())
         .version(version_info.as_ref())
         .long_version(version_info.as_ref())
-        .arg(
-            Arg::with_name("create-fork")
-                .required(false)
-                .long("create-fork")
-                .takes_value(true)
-                .value_name("DIR")
-                .help("create a fork instance from exists data and exit"),
-            )
         .arg(
             Arg::with_name("config")
                 .short("C")
@@ -232,84 +217,8 @@ fn main() {
         process::exit(1)
     }
 
-    // This is for creating a shadow instance from exists data, which is specified
-    // by `config.data_dir`. When duplicating all data files, *symlink* will be used
-    // if possible, otherwise *copy* will be used instead.
-    if let Some(agent_dir) = matches.value_of("create-fork") {
-        if data_key_manager_from_config(&config.security.encryption, &config.storage.data_dir)
-            .unwrap()
-            .is_some()
-        {
-            eprintln!("fork with encryption enabled is not expected");
-            process::exit(-1);
-        }
-
-        if let Err(e) = create_dir(agent_dir) {
-            eprintln!("remove and re-create agent directory fail: {}", e);
-            process::exit(-1);
-        }
-        println!("remove and re-create agent directory success");
-
-        if let Err(e) = symlink_snaps(&config, agent_dir) {
-            eprintln!("symlink snapshot files fail: {}", e);
-            process::exit(-1);
-        }
-        println!("symlink snapshot files success");
-
-        if let Err(e) = dup_kv_engine_files(&config, agent_dir) {
-            eprintln!("symlink kv engine files fail: {}", e);
-            process::exit(-1);
-        }
-        println!("symlink kv engine files success");
-
-        if let Err(e) = dup_raft_engine_files(&config, agent_dir) {
-            eprintln!("symlink raft engine fail: {}", e);
-            process::exit(-1);
-        }
-        println!("symlink raft engine success");
-
-        // Disable background routines and read cluster ID.
-        config.storage.data_dir = agent_dir.to_owned();
-        config.rocksdb.wal_dir = "".to_owned();
-        config.rocksdb.defaultcf.disable_auto_compactions = true;
-        config.rocksdb.writecf.disable_auto_compactions = true;
-        config.rocksdb.lockcf.disable_auto_compactions = true;
-        config.rocksdb.raftcf.disable_auto_compactions = true;
-        config.rocksdb.titan.disable_gc = true;
-        match read_cluster_id(&config) {
-            Ok(id) => {
-                println!("cluster-id: {}", id);
-                process::exit(0);
-            }
-            Err(e) => {
-                eprintln!("read cluster ID fail: {}", e);
-                process::exit(-1);
-            }
-        }
-    }
-
     match config.storage.engine {
         EngineType::RaftKv => server::server::run_tikv(config),
         EngineType::RaftKv2 => server::server2::run_tikv(config),
     }
-}
-
-// Open KV engine and read cluster ID.
-fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
-    let env = config
-        .build_shared_rocks_env(None, None)
-        .map_err(|e| format!("build_shared_rocks_env fail: {}", e))?;
-    let cache = config
-        .storage
-        .block_cache
-        .build_shared_cache(config.storage.engine);
-    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache)
-        .build()
-        .create_shared_db(&config.storage.data_dir)
-        .map_err(|e| format!("create_shared_db fail: {}", e))?;
-    let ident = kv_engine
-        .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
-        .unwrap()
-        .unwrap();
-    Ok(ident.cluster_id)
 }

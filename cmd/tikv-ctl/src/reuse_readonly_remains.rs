@@ -3,27 +3,63 @@
 use std::{
     fs::ReadDir,
     path::{Path, PathBuf},
+    process,
     sync::Arc,
 };
 
+use encryption_export::data_key_manager_from_config;
 use raft_engine::{env::DefaultFileSystem, Engine as RaftEngine};
 use regex::Regex;
 use tikv::config::TikvConfig;
+
+pub fn run(config: &TikvConfig, agent_dir: &str, reuse_snaps: &str, reuse_rocksdb_files: &str) {
+    if data_key_manager_from_config(&config.security.encryption, &config.storage.data_dir)
+        .unwrap()
+        .is_some()
+    {
+        eprintln!("reuse_redonly_remains with encryption enabled isn't expected");
+        process::exit(-1);
+    }
+
+    if let Err(e) = create_dir(agent_dir) {
+        eprintln!("create agent directory fail: {}", e);
+        process::exit(-1);
+    }
+    println!("create agent directory success");
+
+    if let Err(e) = dup_snaps(&config, agent_dir, reuse_snaps == "symlink") {
+        eprintln!("dup snapshot files fail: {}", e);
+        process::exit(-1);
+    }
+    println!("dup snapshot files success");
+
+    if let Err(e) = dup_kv_engine_files(&config, agent_dir, reuse_rocksdb_files == "symlink") {
+        eprintln!("dup kv engine files fail: {}", e);
+        process::exit(-1);
+    }
+    println!("dup kv engine files success");
+
+    if let Err(e) = dup_raft_engine_files(&config, agent_dir, reuse_rocksdb_files == "symlink") {
+        eprintln!("dup raft engine fail: {}", e);
+        process::exit(-1);
+    }
+    println!("dup raft engine success");
+}
 
 const SNAP_NAMES: &str = "^.+\\.(meta|sst)$";
 const ROCKSDB_WALS: &str = "^([0-9]+).log$";
 
 /// Create a directory at `path`, return an error if exists.
-pub fn create_dir<P: AsRef<Path>>(path: P) -> Result<(), String> {
+fn create_dir<P: AsRef<Path>>(path: P) -> Result<(), String> {
     let path = path.as_ref();
     std::fs::create_dir(path).map_err(|e| format!("create_dir({}): {}", path.display(), e))
 }
 
-/// Symlink snapshot files from the original TiKV instance (specified by
+/// Symlink or copy snapshot files from the original TiKV instance (specified by
 /// `config`) to `agent_dir`. TiKV may try to change snapshot files, which can
 /// be avoid by setting `raftstore::store::config::snap_apply_copy_symlink` to
 /// `true`.
-pub fn symlink_snaps(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
+fn dup_snaps(config: &TikvConfig, agent_dir: &str, use_symlink: bool) -> Result<(), String> {
     let mut src = PathBuf::from(&config.storage.data_dir);
     src.push("snap");
     let mut dst = PathBuf::from(agent_dir);
@@ -31,26 +67,50 @@ pub fn symlink_snaps(config: &TikvConfig, agent_dir: &str) -> Result<(), String>
     create_dir(&dst)?;
 
     let ptn = Regex::new(SNAP_NAMES).unwrap();
-    symlink_stuffs(&src, &dst, |name| -> bool { ptn.is_match(name) })
+    reuse_stuffs(
+        &src,
+        &dst,
+        |name| -> bool { ptn.is_match(name) },
+        use_symlink,
+    )
 }
 
 /// Symlink or copy KV engine files from the original TiKV instance (specified
 /// by `config`) to `agent_dir`. Then `agent_dir` can be used to run a new TiKV
 /// instance, without any modifications on the original TiKV data.
-pub fn dup_kv_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
+// There are 3 types of files in RocksDB:
+// * SST files, which won't be changed in any cases;
+// * WAL files, which is named with a sequence ID; all won't be changed except
+//   the last one.
+// * Manifest files, which won't be changed in any cases.
+fn dup_kv_engine_files(
+    config: &TikvConfig,
+    agent_dir: &str,
+    use_symlink: bool,
+) -> Result<(), String> {
     let mut dst_config = TikvConfig::default();
     dst_config.storage.data_dir = agent_dir.to_owned();
     let dst = dst_config.infer_kv_engine_path(None).unwrap();
     create_dir(&dst)?;
 
+    // Firstly, dup all files except LOCK.
     let src = config.infer_kv_engine_path(None).unwrap();
-    symlink_stuffs(&src, &dst, |name| -> bool { name != "LOCK" })?;
+    reuse_stuffs(&src, &dst, |name| -> bool { name != "LOCK" }, use_symlink)?;
 
     if !config.rocksdb.wal_dir.is_empty() {
-        symlink_stuffs(&config.rocksdb.wal_dir, &dst, |_| -> bool { true })?;
-        replace_symlink_with_copy(&config.rocksdb.wal_dir, &dst, rocksdb_files_should_copy)?;
+        reuse_stuffs(
+            &config.rocksdb.wal_dir,
+            &dst,
+            |_| -> bool { true },
+            use_symlink,
+        )?;
+        if use_symlink {
+            replace_symlink_with_copy(&config.rocksdb.wal_dir, &dst, rocksdb_files_should_copy)?;
+        }
     } else {
-        replace_symlink_with_copy(&src, &dst, rocksdb_files_should_copy)?;
+        if use_symlink {
+            replace_symlink_with_copy(&src, &dst, rocksdb_files_should_copy)?;
+        }
     }
 
     Ok(())
@@ -59,7 +119,11 @@ pub fn dup_kv_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), S
 /// Symlink or copy Raft engine files from the original TiKV instance (specified
 /// by `config`) to `agent_dir`. Then `agent_dir` can be used to run a new TiKV
 /// instance, without any modifications on the original TiKV data.
-pub fn dup_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(), String> {
+fn dup_raft_engine_files(
+    config: &TikvConfig,
+    agent_dir: &str,
+    use_symlink: bool,
+) -> Result<(), String> {
     let mut dst_config = TikvConfig::default();
     dst_config.storage.data_dir = agent_dir.to_owned();
 
@@ -79,20 +143,29 @@ pub fn dup_raft_engine_files(config: &TikvConfig, agent_dir: &str) -> Result<(),
         let dst = dst_config.infer_raft_db_path(None).unwrap();
         create_dir(&dst)?;
         let src = config.infer_raft_db_path(None).unwrap();
-        symlink_stuffs(&src, &dst, |name| -> bool { name != "LOCK" })?;
+        reuse_stuffs(&src, &dst, |name| -> bool { name != "LOCK" }, use_symlink)?;
 
         if !config.raftdb.wal_dir.is_empty() {
-            symlink_stuffs(&config.raftdb.wal_dir, &dst, |_| -> bool { true })?;
-            replace_symlink_with_copy(&config.raftdb.wal_dir, &dst, rocksdb_files_should_copy)?;
+            reuse_stuffs(
+                &config.raftdb.wal_dir,
+                &dst,
+                |_| -> bool { true },
+                use_symlink,
+            )?;
+            if use_symlink {
+                replace_symlink_with_copy(&config.raftdb.wal_dir, &dst, rocksdb_files_should_copy)?;
+            }
         } else {
-            replace_symlink_with_copy(&src, &dst, rocksdb_files_should_copy)?;
+            if use_symlink {
+                replace_symlink_with_copy(&src, &dst, rocksdb_files_should_copy)?;
+            }
         }
     }
 
     Ok(())
 }
 
-fn symlink_stuffs<P, Q, F>(src: P, dst: Q, selector: F) -> Result<(), String>
+fn reuse_stuffs<P, Q, F>(src: P, dst: Q, selector: F, use_symlink: bool) -> Result<(), String>
 where
     P: AsRef<Path>,
     Q: AsRef<Path>,
@@ -106,7 +179,11 @@ where
         if selector(&fname) {
             let src = entry.path().canonicalize().unwrap();
             let dst = PathBuf::from(dst).join(fname);
-            symlink(src, dst)?;
+            if use_symlink {
+                symlink(src, dst)?;
+            } else {
+                copy(src, dst)?;
+            }
         }
     }
     Ok(())
@@ -166,6 +243,14 @@ fn symlink<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> Result<(), String>
     let dst = dst.as_ref();
     std::os::unix::fs::symlink(src, dst)
         .map_err(|e| format!("symlink({}, {}): {}", src.display(), dst.display(), e))
+}
+
+fn copy<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> Result<(), String> {
+    let src = src.as_ref();
+    let dst = dst.as_ref();
+    std::fs::copy(src, dst)
+        .map(|_| ())
+        .map_err(|e| format!("copy({}, {}): {}", src.display(), dst.display(), e))
 }
 
 fn replace_file<P, Q>(src: P, dst: Q) -> Result<(), String>
