@@ -173,6 +173,7 @@ pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 snap-mgr-gc-tick-interval = "12m"
 snap-gc-timeout = "12h"
+snap-wait-split-duration = "12h"
 lock-cf-compact-interval = "12m"
 lock-cf-compact-bytes-threshold = "123MB"
 notify-capacity = 12345

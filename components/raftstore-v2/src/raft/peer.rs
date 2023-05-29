@@ -35,8 +35,13 @@ use crate::{
     fsm::ApplyScheduler,
     operation::{
         AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
+<<<<<<< HEAD
         GcPeerContext, MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
         TxnContext,
+=======
+        GcPeerContext, MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder,
+        SplitFlowControl, SplitPendingAppend, TxnContext,
+>>>>>>> 0ea7fedc3d (raftstorev2: avoid unnecessary snapshot after split (#14830))
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -100,6 +105,11 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     // Trace which peers have not finished split.
     split_trace: Vec<(u64, HashSet<u64>)>,
     split_flow_control: SplitFlowControl,
+    /// `MsgAppend` messages from newly split leader should be step after peer
+    /// steps snapshot from split, otherwise leader may send an unnecessary
+    /// snapshot. So the messages are recorded temporarily and will be handled
+    /// later.
+    split_pending_append: SplitPendingAppend,
 
     /// Apply related State changes that needs to be persisted to raft engine.
     ///
@@ -199,6 +209,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
+            split_pending_append: SplitPendingAppend::default(),
             state_changes: None,
             flush_state,
             sst_apply_state,
@@ -794,6 +805,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn split_trace_mut(&mut self) -> &mut Vec<(u64, HashSet<u64>)> {
         &mut self.split_trace
+    }
+
+    pub fn split_pending_append_mut(&mut self) -> &mut SplitPendingAppend {
+        &mut self.split_pending_append
     }
 
     #[inline]

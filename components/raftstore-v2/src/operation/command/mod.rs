@@ -66,9 +66,15 @@ mod control;
 mod write;
 
 pub use admin::{
+<<<<<<< HEAD
     report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs, CompactLogContext,
     MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
     MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+=======
+    merge_source_path, report_split_init_finish, temp_split_path, AdminCmdResult, CatchUpLogs,
+    CompactLogContext, MergeContext, RequestHalfSplit, RequestSplit, SplitFlowControl, SplitInit,
+    SplitPendingAppend, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+>>>>>>> 0ea7fedc3d (raftstorev2: avoid unnecessary snapshot after split (#14830))
 };
 pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};
