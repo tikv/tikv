@@ -36,7 +36,7 @@ use crate::{
     operation::{
         AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
         GcPeerContext, MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder,
-        SplitFlowControl, TxnContext,
+        SplitFlowControl, SplitPendingAppend, TxnContext,
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -104,7 +104,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// steps snapshot from split, otherwise leader may send an unnecessary
     /// snapshot. So the messages are recorded temporarily and will be handled
     /// later.
-    split_pending_append_msg: Option<(Box<RaftMessage>, Instant)>,
+    split_pending_append: SplitPendingAppend,
 
     /// Apply related State changes that needs to be persisted to raft engine.
     ///
@@ -204,7 +204,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
-            split_pending_append_msg: None,
+            split_pending_append: SplitPendingAppend::new(),
             state_changes: None,
             flush_state,
             sst_apply_state,
@@ -802,8 +802,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self.split_trace
     }
 
-    pub fn split_pending_append_msg_mut(&mut self) -> &mut Option<(Box<RaftMessage>, Instant)> {
-        &mut self.split_pending_append_msg
+    pub fn split_pending_append_mut(&mut self) -> &mut SplitPendingAppend {
+        &mut self.split_pending_append
     }
 
     #[inline]

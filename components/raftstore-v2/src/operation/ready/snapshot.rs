@@ -307,7 +307,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     .tablet
                     .schedule(tablet::Task::destroy(region_id, snapshot_index));
             }
-            if let Some((msg, _)) = self.split_pending_append_msg_mut().take() {
+            if let Some(msg) = self.split_pending_append_mut().take_append_message() {
                 let _ = ctx.router.send_raft_message(msg);
             }
         }
