@@ -276,37 +276,63 @@ fn main() {
             rocksdb_files,
         } => {
             if opt.config.is_none() {
-                eprintln!("tikv-ctl parameter config must be specified");
-                process::exit(-1);
+                clap::Error {
+                    message: String::from("(--config) must be specified"),
+                    kind: ErrorKind::MissingRequiredArgument,
+                    info: None,
+                }
+                .exit();
             }
             if data_dir.is_empty() {
-                eprintln!("reuse-readonly-remains parameter data-dir must be specified");
-                process::exit(-1);
+                clap::Error {
+                    message: String::from("(--data-dir) must be specified"),
+                    kind: ErrorKind::MissingRequiredArgument,
+                    info: None,
+                }
+                .exit();
             }
             cfg.storage.data_dir = data_dir;
             if cfg.storage.engine == EngineType::RaftKv2 {
-                eprintln!("storage.engine should be raftkv on the remained TiKV");
-                process::exit(-1);
+                clap::Error {
+                    message: String::from("storage.engine can only be raftkv"),
+                    kind: ErrorKind::InvalidValue,
+                    info: None,
+                }
+                .exit();
             }
             if cfg.raft_engine.config().enable_log_recycle {
-                eprintln!("raft-engine.enable-log-recycle is true on the remained TiKV");
-                process::exit(-1);
+                clap::Error {
+                    message: String::from("raft-engine.enable-log-recycle can only be false"),
+                    kind: ErrorKind::InvalidValue,
+                    info: None,
+                }
+                .exit();
             }
             if cfg.raft_engine.config().recovery_mode != RecoveryMode::TolerateTailCorruption {
-                eprintln!(
-                    "raft-engine.recovery-mode should be tolerate-tail-corruption on the remained TiKV"
-                );
-                process::exit(-1);
+                clap::Error {
+                    message: String::from(
+                        "raft-engine.recovery-mode can only be tolerate-tail-corruption",
+                    ),
+                    kind: ErrorKind::InvalidValue,
+                    info: None,
+                }
+                .exit();
             }
             if snaps != "symlink" && snaps != "copy" {
-                eprintln!("reuse-readonly-remains parameter snaps should be symlink or copy");
-                process::exit(-1);
+                clap::Error {
+                    message: String::from("(--snaps) can only be symlink or copy"),
+                    kind: ErrorKind::InvalidValue,
+                    info: None,
+                }
+                .exit();
             }
             if rocksdb_files != "symlink" && rocksdb_files != "copy" {
-                eprintln!(
-                    "reuse-readonly-remains parameter rocksdb_files should be symlink or copy"
-                );
-                process::exit(-1);
+                clap::Error {
+                    message: String::from("(--rocksdb_files) can only be symlink or copy"),
+                    kind: ErrorKind::InvalidValue,
+                    info: None,
+                }
+                .exit();
             }
             reuse_readonly_remains::run(&cfg, &agent_dir, &snaps, &rocksdb_files)
         }
