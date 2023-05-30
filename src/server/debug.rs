@@ -19,9 +19,9 @@ use engine_rocks::{
     RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
 };
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, MiscExt, Mutable, MvccProperties,
-    Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    Engines, Error as EngineTraitError, IterOptions, Iterable, Iterator as EngineIterator, MiscExt,
+    Mutable, MvccProperties, Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt,
+    SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use futures::future::Future;
 use kvproto::{
@@ -71,6 +71,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
+
+    #[error("Engine error {0}")]
+    EngineTrait(#[from] EngineTraitError),
 
     #[error("Flashback Failed {0:?}")]
     FlashbackFailed(String),
@@ -991,27 +994,11 @@ where
         Ok(())
     }
 
-    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
-        let mut props = dump_write_cf_properties(
-            &self.engines.kv,
-            &keys::data_key(start),
-            &keys::data_end_key(end),
-        )?;
-        let mut props1 = dump_default_cf_properties(
-            &self.engines.kv,
-            &keys::data_key(start),
-            &keys::data_end_key(end),
-        )?;
-        props.append(&mut props1);
-        Ok(props)
-    }
-
     fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
         let start = keys::enc_start_key(region);
         let end = keys::enc_end_key(region);
-
         let mut res = dump_write_cf_properties(&self.engines.kv, &start, &end)?;
         let mut res1 = dump_default_cf_properties(&self.engines.kv, &start, &end)?;
         res.append(&mut res1);
@@ -1030,7 +1017,6 @@ where
             "region.middle_key_by_approximate_size".to_owned(),
             hex::encode(middle_key),
         ));
-
         Ok(res)
     }
 
@@ -1141,15 +1127,29 @@ where
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.raft_statistics = s;
     }
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        let mut props = dump_write_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        let mut props1 = dump_default_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        props.append(&mut props1);
+        Ok(props)
+    }
 }
 
-fn dump_default_cf_properties(
+pub fn dump_default_cf_properties(
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],
 ) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
-
     let collection = box_try!(db.get_range_properties_cf(CF_DEFAULT, start, end));
     let num_files = collection.len();
 
@@ -1176,7 +1176,7 @@ fn dump_default_cf_properties(
     Ok(res)
 }
 
-fn dump_write_cf_properties(
+pub fn dump_write_cf_properties(
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],
@@ -1629,7 +1629,6 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
 
 #[cfg(test)]
 mod tests {
-    use api_version::ApiV1;
     use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine};
     use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::{
@@ -1638,13 +1637,9 @@ mod tests {
     };
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
-    use tikv_kv::MockEngine;
 
     use super::*;
-    use crate::storage::{
-        lock_manager::MockLockManager,
-        mvcc::{Lock, LockType},
-    };
+    use crate::storage::mvcc::{Lock, LockType};
 
     fn init_region_state(
         engine: &RocksEngine,
@@ -1769,22 +1764,16 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> DebuggerImpl<RocksEngine, MockEngine, MockLockManager, ApiV1> {
+    fn new_debugger() -> DebuggerImpl<RocksEngine> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
         let engines = Engines::new(engine.clone(), engine);
-
-        DebuggerImpl::new(engines, ConfigController::default(), None)
+        DebuggerImpl::new(engines, ConfigController::default())
     }
 
-    impl<E, L, K> DebuggerImpl<RocksEngine, E, L, K>
-    where
-        E: Engine,
-        L: LockManager,
-        K: KvFormat,
-    {
+    impl DebuggerImpl<RocksEngine> {
         fn set_store_id(&self, store_id: u64) {
             let mut ident = self.get_store_ident().unwrap_or_default();
             ident.set_store_id(store_id);
@@ -2381,6 +2370,7 @@ mod tests {
                 for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }

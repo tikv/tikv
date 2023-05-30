@@ -236,6 +236,12 @@ fn test_concurrent_snap() {
     cluster.cfg.rocksdb.titan.enabled = true;
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+    // For raftstore v2, after split, follower delays first messages (see
+    // is_first_message() for details), so leader does not send snapshot to
+    // follower and CollectSnapshotFilter holds parent region snapshot forever.
+    // We need to set a short wait duration so that leader can send snapshot
+    // in time and thus CollectSnapshotFilter can send parent region snapshot.
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::millis(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.

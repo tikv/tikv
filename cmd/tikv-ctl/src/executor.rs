@@ -1136,7 +1136,8 @@ where
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!("only available for online mode");
+        println!("only available for online mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn check_region_consistency(&self, _: u64) {
@@ -1271,12 +1272,30 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
-    fn set_region_tombstone(&self, _regions: Vec<Region>) {
-        unimplemented!()
+    fn set_region_tombstone(&self, regions: Vec<Region>) {
+        let ret = self
+            .set_region_tombstone(regions)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
     }
 
-    fn set_region_tombstone_by_id(&self, _regions: Vec<u64>) {
-        unimplemented!()
+    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
+        let ret = self
+            .set_region_tombstone_by_id(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
     }
 
     fn recover_regions(&self, _regions: Vec<Region>, _read_only: bool) {
@@ -1300,40 +1319,58 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         unimplemented!()
     }
 
-    fn drop_unapplied_raftlog(&self, _region_ids: Option<Vec<u64>>) {
-        unimplemented!()
-    }
+    fn drop_unapplied_raftlog(&self, _region_ids: Option<Vec<u64>>) {}
 
-    fn recreate_region(&self, _sec_mgr: Arc<SecurityManager>, _pd_cfg: &PdConfig, _region_id: u64) {
+    fn recreate_region(&self, _mgr: Arc<SecurityManager>, _pd_cfg: &PdConfig, _region_id: u64) {
         unimplemented!()
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!()
+        println!("only available for online mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn check_region_consistency(&self, _: u64) {
-        unimplemented!()
+        println!("only support remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
-    fn modify_tikv_config(&self, _config_name: &str, _config_value: &str) {
-        unimplemented!()
+    fn modify_tikv_config(&self, _: &str, _: &str) {
+        println!("only support remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
-    fn dump_region_properties(&self, _region_id: u64) {
-        unimplemented!()
+    fn dump_region_properties(&self, region_id: u64) {
+        let props = self
+            .get_region_properties(region_id)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
+        for (name, value) in props {
+            println!("{}: {}", name, value);
+        }
     }
 
-    fn dump_range_properties(&self, _start: Vec<u8>, _end: Vec<u8>) {
-        unimplemented!()
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        let props = self
+            .get_range_properties(&start, &end)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_range_properties", e));
+        for (name, value) in props {
+            println!("{}: {}", name, value);
+        }
     }
 
     fn dump_store_info(&self) {
-        unimplemented!()
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("store id: {}", ident.get_store_id());
+            println!("api version: {:?}", ident.get_api_version());
+        }
     }
 
     fn dump_cluster_info(&self) {
-        unimplemented!()
+        let store_ident_info = self.get_store_ident();
+        if let Ok(ident) = store_ident_info {
+            println!("cluster id: {}", ident.get_cluster_id());
+        }
     }
 
     fn reset_to_version(&self, _version: u64) {

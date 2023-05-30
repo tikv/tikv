@@ -6,6 +6,7 @@ use collections::HashMap;
 use engine_traits::{perf_level_serde, PerfLevel};
 use grpcio::{CompressionAlgorithms, ResourceQuota};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
+use raftstore::store::config::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 pub use raftstore::store::Config as RaftStoreConfig;
 use regex::Regex;
 use tikv_util::{
@@ -41,8 +42,6 @@ const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
-
-const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 

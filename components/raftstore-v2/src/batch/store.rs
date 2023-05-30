@@ -54,7 +54,9 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
+    operation::{
+        ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+    },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     worker::{checkpoint, cleanup, pd, tablet},
@@ -425,7 +427,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 continue;
             }
             let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
-            // Keep the checkpoint even if source is destroyed.
             if prefix == MERGE_SOURCE_PREFIX {
                 continue;
             }
@@ -748,8 +749,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router.register_all(mailboxes);
 
         // Make sure Msg::Start is the first message each FSM received.
+        let watch = Arc::new(ReplayWatch::new(self.logger.clone()));
         for addr in address {
-            router.force_send(addr, PeerMsg::Start).unwrap();
+            router
+                .force_send(addr, PeerMsg::Start(Some(watch.clone())))
+                .unwrap();
         }
         router.send_control(StoreMsg::Start).unwrap();
         Ok(())

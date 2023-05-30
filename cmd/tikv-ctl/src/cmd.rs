@@ -496,11 +496,11 @@ pub enum Cmd {
     /// Show range properties
     RangeProperties {
         #[structopt(long, default_value = "")]
-        /// hex start key
+        /// hex start key (not starts with "z")
         start: String,
 
         #[structopt(long, default_value = "")]
-        /// hex end key
+        /// hex end key (not starts with "z")
         end: String,
     },
     /// Split the region

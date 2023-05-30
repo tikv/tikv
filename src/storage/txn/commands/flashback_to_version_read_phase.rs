@@ -1,11 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::ops::Bound;
 
-// #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
+    metrics::{CommandKind, KV_COMMAND_COUNTER_VEC_STATIC},
     mvcc::MvccReader,
     txn::{
         actions::flashback_to_version::{check_flashback_commit, get_first_user_key},
@@ -96,13 +97,40 @@ command! {
 
 impl CommandExt for FlashbackToVersionReadPhase {
     ctx!();
-    tag!(flashback_to_version);
     request_type!(KvFlashbackToVersion);
     property!(readonly);
     gen_lock!(empty);
 
     fn write_bytes(&self) -> usize {
         0
+    }
+
+    fn tag(&self) -> CommandKind {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                CommandKind::flashback_to_version_read_lock
+            }
+            FlashbackToVersionState::FlashbackWrite { .. } => {
+                CommandKind::flashback_to_version_read_write
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn incr_cmd_metric(&self) {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                KV_COMMAND_COUNTER_VEC_STATIC
+                    .flashback_to_version_read_lock
+                    .inc();
+            }
+            FlashbackToVersionState::FlashbackWrite { .. } => {
+                KV_COMMAND_COUNTER_VEC_STATIC
+                    .flashback_to_version_read_write
+                    .inc();
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
