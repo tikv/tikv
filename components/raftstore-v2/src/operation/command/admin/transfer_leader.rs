@@ -132,12 +132,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group_mut().ping();
 
-        // todo: entry cache warmup
-
         let mut msg = eraftpb::Message::new();
         msg.set_to(peer.get_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_from(self.peer_id());
+        msg.set_index(self.entry_storage().entry_cache_first_index().unwrap_or(0));
         // log term here represents the term of last log. For leader, the term of last
         // log is always its current term. Not just set term because raft library
         // forbids setting it for MsgTransferLeader messages.
