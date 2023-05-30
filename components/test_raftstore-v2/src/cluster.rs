@@ -700,6 +700,24 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         )
     }
 
+    pub fn add_new_engine(&mut self) -> u64 {
+        self.count += 1;
+        let node_id = self.count as u64;
+        self.create_engine(Some((self.id(), node_id)));
+
+        let key_mgr = self.key_managers.last().unwrap().clone();
+        self.key_managers_map.insert(node_id, key_mgr);
+        let (tablet_registry, raft_engine) = self.engines.last().unwrap().clone();
+        self.raft_engines.insert(node_id, raft_engine.clone());
+        self.tablet_registries
+            .insert(node_id, tablet_registry.clone());
+        self.sst_workers_map
+            .insert(node_id, self.sst_workers.len() - 1);
+
+        self.run_node(node_id).unwrap();
+        node_id
+    }
+
     pub fn read(
         &self,
         // v2 does not need this

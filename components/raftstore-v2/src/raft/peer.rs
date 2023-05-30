@@ -62,6 +62,10 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// For raft log compaction.
     compact_log_context: CompactLogContext,
+    /// The index of last compacted raft log. It is used for the next compact
+    /// log task.
+    /// TODO: update it correctly.
+    pub last_compacted_idx: u64,
 
     merge_context: Option<Box<MergeContext>>,
     last_sent_snapshot_index: u64,
@@ -176,6 +180,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             compact_log_context: CompactLogContext::new(applied_index),
+            last_compacted_idx: 0,
             merge_context: merge_context.map(|c| Box::new(c)),
             last_sent_snapshot_index: 0,
             raw_write_encoder: None,

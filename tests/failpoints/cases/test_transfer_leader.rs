@@ -13,7 +13,9 @@ use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use test_raftstore::*;
+use test_raftstore::{Simulator as S1, *};
+use test_raftstore_macro::test_case;
+use test_raftstore_v2::Simulator as S2;
 use tikv::storage::Snapshot;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -24,10 +26,11 @@ use txn_types::{Key, PessimisticLock};
 /// When a follower applies log slowly, leader should not transfer leader
 /// to it. Otherwise, new leader may wait a long time to serve read/write
 /// requests.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_transfer_leader_slow_apply() {
     // 3 nodes cluster.
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
 
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
@@ -56,9 +59,10 @@ fn test_transfer_leader_slow_apply() {
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_prewrite_before_max_ts_is_synced() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
 
@@ -67,10 +71,7 @@ fn test_prewrite_before_max_ts_is_synced() {
     let channel = ChannelBuilder::new(env).connect(&addr);
     let client = TikvClient::new(channel);
 
-    let do_prewrite = |cluster: &mut Cluster<ServerCluster>| {
-        let region_id = 1;
-        let leader = cluster.leader_of_region(region_id).unwrap();
-        let epoch = cluster.get_region_epoch(region_id);
+    let do_prewrite = |region_id, leader, epoch| {
         let mut ctx = Context::default();
         ctx.set_region_id(region_id);
         ctx.set_peer(leader);
@@ -93,11 +94,12 @@ fn test_prewrite_before_max_ts_is_synced() {
     cluster.must_transfer_leader(1, new_peer(2, 2));
     fail::cfg("test_raftstore_get_tso", "return(50)").unwrap();
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    let resp = do_prewrite(&mut cluster);
+    let epoch = cluster.get_region_epoch(1);
+    let resp = do_prewrite(1, new_peer(1, 1), epoch.clone());
     assert!(resp.get_region_error().has_max_timestamp_not_synced());
     fail::remove("test_raftstore_get_tso");
     thread::sleep(Duration::from_millis(200));
-    let resp = do_prewrite(&mut cluster);
+    let resp = do_prewrite(1, new_peer(1, 1), epoch);
     assert!(!resp.get_region_error().has_max_timestamp_not_synced());
 }
 
@@ -191,9 +193,10 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
     panic!("region should succeed to transfer leader to peer 2");
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_delete_lock_proposed_before_proposing_locks() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
 
@@ -269,9 +272,10 @@ fn test_delete_lock_proposed_before_proposing_locks() {
     panic!("region should succeed to transfer leader to peer 2");
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_read_lock_after_become_follower() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
 
@@ -355,48 +359,57 @@ fn test_read_lock_after_become_follower() {
 /// 3. Insert another 20 entries.
 /// 4. Wait for some time so that part of the entry cache are compacted
 ///    on the leader(store 1).
-fn run_cluster_for_test_warmup_entry_cache(cluster: &mut Cluster<NodeCluster>) {
-    // Let the leader compact the entry cache.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.run();
+macro_rules! run_cluster_for_test_warmup_entry_cache {
+    ($cluster:expr) => {
+        // Let the leader compact the entry cache.
+        $cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+        $cluster.run();
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
+        $cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    for i in 1..5u32 {
-        let k = i.to_string().into_bytes();
-        let v = k.clone();
-        cluster.must_put(&k, &v);
-        must_get_equal(&cluster.get_engine(3), &k, &v);
-    }
+        for i in 1..5u32 {
+            let k = i.to_string().into_bytes();
+            let v = k.clone();
+            $cluster.must_put(&k, &v);
+            must_get_equal(&$cluster.get_engine(3), &k, &v);
+        }
 
-    // Let store 3 fall behind.
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 3).direction(Direction::Recv),
-    ));
+        // Let store 3 fall behind.
+        $cluster.add_send_filter(CloneFilterFactory(
+            RegionPacketFilter::new(1, 3).direction(Direction::Recv),
+        ));
 
-    for i in 1..20u32 {
-        let k = i.to_string().into_bytes();
-        let v = k.clone();
-        cluster.must_put(&k, &v);
-        must_get_equal(&cluster.get_engine(2), &k, &v);
-    }
+        for i in 1..20u32 {
+            let k = i.to_string().into_bytes();
+            let v = k.clone();
+            $cluster.must_put(&k, &v);
+            must_get_equal(&$cluster.get_engine(2), &k, &v);
+        }
 
-    // Wait until part of the leader's entry cache is compacted.
-    sleep_ms(cluster.cfg.raft_store.raft_log_gc_tick_interval.as_millis() * 2);
+        // Wait until part of the leader's entry cache is compacted.
+        sleep_ms(
+            $cluster
+                .cfg
+                .raft_store
+                .raft_log_gc_tick_interval
+                .as_millis()
+                * 2,
+        );
+    };
 }
 
-fn prevent_from_gc_raft_log(cluster: &mut Cluster<NodeCluster>) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100000);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
-    cluster.cfg.raft_store.raft_log_reserve_max_ticks = 20;
+fn prevent_from_gc_raft_log(cfg: &mut Config) {
+    cfg.raft_store.raft_log_gc_count_limit = Some(100000);
+    cfg.raft_store.raft_log_gc_threshold = 1000;
+    cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
+    cfg.raft_store.raft_log_reserve_max_ticks = 20;
 }
 
 fn run_cluster_and_warm_up_cache_for_store2() -> Cluster<NodeCluster> {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
-    prevent_from_gc_raft_log(&mut cluster);
-    run_cluster_for_test_warmup_entry_cache(&mut cluster);
+    prevent_from_gc_raft_log(&mut cluster.cfg);
+    run_cluster_for_test_warmup_entry_cache!(cluster);
 
     let (sx, rx) = channel::unbounded();
     let recv_filter = Box::new(
@@ -423,12 +436,13 @@ fn run_cluster_and_warm_up_cache_for_store2() -> Cluster<NodeCluster> {
 
 /// Leader should carry a correct index in TransferLeaderMsg so that
 /// the follower can warm up the entry cache with this index.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_transfer_leader_msg_index() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::secs(1000);
-    prevent_from_gc_raft_log(&mut cluster);
-    run_cluster_for_test_warmup_entry_cache(&mut cluster);
+    prevent_from_gc_raft_log(&mut cluster.cfg);
+    run_cluster_for_test_warmup_entry_cache!(cluster);
 
     let (sx, rx) = channel::unbounded();
     let recv_filter = Box::new(
@@ -452,12 +466,13 @@ fn test_transfer_leader_msg_index() {
 
 /// The store should ack the transfer leader msg immediately
 /// when the warmup range start is larger than it's last index.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_when_warmup_range_start_is_larger_than_last_index() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::secs(1000);
-    prevent_from_gc_raft_log(&mut cluster);
-    run_cluster_for_test_warmup_entry_cache(&mut cluster);
+    prevent_from_gc_raft_log(&mut cluster.cfg);
+    run_cluster_for_test_warmup_entry_cache!(cluster);
     cluster.pd_client.disable_default_operator();
 
     let s4 = cluster.add_new_engine();
@@ -490,14 +505,15 @@ fn test_when_warmup_range_start_is_larger_than_last_index() {
 
 /// When the start index of warmup range is compacted, the follower should
 /// still warm up and use the compacted_idx as the start index.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_when_warmup_range_start_is_compacted() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     // GC raft log aggressively.
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
     cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
-    run_cluster_for_test_warmup_entry_cache(&mut cluster);
+    run_cluster_for_test_warmup_entry_cache!(cluster);
     cluster.pd_client.disable_default_operator();
 
     // Case `test_transfer_leader_msg_index` already proves that
@@ -517,11 +533,12 @@ fn test_when_warmup_range_start_is_compacted() {
 }
 
 /// Transfer leader should work as normal when disable warming up entry cache.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_turnoff_warmup_entry_cache() {
-    let mut cluster = new_node_cluster(0, 3);
-    prevent_from_gc_raft_log(&mut cluster);
-    run_cluster_for_test_warmup_entry_cache(&mut cluster);
+    let mut cluster = new_cluster(0, 3);
+    prevent_from_gc_raft_log(&mut cluster.cfg);
+    run_cluster_for_test_warmup_entry_cache!(cluster);
     cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(0);
     fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
     cluster.must_transfer_leader(1, new_peer(2, 2));
@@ -529,12 +546,13 @@ fn test_turnoff_warmup_entry_cache() {
 
 /// When the follower has not warmed up the entry cache and the timeout of
 /// warmup is very long, then the leadership transfer can never succeed.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_when_warmup_fail_and_its_timeout_is_too_long() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
-    prevent_from_gc_raft_log(&mut cluster);
-    run_cluster_for_test_warmup_entry_cache(&mut cluster);
+    prevent_from_gc_raft_log(&mut cluster.cfg);
+    run_cluster_for_test_warmup_entry_cache!(cluster);
 
     fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
     cluster.transfer_leader(1, new_peer(2, 2));
@@ -547,12 +565,13 @@ fn test_when_warmup_fail_and_its_timeout_is_too_long() {
 
 /// When the follower has not warmed up the entry cache and the timeout of
 /// warmup is pretty short, then the leadership transfer should succeed quickly.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_when_warmup_fail_and_its_timeout_is_short() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::millis(10);
-    prevent_from_gc_raft_log(&mut cluster);
-    run_cluster_for_test_warmup_entry_cache(&mut cluster);
+    prevent_from_gc_raft_log(&mut cluster.cfg);
+    run_cluster_for_test_warmup_entry_cache!(cluster);
 
     fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
     cluster.must_transfer_leader(1, new_peer(2, 2));

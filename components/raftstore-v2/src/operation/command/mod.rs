@@ -391,7 +391,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .on_admin_modify(res.tablet_index);
                     self.on_apply_res_split(ctx, res)
                 }
-                AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
+                AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(term),
                 AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
                 AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
