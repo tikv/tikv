@@ -328,12 +328,10 @@ impl AzureUploader {
         {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
-                Err(err) => {
-                    Err(RequestError::InvalidInput(
-                        err,
-                        "upload block failed".to_owned(),
-                    ))
-                }
+                Err(err) => Err(RequestError::InvalidInput(
+                    err,
+                    "upload block failed".to_owned(),
+                )),
             },
             Err(_) => Err(RequestError::TimeOut(
                 "timeout after 15mins for complete in azure storage".to_owned(),
@@ -519,17 +517,16 @@ impl AzureStorage {
     pub fn new(config: Config) -> io::Result<AzureStorage> {
         let account_name = config.get_account_name()?;
         let bucket = (*config.bucket.bucket).to_owned();
-        // priority: 
+        // priority:
         //   explicit sas token > explicit shared key > env Azure AD > env shared key
         if let Some(sas_token) = config.sas_token.as_ref() {
             let token = sas_token.deref();
-            let storage_credentials = StorageCredentials::sas_token(token)
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("invalid configurations for SAS token, err: {}", e),
-                    )
-                })?;
+            let storage_credentials = StorageCredentials::sas_token(token).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid configurations for SAS token, err: {}", e),
+                )
+            })?;
             let container_client = Arc::new(
                 BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
             );
