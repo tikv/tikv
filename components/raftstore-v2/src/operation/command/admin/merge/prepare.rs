@@ -626,6 +626,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             });
         }
 
+        // Notes on the lifetime of this checkpoint:
+        // - Target region is responsible to clean up if it has proposed `CommitMerge`.
+        //   It will destroy the checkpoint if the persisted apply index is advanced. It
+        //   will also destroy the checkpoint before sending `GcPeerResponse` to target
+        //   leader.
+        // - Otherwise, the `PrepareMerge` is rollback-ed. In this case the source
+        //   region is responsible to clean up (see `rollback_merge`).
+
         Ok((
             AdminResponse::default(),
             AdminCmdResult::PrepareMerge(PrepareMergeResult {
@@ -653,7 +661,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 reader,
                 region,
                 RegionChangeReason::PrepareMerge,
-                res.state.get_commit(),
+                self.storage().region_state().get_tablet_index(),
             );
         }
 

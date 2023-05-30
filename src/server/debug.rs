@@ -16,9 +16,9 @@ use engine_rocks::{
     RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
 };
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, MiscExt, Mutable, MvccProperties,
-    Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    Engines, Error as EngineTraitError, IterOptions, Iterable, Iterator as EngineIterator, MiscExt,
+    Mutable, MvccProperties, Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt,
+    SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
     debugpb::{self, Db as DbType},
@@ -58,6 +58,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
+
+    #[error("Engine error {0}")]
+    EngineTrait(#[from] EngineTraitError),
 }
 
 /// Describes the meta information of a Region.
@@ -172,6 +175,8 @@ pub trait Debugger {
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
 
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>>;
 }
 
 #[derive(Clone)]
@@ -744,21 +749,6 @@ impl<ER: RaftEngine> DebuggerImpl<ER> {
             None => Err(Error::NotFound(format!("region {}", region_id))),
         }
     }
-
-    pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
-        let mut props = dump_write_cf_properties(
-            &self.engines.kv,
-            &keys::data_key(start),
-            &keys::data_end_key(end),
-        )?;
-        let mut props1 = dump_default_cf_properties(
-            &self.engines.kv,
-            &keys::data_key(start),
-            &keys::data_end_key(end),
-        )?;
-        props.append(&mut props1);
-        Ok(props)
-    }
 }
 
 impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
@@ -948,7 +938,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
         let region = region_state.get_region();
         let start = keys::enc_start_key(region);
         let end = keys::enc_end_key(region);
-
         let mut res = dump_write_cf_properties(&self.engines.kv, &start, &end)?;
         let mut res1 = dump_default_cf_properties(&self.engines.kv, &start, &end)?;
         res.append(&mut res1);
@@ -967,7 +956,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
             "region.middle_key_by_approximate_size".to_owned(),
             hex::encode(middle_key),
         ));
-
         Ok(res)
     }
 
@@ -982,15 +970,29 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.raft_statistics = s;
     }
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        let mut props = dump_write_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        let mut props1 = dump_default_cf_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )?;
+        props.append(&mut props1);
+        Ok(props)
+    }
 }
 
-fn dump_default_cf_properties(
+pub fn dump_default_cf_properties(
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],
 ) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
-
     let collection = box_try!(db.get_range_properties_cf(CF_DEFAULT, start, end));
     let num_files = collection.len();
 
@@ -1017,7 +1019,7 @@ fn dump_default_cf_properties(
     Ok(res)
 }
 
-fn dump_write_cf_properties(
+pub fn dump_write_cf_properties(
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],
@@ -2211,6 +2213,7 @@ mod tests {
                 for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }
