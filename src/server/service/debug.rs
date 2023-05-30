@@ -569,7 +569,7 @@ where
                     req.get_commit_ts(),
                 );
                 match check.await {
-                    Ok(_) => {}
+                    Ok(_) => Ok(FlashbackToVersionResponse::default()),
                     Err(err) => {
                         return Err(Error::FlashbackFailed(format!(
                             "flashback failed err is {}",
@@ -577,7 +577,6 @@ where
                         )));
                     }
                 }
-                Ok(FlashbackToVersionResponse::default())
             })
             .map(|res| res.unwrap());
 

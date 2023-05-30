@@ -4,11 +4,9 @@ use std::{
     error::Error as StdError,
     iter::FromIterator,
     path::Path,
-    pin::Pin,
     result,
     sync::Arc,
     thread::{Builder as ThreadBuilder, JoinHandle},
-    time::{Duration, Instant},
 };
 
 use api_version::KvFormat;
@@ -56,10 +54,7 @@ use crate::{
     },
 };
 
-pub const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
-
 pub type Result<T> = result::Result<T, Error>;
-pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -1059,64 +1054,53 @@ where
 
         let storage = self.storage.clone().unwrap();
         async move {
-            let timeout = Duration::from_secs(FLASHBACK_TIMEOUT);
-            let start_time = Instant::now();
+            let storage_clone = storage.clone();
+            // Means now is prepare flashback.
+            if TimeStamp::from(commit_ts).is_zero() {
+                if is_in_flashback {
+                    return Ok(());
+                }
+                let mut req = kvrpcpb::PrepareFlashbackToVersionRequest::new();
+                req.set_version(version);
+                req.set_start_key(start_key.clone());
+                req.set_end_key(end_key.clone());
+                req.set_context(ctx.clone());
+                req.set_start_ts(start_ts);
 
-            // Loop for single region.
-            loop {
-                let elapsed_time = start_time.elapsed();
-                if elapsed_time >= timeout {
-                    error!("Execute flashback timeout. Exiting the loop.");
-                    return Err(Error::Other(
-                        "Flashback timeout reached. Exiting the loop.".into(),
+                let resp = future_prepare_flashback_to_version(storage_clone, req)
+                    .await
+                    .unwrap();
+                if !resp.get_error().is_empty() || resp.has_region_error() {
+                    error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+                    return Err(Error::NotPreparedFlashback(
+                        "exec prepare flashback failed.".into(),
                     ));
                 }
+            } else {
+                if !is_in_flashback {
+                    return Err(Error::NotPreparedFlashback(
+                        "not in flashback state".to_owned(),
+                    ));
+                }
+                let mut req = kvrpcpb::FlashbackToVersionRequest::new();
+                req.set_version(version);
+                req.set_start_key(start_key.clone());
+                req.set_end_key(end_key.clone());
+                req.set_context(ctx.clone());
+                req.set_start_ts(start_ts);
+                req.set_commit_ts(commit_ts);
 
-                let storage_clone = storage.clone();
-                // Means now is prepare flashback.
-                if TimeStamp::from(commit_ts).is_zero() {
-                    if is_in_flashback {
-                        return Ok(());
-                    }
-                    let mut req = kvrpcpb::PrepareFlashbackToVersionRequest::new();
-                    req.set_version(version);
-                    req.set_start_key(start_key.clone());
-                    req.set_end_key(end_key.clone());
-                    req.set_context(ctx.clone());
-                    req.set_start_ts(start_ts);
-
-                    let resp = future_prepare_flashback_to_version(storage_clone, req)
-                        .await
-                        .unwrap();
-                    if !resp.get_error().is_empty() || resp.has_region_error() {
-                        error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-                        continue;
-                    }
-                    return Ok(());
-                } else {
-                    if !is_in_flashback {
-                        return Err(Error::NotPreparedFlashback(
-                            "not in flashback state".to_owned(),
-                        ));
-                    }
-                    let mut req = kvrpcpb::FlashbackToVersionRequest::new();
-                    req.set_version(version);
-                    req.set_start_key(start_key.clone());
-                    req.set_end_key(end_key.clone());
-                    req.set_context(ctx.clone());
-                    req.set_start_ts(start_ts);
-                    req.set_commit_ts(commit_ts);
-
-                    let resp = future_flashback_to_version(storage_clone, req)
-                        .await
-                        .unwrap();
-                    if !resp.get_error().is_empty() || resp.has_region_error() {
-                        error!("exec flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-                        continue;
-                    }
-                    return Ok(());
+                let resp = future_flashback_to_version(storage_clone, req)
+                    .await
+                    .unwrap();
+                if !resp.get_error().is_empty() || resp.has_region_error() {
+                    error!("exec flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+                    return Err(Error::FlashbackFailed(
+                        "exec prepare flashback failed.".into(),
+                    ));
                 }
             }
+            Ok(())
         }
     }
 
@@ -1629,6 +1613,7 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
 
 #[cfg(test)]
 mod tests {
+    use api_version::ApiV1;
     use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine};
     use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::{
@@ -1637,9 +1622,13 @@ mod tests {
     };
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
+    use tikv_kv::MockEngine;
 
     use super::*;
-    use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{
+        lock_manager::MockLockManager,
+        mvcc::{Lock, LockType},
+    };
 
     fn init_region_state(
         engine: &RocksEngine,
@@ -1764,16 +1753,21 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> DebuggerImpl<RocksEngine> {
+    fn new_debugger() -> DebuggerImpl<RocksEngine, MockEngine, MockLockManager, ApiV1> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
         let engines = Engines::new(engine.clone(), engine);
-        DebuggerImpl::new(engines, ConfigController::default())
+        DebuggerImpl::new(engines, ConfigController::default(), None)
     }
 
-    impl DebuggerImpl<RocksEngine> {
+    impl<E, L, K> DebuggerImpl<RocksEngine, E, L, K>
+    where
+        E: Engine,
+        L: LockManager,
+        K: KvFormat,
+    {
         fn set_store_id(&self, store_id: u64) {
             let mut ident = self.get_store_ident().unwrap_or_default();
             ident.set_store_id(store_id);

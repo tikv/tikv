@@ -16,7 +16,7 @@ use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamEx
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},
-    kvrpcpb::MvccInfo,
+    kvrpcpb::{KeyRange, MvccInfo},
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::PeerState,
@@ -33,7 +33,7 @@ use slog_global::crit;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
-        debug::{BottommostLevelCompaction, Debugger, DebuggerImpl, Error, RegionInfo},
+        debug::{BottommostLevelCompaction, Debugger, DebuggerImpl, RegionInfo},
         debug2::DebuggerImplV2,
         KvEngineFactoryBuilder,
     },
@@ -44,7 +44,7 @@ use tikv::{
         Engine,
     },
 };
-use tikv_util::{box_err, escape};
+use tikv_util::escape;
 
 use crate::util::*;
 
@@ -54,7 +54,6 @@ pub const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 pub const METRICS_JEMALLOC: &str = "jemalloc";
 pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
-pub type Result<T> = result::Result<T, Error>;
 type MvccInfoStream = Pin<Box<dyn Stream<Item = result::Result<(Vec<u8>, MvccInfo), String>>>>;
 
 pub fn new_debug_executor(
@@ -697,7 +696,7 @@ pub trait DebugExecutor {
         _end_key: Vec<u8>,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<FlashbackToVersionResponse>;
+    ) -> Result<(), KeyRange>;
 }
 
 impl DebugExecutor for DebugClient {
@@ -929,7 +928,7 @@ impl DebugExecutor for DebugClient {
         end_key: Vec<u8>,
         start_ts: u64,
         commit_ts: u64,
-    ) -> Result<FlashbackToVersionResponse> {
+    ) -> Result<(), KeyRange> {
         let mut req = FlashbackToVersionRequest::default();
         req.set_version(version);
         req.set_region_id(region_id);
@@ -938,10 +937,13 @@ impl DebugExecutor for DebugClient {
         req.set_start_ts(start_ts);
         req.set_commit_ts(commit_ts);
         match self.flashback_to_version(&req) {
-            Ok(resp) => Ok(resp),
-            Err(e) => {
-                println!("region: {} failed to flashback to version {}: {:?}", region_id, version, e);
-                Err(Error::Other(box_err!("flashback failed")))
+            Ok(_) => Ok(()),
+            Err(err) => {
+                println!("failed to flashback to version: {}", err);
+                let mut key_range = KeyRange::default();
+                key_range.set_start_key(req.get_start_key().to_owned());
+                key_range.set_end_key(req.get_end_key().to_owned());
+                Err(key_range)
             }
         }
     }
@@ -1196,7 +1198,7 @@ where
         _end_key: Vec<u8>,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<FlashbackToVersionResponse> {
+    ) -> Result<(), KeyRange> {
         unimplemented!("only available for online mode");
     }
 }
@@ -1385,7 +1387,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         _end_key: Vec<u8>,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<FlashbackToVersionResponse> {
+    ) -> Result<(), KeyRange> {
         unimplemented!("only available for online mode");
     }
 }

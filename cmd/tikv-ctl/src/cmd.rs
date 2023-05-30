@@ -566,14 +566,6 @@ pub enum Cmd {
     #[structopt(external_subcommand)]
     External(Vec<String>),
     Flashback {
-        #[structopt(subcommand)]
-        cmd: FlashbackCmd,
-    },
-}
-
-#[derive(StructOpt)]
-pub enum FlashbackCmd {
-    Cluster {
         #[structopt(short = "v")]
         /// The version to flashback
         version: u64,
@@ -596,7 +588,6 @@ pub enum FlashbackCmd {
         /// hex end key
         end: String,
     },
-    Process {},
 }
 
 #[derive(StructOpt)]
