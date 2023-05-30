@@ -211,6 +211,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         self.region().get_id()
     }
 
+    #[allow(unused)]
+    #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.get_id()
     }

@@ -1011,6 +1011,7 @@ pub mod test_util {
                 self.for_update_ts,
                 0,
                 0.into(),
+                false,
             )
             .set_last_change(self.last_change_ts, self.versions_to_last_change);
             TxnEntry::Prewrite {

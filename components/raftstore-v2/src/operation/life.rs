@@ -174,6 +174,7 @@ impl AbnormalPeerContext {
 
 #[derive(Default)]
 pub struct GcPeerContext {
+    // Peers that are confirmed to be deleted.
     confirmed_ids: Vec<u64>,
 }
 
@@ -455,7 +456,7 @@ impl Store {
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
         if ctx
             .router
-            .send_and_register(region_id, mailbox, PeerMsg::Start)
+            .send_and_register(region_id, mailbox, PeerMsg::Start(None))
             .is_err()
         {
             panic!(
@@ -572,8 +573,30 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        let check = extra_msg.get_check_gc_peer();
+        let check_peer_id = check.get_check_peer().get_id();
+        let records = self.storage().region_state().get_merged_records();
+        let Some(record) = records.iter().find(|r| {
+            r.get_source_peers().iter().any(|p| p.get_id() == check_peer_id)
+        }) else { return };
+        let source_index = record.get_source_index();
         forward_destroy_to_source_peer(msg, |m| {
-            let _ = ctx.router.send_raft_message(m.into());
+            let source_checkpoint = super::merge_source_path(
+                &ctx.tablet_registry,
+                check.get_check_region_id(),
+                source_index,
+            );
+            if source_checkpoint.exists() {
+                let router = ctx.router.clone();
+                self.record_tombstone_tablet_path_callback(
+                    ctx,
+                    source_checkpoint,
+                    extra_msg.get_index(),
+                    move || {
+                        let _ = router.send_raft_message(m.into());
+                    },
+                );
+            }
         });
     }
 
@@ -600,6 +623,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx.confirmed_ids.push(gc_peer_id);
     }
 
+    // Removes deleted peers from region state by proposing a `UpdateGcPeer`
+    // command.
     pub fn on_gc_peer_tick<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if !self.is_leader() {
             return;

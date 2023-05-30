@@ -26,8 +26,8 @@ use kvproto::{
     kvrpcpb::ApiVersion,
     metapb::{self, Buckets, PeerRole, RegionEpoch},
     raft_cmdpb::{
-        AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse, Request,
-        Response, StatusCmdType,
+        AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse,
+        Request, Response, StatusCmdType,
     },
     raft_serverpb::{
         PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
@@ -68,6 +68,7 @@ use tikv_util::{
     worker::LazyWorker,
     HandyRwLock,
 };
+use txn_types::WriteBatchFlags;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -717,7 +718,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
 
     // mixed read and write requests are not supportted
     pub fn call_command(
-        &mut self,
+        &self,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
@@ -870,7 +871,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
     }
 
     pub fn query_leader(
-        &mut self,
+        &self,
         store_id: u64,
         region_id: u64,
         timeout: Duration,
@@ -1324,7 +1325,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
         // todo(SpadeA): modify
         let resp = self
-            .call_command_on_leader(transfer_leader, Duration::from_secs(500))
+            .call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
         assert_eq!(
             resp.get_admin_response().get_cmd_type(),
@@ -1370,29 +1371,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         &mut self,
         region: &metapb::Region,
         split_key: &[u8],
-        mut cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksSnapshot>,
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let split_key = split_key.to_vec();
-        let (split_region_req, mut sub) = PeerMsg::request_split(
+        let (split_region_req, _) = PeerMsg::request_split_with_callback(
             region.get_region_epoch().clone(),
             vec![split_key],
             "test".into(),
+            Box::new(move |resp| {
+                cb.invoke_with_response(resp.clone());
+            }),
         );
 
         router
             .check_send(region.get_id(), split_region_req)
             .unwrap();
-
-        block_on(async {
-            sub.wait_proposed().await;
-            cb.invoke_proposed();
-            sub.wait_committed().await;
-            cb.invoke_committed();
-            let res = sub.result().await.unwrap();
-            cb.invoke_with_response(res)
-        });
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
@@ -1672,6 +1667,48 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
 
         debug!("all nodes are shut down.");
+    }
+
+    pub fn must_send_flashback_msg(
+        &mut self,
+        region_id: u64,
+        cmd_type: AdminCmdType,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
+        let leader = self.leader_of_region(region_id).unwrap();
+        let store_id = leader.get_store_id();
+        let region_epoch = self.get_region_epoch(region_id);
+        let mut admin = AdminRequest::default();
+        admin.set_cmd_type(cmd_type);
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header().set_region_epoch(region_epoch);
+        req.mut_header().set_peer(leader);
+        req.set_admin_request(admin);
+        req.mut_header()
+            .set_flags(WriteBatchFlags::FLASHBACK.bits());
+        let (msg, sub) = PeerMsg::admin_command(req);
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        if let Err(e) = router.send(region_id, msg) {
+            panic!(
+                "router send flashback msg {:?} failed, error: {}",
+                cmd_type, e
+            );
+        }
+        Box::pin(async move { sub.result().await.unwrap() })
+    }
+
+    pub fn must_send_wait_flashback_msg(&mut self, region_id: u64, cmd_type: AdminCmdType) {
+        let resp = self.must_send_flashback_msg(region_id, cmd_type);
+        block_on(async {
+            let resp = resp.await;
+            if resp.get_header().has_error() {
+                panic!(
+                    "call flashback msg {:?} failed, error: {:?}",
+                    cmd_type,
+                    resp.get_header().get_error()
+                );
+            }
+        });
     }
 }
 
