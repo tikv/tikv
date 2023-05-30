@@ -1070,13 +1070,10 @@ pub fn must_new_cluster_and_debug_client() -> (
         sim.pending_debug_service = Some(Box::new(move |cluster, debug_thread_handle| {
             let raft_extension = cluster.storages.get(&1).unwrap().raft_extension();
 
-            let mut host = CoprocessorHost::<RocksEngine>::default();
             create_debug(DebugService::new(
                 debugger.clone(),
                 debug_thread_handle,
                 raft_extension,
-                cluster.pd_client.clone(),
-                RegionInfoAccessor::new(&mut host),
             ))
         }));
     }

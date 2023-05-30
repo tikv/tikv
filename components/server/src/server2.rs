@@ -923,8 +923,6 @@ where
             debugger,
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
-            self.pd_client.clone(),
-            self.region_info_accessor.clone().unwrap(),
         );
         if servers
             .server

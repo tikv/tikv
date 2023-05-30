@@ -1,13 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
-
 use futures::{
     future::{Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -17,23 +9,12 @@ use grpcio::{
     Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
 };
-use kvproto::{
-    debugpb::{self, *},
-    kvrpcpb::KeyRange,
-};
-use pd_client::PdClient;
-use raftstore::{store::util::build_key_range, RegionInfoAccessor};
+use kvproto::debugpb::{self, *};
 use tikv_kv::RaftExtension;
 use tikv_util::metrics;
-use tokio::{
-    runtime::Handle,
-    sync::{oneshot, Mutex},
-};
+use tokio::runtime::Handle;
 
-use crate::{
-    server::debug::{BoxFuture, Debugger, Error, Result, FLASHBACK_TIMEOUT},
-    storage::mvcc::TimeStamp,
-};
+use crate::server::debug::{Debugger, Error, Result};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -67,8 +48,6 @@ where
     pool: Handle,
     debugger: D,
     raft_router: T,
-    pd_client: Arc<dyn PdClient>,
-    region_info_accessor: RegionInfoAccessor,
 }
 
 impl<T, D> Service<T, D>
@@ -78,19 +57,11 @@ where
 {
     /// Constructs a new `Service` with `Engines`, a `RaftExtension`, a
     /// `GcWorker` and a `RegionInfoAccessor`.
-    pub fn new(
-        debugger: D,
-        pool: Handle,
-        raft_router: T,
-        pd_client: Arc<dyn PdClient>,
-        region_info_accessor: RegionInfoAccessor,
-    ) -> Self {
+    pub fn new(debugger: D, pool: Handle, raft_router: T) -> Self {
         Service {
             pool,
             debugger,
             raft_router,
-            pd_client,
-            region_info_accessor,
         }
     }
 
@@ -584,117 +555,27 @@ where
         req: FlashbackToVersionRequest,
         sink: UnarySink<FlashbackToVersionResponse>,
     ) {
-        let tmp = self.region_info_accessor.region_leaders();
-        let region_leaders = tmp.read().unwrap();
-        let key_range = build_key_range(req.get_start_key(), req.get_end_key(), false);
-
-        let region_ids = req.get_region_ids();
-        let filtered_region_ids = region_leaders
-            .iter()
-            .filter_map(|region_id| {
-                if region_ids.is_empty() || region_ids.contains(region_id) {
-                    let debugger = self.debugger.clone();
-                    let r = debugger.region_info(*region_id).unwrap();
-                    let region = r
-                        .region_local_state
-                        .as_ref()
-                        .map(|s| s.get_region().clone())
-                        .unwrap();
-
-                    if check_intersect_of_range(
-                        &build_key_range(region.get_start_key(), region.get_end_key(), false),
-                        &key_range,
-                    ) {
-                        Some(*region_id)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let version = req.get_version();
-        let debugger = Arc::new(Mutex::new(self.debugger.clone()));
-        let filtered_region_ids_clone = filtered_region_ids.clone();
-        let pd_client = self.pd_client.clone();
-        let runtime = self.pool.clone();
+        let debugger = self.debugger.clone();
         let f = self
             .pool
             .spawn(async move {
-                let start_ts = pd_client
-                    .get_tso()
-                    .await
-                    .expect("failed to get commit_ts from PD");
-                // Prepare flashback for specified regions.
-                let prepare_wg = WaitGroup::new();
-                filtered_region_ids_clone.iter().for_each(|&region_id| {
-                    let debugger = debugger.clone();
-                    let wg = prepare_wg.clone();
-                    runtime.spawn(async move {
-                        let work = wg.work();
-                        let debugger = debugger.lock().await;
-                        let check = debugger.region_flashback_to_version(
-                            region_id,
-                            version,
-                            start_ts,
-                            TimeStamp::zero(),
-                        );
-                        match check.await {
-                            Ok(_) => {}
-                            Err(err) => {
-                                return Err(Error::NotPreparedFlashback(format!(
-                                    "prepare flashback failed err is {}",
-                                    err
-                                )));
-                            }
-                        }
-                        drop(work);
-                        Ok(())
-                    });
-                });
-                // Wait for finishing prepare flashback.
-                tokio::time::timeout(Duration::from_secs(FLASHBACK_TIMEOUT), prepare_wg.wait())
-                    .map_err(|e| {
-                        Error::NotPreparedFlashback(format!(
-                            "prepare flashback timeout err is {}",
-                            e
-                        ))
-                    })
-                    .await?;
-
-                let commit_ts = pd_client
-                    .get_tso()
-                    .await
-                    .expect("failed to get commit_ts from PD");
-                // Flashback to version.
-                let debugger = debugger.lock().await;
-                let flashback_wg = WaitGroup::new();
-                filtered_region_ids.iter().for_each(|&region_id| {
-                    let debugger = debugger.clone();
-                    let work = flashback_wg.clone().work();
-                    runtime.spawn(async move {
-                        let check = debugger
-                            .region_flashback_to_version(region_id, version, start_ts, commit_ts);
-                        match check.await {
-                            Ok(_) => {}
-                            Err(err) => {
-                                return Err(Error::FlashbackFailed(format!(
-                                    "flashback failed err is {}",
-                                    err
-                                )));
-                            }
-                        }
-                        drop(work);
-                        Ok(())
-                    });
-                });
-
-                // Wait for finish.
-                tokio::time::timeout(Duration::from_secs(FLASHBACK_TIMEOUT), flashback_wg.wait())
-                    .map_err(|e| Error::FlashbackFailed(format!("flashback timeout err is {}", e)))
-                    .await?;
+                let check = debugger.key_range_flashback_to_version(
+                    req.get_version(),
+                    req.get_region_id(),
+                    req.get_start_key(),
+                    req.get_end_key(),
+                    req.get_start_ts(),
+                    req.get_commit_ts(),
+                );
+                match check.await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        return Err(Error::FlashbackFailed(format!(
+                            "flashback failed err is {}",
+                            err
+                        )));
+                    }
+                }
                 Ok(FlashbackToVersionResponse::default())
             })
             .map(|res| res.unwrap());
@@ -703,94 +584,10 @@ where
     }
 }
 
-// Check if region's `key_range` intersects with `key_range_limit`.
-pub fn check_intersect_of_range(key_range: &KeyRange, key_range_limit: &KeyRange) -> bool {
-    if !key_range.get_end_key().is_empty()
-        && !key_range_limit.get_start_key().is_empty()
-        && key_range.get_end_key() <= key_range_limit.get_start_key()
-    {
-        return false;
-    }
-    if !key_range_limit.get_end_key().is_empty()
-        && !key_range.get_start_key().is_empty()
-        && key_range_limit.get_end_key() < key_range.get_start_key()
-    {
-        return false;
-    }
-    true
-}
 mod region_size_response {
     pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
 }
 
 mod list_fail_points_response {
     pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
-}
-
-pub struct WaitGroup {
-    running: AtomicUsize,
-    on_finish_all: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send + 'static>>>,
-}
-
-impl WaitGroup {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            running: AtomicUsize::new(0),
-            on_finish_all: std::sync::Mutex::default(),
-        })
-    }
-
-    fn work_done(&self) {
-        let last = self.running.fetch_sub(1, Ordering::SeqCst);
-        if last == 1 {
-            self.on_finish_all
-                .lock()
-                .unwrap()
-                .drain(..)
-                .for_each(|x| x())
-        }
-    }
-
-    /// wait until all running tasks done.
-    pub fn wait(&self) -> BoxFuture<()> {
-        // Fast path: no uploading.
-        if self.running.load(Ordering::SeqCst) == 0 {
-            return Box::pin(futures::future::ready(()));
-        }
-
-        let (tx, rx) = oneshot::channel();
-        self.on_finish_all.lock().unwrap().push(Box::new(move || {
-            // The waiter may timed out.
-            let _ = tx.send(());
-        }));
-        // try to acquire the lock again.
-        if self.running.load(Ordering::SeqCst) == 0 {
-            return Box::pin(futures::future::ready(()));
-        }
-        Box::pin(rx.map(|_| ()))
-    }
-
-    /// make a work, as long as the return value held, mark a work in the group
-    /// is running.
-    pub fn work(self: Arc<Self>) -> Work {
-        self.running.fetch_add(1, Ordering::SeqCst);
-        Work(self)
-    }
-}
-
-pub struct Work(Arc<WaitGroup>);
-
-impl Drop for Work {
-    fn drop(&mut self) {
-        self.0.work_done();
-    }
-}
-
-impl std::fmt::Debug for WaitGroup {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let running = self.running.load(Ordering::Relaxed);
-        f.debug_struct("WaitGroup")
-            .field("running", &running)
-            .finish()
-    }
 }

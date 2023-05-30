@@ -22,6 +22,7 @@ use std::{
     u64,
 };
 
+use collections::HashMap;
 use encryption_export::{
     create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
     DecrypterReader, Iv,
@@ -36,6 +37,7 @@ use kvproto::{
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
+    metapb,
     raft_serverpb::SnapshotMeta,
     tikvpb::TikvClient,
 };
@@ -45,8 +47,14 @@ use raft_log_engine::ManagedFileSystem;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
-use tikv::{config::TikvConfig, server::debug::BottommostLevelCompaction};
-use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
+use tikv::{
+    config::TikvConfig,
+    server::debug::{BottommostLevelCompaction, FLASHBACK_TIMEOUT},
+};
+use tikv_util::{
+    escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape,
+    waitgroup::WaitGroup,
+};
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
@@ -701,31 +709,165 @@ fn flashback_whole_cluster(
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 ) {
-    let stores = pd_client
-            .get_all_stores(true) // Exclude tombstone stores.
-            .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
+    // Prepare flashback for all regions.
+    let pd_client = pd_client.clone();
+    let cfg = cfg.clone();
 
-    let mut handles = Vec::new();
-    stores.into_iter().for_each(|s| {
-        let cfg = cfg.clone();
-        let mgr = Arc::clone(&mgr);
-        let addr = s.address;
-        let region_ids = region_ids.clone();
-        let start_key = start_key.clone();
-        let end_key = end_key.clone();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("flashback")
+        .enable_time()
+        .build()
+        .unwrap();
 
-        let h = thread::Builder::new()
-            .name(format!("flashback-{}", addr))
-            .spawn_wrapper(move || {
-                let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
-                debug_executor.flashback_to_version(region_ids, version, start_key, end_key);
-            })
-            .unwrap();
-        handles.push(h);
-    });
+    block_on(runtime.spawn(async move {
+        // Prepare all regions for flashback.
+        let mut start_ts = pd_client.get_tso().await.unwrap();
+        let prepare_wg = WaitGroup::new();
+        loop {
+            let prepare_wg = prepare_wg.clone();
+            let start_key = start_key.clone();
+            let end_key = end_key.clone();
+            let cfg = cfg.clone();
 
-    handles.into_iter().for_each(|h| h.join().unwrap());
+            load_regions_to_each_store(&pd_client, start_key, end_key)
+                .into_iter()
+                .for_each(|(store, leaders)| {
+                    let addr = pd_client.get_store(store).unwrap().address;
+                    leaders
+                        .into_iter()
+                        .filter(|r| region_ids.is_empty() || region_ids.contains(&r.get_id()))
+                        .for_each(|region| {
+                            // get key range from region.
+                            let mgr = Arc::clone(&mgr);
+                            let addr = addr.clone();
+                            let cfg = cfg.clone();
+
+                            let start_key = region.get_start_key().to_vec();
+                            let end_key = region.get_end_key().to_vec();
+                            let region_id = region.get_id();
+                            let prepare_wg = prepare_wg.clone();
+                            let work = prepare_wg.clone().work();
+                            tokio::spawn(async move {
+                                let debug_executor =
+                                    new_debug_executor(&cfg, None, Some(&addr), mgr);
+                                match debug_executor.flashback_to_version(
+                                    version,
+                                    region_id,
+                                    start_key,
+                                    end_key,
+                                    start_ts.into_inner(),
+                                    0,
+                                ) {
+                                    Ok(_) => drop(work),
+                                    Err(_) => prepare_wg.work_fail(),
+                                }
+                            });
+                        })
+                });
+
+            // Wait for finishing prepare flashback.
+            match tokio::time::timeout(Duration::from_secs(FLASHBACK_TIMEOUT), prepare_wg.wait())
+                .await
+            {
+                Ok(success) => {
+                    if success {
+                        break;
+                    } else {
+                        start_ts = pd_client.get_tso().await.unwrap();
+                        continue;
+                    }
+                }
+                Err(_) => {
+                    println!("prepare flashback timeout.");
+                    return;
+                }
+            }
+        }
+
+        // Start flashback for all regions.
+        let mut commit_ts = pd_client.get_tso().await.unwrap();
+        let flashback_wg = WaitGroup::new();
+        loop {
+            let start_key = start_key.clone();
+            let end_key = end_key.clone();
+            let cfg = cfg.clone();
+            load_regions_to_each_store(&pd_client, start_key, end_key)
+                .into_iter()
+                .for_each(|(store, leaders)| {
+                    let addr = pd_client.get_store(store).unwrap().address;
+                    leaders
+                        .into_iter()
+                        .filter(|r| region_ids.is_empty() || region_ids.contains(&r.get_id()))
+                        .for_each(|region| {
+                            // get key range from region.
+                            let mgr = Arc::clone(&mgr);
+                            let addr = addr.clone();
+                            let cfg = cfg.clone();
+
+                            let start_key = region.get_start_key().to_vec();
+                            let end_key = region.get_end_key().to_vec();
+                            let region_id = region.get_id();
+                            let flashback_wg = flashback_wg.clone();
+                            let work = flashback_wg.clone().work();
+                            tokio::spawn(async move {
+                                let debug_executor =
+                                    new_debug_executor(&cfg, None, Some(&addr), mgr);
+                                match debug_executor.flashback_to_version(
+                                    version,
+                                    region_id,
+                                    start_key,
+                                    end_key,
+                                    start_ts.into_inner(),
+                                    commit_ts.into_inner(),
+                                ) {
+                                    Ok(_) => drop(work),
+                                    Err(_) => flashback_wg.work_fail(),
+                                }
+                            });
+                        })
+                });
+
+            // Wait for finishing flashback to version.
+            match tokio::time::timeout(Duration::from_secs(FLASHBACK_TIMEOUT), flashback_wg.wait())
+                .await
+            {
+                Ok(success) => {
+                    if success {
+                        break;
+                    } else {
+                        commit_ts = pd_client.get_tso().await.unwrap();
+                        continue;
+                    }
+                }
+                Err(_) => {
+                    println!("finish flashback timeout.");
+                    return;
+                }
+            }
+        }
+    }))
+    .unwrap();
+
     println!("flashback all stores success");
+}
+
+fn load_regions_to_each_store(
+    pd_client: &RpcClient,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+) -> HashMap<u64, Vec<metapb::Region>> {
+    // Get all regions in the cluster.
+    let res = pd_client.batch_load_regions(start_key, end_key);
+    // Put all regions in right stores.
+    let mut store_regions = HashMap::default();
+    res.into_iter().for_each(|batch| {
+        batch.into_iter().for_each(|r| {
+            let store_id = r.get_leader().get_store_id();
+            let regions = store_regions.entry(store_id).or_insert_with(Vec::new);
+            regions.push(r.get_region().to_owned());
+        });
+    });
+    store_regions
 }
 
 fn read_fail_file(path: &str) -> Vec<(String, String)> {

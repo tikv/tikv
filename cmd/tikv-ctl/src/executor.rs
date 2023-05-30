@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, str, string::ToString, sync::Arc,
+    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, result, str, string::ToString, sync::Arc,
     time::Duration, u64,
 };
 
@@ -33,9 +33,8 @@ use slog_global::crit;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
-        debug::{BottommostLevelCompaction, Debugger, DebuggerImpl, RegionInfo},
+        debug::{BottommostLevelCompaction, Debugger, DebuggerImpl, Error, RegionInfo},
         debug2::DebuggerImplV2,
-        service::check_intersect_of_range,
         KvEngineFactoryBuilder,
     },
     storage::{
@@ -45,7 +44,7 @@ use tikv::{
         Engine,
     },
 };
-use tikv_util::escape;
+use tikv_util::{box_err, escape};
 
 use crate::util::*;
 
@@ -55,7 +54,8 @@ pub const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 pub const METRICS_JEMALLOC: &str = "jemalloc";
 pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
-type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
+pub type Result<T> = result::Result<T, Error>;
+type MvccInfoStream = Pin<Box<dyn Stream<Item = result::Result<(Vec<u8>, MvccInfo), String>>>>;
 
 pub fn new_debug_executor(
     cfg: &TikvConfig,
@@ -691,11 +691,13 @@ pub trait DebugExecutor {
 
     fn flashback_to_version(
         &self,
-        _region_ids: Vec<u64>,
         _version: u64,
+        _region_id: u64,
         _start_key: Vec<u8>,
         _end_key: Vec<u8>,
-    );
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<FlashbackToVersionResponse>;
 }
 
 impl DebugExecutor for DebugClient {
@@ -921,18 +923,27 @@ impl DebugExecutor for DebugClient {
 
     fn flashback_to_version(
         &self,
-        region_ids: Vec<u64>,
         version: u64,
+        region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) {
+        start_ts: u64,
+        commit_ts: u64,
+    ) -> Result<FlashbackToVersionResponse> {
         let mut req = FlashbackToVersionRequest::default();
-        req.set_region_ids(region_ids);
         req.set_version(version);
+        req.set_region_id(region_id);
         req.set_start_key(start_key);
         req.set_end_key(end_key);
-        self.flashback_to_version(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::flashback", e));
+        req.set_start_ts(start_ts);
+        req.set_commit_ts(commit_ts);
+        match self.flashback_to_version(&req) {
+            Ok(resp) => Ok(resp),
+            Err(e) => {
+                println!("region: {} failed to flashback to version {}: {:?}", region_id, version, e);
+                Err(Error::Other(box_err!("flashback failed")))
+            }
+        }
     }
 }
 
@@ -1177,11 +1188,14 @@ where
 
     fn flashback_to_version(
         &self,
-        _region_ids: Vec<u64>,
         _version: u64,
+        _region_id: u64,
+
         _start_key: Vec<u8>,
         _end_key: Vec<u8>,
-    ) {
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<FlashbackToVersionResponse> {
         unimplemented!("only available for online mode");
     }
 }
@@ -1328,11 +1342,13 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
 
     fn flashback_to_version(
         &self,
-        _region_ids: Vec<u64>,
+        _region_id: u64,
         _version: u64,
         _start_key: Vec<u8>,
         _end_key: Vec<u8>,
-    ) {
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<FlashbackToVersionResponse> {
         unimplemented!("only available for online mode");
     }
 }

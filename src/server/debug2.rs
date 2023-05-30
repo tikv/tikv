@@ -20,7 +20,6 @@ use kvproto::{
 use nom::AsBytes;
 use raft::prelude::Entry;
 use raftstore::store::util::check_key_in_region;
-use txn_types::TimeStamp;
 
 use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use crate::{
@@ -449,12 +448,14 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         self.raft_statistics = s;
     }
 
-    fn region_flashback_to_version(
+    fn key_range_flashback_to_version(
         &self,
-        _region_id: u64,
         _version: u64,
-        _start_ts: TimeStamp,
-        _commit_ts: TimeStamp,
+        _region_id: u64,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _start_ts: u64,
+        _commit_ts: u64,
     ) -> impl Future<Output = Result<()>> + Send {
         async move { unimplemented!() }
     }

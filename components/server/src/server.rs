@@ -1050,8 +1050,6 @@ where
             servers.debugger.clone(),
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
-            self.pd_client.clone(),
-            self.region_info_accessor.clone(),
         );
         info!("start register debug service");
         if servers

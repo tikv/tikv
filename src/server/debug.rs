@@ -188,12 +188,14 @@ pub trait Debugger {
 
     fn reset_to_version(&self, version: u64);
 
-    fn region_flashback_to_version(
+    fn key_range_flashback_to_version(
         &self,
-        region_id: u64,
         version: u64,
-        start_ts: TimeStamp,
-        commit_ts: TimeStamp,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
@@ -1036,12 +1038,14 @@ where
         self.reset_to_version_manager.start(version.into());
     }
 
-    fn region_flashback_to_version(
+    fn key_range_flashback_to_version(
         &self,
-        region_id: u64,
         version: u64,
-        start_ts: TimeStamp,
-        commit_ts: TimeStamp,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
     ) -> impl Future<Output = Result<()>> + Send {
         let store_id = self.get_store_ident().unwrap().get_store_id();
         let r = self.region_info(region_id).unwrap();
@@ -1051,6 +1055,8 @@ where
             .map(|s| s.get_region().clone())
             .unwrap();
 
+        let is_in_flashback = region.get_is_in_flashback();
+
         let mut ctx = Context::default();
         ctx.set_region_id(region.get_id());
         ctx.set_region_epoch(region.get_region_epoch().to_owned());
@@ -1058,15 +1064,14 @@ where
         ctx.set_peer(peer.clone());
 
         // Flashback will encode the key, so we need to use raw key.
-        let start_key = Key::from_encoded_slice(region.get_start_key())
+        let start_key = Key::from_encoded_slice(start_key)
             .to_raw()
             .unwrap_or_default();
-        let end_key = Key::from_encoded_slice(region.get_end_key())
+        let end_key = Key::from_encoded_slice(end_key)
             .to_raw()
             .unwrap_or_default();
 
         let storage = self.storage.clone().unwrap();
-        let is_in_flashback = region.get_is_in_flashback();
         async move {
             let timeout = Duration::from_secs(FLASHBACK_TIMEOUT);
             let start_time = Instant::now();
@@ -1083,7 +1088,7 @@ where
 
                 let storage_clone = storage.clone();
                 // Means now is prepare flashback.
-                if commit_ts.is_zero() {
+                if TimeStamp::from(commit_ts).is_zero() {
                     if is_in_flashback {
                         return Ok(());
                     }
@@ -1092,7 +1097,7 @@ where
                     req.set_start_key(start_key.clone());
                     req.set_end_key(end_key.clone());
                     req.set_context(ctx.clone());
-                    req.set_start_ts(start_ts.into_inner());
+                    req.set_start_ts(start_ts);
 
                     let resp = future_prepare_flashback_to_version(storage_clone, req)
                         .await
@@ -1108,14 +1113,13 @@ where
                             "not in flashback state".to_owned(),
                         ));
                     }
-
                     let mut req = kvrpcpb::FlashbackToVersionRequest::new();
                     req.set_version(version);
                     req.set_start_key(start_key.clone());
                     req.set_end_key(end_key.clone());
                     req.set_context(ctx.clone());
-                    req.set_start_ts(start_ts.into_inner());
-                    req.set_commit_ts(commit_ts.into_inner());
+                    req.set_start_ts(start_ts);
+                    req.set_commit_ts(commit_ts);
 
                     let resp = future_flashback_to_version(storage_clone, req)
                         .await

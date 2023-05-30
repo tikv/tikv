@@ -2,6 +2,7 @@
 
 use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
 
+use kvproto::kvrpcpb::KeyRange;
 use server::setup::initial_logger;
 use tikv::config::TikvConfig;
 
@@ -62,11 +63,27 @@ pub fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     tikv_util::logger::exit_process_gracefully(-1);
 }
 
+// Check if region's `key_range` intersects with `key_range_limit`.
+pub fn check_intersect_of_range(key_range: &KeyRange, key_range_limit: &KeyRange) -> bool {
+    if !key_range.get_end_key().is_empty()
+        && !key_range_limit.get_start_key().is_empty()
+        && key_range.get_end_key() <= key_range_limit.get_start_key()
+    {
+        return false;
+    }
+    if !key_range_limit.get_end_key().is_empty()
+        && !key_range.get_start_key().is_empty()
+        && key_range_limit.get_end_key() < key_range.get_start_key()
+    {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use kvproto::kvrpcpb::KeyRange;
     use raftstore::store::util::build_key_range;
-    use tikv::server::service::check_intersect_of_range;
 
     use super::*;
 

@@ -2930,7 +2930,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/HuSharp/kvproto?branch=support_flashback_kv#207ad8321dad0b2faa05ca4f9e067ecc92a8dca1"
+source = "git+https://github.com/HuSharp/kvproto?branch=support_flashback_kv#52a8119500fa1c7888ab66e875b72f27abc9d2a7"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
