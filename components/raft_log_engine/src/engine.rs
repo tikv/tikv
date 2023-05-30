@@ -733,12 +733,14 @@ impl RaftEngine for RaftLogEngine {
                         {
                             if found_region_state {
                                 info!("dbg delete stale region state";
+                                    "region_id" => raft_group_id,
                                     "apply_index" => apply_index,
                                     "index" => NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]),
                                     "state" => ?parse_from_bytes::<RegionLocalState>(value));
                                 batch.0.delete(raft_group_id, key.to_vec());
                             } else {
                                 info!("dbg keep region state";
+                                    "region_id" => raft_group_id,
                                     "apply_index" => apply_index,
                                     "index" => NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]),
                                     "state" => ?parse_from_bytes::<RegionLocalState>(value));
@@ -750,12 +752,14 @@ impl RaftEngine for RaftLogEngine {
                         {
                             if found_apply_state {
                                 info!("dbg delete stale apply state";
+                                    "region_id" => raft_group_id,
                                     "apply_index" => apply_index,
                                     "index" => NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]),
                                     "state" => ?parse_from_bytes::<RaftApplyState>(value));
                                 batch.0.delete(raft_group_id, key.to_vec());
                             } else {
                                 info!("dbg keep apply state";
+                                    "region_id" => raft_group_id,
                                     "apply_index" => apply_index,
                                     "index" => NumberCodec::decode_u64(&key[KEY_PREFIX_LEN..]),
                                     "state" => ?parse_from_bytes::<RaftApplyState>(value));
@@ -768,6 +772,7 @@ impl RaftEngine for RaftLogEngine {
                             if cf_id <= MAX_CF_ID && tablet_index <= apply_index {
                                 if found_flush_state[cf_id as usize] {
                                     info!("dbg delete stale flush state";
+                                        "region_id" => raft_group_id,
                                         "apply_index" => apply_index,
                                         "tablet_index" => tablet_index,
                                         "flush_index" => NumberCodec::decode_u64(value),
@@ -775,6 +780,7 @@ impl RaftEngine for RaftLogEngine {
                                     batch.0.delete(raft_group_id, key.to_vec());
                                 } else {
                                     info!("dbg keep flush state";
+                                        "region_id" => raft_group_id,
                                         "apply_index" => apply_index,
                                         "tablet_index" => tablet_index,
                                         "flush_index" => NumberCodec::decode_u64(value),
