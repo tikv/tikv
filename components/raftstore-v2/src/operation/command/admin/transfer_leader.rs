@@ -273,8 +273,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // for details.
             should_ack_now = true;
         } else {
-            if low < self.last_compacted_idx {
-                low = self.last_compacted_idx
+            if low < self.compact_log_context().last_compacted_idx() {
+                low = self.compact_log_context().last_compacted_idx()
             };
             // Check if the entry cache is already warmed up.
             if let Some(first_index) = self.entry_storage().entry_cache_first_index() {
