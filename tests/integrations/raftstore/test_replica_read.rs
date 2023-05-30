@@ -375,6 +375,7 @@ fn test_read_index_retry_lock_checking() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
@@ -451,15 +452,18 @@ fn test_split_isolation() {
     cluster.run_node(2).unwrap();
     // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer
     // cannot be created.
-    for _ in 0..10 {
+    let start = Instant::now();
+    loop {
         let resp = async_read_on_peer(&mut cluster, peer.clone(), r2.clone(), b"k1", true, true);
         let resp = block_on_timeout(resp, Duration::from_secs(1)).unwrap();
         if !resp.get_header().has_error() {
             return;
         }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("test failed: {:?}", resp);
+        }
         thread::sleep(Duration::from_millis(200));
     }
-    panic!("test failed");
 }
 
 /// Testing after applying snapshot, the `ReadDelegate` stored at `StoreMeta`

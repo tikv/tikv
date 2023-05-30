@@ -98,13 +98,13 @@ fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
 /// received but there is no such region in `Store::region_peers`. In this case
 /// we should put `msg` into `pending_msg` instead of create the peer.
 #[inline]
-fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
+pub fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
     match msg.get_msg_type() {
         MessageType::MsgAppend => {
-            let ent = msg.get_entries();
-            ent.len() == 1
-                && ent[0].data.is_empty()
-                && ent[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
+            let entries = msg.get_entries();
+            !entries.is_empty()
+                && entries[0].data.is_empty()
+                && entries[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
         }
         _ => false,
     }
@@ -344,27 +344,28 @@ pub fn compare_region_epoch(
 pub fn check_flashback_state(
     is_in_flashback: bool,
     flashback_start_ts: u64,
-    req: &RaftCmdRequest,
+    header: &RaftRequestHeader,
+    admin_type: Option<AdminCmdType>,
     region_id: u64,
     skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
-    if req.has_admin_request()
-        && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
-            || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+    if let Some(ty) = admin_type
+        && (ty == AdminCmdType::PrepareFlashback
+            || ty == AdminCmdType::FinishFlashback)
     {
         return Ok(());
     }
     // TODO: only use `flashback_start_ts` to check flashback state.
     let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
-    let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+    let is_flashback_request = WriteBatchFlags::from_bits_truncate(header.get_flags())
         .contains(WriteBatchFlags::FLASHBACK);
     // If the region is in the flashback state:
     //   - A request with flashback flag will be allowed.
     //   - A read request whose `read_ts` is smaller than `flashback_start_ts` will
     //     be allowed.
     if is_in_flashback && !is_flashback_request {
-        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+        if let Ok(read_ts) = decode_u64(&mut header.get_flag_data()) {
             if read_ts != 0 && read_ts < flashback_start_ts {
                 return Ok(());
             }
@@ -2074,12 +2075,12 @@ mod tests {
         for (msg_type, index, is_append) in tbl {
             let mut msg = Message::default();
             msg.set_msg_type(msg_type);
-            let ent = {
-                let mut e = Entry::default();
-                e.set_index(index);
-                e
-            };
-            msg.set_entries(vec![ent].into());
+            let mut ent = Entry::default();
+            ent.set_index(index);
+            msg.mut_entries().push(ent.clone());
+            assert_eq!(is_first_append_entry(&msg), is_append);
+            ent.set_index(index + 1);
+            msg.mut_entries().push(ent);
             assert_eq!(is_first_append_entry(&msg), is_append);
         }
     }

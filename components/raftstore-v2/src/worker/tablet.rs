@@ -9,6 +9,7 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
+use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
@@ -33,6 +34,7 @@ pub enum Task<EK> {
         tablet: Either<EK, PathBuf>,
         region_id: u64,
         wait_for_persisted: u64,
+        cb: Option<Box<dyn FnOnce() + Send>>,
     },
     Destroy {
         region_id: u64,
@@ -118,6 +120,7 @@ impl<EK> Task<EK> {
             tablet: Either::Left(tablet),
             region_id,
             wait_for_persisted,
+            cb: None,
         }
     }
 
@@ -127,6 +130,22 @@ impl<EK> Task<EK> {
             tablet: Either::Right(path),
             region_id,
             wait_for_persisted,
+            cb: None,
+        }
+    }
+
+    #[inline]
+    pub fn prepare_destroy_path_callback(
+        path: PathBuf,
+        region_id: u64,
+        wait_for_persisted: u64,
+        cb: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        Task::PrepareDestroy {
+            tablet: Either::Right(path),
+            region_id,
+            wait_for_persisted,
+            cb: Some(Box::new(cb)),
         }
     }
 
@@ -158,9 +177,9 @@ pub struct Runner<EK: KvEngine> {
     sst_importer: Arc<SstImporter>,
     logger: Logger,
 
-    // region_id -> [(tablet_path, wait_for_persisted)].
-    waiting_destroy_tasks: HashMap<u64, Vec<(PathBuf, u64)>>,
-    pending_destroy_tasks: Vec<PathBuf>,
+    // region_id -> [(tablet_path, wait_for_persisted, callback)].
+    waiting_destroy_tasks: HashMap<u64, Vec<(PathBuf, u64, Option<Box<dyn FnOnce() + Send>>)>>,
+    pending_destroy_tasks: Vec<(PathBuf, Option<Box<dyn FnOnce() + Send>>)>,
 
     // An independent pool to run tasks that are time-consuming but doesn't take CPU resources,
     // such as waiting for RocksDB compaction.
@@ -237,6 +256,7 @@ impl<EK: KvEngine> Runner<EK> {
                 }
                 // drop before callback.
                 drop(tablet);
+                fail_point!("tablet_trimmed_finished");
                 cb();
             })
             .unwrap();
@@ -259,20 +279,24 @@ impl<EK: KvEngine> Runner<EK> {
         region_id: u64,
         tablet: Either<EK, PathBuf>,
         wait_for_persisted: u64,
+        cb: Option<Box<dyn FnOnce() + Send>>,
     ) {
         let path = self.pause_background_work(tablet);
         self.waiting_destroy_tasks
             .entry(region_id)
             .or_default()
-            .push((path, wait_for_persisted));
+            .push((path, wait_for_persisted, cb));
     }
 
     fn destroy(&mut self, region_id: u64, persisted: u64) {
         if let Some(v) = self.waiting_destroy_tasks.get_mut(&region_id) {
-            v.retain(|(path, wait)| {
+            v.retain_mut(|(path, wait, cb)| {
                 if *wait <= persisted {
+                    let cb = cb.take();
                     if !Self::process_destroy_task(&self.logger, &self.tablet_registry, path) {
-                        self.pending_destroy_tasks.push(path.clone());
+                        self.pending_destroy_tasks.push((path.clone(), cb));
+                    } else if let Some(cb) = cb {
+                        cb();
                     }
                     return false;
                 }
@@ -284,7 +308,7 @@ impl<EK: KvEngine> Runner<EK> {
     fn direct_destroy(&mut self, tablet: Either<EK, PathBuf>) {
         let path = self.pause_background_work(tablet);
         if !Self::process_destroy_task(&self.logger, &self.tablet_registry, &path) {
-            self.pending_destroy_tasks.push(path);
+            self.pending_destroy_tasks.push((path, None));
         }
     }
 
@@ -391,7 +415,8 @@ where
                 region_id,
                 tablet,
                 wait_for_persisted,
-            } => self.prepare_destroy(region_id, tablet, wait_for_persisted),
+                cb,
+            } => self.prepare_destroy(region_id, tablet, wait_for_persisted, cb),
             Task::Destroy {
                 region_id,
                 persisted_index,
@@ -408,8 +433,13 @@ where
     EK: KvEngine,
 {
     fn on_timeout(&mut self) {
-        self.pending_destroy_tasks
-            .retain(|task| !Self::process_destroy_task(&self.logger, &self.tablet_registry, task));
+        self.pending_destroy_tasks.retain_mut(|(path, cb)| {
+            let r = Self::process_destroy_task(&self.logger, &self.tablet_registry, path);
+            if r && let Some(cb) = cb.take() {
+                cb();
+            }
+            r
+        });
     }
 
     fn get_interval(&self) -> Duration {

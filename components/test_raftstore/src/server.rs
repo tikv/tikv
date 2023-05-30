@@ -489,13 +489,14 @@ impl ServerCluster {
                 .unwrap(),
         );
 
-        let debugger = DebuggerImpl::new(engines.clone(), ConfigController::default());
+        let debugger = DebuggerImpl::new(engines.clone(), ConfigController::new(cfg.tikv.clone()));
         let debug_thread_handle = debug_thread_pool.handle().clone();
         let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
 
         let apply_router = system.apply_router();
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(false);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),

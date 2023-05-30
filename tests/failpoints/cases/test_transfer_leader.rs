@@ -136,6 +136,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
                 min_commit_ts: 20.into(),
                 last_change_ts: 5.into(),
                 versions_to_last_change: 3,
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();
@@ -215,6 +216,7 @@ fn test_delete_lock_proposed_before_proposing_locks() {
                 min_commit_ts: 20.into(),
                 last_change_ts: 5.into(),
                 versions_to_last_change: 3,
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();
@@ -299,6 +301,7 @@ fn test_read_lock_after_become_follower() {
                 min_commit_ts: for_update_ts,
                 last_change_ts: start_ts.prev(),
                 versions_to_last_change: 1,
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();
