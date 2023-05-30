@@ -115,4 +115,8 @@ impl MiscExt for PanicEngine {
     fn is_stalled_or_stopped(&self) -> bool {
         panic!()
     }
+
+    fn get_active_memtable_stats_cf(&self, cf: &str) -> Result<Option<(u64, std::time::SystemTime)>> {
+        panic!()
+    }
 }

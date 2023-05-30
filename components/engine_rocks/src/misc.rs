@@ -410,6 +410,13 @@ impl MiscExt for RocksEngine {
                 .unwrap_or_default()
                 != 0
     }
+
+    fn get_active_memtable_stats_cf(&self, cf: &str) -> Result<Option<(u64, std::time::SystemTime)>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_approximate_active_memtable_stats_cf(handle))
+    }
 }
 
 #[cfg(test)]

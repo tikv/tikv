@@ -140,4 +140,7 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
+
+    /// Returns size and age of active memtable if there's one.
+    fn get_active_memtable_stats_cf(&self, cf: &str) -> Result<Option<(u64, std::time::SystemTime)>>;
 }
