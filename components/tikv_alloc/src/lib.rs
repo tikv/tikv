@@ -84,6 +84,7 @@
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(test, feature(custom_test_frameworks))]
 #![cfg_attr(test, test_runner(runner::run_env_conditional_tests))]
+#![feature(core_intrinsics)]
 
 #[cfg(feature = "jemalloc")]
 #[macro_use]
@@ -106,7 +107,7 @@ mod imp;
 mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "mimalloc"))]
 #[path = "mimalloc.rs"]
-mod imp;
+    mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "snmalloc"))]
 #[path = "snmalloc.rs"]
 mod imp;

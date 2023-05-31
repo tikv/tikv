@@ -2,7 +2,13 @@
 
 // The implementation of this crate when jemalloc is turned on
 
-use std::{collections::HashMap, ptr, slice, sync::Mutex, thread};
+use std::{
+    collections::HashMap,
+    ptr::{self, NonNull},
+    slice,
+    sync::{atomic::AtomicU64, Mutex},
+    thread,
+};
 
 use libc::{self, c_char, c_void};
 use tikv_jemalloc_ctl::{epoch, stats, Error};
@@ -21,18 +27,72 @@ lazy_static! {
         Mutex::new(HashMap::new());
 }
 
+/// The struct for tracing the statistic of another thread.
+/// The target pointer should be bound to some TLS of another thread, this
+/// structure is just "peeking" it -- with out modifying.
+// It should be covariant so we wrap it with `NonNull`.
+#[repr(transparent)]
+struct PeekableRemoteStat<T>(Option<NonNull<T>>);
+
+// SAFETY: we need to keep the thread called add_thread_memory_accessor always
+// call remove_thread_memory_accessor before exit.
+unsafe impl<T: Send> Send for PeekableRemoteStat<T> {}
+
+impl<T: Copy> PeekableRemoteStat<T> {
+    /// Try access the underlying data. When the pointer is `nullptr`, returns
+    /// `None`.
+    ///
+    /// # Safety
+    ///
+    /// The pointer should not be dangling. (i.e. the thread to be traced should
+    /// be accessible.)
+    unsafe fn peek(&self) -> Option<T> {
+        self.0
+            .map(|nlp| unsafe { core::intrinsics::atomic_load_seqcst(nlp.as_ptr()) })
+    }
+
+    fn from_raw(ptr: *mut T) -> Self {
+        Self(NonNull::new(ptr))
+    }
+}
+
+impl PeekableRemoteStat<u64> {
+    fn allocated() -> Self {
+        // SAFETY: it is transparent.
+        // NOTE: perhaps we'd better add something `as_raw()` for `ThreadLocal`...
+        Self::from_raw(
+            tikv_jemalloc_ctl::thread::allocatedp::read()
+                .map(|x| unsafe { std::mem::transmute(x) })
+                .unwrap_or(std::ptr::null_mut()),
+        )
+    }
+
+    fn deallocated() -> Self {
+        // SAFETY: it is transparent.
+        Self::from_raw(
+            tikv_jemalloc_ctl::thread::deallocatedp::read()
+                .map(|x| unsafe { std::mem::transmute(x) })
+                .unwrap_or(std::ptr::null_mut()),
+        )
+    }
+}
+
 struct MemoryStatsAccessor {
-    // TODO: trace arena, allocated, deallocated. Original implement doesn't
-    // work actually.
+    allocated: PeekableRemoteStat<u64>,
+    deallocated: PeekableRemoteStat<u64>,
     thread_name: String,
 }
 
 pub fn add_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    let allocated = PeekableRemoteStat::allocated();
+    let deallocated = PeekableRemoteStat::deallocated();
     thread_memory_map.insert(
         thread::current().id(),
         MemoryStatsAccessor {
             thread_name: thread::current().name().unwrap().to_string(),
+            allocated,
+            deallocated,
         },
     );
 }
@@ -64,7 +124,17 @@ pub fn dump_stats() -> String {
 
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     for (_, accessor) in thread_memory_map.iter() {
-        memory_stats.push_str(format!("Thread [{}]: \n", accessor.thread_name).as_str());
+        unsafe {
+            let alloc = accessor.allocated.peek().unwrap_or_default();
+            let dealloc = accessor.deallocated.peek().unwrap_or_default();
+            memory_stats.push_str(
+                format!(
+                    "Thread [{}]: alloc_bytes={alloc},dealloc_bytes={dealloc}\n",
+                    accessor.thread_name
+                )
+                .as_str(),
+            );
+        }
     }
     memory_stats
 }
@@ -89,6 +159,29 @@ pub fn fetch_stats() -> Result<Option<AllocStats>, Error> {
             stats::active::read()? - stats::allocated::read()?,
         ),
     ]))
+}
+
+/// Iterate over the allocation stat.
+/// Format of the callback: `(name, allocated, deallocated)`.
+pub fn iterate_thread_allocation_stats(mut f: impl FnMut(&str, u64, u64)) {
+    // Given we have called `epoch::advance()` in `fetch_stats`, we (magically!)
+    // skip advancing the epoch here.
+    let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    let mut collected = HashMap::<&str, (u64, u64)>::with_capacity(thread_memory_map.len());
+    for (_, accessor) in thread_memory_map.iter() {
+        // SAFETY: we have removed the thread info accessor in almost every path of
+        // creating thread by clippy.
+        unsafe {
+            let alloc = accessor.allocated.peek().unwrap_or_default();
+            let dealloc = accessor.allocated.peek().unwrap_or_default();
+            let ent = collected.entry(accessor.thread_name.as_str()).or_default();
+            ent.0 += alloc;
+            ent.1 += dealloc;
+        }
+    }
+    for (name, val) in collected {
+        f(name, val.0, val.1)
+    }
 }
 
 #[allow(clippy::cast_ptr_alignment)]
