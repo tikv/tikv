@@ -571,9 +571,9 @@ pub enum Cmd {
         #[structopt(long)]
         data_dir: String,
     },
-    /// Usage: tikv-ctl reuse-readonly-remains
+    /// Usage: tikv-ctl fork-readonly-tikv
     ///
-    /// reuse-readonly-remains is for creating a tikv-server agent based on a
+    /// fork-readonly-tikv is for creating a tikv-server agent based on a
     /// read-only TiKV remains. The agent can be used for recovery because
     /// all committed transactions can be accessed correctly, without any
     /// modifications on the remained TiKV.

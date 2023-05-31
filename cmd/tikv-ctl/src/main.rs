@@ -243,12 +243,20 @@ fn main() {
         }
         Cmd::ShowClusterId { data_dir } => {
             if opt.config.is_none() {
-                eprintln!("tikv-ctl parameter config must be specified");
-                process::exit(-1);
+                clap::Error {
+                    message: String::from("(--config) must be specified"),
+                    kind: ErrorKind::MissingRequiredArgument,
+                    info: None,
+                }
+                .exit();
             }
             if data_dir.is_empty() {
-                eprintln!("reuse-readonly-remains parameter data-dir must be specified");
-                process::exit(-1);
+                clap::Error {
+                    message: String::from("(--data-dir) must be specified"),
+                    kind: ErrorKind::MissingRequiredArgument,
+                    info: None,
+                }
+                .exit();
             }
             cfg.storage.data_dir = data_dir;
             // Disable auto compactions and GCs to avoid modifications.
