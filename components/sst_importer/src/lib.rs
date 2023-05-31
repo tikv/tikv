@@ -29,5 +29,5 @@ pub use self::{
     import_file::sst_meta_to_path,
     sst_importer::SstImporter,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util::prepare_sst_for_ingestion,
+    util::{copy_sst_for_ingestion, prepare_sst_for_ingestion},
 };

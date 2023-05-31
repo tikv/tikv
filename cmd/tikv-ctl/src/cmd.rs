@@ -565,6 +565,41 @@ pub enum Cmd {
     },
     #[structopt(external_subcommand)]
     External(Vec<String>),
+    /// Usage: tikv-ctl show-cluster-id --config <config-path>
+    ShowClusterId {
+        /// Data directory path of the given TiKV instance.
+        #[structopt(long)]
+        data_dir: String,
+    },
+    /// Usage: tikv-ctl fork-readonly-tikv
+    ///
+    /// fork-readonly-tikv is for creating a tikv-server agent based on a
+    /// read-only TiKV remains. The agent can be used for recovery because
+    /// all committed transactions can be accessed correctly, without any
+    /// modifications on the remained TiKV.
+    ///
+    /// NOTE: The remained TiKV can't run concurrently with the agent.
+    ReuseReadonlyRemains {
+        /// Data directory path of the remained TiKV.
+        #[structopt(long)]
+        data_dir: String,
+
+        /// Data directory to create the agent.
+        #[structopt(long)]
+        agent_dir: String,
+
+        /// Reuse snapshot files of the remained TiKV: symlink or copy.
+        #[structopt(long, default_value = "symlink")]
+        snaps: String,
+
+        /// Reuse rocksdb files of the remained TiKV: symlink or copy.
+        ///
+        /// NOTE: the last one WAL file will still be copied even if `symlink`
+        /// is specified, because the last one WAL file isn't read-only when
+        /// opening a RocksDB instance.
+        #[structopt(long, default_value = "symlink")]
+        rocksdb_files: String,
+    },
 }
 
 #[derive(StructOpt)]
