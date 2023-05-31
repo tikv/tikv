@@ -35,6 +35,7 @@ const ASYNC_COMMIT_PREFIX: u8 = b'a';
 const ROLLBACK_TS_PREFIX: u8 = b'r';
 const LAST_CHANGE_PREFIX: u8 = b'l';
 const TXN_SOURCE_PREFIX: u8 = b's';
+const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -103,6 +104,8 @@ pub struct Lock {
     /// application is limited to setting this value under `0x80`,
     /// so there will no more cost to change it to `u64`.
     pub txn_source: u64,
+    /// The lock is locked with conflict using fair lock mode.
+    pub is_locked_with_conflict: bool,
 }
 
 impl std::fmt::Debug for Lock {
@@ -129,6 +132,7 @@ impl std::fmt::Debug for Lock {
             .field("last_change_ts", &self.last_change_ts)
             .field("versions_to_last_change", &self.versions_to_last_change)
             .field("txn_source", &self.txn_source)
+            .field("is_locked_with_conflict", &self.is_locked_with_conflict)
             .finish()
     }
 }
@@ -143,6 +147,7 @@ impl Lock {
         for_update_ts: TimeStamp,
         txn_size: u64,
         min_commit_ts: TimeStamp,
+        is_locked_with_conflict: bool,
     ) -> Self {
         Self {
             lock_type,
@@ -159,6 +164,7 @@ impl Lock {
             last_change_ts: TimeStamp::zero(),
             versions_to_last_change: 0,
             txn_source: 0,
+            is_locked_with_conflict,
         }
     }
 
@@ -239,6 +245,9 @@ impl Lock {
             b.push(TXN_SOURCE_PREFIX);
             b.encode_var_u64(self.txn_source).unwrap();
         }
+        if self.is_locked_with_conflict {
+            b.push(PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX);
+        }
         b
     }
 
@@ -274,6 +283,9 @@ impl Lock {
         if self.txn_source != 0 {
             size += 1 + MAX_VAR_U64_LEN;
         }
+        if self.is_locked_with_conflict {
+            size += 1;
+        }
         size
     }
 
@@ -300,6 +312,7 @@ impl Lock {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
             ));
         }
 
@@ -313,6 +326,7 @@ impl Lock {
         let mut last_change_ts = TimeStamp::zero();
         let mut versions_to_last_change = 0;
         let mut txn_source = 0;
+        let mut is_locked_with_conflict = false;
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -353,6 +367,9 @@ impl Lock {
                 TXN_SOURCE_PREFIX => {
                     txn_source = number::decode_var_u64(&mut b)?;
                 }
+                PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX => {
+                    is_locked_with_conflict = true;
+                }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.
@@ -369,6 +386,7 @@ impl Lock {
             for_update_ts,
             txn_size,
             min_commit_ts,
+            is_locked_with_conflict,
         )
         .set_last_change(last_change_ts, versions_to_last_change)
         .set_txn_source(txn_source);
@@ -409,11 +427,9 @@ impl Lock {
         key: &Key,
         ts: TimeStamp,
         bypass_locks: &TsSet,
+        is_replica_read: bool,
     ) -> Result<()> {
-        if lock.ts > ts
-            || lock.lock_type == LockType::Lock
-            || lock.lock_type == LockType::Pessimistic
-        {
+        if lock.ts > ts || lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
             // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
             return Ok(());
         }
@@ -428,6 +444,14 @@ impl Lock {
         }
 
         let raw_key = key.to_raw()?;
+
+        // Disable replica read for autocommit max ts read, to avoid breaking
+        // linearizability. See https://github.com/pingcap/tidb/issues/43583 for details.
+        if ts == TimeStamp::max() && is_replica_read {
+            return Err(Error::from(ErrorInner::KeyIsLocked(
+                lock.into_owned().into_lock_info(raw_key),
+            )));
+        }
 
         if ts == TimeStamp::max() && raw_key == lock.primary && !lock.use_async_commit {
             // When `ts == TimeStamp::max()` (which means to get latest committed version
@@ -449,7 +473,7 @@ impl Lock {
         ts: TimeStamp,
         bypass_locks: &TsSet,
     ) -> Result<()> {
-        if lock.lock_type == LockType::Lock || lock.lock_type == LockType::Pessimistic {
+        if lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
             // Ignore lock when the lock's type is Lock or Pessimistic.
             return Ok(());
         }
@@ -478,9 +502,25 @@ impl Lock {
         iso_level: IsolationLevel,
     ) -> Result<()> {
         match iso_level {
-            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks),
+            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks, false),
             IsolationLevel::RcCheckTs => {
                 Lock::check_ts_conflict_rc_check_ts(lock, key, ts, bypass_locks)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub fn check_ts_conflict_for_replica_read(
+        lock: Cow<'_, Self>,
+        key: &Key,
+        ts: TimeStamp,
+        bypass_locks: &TsSet,
+        iso_level: IsolationLevel,
+    ) -> Result<()> {
+        match iso_level {
+            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks, true),
+            IsolationLevel::RcCheckTs => {
+                unreachable!()
             }
             _ => Ok(()),
         }
@@ -492,6 +532,10 @@ impl Lock {
 
     pub fn is_pessimistic_lock(&self) -> bool {
         self.lock_type == LockType::Pessimistic
+    }
+
+    pub fn is_pessimistic_lock_with_conflict(&self) -> bool {
+        self.is_pessimistic_lock() && self.is_locked_with_conflict
     }
 }
 
@@ -508,6 +552,7 @@ pub struct PessimisticLock {
 
     pub last_change_ts: TimeStamp,
     pub versions_to_last_change: u64,
+    pub is_locked_with_conflict: bool,
 }
 
 impl PessimisticLock {
@@ -521,6 +566,7 @@ impl PessimisticLock {
             self.for_update_ts,
             0,
             self.min_commit_ts,
+            self.is_locked_with_conflict,
         )
         .set_last_change(self.last_change_ts, self.versions_to_last_change)
     }
@@ -536,6 +582,7 @@ impl PessimisticLock {
             self.for_update_ts,
             0,
             self.min_commit_ts,
+            self.is_locked_with_conflict,
         )
         .set_last_change(self.last_change_ts, self.versions_to_last_change)
     }
@@ -555,6 +602,7 @@ impl std::fmt::Debug for PessimisticLock {
             .field("min_commit_ts", &self.min_commit_ts)
             .field("last_change_ts", &self.last_change_ts)
             .field("versions_to_last_change", &self.versions_to_last_change)
+            .field("is_locked_with_conflict", &self.is_locked_with_conflict)
             .finish()
     }
 }
@@ -618,6 +666,7 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
             ),
             Lock::new(
                 LockType::Delete,
@@ -628,6 +677,7 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
             ),
             Lock::new(
                 LockType::Put,
@@ -638,6 +688,7 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             ),
             Lock::new(
                 LockType::Delete,
@@ -648,6 +699,7 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             ),
             Lock::new(
                 LockType::Put,
@@ -658,6 +710,7 @@ mod tests {
                 TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
+                false,
             ),
             Lock::new(
                 LockType::Delete,
@@ -668,6 +721,7 @@ mod tests {
                 TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
+                false,
             ),
             Lock::new(
                 LockType::Put,
@@ -678,6 +732,7 @@ mod tests {
                 10.into(),
                 16,
                 TimeStamp::zero(),
+                false,
             ),
             Lock::new(
                 LockType::Delete,
@@ -688,6 +743,7 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             ),
             Lock::new(
                 LockType::Put,
@@ -698,6 +754,7 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
+                false,
             ),
             Lock::new(
                 LockType::Put,
@@ -708,6 +765,7 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
+                false,
             )
             .use_async_commit(vec![]),
             Lock::new(
@@ -719,6 +777,7 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
+                false,
             )
             .use_async_commit(vec![b"k".to_vec()]),
             Lock::new(
@@ -730,6 +789,7 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
+                false,
             )
             .use_async_commit(vec![
                 b"k1".to_vec(),
@@ -746,6 +806,7 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
+                false,
             )
             .use_async_commit(vec![
                 b"k1".to_vec(),
@@ -763,6 +824,7 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
+                false,
             )
             .with_rollback_ts(vec![12.into(), 24.into(), 13.into()]),
             Lock::new(
@@ -774,6 +836,7 @@ mod tests {
                 6.into(),
                 16,
                 8.into(),
+                false,
             )
             .set_last_change(0.into(), 2),
             Lock::new(
@@ -785,6 +848,7 @@ mod tests {
                 6.into(),
                 16,
                 8.into(),
+                false,
             )
             .set_last_change(4.into(), 2)
             .set_txn_source(1),
@@ -808,6 +872,7 @@ mod tests {
             TimeStamp::zero(),
             0,
             TimeStamp::zero(),
+            false,
         );
         let mut v = lock.to_bytes();
         Lock::parse(&v[..4]).unwrap_err();
@@ -829,6 +894,7 @@ mod tests {
             TimeStamp::zero(),
             1,
             TimeStamp::zero(),
+            false,
         );
 
         let empty = Default::default();
@@ -983,6 +1049,7 @@ mod tests {
             100.into(),
             1,
             TimeStamp::zero(),
+            false,
         );
 
         let empty = Default::default();
@@ -1026,6 +1093,7 @@ mod tests {
             101.into(),
             10,
             127.into(),
+            false,
         )
         .use_async_commit(vec![
             b"secondary_k1".to_vec(),
@@ -1042,7 +1110,7 @@ mod tests {
             min_commit_ts: TimeStamp(127), use_async_commit: true, \
             secondaries: [7365636F6E646172795F6B31, 7365636F6E646172795F6B6B6B6B6B32, \
             7365636F6E646172795F6B336B336B336B336B336B33, 7365636F6E646172795F6B34], rollback_ts: [], \
-            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0 }"
+            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0, is_locked_with_conflict: false }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -1052,7 +1120,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, \
             short_value: ?, for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [?, ?, ?, ?], rollback_ts: [], \
-            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0 }"
+            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0, is_locked_with_conflict: false }"
         );
 
         lock.short_value = None;
@@ -1062,7 +1130,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: 706B, start_ts: TimeStamp(100), ttl: 3, short_value: , \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [], last_change_ts: TimeStamp(80), \
-            versions_to_last_change: 4, txn_source: 0 }"
+            versions_to_last_change: 4, txn_source: 0, is_locked_with_conflict: false }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -1072,7 +1140,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [], last_change_ts: TimeStamp(80), \
-            versions_to_last_change: 4, txn_source: 0 }"
+            versions_to_last_change: 4, txn_source: 0, is_locked_with_conflict: false }"
         );
     }
 
@@ -1086,6 +1154,7 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
+            is_locked_with_conflict: false,
         };
         let expected_lock = Lock {
             lock_type: LockType::Pessimistic,
@@ -1102,6 +1171,7 @@ mod tests {
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
             txn_source: 0,
+            is_locked_with_conflict: false,
         };
         assert_eq!(pessimistic_lock.to_lock(), expected_lock);
         assert_eq!(pessimistic_lock.into_lock(), expected_lock);
@@ -1117,12 +1187,13 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
+            is_locked_with_conflict: false,
         };
         assert_eq!(
             format!("{:?}", pessimistic_lock),
             "PessimisticLock { primary_key: 7072696D617279, start_ts: TimeStamp(5), ttl: 1000, \
             for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), last_change_ts: TimeStamp(8), \
-            versions_to_last_change: 2 }"
+            versions_to_last_change: 2, is_locked_with_conflict: false }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", pessimistic_lock);
@@ -1131,7 +1202,7 @@ mod tests {
             redact_result,
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
             for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), last_change_ts: TimeStamp(8), \
-            versions_to_last_change: 2 }"
+            versions_to_last_change: 2, is_locked_with_conflict: false }"
         );
     }
 
@@ -1145,8 +1216,9 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
+            is_locked_with_conflict: false,
         };
         // 7 bytes for primary key, 16 bytes for Box<[u8]>, and 6 8-byte integers.
-        assert_eq!(lock.memory_size(), 7 + 16 + 6 * 8);
+        assert_eq!(lock.memory_size(), 7 + 16 + 7 * 8);
     }
 }

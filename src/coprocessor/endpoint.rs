@@ -1674,10 +1674,6 @@ mod tests {
 
             // Response 1
             //
-            // Note: `process_wall_time_ms` includes `total_process_time` and
-            // `total_suspend_time`. Someday it will be separated, but for now,
-            // let's just consider the combination.
-            //
             // In the worst case, `total_suspend_time` could be totally req2 payload.
             // So here: req1 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
@@ -1700,10 +1696,6 @@ mod tests {
             );
 
             // Response 2
-            //
-            // Note: `process_wall_time_ms` includes `total_process_time` and
-            // `total_suspend_time`. Someday it will be separated, but for now,
-            // let's just consider the combination.
             //
             // In the worst case, `total_suspend_time` could be totally req1 payload.
             // So here: req2 payload <= process time <= (req1 payload + req2 payload)
@@ -1955,6 +1947,7 @@ mod tests {
                 0.into(),
                 1,
                 20.into(),
+                false,
             ));
         });
 

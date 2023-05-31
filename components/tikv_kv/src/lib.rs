@@ -1327,6 +1327,7 @@ mod unit_tests {
                     min_commit_ts: 102.into(),
                     last_change_ts: 80.into(),
                     versions_to_last_change: 2,
+                    is_locked_with_conflict: false,
                 },
             ),
             Modify::DeleteRange(
@@ -1371,6 +1372,7 @@ mod unit_tests {
                         min_commit_ts: 102.into(),
                         last_change_ts: 80.into(),
                         versions_to_last_change: 2,
+                        is_locked_with_conflict: false,
                     }
                     .into_lock()
                     .to_bytes(),

@@ -27,7 +27,7 @@ use tikv::{
     import::SstImporter,
 };
 use tikv_util::{
-    config::{ReadableSize, VersionTrack},
+    config::{ReadableDuration, ReadableSize, VersionTrack},
     worker::{dummy_scheduler, LazyWorker, Worker},
 };
 
@@ -163,6 +163,7 @@ fn test_update_raftstore_config() {
         ("raftstore.store-max-batch-size", "4321"),
         ("raftstore.raft-entry-max-size", "32MiB"),
         ("raftstore.apply-yield-write-size", "10KiB"),
+        ("raftstore.snap-wait-split-duration", "10s"),
     ]);
 
     cfg_controller.update(change).unwrap();
@@ -176,6 +177,7 @@ fn test_update_raftstore_config() {
     raft_store.store_batch_system.max_batch_size = Some(4321);
     raft_store.raft_max_size_per_msg = ReadableSize::mb(128);
     raft_store.raft_entry_max_size = ReadableSize::mb(32);
+    raft_store.snap_wait_split_duration = ReadableDuration::secs(10);
     let validate_store_cfg = |raft_cfg: &Config| {
         let raftstore_cfg = raft_cfg.clone();
         validate_store(&router, move |cfg: &Config| {
