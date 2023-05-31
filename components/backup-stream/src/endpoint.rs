@@ -56,7 +56,7 @@ use crate::{
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
-    subscription_track::SubscriptionTracer,
+    subscription_track::{Ref, RefMut, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, StopWatch, Work},
 };
@@ -474,7 +474,7 @@ where
     }
 
     fn backup_batch(&self, batch: CmdBatch, work: Work) {
-        let mut sw = StopWatch::new();
+        let mut sw = StopWatch::by_now();
 
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
