@@ -62,11 +62,34 @@ impl Latch {
                 }
                 self.waiting.push_front(item);
             }
-            // FIXME: remove this clippy attribute once https://github.com/rust-lang/rust-clippy/issues/6784 is fixed.
-            #[allow(clippy::manual_flatten)]
             for it in self.waiting.iter_mut() {
                 if let Some((v, _)) = it {
                     if *v == key_hash {
+                        return it.take();
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Clear the waiting info with specific `key_hash` and `who`.
+    /// If the element which would be removed does not appear at the
+    /// front of the queue, it will leave a hole in the queue. So we must remove
+    /// consecutive hole when remove the head of the queue to make the queue not
+    /// too long.
+    pub fn clear_waiting(&mut self, key_hash: u64, who: u64) -> Option<(u64, u64)> {
+        if let Some(item) = self.waiting.pop_front() {
+            if let Some((k, cid)) = item.as_ref() {
+                if *k == key_hash && *cid == who {
+                    self.maybe_shrink();
+                    return item;
+                }
+                self.waiting.push_front(item);
+            }
+            for it in self.waiting.iter_mut() {
+                if let Some((v, cid)) = it {
+                    if *v == key_hash && *cid == who {
                         return it.take();
                     }
                 }
@@ -264,6 +287,22 @@ impl Latches {
         assert!(keep_latches_it.next().is_none());
 
         wakeup_list
+    }
+
+    /// Clear the waiting info of the `Lock` of command with ID `who`. It should
+    /// be called Only when this task has been canceled due to timeout or
+    /// precheck errors and will not be scheduled for execution again.
+    pub fn clear_waiting_info(&self, lock: &Lock, who: u64) {
+        // If the task is woken up by other tasks holding the latch, it's possible
+        // the current woken up task has acquired all the latches it needs, there's
+        // no need to clear waiting info in this case.
+        if !lock.acquired() {
+            let waiting_key_hash = lock.required_hashes[lock.owned_count];
+            let mut latch = self.lock_latch(waiting_key_hash);
+            let (v, cid) = latch.clear_waiting(waiting_key_hash, who).unwrap();
+            assert_eq!(v, waiting_key_hash);
+            assert_eq!(cid, who);
+        }
     }
 
     #[inline]
@@ -554,5 +593,39 @@ mod tests {
         test_partially_releasing_impl(256);
         test_partially_releasing_impl(4);
         test_partially_releasing_impl(2);
+    }
+
+    #[test]
+    fn test_clear_waiting_info() {
+        let latches = Latches::new(256);
+
+        let keys_a = vec!["k1", "k5", "k6"];
+        let keys_b = vec!["k3", "k5"];
+        let keys_c = vec!["k5"];
+        let mut lock_a = Lock::new(keys_a.iter());
+        let mut lock_b = Lock::new(keys_b.iter());
+        let mut lock_c = Lock::new(keys_c.iter());
+        let cid_a: u64 = 1;
+        let cid_b: u64 = 2;
+        let cid_c: u64 = 3;
+
+        // a quires lock_a.
+        let acquired_a = latches.acquire(&mut lock_a, cid_a);
+        assert_eq!(acquired_a, true);
+
+        // b fails to acquire lock_b, and waits for lock_a on `k5`.
+        let acquired_b = latches.acquire(&mut lock_b, cid_b);
+        assert_eq!(acquired_b, false);
+
+        // b times out, release its latch and clears waiting info.
+        latches.release(&lock_b, cid_b, None);
+        latches.clear_waiting_info(&lock_b, cid_b);
+
+        // a releases.
+        latches.release(&lock_a, cid_a, None);
+
+        // c tries to lock latch conflicted with b, c should not be blocked.
+        let acquired_c = latches.acquire(&mut lock_c, cid_c);
+        assert_eq!(acquired_c, true);
     }
 }
