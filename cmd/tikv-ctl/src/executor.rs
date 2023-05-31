@@ -1136,7 +1136,7 @@ where
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        println!("only available for online mode");
+        println!("only available for remote mode");
         tikv_util::logger::exit_process_gracefully(-1);
     }
 
@@ -1196,7 +1196,7 @@ where
         _start_ts: u64,
         _commit_ts: u64,
     ) -> Result<(), KeyRange> {
-        unimplemented!("only available for online mode");
+        unimplemented!("only available for remote mode");
     }
 }
 
@@ -1325,7 +1325,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        println!("only available for online mode");
+        println!("only available for remote mode");
         tikv_util::logger::exit_process_gracefully(-1);
     }
 
@@ -1384,6 +1384,6 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         _start_ts: u64,
         _commit_ts: u64,
     ) -> Result<(), KeyRange> {
-        unimplemented!("only available for online mode");
+        unimplemented!("only available for remote mode");
     }
 }
