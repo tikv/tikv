@@ -579,7 +579,7 @@ pub enum Cmd {
     /// modifications on the remained TiKV.
     ///
     /// NOTE: The remained TiKV can't run concurrently with the agent.
-    ReuseReadonlyRemains {
+    ForkReadonlyTikv {
         /// Data directory path of the remained TiKV.
         #[structopt(long)]
         data_dir: String,

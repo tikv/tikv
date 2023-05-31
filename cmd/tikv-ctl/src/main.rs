@@ -28,7 +28,7 @@ use encryption_export::{
     DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
-use engine_traits::{EncryptionKeyManager, Peekable};
+use engine_traits::{EncryptionKeyManager, Peekable, TabletFactory};
 use file_system::calc_crc32;
 use futures::executor::block_on;
 use gag::BufferRedirect;
@@ -50,7 +50,6 @@ use structopt::{clap::ErrorKind, StructOpt};
 use tikv::{
     config::TikvConfig,
     server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
-    storage::config::EngineType,
 };
 use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
 use txn_types::Key;
@@ -65,7 +64,7 @@ fn main() {
 
     // Initialize configuration and security manager.
     let cfg_path = opt.config.as_ref();
-    let cfg = cfg_path.map_or_else(
+    let mut cfg = cfg_path.map_or_else(
         || {
             let mut cfg = TikvConfig::default();
             cfg.log.level = tikv_util::logger::get_level_by_string("warn")
@@ -277,7 +276,7 @@ fn main() {
                 }
             }
         }
-        Cmd::ReuseReadonlyRemains {
+        Cmd::ForkReadonlyTikv {
             data_dir,
             agent_dir,
             snaps,
@@ -300,14 +299,6 @@ fn main() {
                 .exit();
             }
             cfg.storage.data_dir = data_dir;
-            if cfg.storage.engine == EngineType::RaftKv2 {
-                clap::Error {
-                    message: String::from("storage.engine can only be raftkv"),
-                    kind: ErrorKind::InvalidValue,
-                    info: None,
-                }
-                .exit();
-            }
             if cfg.raft_engine.config().enable_log_recycle {
                 clap::Error {
                     message: String::from("raft-engine.enable-log-recycle can only be false"),
@@ -1046,13 +1037,9 @@ fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
     let env = config
         .build_shared_rocks_env(None, None)
         .map_err(|e| format!("build_shared_rocks_env fail: {}", e))?;
-    let cache = config
-        .storage
-        .block_cache
-        .build_shared_cache(config.storage.engine);
-    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache)
+    let kv_engine = KvEngineFactoryBuilder::new(env, config, &config.storage.data_dir)
         .build()
-        .create_shared_db(&config.storage.data_dir)
+        .create_shared_db()
         .map_err(|e| format!("create_shared_db fail: {}", e))?;
     let ident = kv_engine
         .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
