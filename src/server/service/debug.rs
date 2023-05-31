@@ -23,7 +23,6 @@ fn error_to_status(e: Error) -> RpcStatus {
         Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
         Error::EngineTrait(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
         Error::FlashbackFailed(msg) => (RpcStatusCode::UNKNOWN, msg),
-        Error::NotPreparedFlashback(msg) => (RpcStatusCode::UNKNOWN, msg),
     };
     RpcStatus::with_message(code, msg)
 }
@@ -570,12 +569,7 @@ where
                 );
                 match check.await {
                     Ok(_) => Ok(FlashbackToVersionResponse::default()),
-                    Err(err) => {
-                        return Err(Error::FlashbackFailed(format!(
-                            "flashback failed err is {}",
-                            err
-                        )));
-                    }
+                    Err(err) => Err(err),
                 }
             })
             .map(|res| res.unwrap());

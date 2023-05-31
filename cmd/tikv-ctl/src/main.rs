@@ -37,13 +37,13 @@ use kvproto::{
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
-    metapb,
     raft_serverpb::SnapshotMeta,
     tikvpb::TikvClient,
 };
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft_log_engine::ManagedFileSystem;
+use raftstore::store::util::build_key_range;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
@@ -713,23 +713,23 @@ fn flashback_whole_cluster(
     block_on(runtime.spawn(async move {
         // Prepare all regions for flashback.
         let start_ts = pd_client.get_tso().await.unwrap();
-        let mut stores_region = load_regions_to_each_store(&pd_client, start_key, end_key);
+        let mut stores_leader = load_leaders_to_each_store(&pd_client, start_key, end_key);
         // Need to retry if all regions are not finish prepare.
         loop {
             let mut futures = Vec::default();
-            stores_region
+            stores_leader
                 .clone()
                 .into_iter()
-                .for_each(|(store, leaders)| {
-                    let addr = pd_client.get_store(store).unwrap().address;
+                .for_each(|(store_id, leaders)| {
+                    let addr = pd_client.get_store(store_id).unwrap().address;
                     leaders
                         .into_iter()
-                        .filter(|r| region_ids.is_empty() || region_ids.contains(&r.get_id()))
-                        .for_each(|region| {
+                        .filter(|(_, region_id)| {
+                            region_ids.is_empty() || region_ids.contains(region_id)
+                        })
+                        .for_each(|(key_range, region_id)| {
                             // Get key range from region.
-                            let start_key = region.get_start_key().to_vec();
-                            let end_key = region.get_end_key().to_vec();
-                            let region_id = region.get_id();
+                            let key_range = build_key_range(&key_range.0, &key_range.1, false);
 
                             let addr = addr.clone();
                             let cfg_inner = cfg.clone();
@@ -740,8 +740,7 @@ fn flashback_whole_cluster(
                                 debug_executor.flashback_to_version(
                                     version,
                                     region_id,
-                                    start_key,
-                                    end_key,
+                                    key_range,
                                     start_ts.into_inner(),
                                     0,
                                 )
@@ -759,13 +758,19 @@ fn flashback_whole_cluster(
             {
                 Ok(res) => {
                     if let Err(key_range) = res {
-                        println!("prepare key_range {:?} flashback need to retry", key_range);
                         // Retry specific key range to prepare flashback.
-                        stores_region = load_regions_to_each_store(
+                        let retry_stores_region = load_leaders_to_each_store(
                             &pd_client,
                             key_range.get_start_key().to_vec(),
                             key_range.get_end_key().to_vec(),
                         );
+                        // Need to update `stores_leader` to replace stale key range.
+                        for (store_id, leaders) in retry_stores_region {
+                            let regions = stores_leader
+                                .entry(store_id)
+                                .or_insert_with(HashMap::default);
+                            regions.extend(leaders);
+                        }
                         continue;
                     }
                     break;
@@ -779,50 +784,57 @@ fn flashback_whole_cluster(
 
         // Start flashback for all regions.
         let commit_ts = pd_client.get_tso().await.unwrap();
-        let mut futures = Vec::default();
-        stores_region.into_iter().for_each(|(store, leaders)| {
-            let addr = pd_client.get_store(store).unwrap().address;
-            leaders
+        loop {
+            let mut futures = Vec::default();
+            stores_leader
+                .clone()
                 .into_iter()
-                .filter(|r| region_ids.is_empty() || region_ids.contains(&r.get_id()))
-                .for_each(|region| {
-                    // Get key range from region.
-                    let start_key = region.get_start_key().to_vec();
-                    let end_key = region.get_end_key().to_vec();
-                    let region_id = region.get_id();
+                .for_each(|(store_id, leaders)| {
+                    let addr = pd_client.get_store(store_id).unwrap().address;
+                    leaders
+                        .into_iter()
+                        .filter(|(_, region_id)| {
+                            region_ids.is_empty() || region_ids.contains(region_id)
+                        })
+                        .for_each(|(key_range, region_id)| {
+                            // Get key range from region.
+                            let key_range = build_key_range(&key_range.0, &key_range.1, false);
 
-                    let addr = addr.clone();
-                    let cfg_inner = cfg.clone();
-                    let mgr = Arc::clone(&mgr);
-                    let f = async move {
-                        let debug_executor = new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
-                        debug_executor.flashback_to_version(
-                            version,
-                            region_id,
-                            start_key,
-                            end_key,
-                            start_ts.into_inner(),
-                            commit_ts.into_inner(),
-                        )
-                    };
-                    futures.push(f);
-                })
-        });
+                            let addr = addr.clone();
+                            let cfg_inner = cfg.clone();
+                            let mgr = Arc::clone(&mgr);
+                            let f = async move {
+                                let debug_executor =
+                                    new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
+                                debug_executor.flashback_to_version(
+                                    version,
+                                    region_id,
+                                    key_range,
+                                    start_ts.into_inner(),
+                                    commit_ts.into_inner(),
+                                )
+                            };
+                            futures.push(f);
+                        })
+                });
 
-        // Wait for finishing flashback to version.
-        match tokio::time::timeout(
-            Duration::from_secs(FLASHBACK_TIMEOUT),
-            try_join_all(futures),
-        )
-        .await
-        {
-            Ok(res) => {
-                if let Err(key_range) = res {
-                    println!("finish key_range {:?} flashback failed", key_range);
+            // Wait for finishing flashback to version.
+            match tokio::time::timeout(
+                Duration::from_secs(FLASHBACK_TIMEOUT),
+                try_join_all(futures),
+            )
+            .await
+            {
+                Ok(res) => {
+                    match res {
+                        Ok(_) => break,
+                        Err(_) => continue,
+                    }
                 }
-            }
-            Err(e) => {
-                println!("finish flashback timeout. err: {:?}", e);
+                Err(e) => {
+                    println!("finish flashback timeout. err: {:?}", e);
+                    return;
+                }
             }
         }
     }))
@@ -831,11 +843,11 @@ fn flashback_whole_cluster(
     println!("flashback all stores success");
 }
 
-fn load_regions_to_each_store(
+fn load_leaders_to_each_store(
     pd_client: &RpcClient,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-) -> HashMap<u64, Vec<metapb::Region>> {
+) -> HashMap<u64, HashMap<(Vec<u8>, Vec<u8>), u64>> {
     // Get all regions in the cluster.
     let res = pd_client.batch_load_regions(start_key, end_key);
     // Put all regions in right stores.
@@ -843,8 +855,14 @@ fn load_regions_to_each_store(
     res.into_iter().for_each(|batch| {
         batch.into_iter().for_each(|r| {
             let store_id = r.get_leader().get_store_id();
-            let regions = store_regions.entry(store_id).or_insert_with(Vec::new);
-            regions.push(r.get_region().to_owned());
+            let regions = store_regions
+                .entry(store_id)
+                .or_insert_with(HashMap::default);
+            let mut cur_region = r.get_region().clone();
+            regions.insert(
+                (cur_region.take_start_key(), cur_region.take_end_key()),
+                cur_region.get_id(),
+            );
         });
     });
     store_regions

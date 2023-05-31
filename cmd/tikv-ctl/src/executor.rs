@@ -692,8 +692,7 @@ pub trait DebugExecutor {
         &self,
         _version: u64,
         _region_id: u64,
-        _start_key: Vec<u8>,
-        _end_key: Vec<u8>,
+        _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
     ) -> Result<(), KeyRange>;
@@ -924,25 +923,24 @@ impl DebugExecutor for DebugClient {
         &self,
         version: u64,
         region_id: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
+        key_range: KeyRange,
         start_ts: u64,
         commit_ts: u64,
     ) -> Result<(), KeyRange> {
         let mut req = FlashbackToVersionRequest::default();
         req.set_version(version);
         req.set_region_id(region_id);
-        req.set_start_key(start_key);
-        req.set_end_key(end_key);
+        req.set_start_key(key_range.get_start_key().to_owned());
+        req.set_end_key(key_range.get_end_key().to_owned());
         req.set_start_ts(start_ts);
         req.set_commit_ts(commit_ts);
         match self.flashback_to_version(&req) {
             Ok(_) => Ok(()),
             Err(err) => {
-                println!("failed to flashback to version: {}", err);
-                let mut key_range = KeyRange::default();
-                key_range.set_start_key(req.get_start_key().to_owned());
-                key_range.set_end_key(req.get_end_key().to_owned());
+                println!(
+                    "prepare key_range {:?} flashback need to retry, err is {:?}",
+                    key_range, err
+                );
                 Err(key_range)
             }
         }
@@ -1194,8 +1192,7 @@ where
         _version: u64,
         _region_id: u64,
 
-        _start_key: Vec<u8>,
-        _end_key: Vec<u8>,
+        _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
     ) -> Result<(), KeyRange> {
@@ -1383,8 +1380,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         &self,
         _region_id: u64,
         _version: u64,
-        _start_key: Vec<u8>,
-        _end_key: Vec<u8>,
+        _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
     ) -> Result<(), KeyRange> {

@@ -72,9 +72,6 @@ pub enum Error {
 
     #[error("Flashback Failed {0:?}")]
     FlashbackFailed(String),
-
-    #[error("{0:?} Not Prepared Flashback")]
-    NotPreparedFlashback(String),
 }
 
 /// Describes the meta information of a Region.
@@ -1072,13 +1069,13 @@ where
                     .unwrap();
                 if !resp.get_error().is_empty() || resp.has_region_error() {
                     error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-                    return Err(Error::NotPreparedFlashback(
+                    return Err(Error::FlashbackFailed(
                         "exec prepare flashback failed.".into(),
                     ));
                 }
             } else {
                 if !is_in_flashback {
-                    return Err(Error::NotPreparedFlashback(
+                    return Err(Error::FlashbackFailed(
                         "not in flashback state".to_owned(),
                     ));
                 }
@@ -1094,9 +1091,9 @@ where
                     .await
                     .unwrap();
                 if !resp.get_error().is_empty() || resp.has_region_error() {
-                    error!("exec flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+                    error!("exec finish flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
                     return Err(Error::FlashbackFailed(
-                        "exec prepare flashback failed.".into(),
+                        "exec finish flashback failed.".into(),
                     ));
                 }
             }
