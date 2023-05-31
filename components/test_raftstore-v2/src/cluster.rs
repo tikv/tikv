@@ -37,13 +37,14 @@ use kvproto::{
 use pd_client::PdClient;
 use raftstore::{
     store::{
-        cmd_resp, initial_region, util::check_key_in_region, Bucket, BucketRange, Callback,
-        RegionSnapshot, TabletSnapManager, WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        cmd_resp, initial_region, region_meta::RegionMeta, util::check_key_in_region, Bucket,
+        BucketRange, Callback, RegionSnapshot, TabletSnapManager, WriteResponse,
+        INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
 };
 use raftstore_v2::{
-    router::{PeerMsg, QueryResult},
+    router::{DebugInfoChannel, PeerMsg, QueryResult},
     write_initial_states, SimpleWriteEncoder, StoreMeta, StoreRouter,
 };
 use resource_control::ResourceGroupManager;
@@ -1167,6 +1168,28 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn wait_applied_index(&mut self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let applied_index = self.apply_state(region_id, store_id).applied_index;
+            if applied_index >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not applied to {}: {} on store {}",
+                    region_id, index, applied_index, store_id,
+                );
+            }
+            let _ = self
+                .get_engine(store_id)
+                .get_tablet_by_id(region_id)
+                .unwrap()
+                .flush_cfs(&[], true);
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         self.get_impl(CF_DEFAULT, key, false)
     }
@@ -1294,11 +1317,47 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn must_query_debug_info(
+        &self,
+        store_id: u64,
+        region_id: u64,
+        timeout: Duration,
+    ) -> Option<RegionMeta> {
+        let timer = Instant::now();
+        while timer.saturating_elapsed() < timeout {
+            let (ch, sub) = DebugInfoChannel::pair();
+            let msg = PeerMsg::QueryDebugInfo(ch);
+            let res = self.get_router(store_id).unwrap().send(region_id, msg);
+            if res.is_err() {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            let res = block_on(sub.result());
+            if res.is_some() {
+                return res;
+            }
+        }
+        None
+    }
+
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
-        self.get_engine(store_id)
-            .raft_apply_state(region_id)
+        // In raftstore v2, RaftApplyState is persisted infrequently,
+        // just return in memory RaftApplySate to mimic this API in test_raftstore.
+        let apply_state = self
+            .must_query_debug_info(store_id, region_id, Duration::from_secs(5))
             .unwrap()
-            .unwrap()
+            .raft_apply;
+        let mut state = RaftApplyState::default();
+        state.set_applied_index(apply_state.applied_index);
+        state.set_commit_index(apply_state.commit_index);
+        state.set_commit_term(apply_state.commit_term);
+        state
+            .mut_truncated_state()
+            .set_index(apply_state.truncated_state.index);
+        state
+            .mut_truncated_state()
+            .set_term(apply_state.truncated_state.term);
+        state
     }
 
     pub fn add_send_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {

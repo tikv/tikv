@@ -103,94 +103,99 @@ fn test_prewrite_before_max_ts_is_synced() {
     assert!(!resp.get_region_error().has_max_timestamp_not_synced());
 }
 
-#[test]
-fn test_delete_lock_proposed_after_proposing_locks_1() {
-    test_delete_lock_proposed_after_proposing_locks_impl(1);
+macro_rules! test_delete_lock_proposed_after_proposing_locks_impl {
+    ($cluster:expr, $transfer_msg_count:expr) => {
+        $cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+        $cluster.run();
+
+        let region_id = 1;
+        $cluster.must_transfer_leader(1, new_peer(1, 1));
+        let leader = $cluster.leader_of_region(region_id).unwrap();
+
+        let snapshot = $cluster.must_get_snapshot_of_region(region_id);
+        let txn_ext = snapshot.txn_ext.unwrap();
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(
+                Key::from_raw(b"key"),
+                PessimisticLock {
+                    primary: b"key".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 1000,
+                    for_update_ts: 10.into(),
+                    min_commit_ts: 20.into(),
+                    last_change_ts: 5.into(),
+                    versions_to_last_change: 3,
+                    is_locked_with_conflict: false,
+                },
+            )])
+            .unwrap();
+
+        let addr = $cluster.sim.rl().get_addr(1);
+        let env = Arc::new(Environment::new(1));
+        let channel = ChannelBuilder::new(env).connect(&addr);
+        let client = TikvClient::new(channel);
+
+        let mut req = CleanupRequest::default();
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_region_epoch($cluster.get_region_epoch(region_id));
+        ctx.set_peer(leader);
+        req.set_context(ctx);
+        req.set_key(b"key".to_vec());
+        req.set_start_version(10);
+        req.set_current_ts(u64::MAX);
+
+        // Pause the command after it mark the lock as deleted.
+        fail::cfg("raftkv_async_write", "pause").unwrap();
+        let (tx, resp_rx) = mpsc::channel();
+        thread::spawn(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
+
+        thread::sleep(Duration::from_millis(200));
+        resp_rx.try_recv().unwrap_err();
+
+        for _ in 0..$transfer_msg_count {
+            $cluster.transfer_leader(1, new_peer(2, 2));
+        }
+        thread::sleep(Duration::from_millis(200));
+
+        // Transfer leader will not make the command fail.
+        fail::remove("raftkv_async_write");
+        let resp = resp_rx.recv().unwrap();
+        assert!(!resp.has_region_error());
+
+        for _ in 0..10 {
+            thread::sleep(Duration::from_millis(100));
+            $cluster.reset_leader_of_region(region_id);
+            if $cluster.leader_of_region(region_id).unwrap().id == 2 {
+                let snapshot = $cluster.must_get_snapshot_of_region(1);
+                assert!(
+                    snapshot
+                        .get_cf(CF_LOCK, &Key::from_raw(b"key"))
+                        .unwrap()
+                        .is_none()
+                );
+                return;
+            }
+        }
+        panic!("region should succeed to transfer leader to peer 2");
+    };
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_delete_lock_proposed_after_proposing_locks_1() {
+    let mut cluster = new_cluster(0, 3);
+    test_delete_lock_proposed_after_proposing_locks_impl!(cluster, 1);
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_delete_lock_proposed_after_proposing_locks_2() {
     // Repeated transfer leader command before proposing the write command
-    test_delete_lock_proposed_after_proposing_locks_impl(2);
-}
-
-fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usize) {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
-    cluster.run();
-
-    let region_id = 1;
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    let leader = cluster.leader_of_region(region_id).unwrap();
-
-    let snapshot = cluster.must_get_snapshot_of_region(region_id);
-    let txn_ext = snapshot.txn_ext.unwrap();
-    txn_ext
-        .pessimistic_locks
-        .write()
-        .insert(vec![(
-            Key::from_raw(b"key"),
-            PessimisticLock {
-                primary: b"key".to_vec().into_boxed_slice(),
-                start_ts: 10.into(),
-                ttl: 1000,
-                for_update_ts: 10.into(),
-                min_commit_ts: 20.into(),
-                last_change_ts: 5.into(),
-                versions_to_last_change: 3,
-                is_locked_with_conflict: false,
-            },
-        )])
-        .unwrap();
-
-    let addr = cluster.sim.rl().get_addr(1);
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
-
-    let mut req = CleanupRequest::default();
-    let mut ctx = Context::default();
-    ctx.set_region_id(region_id);
-    ctx.set_region_epoch(cluster.get_region_epoch(region_id));
-    ctx.set_peer(leader);
-    req.set_context(ctx);
-    req.set_key(b"key".to_vec());
-    req.set_start_version(10);
-    req.set_current_ts(u64::MAX);
-
-    // Pause the command after it mark the lock as deleted.
-    fail::cfg("raftkv_async_write", "pause").unwrap();
-    let (tx, resp_rx) = mpsc::channel();
-    thread::spawn(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
-
-    thread::sleep(Duration::from_millis(200));
-    resp_rx.try_recv().unwrap_err();
-
-    for _ in 0..transfer_msg_count {
-        cluster.transfer_leader(1, new_peer(2, 2));
-    }
-    thread::sleep(Duration::from_millis(200));
-
-    // Transfer leader will not make the command fail.
-    fail::remove("raftkv_async_write");
-    let resp = resp_rx.recv().unwrap();
-    assert!(!resp.has_region_error());
-
-    for _ in 0..10 {
-        thread::sleep(Duration::from_millis(100));
-        cluster.reset_leader_of_region(region_id);
-        if cluster.leader_of_region(region_id).unwrap().id == 2 {
-            let snapshot = cluster.must_get_snapshot_of_region(1);
-            assert!(
-                snapshot
-                    .get_cf(CF_LOCK, &Key::from_raw(b"key"))
-                    .unwrap()
-                    .is_none()
-            );
-            return;
-        }
-    }
-    panic!("region should succeed to transfer leader to peer 2");
+    let mut cluster = new_cluster(0, 3);
+    test_delete_lock_proposed_after_proposing_locks_impl!(cluster, 2);
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
@@ -405,33 +410,33 @@ fn prevent_from_gc_raft_log(cfg: &mut Config) {
     cfg.raft_store.raft_log_reserve_max_ticks = 20;
 }
 
-fn run_cluster_and_warm_up_cache_for_store2() -> Cluster<NodeCluster> {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
-    prevent_from_gc_raft_log(&mut cluster.cfg);
-    run_cluster_for_test_warmup_entry_cache!(cluster);
+macro_rules! run_cluster_and_warm_up_cache_for_store2 {
+    ($cluster:expr) => {
+        $cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
+        prevent_from_gc_raft_log(&mut $cluster.cfg);
+        run_cluster_for_test_warmup_entry_cache!($cluster);
 
-    let (sx, rx) = channel::unbounded();
-    let recv_filter = Box::new(
-        RegionPacketFilter::new(1, 1)
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgTransferLeader)
-            .set_msg_callback(Arc::new(move |m| {
-                sx.send(m.get_message().get_from()).unwrap();
-            })),
-    );
-    cluster.sim.wl().add_recv_filter(1, recv_filter);
+        let (sx, rx) = channel::unbounded();
+        let recv_filter = Box::new(
+            RegionPacketFilter::new(1, 1)
+                .direction(Direction::Recv)
+                .msg_type(MessageType::MsgTransferLeader)
+                .set_msg_callback(Arc::new(move |m| {
+                    sx.send(m.get_message().get_from()).unwrap();
+                })),
+        );
+        $cluster.sim.wl().add_recv_filter(1, recv_filter);
 
-    let (sx2, rx2) = channel::unbounded();
-    fail::cfg_callback("on_entry_cache_warmed_up", move || sx2.send(true).unwrap()).unwrap();
-    cluster.transfer_leader(1, new_peer(2, 2));
+        let (sx2, rx2) = channel::unbounded();
+        fail::cfg_callback("on_entry_cache_warmed_up", move || sx2.send(true).unwrap()).unwrap();
+        $cluster.transfer_leader(1, new_peer(2, 2));
 
-    // Cache should be warmed up.
-    assert!(rx2.recv_timeout(Duration::from_millis(500)).unwrap());
-    // It should ack the message just after cache is warmed up.
-    assert_eq!(rx.recv_timeout(Duration::from_millis(500)).unwrap(), 2);
-    cluster.sim.wl().clear_recv_filters(1);
-    cluster
+        // Cache should be warmed up.
+        assert!(rx2.recv_timeout(Duration::from_millis(500)).unwrap());
+        // It should ack the message just after cache is warmed up.
+        assert_eq!(rx.recv_timeout(Duration::from_millis(500)).unwrap(), 2);
+        $cluster.sim.wl().clear_recv_filters(1);
+    };
 }
 
 /// Leader should carry a correct index in TransferLeaderMsg so that
@@ -579,13 +584,16 @@ fn test_when_warmup_fail_and_its_timeout_is_short() {
 
 /// The follower should ack the msg when the cache is warmed up.
 /// Besides, the cache should be kept for a period of time.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_when_warmup_succeed_and_become_leader() {
-    let mut cluster = run_cluster_and_warm_up_cache_for_store2();
+    let mut cluster = new_cluster(0, 3);
+    run_cluster_and_warm_up_cache_for_store2!(cluster);
 
     // Generally, the cache will be compacted during post_apply.
     // However, if the cache is warmed up recently, the cache should be kept.
     let applied_index = cluster.apply_state(1, 2).applied_index;
+    debug!("applied_index: {}", applied_index);
     cluster.must_put(b"kk1", b"vv1");
     cluster.wait_applied_index(1, 2, applied_index + 1);
 
@@ -598,9 +606,11 @@ fn test_when_warmup_succeed_and_become_leader() {
 
 /// The follower should exit warmup state if it does not become leader
 /// in a period of time.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_when_warmup_succeed_and_not_become_leader() {
-    let mut cluster = run_cluster_and_warm_up_cache_for_store2();
+    let mut cluster = new_cluster(0, 3);
+    run_cluster_and_warm_up_cache_for_store2!(cluster);
 
     let (sx, rx) = channel::unbounded();
     fail::cfg_callback("worker_async_fetch_raft_log", move || {
@@ -612,6 +622,7 @@ fn test_when_warmup_succeed_and_not_become_leader() {
     // Since the warmup state is stale, the peer should exit warmup state,
     // and the entry cache should be compacted during post_apply.
     let applied_index = cluster.apply_state(1, 2).applied_index;
+    debug!("applied_index: {}", applied_index);
     cluster.must_put(b"kk1", b"vv1");
     cluster.wait_applied_index(1, 2, applied_index + 1);
     // The peer should warm up cache again when it receives a new TransferLeaderMsg.
