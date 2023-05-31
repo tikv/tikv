@@ -875,4 +875,9 @@ lazy_static! {
         &["store"]
     )
     .unwrap();
+
+    pub static ref PEER_IN_FLASHBACK_STATE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_peer_in_flashback_state",
+        "Total number of peers in the flashback state"
+    ).unwrap();
 }
