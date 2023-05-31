@@ -35,20 +35,22 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
     {
         let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
         let txn_ext = snapshot.txn_ext.unwrap();
-        let lock = PessimisticLock {
-            primary: TEST_KEY.to_vec().into_boxed_slice(),
-            start_ts: 10.into(),
-            ttl: 3000,
-            for_update_ts: 20.into(),
-            min_commit_ts: 30.into(),
-            last_change_ts: 5.into(),
-            versions_to_last_change: 3,
-            is_locked_with_conflict: false,
-        };
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
         assert!(pessimistic_locks.is_writable());
         pessimistic_locks
-            .insert(vec![(Key::from_raw(TEST_KEY), lock.clone())])
+            .insert(vec![(
+                Key::from_raw(TEST_KEY),
+                PessimisticLock {
+                    primary: TEST_KEY.to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 3000,
+                    for_update_ts: 20.into(),
+                    min_commit_ts: 30.into(),
+                    last_change_ts: 5.into(),
+                    versions_to_last_change: 3,
+                    is_locked_with_conflict: false,
+                },
+            )])
             .unwrap();
         assert_eq!(pessimistic_locks.len(), 1);
     }

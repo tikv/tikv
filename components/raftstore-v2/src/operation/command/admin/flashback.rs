@@ -1,7 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
-#[cfg(feature = "failpoints")]
 use fail::fail_point;
 use kvproto::{
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest},
@@ -89,10 +88,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_flashback<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        #[cfg(not(feature = "failpoints"))] res: FlashbackResult,
-        #[cfg(feature = "failpoints")] mut res: FlashbackResult,
+        #[allow(unused_mut)] mut res: FlashbackResult,
     ) {
-        #[cfg(feature = "failpoints")]
         (|| {
             fail_point!("keep_peer_fsm_flashback_state_false", |_| {
                 res.region_state.mut_region().set_is_in_flashback(false);

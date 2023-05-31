@@ -891,7 +891,7 @@ impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
     pub fn must_get_snapshot_of_region_with_ctx(
         &mut self,
         region_id: u64,
-        snap_ctx: SnapContext,
+        snap_ctx: SnapContext<'_>,
     ) -> RegionSnapshot<EK::Snapshot> {
         let mut try_snapshot = || -> Option<RegionSnapshot<EK::Snapshot>> {
             let leader = self.leader_of_region(region_id)?;
