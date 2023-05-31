@@ -556,6 +556,10 @@ pub enum Cmd {
         #[structopt(short = "v")]
         /// The version to reset TiKV to
         version: u64,
+
+        #[structopt(long)]
+        /// Force to reset TiKV to a version.
+        force: bool,
     },
     /// Control for Raft Engine
     /// Usage: tikv-ctl raft-engine-ctl -- --help

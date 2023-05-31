@@ -677,6 +677,7 @@ pub trait DebugExecutor {
 
     fn dump_cluster_info(&self);
 
+    // Deprecated, use `flashback to version` instead.
     fn reset_to_version(&self, version: u64);
 }
 
