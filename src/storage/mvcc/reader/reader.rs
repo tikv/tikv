@@ -5,9 +5,10 @@ use std::ops::Bound;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
-    errorpb::{self, EpochNotMatch, StaleCommand},
+    errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
 };
+use raftstore::store::LocksStatus;
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
@@ -265,6 +266,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     let mut err = errorpb::Error::default();
                     // We don't know the current regions. Just return an empty EpochNotMatch error.
                     err.set_epoch_not_match(EpochNotMatch::default());
+                    return Some(Err(KvError::from(err).into()));
+                }
+                // If the region is in the flashback state, it should not be allowed to read the
+                // locks.
+                if locks.status == LocksStatus::IsInFlashback {
+                    let mut err = errorpb::Error::default();
+                    err.set_flashback_in_progress(FlashbackInProgress::default());
                     return Some(Err(KvError::from(err).into()));
                 }
 
