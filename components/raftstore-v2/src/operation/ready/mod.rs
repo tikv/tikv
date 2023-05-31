@@ -34,7 +34,6 @@ use std::{
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{
-    metapb,
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
@@ -43,8 +42,9 @@ use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVA
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
+        fsm::store::StoreRegionMeta,
         needs_evict_entry_cache,
-        util::{self, is_initial_msg},
+        util::{self, is_first_append_entry, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
@@ -370,6 +370,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // It prevents cache peer(0,0) which is sent by region split.
             self.insert_peer_cache(from_peer);
         }
+
+        // Delay first append message and wait for split snapshot,
+        // so that slow split does not trigger leader to send a snapshot.
+        if !self.storage().is_initialized() {
+            if is_initial_msg(msg.get_message()) {
+                let mut is_overlapped = false;
+                let meta = ctx.store_meta.lock().unwrap();
+                meta.search_region(msg.get_start_key(), msg.get_end_key(), |_| {
+                    is_overlapped = true;
+                });
+                self.split_pending_append_mut()
+                    .set_range_overlapped(is_overlapped);
+            } else if is_first_append_entry(msg.get_message())
+                && !self.ready_to_handle_first_append_message(ctx, &msg)
+            {
+                return;
+            }
+        }
+
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
@@ -462,7 +481,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return None;
             }
         };
-        let to_peer_is_learner = to_peer.get_role() == metapb::PeerRole::Learner;
 
         let mut raft_msg = self.prepare_raft_message();
 
@@ -489,7 +507,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // and Heartbeat message for the store of that peer to check whether to create a
         // new peer when receiving these messages, or just to wait for a pending region
         // split to perform later.
-        if self.storage().is_initialized() && is_initial_msg(&msg) && to_peer_is_learner {
+        if self.storage().is_initialized() && is_initial_msg(&msg) {
             let region = self.region();
             raft_msg.set_start_key(region.get_start_key().to_vec());
             raft_msg.set_end_key(region.get_end_key().to_vec());
