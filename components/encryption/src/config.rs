@@ -48,7 +48,7 @@ pub struct FileConfig {
 }
 
 // TODO: the representation of Azure KMS to users needs to be discussed.
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct AzureConfig {
@@ -70,6 +70,18 @@ pub struct AzureConfig {
     pub client_certificate_password: String,
     /// Secret of the client.
     pub client_secret: Option<String>,
+}
+
+impl std::fmt::Debug for AzureConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureConfig")
+            .field("tenant_id", &self.tenant_id)
+            .field("client_id", &self.client_id)
+            .field("keyvault_url", &self.keyvault_url)
+            .field("hsm_name", &self.hsm_name)
+            .field("hsm_url", &self.hsm_url)
+            .finish()
+    }
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
