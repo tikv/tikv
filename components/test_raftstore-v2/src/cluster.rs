@@ -709,9 +709,8 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         let key_mgr = self.key_managers.last().unwrap().clone();
         self.key_managers_map.insert(node_id, key_mgr);
         let (tablet_registry, raft_engine) = self.engines.last().unwrap().clone();
-        self.raft_engines.insert(node_id, raft_engine.clone());
-        self.tablet_registries
-            .insert(node_id, tablet_registry.clone());
+        self.raft_engines.insert(node_id, raft_engine);
+        self.tablet_registries.insert(node_id, tablet_registry);
         self.sst_workers_map
             .insert(node_id, self.sst_workers.len() - 1);
 

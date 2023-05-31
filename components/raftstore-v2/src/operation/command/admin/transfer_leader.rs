@@ -158,7 +158,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         if !self.is_leader() {
-            self.execute_transfer_leader(ctx, msg, peer_disk_usage, false);
+            if self.maybe_reject_transfer_leader_msg(ctx, msg.get_from(), peer_disk_usage)
+                || !self.pre_ack_transfer_leader_msg(ctx, msg)
+            {
+                return;
+            }
+
+            self.ack_transfer_leader_msg(false);
             return;
         }
 
@@ -319,23 +325,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
         }
         self.raft_group_mut().raft.msgs.push(msg);
-    }
-
-    pub fn execute_transfer_leader<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        msg: &eraftpb::Message,
-        peer_disk_usage: DiskUsage,
-        reply_cmd: bool, // whether it is a reply to a TransferLeader command
-    ) {
-        if self.maybe_reject_transfer_leader_msg(ctx, msg.get_from(), peer_disk_usage) {
-            return;
-        }
-        if !self.pre_ack_transfer_leader_msg(ctx, msg) {
-            return;
-        }
-
-        self.ack_transfer_leader_msg(reply_cmd);
     }
 
     fn ready_to_transfer_leader<T>(
