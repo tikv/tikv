@@ -7,7 +7,7 @@ extern crate log;
 
 mod cmd;
 mod executor;
-mod reuse_readonly_remains;
+mod fork_readonly_tikv;
 mod util;
 
 use std::{
@@ -318,7 +318,7 @@ fn main() {
                 }
                 .exit();
             }
-            if snaps != "symlink" && snaps != "copy" {
+            if snaps != fork_readonly_tikv::SYMLINK && snaps != fork_readonly_tikv::COPY {
                 clap::Error {
                     message: String::from("(--snaps) can only be symlink or copy"),
                     kind: ErrorKind::InvalidValue,
@@ -326,7 +326,9 @@ fn main() {
                 }
                 .exit();
             }
-            if rocksdb_files != "symlink" && rocksdb_files != "copy" {
+            if rocksdb_files != fork_readonly_tikv::SYMLINK
+                && rocksdb_files != fork_readonly_tikv::COPY
+            {
                 clap::Error {
                     message: String::from("(--rocksdb_files) can only be symlink or copy"),
                     kind: ErrorKind::InvalidValue,
@@ -334,7 +336,7 @@ fn main() {
                 }
                 .exit();
             }
-            reuse_readonly_remains::run(&cfg, &agent_dir, &snaps, &rocksdb_files)
+            fork_readonly_tikv::run(&cfg, &agent_dir, &snaps, &rocksdb_files)
         }
         // Commands below requires either the data dir or the host.
         cmd => {

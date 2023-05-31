@@ -12,6 +12,9 @@ use raft_engine::{env::DefaultFileSystem, Engine as RaftEngine};
 use regex::Regex;
 use tikv::config::TikvConfig;
 
+pub const SYMLINK: &str = "symlink";
+pub const COPY: &str = "copy";
+
 pub fn run(config: &TikvConfig, agent_dir: &str, reuse_snaps: &str, reuse_rocksdb_files: &str) {
     if data_key_manager_from_config(&config.security.encryption, &config.storage.data_dir)
         .unwrap()
