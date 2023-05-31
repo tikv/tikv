@@ -207,7 +207,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             header,
             admin_type,
             self.region_id(),
-            true,
+            false,
         ) {
             match e {
                 Error::FlashbackInProgress(..) => {
