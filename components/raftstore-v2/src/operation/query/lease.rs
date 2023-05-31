@@ -146,26 +146,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "request_id" => ?id,
         );
 
-        self.set_has_ready();
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        // TODO:add following when propose is done
-        // if self.leader_lease.is_suspect() {
-        // let req = RaftCmdRequest::default();
-        // if let Ok(Either::Left(index)) = self.propose_normal(ctx, req) {
-        // let (callback, _) = CmdResChannel::pair();
-        // let p = Proposal {
-        // is_conf_change: false,
-        // index,
-        // term: self.term(),
-        // cb: callback,
-        // propose_time: Some(now),
-        // must_pass_epoch_check: false,
-        // };
-        //
-        // self.post_propose(ctx, p);
-        // }
-        // }
+        if self.leader_lease.is_suspect() {
+            let req = RaftCmdRequest::default();
+            if let Ok(Either::Left(index)) = self.propose_normal(ctx, req) {
+                let (callback, _) = CmdResChannel::pair();
+                let p = Proposal {
+                    is_conf_change: false,
+                    index,
+                    term: self.term(),
+                    cb: callback,
+                    propose_time: Some(now),
+                    must_pass_epoch_check: false,
+                };
+
+                self.post_propose(ctx, p);
+            }
+        }
+
+        self.set_has_ready();
     }
 
     /// response the read index request
