@@ -1501,6 +1501,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // is undeterministic. in this case, we don't know whether the
         // request is finished or not, so we should not release latch as
         // it may break correctness.
+        panic!(
+            "unexpected write finished cid={}, cmd={}, the latch is not released",
+            cid, tag
+        );
     }
 
     /// Returns whether it succeeds to write pessimistic locks to the in-memory
