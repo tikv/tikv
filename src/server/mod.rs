@@ -15,7 +15,6 @@ pub mod node;
 mod proxy;
 pub mod raftkv;
 mod raftkv2;
-mod reset_to_version;
 pub mod resolve;
 pub mod server;
 pub mod service;

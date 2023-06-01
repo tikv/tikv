@@ -585,10 +585,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         Ok(res)
     }
 
-    fn reset_to_version(&self, _version: u64) {
-        unimplemented!()
-    }
-
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.kv_statistics = s;
     }

@@ -537,16 +537,6 @@ where
 
         self.handle_response(ctx, sink, f, TAG);
     }
-
-    fn reset_to_version(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        req: ResetToVersionRequest,
-        sink: UnarySink<ResetToVersionResponse>,
-    ) {
-        self.debugger.reset_to_version(req.get_ts());
-        sink.success(ResetToVersionResponse::default());
-    }
 }
 
 mod region_size_response {

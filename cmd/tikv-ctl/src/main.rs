@@ -519,15 +519,6 @@ fn main() {
                 Cmd::Cluster {} => {
                     debug_executor.dump_cluster_info();
                 }
-                Cmd::ResetToVersion { version, force } => {
-                    // This command is deprecated which cannot make sure transaction correctness.
-                    // See: https://github.com/tikv/tikv/issues/13203
-                    println!("Deprecated, please use `tikv-ctl flashback` instead.");
-                    if force {
-                        debug_executor.reset_to_version(version);
-                        println!("Reset to version {} successfully.", version);
-                    }
-                },
                 _ => {
                     unreachable!()
                 }

@@ -42,7 +42,6 @@ use txn_types::Key;
 pub use crate::storage::mvcc::MvccInfoIterator;
 use crate::{
     config::ConfigController,
-    server::reset_to_version::ResetToVersionManager,
     storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType},
 };
 
@@ -170,8 +169,6 @@ pub trait Debugger {
 
     fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>>;
 
-    fn reset_to_version(&self, version: u64);
-
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
 
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
@@ -184,7 +181,6 @@ pub struct DebuggerImpl<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
-    reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
 }
 
@@ -213,12 +209,10 @@ impl<ER: RaftEngine> DebuggerImpl<ER> {
         engines: Engines<RocksEngine, ER>,
         cfg_controller: ConfigController,
     ) -> DebuggerImpl<ER> {
-        let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
         DebuggerImpl {
             engines,
             kv_statistics: None,
             raft_statistics: None,
-            reset_to_version_manager,
             cfg_controller,
         }
     }
@@ -957,10 +951,6 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
             hex::encode(middle_key),
         ));
         Ok(res)
-    }
-
-    fn reset_to_version(&self, version: u64) {
-        self.reset_to_version_manager.start(version.into());
     }
 
     fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
