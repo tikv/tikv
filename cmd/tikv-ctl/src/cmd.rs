@@ -600,6 +600,10 @@ pub enum Cmd {
         #[structopt(long, default_value = "symlink")]
         rocksdb_files: String,
     },
+    /// flashback data in a TiKV to a certain version
+    ///
+    /// NOTE: Should use `./pd-ctl config set halt-scheduling true` to halt PD
+    /// scheduling before flashback.
     Flashback {
         #[structopt(short = "v")]
         /// The version to flashback
