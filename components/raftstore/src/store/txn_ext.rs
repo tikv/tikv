@@ -125,6 +125,7 @@ pub enum LocksStatus {
     TransferringLeader,
     MergingRegion,
     NotLeader,
+    IsInFlashback,
 }
 
 impl fmt::Debug for PeerPessimisticLocks {
