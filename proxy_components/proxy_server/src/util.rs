@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::{Duration, Instant};
+use std::{
+    pin::Pin,
+    time::{Duration, Instant},
+};
 
 use engine_store_ffi::ffi::interfaces_ffi::{BaseBuffView, RaftStoreProxyPtr, RawVoidPtr};
 use futures::{compat::Future01CompatExt, executor::block_on};
@@ -72,5 +75,31 @@ pub extern "C" fn ffi_server_info(
 
     let resp = server_info_for_ffi(req);
     engine_store_ffi::ffi::set_server_info_resp(&resp, res);
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn ffi_get_server_info_from_proxy(
+    server_helper_ptr: isize,
+    view: BaseBuffView,
+    res: RawVoidPtr,
+) -> u32 {
+    assert_ne!(server_helper_ptr, 0);
+    let mut req = ServerInfoRequest::default();
+    assert_ne!(view.data, std::ptr::null());
+    assert_ne!(view.len, 0);
+    req.merge_from_bytes(view.to_slice()).unwrap();
+
+    let resp = server_info_for_ffi(req);
+    let buff = engine_store_ffi::ffi::ProtoMsgBaseBuff::new(&resp);
+    unsafe {
+        let server_helper = &(*(server_helper_ptr
+            as *const engine_store_ffi::ffi::interfaces_ffi::EngineStoreServerHelper));
+        server_helper.set_pb_msg_by_bytes(
+            engine_store_ffi::ffi::interfaces_ffi::MsgPBType::ServerInfoResponse,
+            res,
+            Pin::new(&buff).into(),
+        );
+    }
     0
 }
