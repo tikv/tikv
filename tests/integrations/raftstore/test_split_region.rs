@@ -9,7 +9,11 @@ use std::{
 
 use engine_traits::{Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
-use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
+use kvproto::{
+    metapb, pdpb,
+    raft_cmdpb::*,
+    raft_serverpb::{ExtraMessageType, RaftMessage},
+};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
@@ -912,6 +916,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -921,6 +926,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
@@ -1258,4 +1264,172 @@ fn test_catch_up_peers_after_split() {
     for p in right_region.get_peers() {
         assert!(!pending_peers.contains_key(&p.id))
     }
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_split_region_keep_records() {
+    let mut cluster = new_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+
+    let leader = cluster.leader_of_region(r1).unwrap();
+    cluster.add_send_filter_on_node(
+        leader.get_store_id(),
+        Box::new(DropMessageFilter::new(Arc::new(|m: &RaftMessage| {
+            // Drop all gc peer requests and responses.
+            !(m.has_extra_msg()
+                && (m.get_extra_msg().get_type() == ExtraMessageType::MsgGcPeerRequest
+                    || m.get_extra_msg().get_type() == ExtraMessageType::MsgGcPeerResponse))
+        }))),
+    );
+
+    // Make sure split has applied.
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k0", b"v0");
+
+    let region_state = cluster.region_local_state(r1, leader.get_store_id());
+    assert!(
+        !region_state.get_removed_records().is_empty(),
+        "{:?}",
+        region_state
+    );
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_slow_split_does_not_cause_snapshot() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+
+    // isolate node 3 for region 1.
+    cluster.add_recv_filter_on_node(3, Box::new(RegionPacketFilter::new(1, 3)));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Leader must not send snapshot to new peer on node 3.
+    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap_err();
+    cluster.must_put(b"k0", b"v0");
+    // ... even after node 3 applied split.
+    cluster.clear_recv_filter_on_node(3);
+
+    let new_region = pd_client.get_region(b"").unwrap();
+    let new_peer3 = find_peer(&new_region, 3).unwrap();
+    cluster.must_transfer_leader(new_region.get_id(), new_peer3.clone());
+
+    notify_rx.try_recv().unwrap_err();
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_slow_split_does_not_prevent_snapshot() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::secs(2);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+
+    // isolate node 3 for region 1.
+    cluster.add_recv_filter_on_node(3, Box::new(RegionPacketFilter::new(1, 3)));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Leader must not send snapshot to new peer on node 3.
+    notify_rx
+        .recv_timeout(cluster.cfg.raft_store.snap_wait_split_duration.0 / 2)
+        .unwrap_err();
+
+    // A follower can receive a snapshot from leader if split is really slow.
+    thread::sleep(2 * cluster.cfg.raft_store.snap_wait_split_duration.0);
+    let new_region = pd_client.get_region(b"").unwrap();
+    let new_peer3 = find_peer(&new_region, 3).unwrap();
+    cluster.must_transfer_leader(new_region.get_id(), new_peer3.clone());
+
+    notify_rx.try_recv().unwrap();
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_slow_split_does_not_prevent_leader_election() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Do not let node 2 and 3 split.
+    cluster.add_recv_filter_on_node(2, Box::new(EraseHeartbeatCommit));
+    cluster.add_recv_filter_on_node(3, Box::new(EraseHeartbeatCommit));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_recv_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgRequestVoteResponse,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Node 1 must receive request vote response twice.
+    notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    cluster.must_put(b"k0", b"v0");
 }

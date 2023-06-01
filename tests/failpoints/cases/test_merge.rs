@@ -1348,6 +1348,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
                 min_commit_ts: 30.into(),
                 last_change_ts: 15.into(),
                 versions_to_last_change: 3,
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();
@@ -1437,6 +1438,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
         min_commit_ts: 30.into(),
         last_change_ts: 15.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1518,6 +1520,7 @@ fn test_retry_pending_prepare_merge_fail() {
         min_commit_ts: 30.into(),
         last_change_ts: 15.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1530,7 +1533,7 @@ fn test_retry_pending_prepare_merge_fail() {
     let (propose_tx, propose_rx) = mpsc::sync_channel(10);
     fail::cfg_callback("after_propose", move || propose_tx.send(()).unwrap()).unwrap();
 
-    let rx = cluster.async_put(b"k1", b"v11").unwrap();
+    let mut rx = cluster.async_put(b"k1", b"v11").unwrap();
     propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
@@ -1594,6 +1597,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
         min_commit_ts: 30.into(),
         last_change_ts: 15.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks

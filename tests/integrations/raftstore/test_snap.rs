@@ -15,8 +15,11 @@ use collections::HashMap;
 use engine_traits::{Checkpointer, KvEngine, RaftEngineReadOnly};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
-use grpcio::Environment;
-use kvproto::raft_serverpb::*;
+use grpcio::{self, ChannelBuilder, Environment};
+use kvproto::{
+    raft_serverpb::{RaftMessage, RaftSnapshotData},
+    tikvpb::TikvClient,
+};
 use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{
     coprocessor::{ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost},
@@ -233,6 +236,12 @@ fn test_concurrent_snap() {
     cluster.cfg.rocksdb.titan.enabled = true;
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+    // For raftstore v2, after split, follower delays first messages (see
+    // is_first_message() for details), so leader does not send snapshot to
+    // follower and CollectSnapshotFilter holds parent region snapshot forever.
+    // We need to set a short wait duration so that leader can send snapshot
+    // in time and thus CollectSnapshotFilter can send parent region snapshot.
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::millis(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -869,21 +878,14 @@ fn test_v1_apply_snap_from_v2() {
     let tablet_snap_mgr = cluster_v2.get_snap_mgr(1);
     let security_mgr = cluster_v2.get_security_mgr();
     let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
-    let cfg = tikv::server::Config::default();
     let limit = Limiter::new(f64::INFINITY);
     let env = Arc::new(Environment::new(1));
     let _ = block_on(async {
-        send_snap_v2(
-            env.clone(),
-            tablet_snap_mgr.clone(),
-            security_mgr.clone(),
-            &cfg,
-            &s1_addr,
-            msg,
-            limit.clone(),
-        )
-        .unwrap()
-        .await
+        let client =
+            TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+        send_snap_v2(client, tablet_snap_mgr.clone(), msg, limit.clone())
+            .await
+            .unwrap()
     });
 
     let snap_mgr = cluster_v1.get_snap_mgr(region_id);
@@ -900,17 +902,11 @@ fn test_v1_apply_snap_from_v2() {
     let region_id = region.get_id();
     let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
     let _ = block_on(async {
-        send_snap_v2(
-            env,
-            tablet_snap_mgr,
-            security_mgr,
-            &cfg,
-            &s1_addr,
-            msg,
-            limit,
-        )
-        .unwrap()
-        .await
+        let client =
+            TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+        send_snap_v2(client, tablet_snap_mgr, msg, limit)
+            .await
+            .unwrap()
     });
 
     let snap_mgr = cluster_v1.get_snap_mgr(region_id);

@@ -2,7 +2,7 @@
 name = "tikv-server"
 version = "0.0.1"
 license = "Apache-2.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
@@ -33,9 +33,16 @@ pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]
 clap = "2.32"
+encryption_export = { workspace = true }
+engine_traits = { workspace = true }
+keys = { workspace = true }
+kvproto = { workspace = true }
+raft-engine = { git = "https://github.com/tikv/raft-engine.git" }
+regex = "1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 server = { workspace = true }
 tikv = { workspace = true }
+tikv_util = { workspace = true }
 toml = "0.5"
 
 [build-dependencies]

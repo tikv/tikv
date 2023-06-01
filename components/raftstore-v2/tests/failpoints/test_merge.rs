@@ -1,12 +1,14 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 
 use engine_traits::Peekable;
 use tikv_util::store::new_peer;
 
 use crate::cluster::{
-    life_helper::assert_peer_not_exist, merge_helper::merge_region, split_helper::split_region,
+    life_helper::assert_peer_not_exist,
+    merge_helper::merge_region,
+    split_helper::{put, split_region},
     Cluster,
 };
 
@@ -106,4 +108,66 @@ fn test_source_destroy_before_target_apply() {
         std::thread::sleep(Duration::from_millis(100));
     }
     panic!("merge not replayed after 5s");
+}
+
+#[test]
+fn test_rollback() {
+    let mut cluster = Cluster::default();
+    let store_id = cluster.node(0).id();
+    let router = &mut cluster.routers[0];
+
+    let region_1 = router.region_detail(2);
+    let peer_1 = region_1.get_peers()[0].clone();
+    router.wait_applied_to_current_term(2, Duration::from_secs(3));
+    let peer_2 = new_peer(store_id, peer_1.get_id() + 1);
+    let region_1_id = region_1.get_id();
+    let region_2_id = region_1_id + 1;
+    let (region_1, region_2) = split_region(
+        router,
+        region_1,
+        peer_1.clone(),
+        region_2_id,
+        peer_2.clone(),
+        Some(format!("k{}k", region_1_id).as_bytes()),
+        Some(format!("k{}k", region_2_id).as_bytes()),
+        format!("k{}", region_2_id).as_bytes(),
+        format!("k{}", region_2_id).as_bytes(),
+        false,
+    );
+
+    let region_3_id = region_2_id + 1;
+    let peer_3 = new_peer(store_id, peer_2.get_id() + 1);
+    let router_clone = Mutex::new(cluster.routers[0].clone());
+    let region_2_clone = region_2.clone();
+    fail::cfg_callback("start_commit_merge", move || {
+        split_region(
+            &mut router_clone.lock().unwrap(),
+            region_2_clone.clone(),
+            peer_2.clone(),
+            region_3_id,
+            peer_3.clone(),
+            Some(format!("k{}k", region_2_id).as_bytes()),
+            Some(format!("k{}k", region_3_id).as_bytes()),
+            format!("k{}", region_3_id).as_bytes(),
+            format!("k{}", region_3_id).as_bytes(),
+            false,
+        );
+        fail::remove("start_commit_merge");
+    })
+    .unwrap();
+    merge_region(&cluster, 0, region_1, peer_1, region_2, false);
+
+    let mut resp = Default::default();
+    for _ in 0..10 {
+        resp = put(
+            &mut cluster.routers[0],
+            region_1_id,
+            format!("k{}k2", region_1_id).as_bytes(),
+        );
+        if !resp.get_header().has_error() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 }

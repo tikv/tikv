@@ -21,7 +21,6 @@ use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
 use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn};
-use tokio::sync::oneshot;
 
 use crate::{
     config::EncryptionConfig,
@@ -397,7 +396,7 @@ fn check_stale_file_exist(
 
 enum RotateTask {
     Terminate,
-    Save(oneshot::Sender<()>),
+    Save(std::sync::mpsc::Sender<()>),
 }
 
 fn run_background_rotate_work(
@@ -770,6 +769,27 @@ impl DataKeyManager {
         Ok(Some(encrypted_file))
     }
 
+    /// Returns initial vector and data key.
+    pub fn get_file_internal(&self, fname: &str) -> IoResult<Option<(Vec<u8>, DataKey)>> {
+        let (key_id, iv) = {
+            match self.dicts.get_file(fname) {
+                Some(file) if file.method != EncryptionMethod::Plaintext => (file.key_id, file.iv),
+                _ => return Ok(None),
+            }
+        };
+        // Fail if key is specified but not found.
+        let k = match self.dicts.key_dict.lock().unwrap().keys.get(&key_id) {
+            Some(k) => k.clone(),
+            None => {
+                return Err(IoError::new(
+                    ErrorKind::NotFound,
+                    format!("key not found for id {}", key_id),
+                ));
+            }
+        };
+        Ok(Some((iv, k)))
+    }
+
     /// Removes data keys under the directory `logical`. If `physical` is
     /// present, if means the `logical` directory is already physically renamed
     /// to `physical`.
@@ -988,10 +1008,17 @@ impl<'a> DataKeyImporter<'a> {
     }
 
     pub fn commit(mut self) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
         if !self.key_additions.is_empty() {
-            self.manager.rotate_tx.send(RotateTask::Save(tx)).unwrap();
-            rx.blocking_recv().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.manager
+                .rotate_tx
+                .send(RotateTask::Save(tx))
+                .map_err(|_| {
+                    Error::Other(box_err!("Failed to request background key dict rotation"))
+                })?;
+            rx.recv().map_err(|_| {
+                Error::Other(box_err!("Failed to wait for background key dict rotation"))
+            })?;
         }
         if !self.file_additions.is_empty() {
             self.manager.dicts.file_dict_file.lock().unwrap().sync()?;
@@ -1006,13 +1033,22 @@ impl<'a> DataKeyImporter<'a> {
         while let Some(f) = iter.next() {
             self.manager.dicts.delete_file(&f, iter.peek().is_none())?;
         }
-        for key_id in self.key_additions.drain(..) {
-            let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
-            key_dict.keys.remove(&key_id);
+        if !self.key_additions.is_empty() {
+            for key_id in self.key_additions.drain(..) {
+                let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
+                key_dict.keys.remove(&key_id);
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.manager
+                .rotate_tx
+                .send(RotateTask::Save(tx))
+                .map_err(|_| {
+                    Error::Other(box_err!("Failed to request background key dict rotation"))
+                })?;
+            rx.recv().map_err(|_| {
+                Error::Other(box_err!("Failed to wait for background key dict rotation"))
+            })?;
         }
-        let (tx, rx) = oneshot::channel();
-        self.manager.rotate_tx.send(RotateTask::Save(tx)).unwrap();
-        rx.blocking_recv().unwrap();
         Ok(())
     }
 }

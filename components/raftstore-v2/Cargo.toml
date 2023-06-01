@@ -72,6 +72,7 @@ slog-global = { workspace = true }
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_util = { workspace = true }
+walkdir = "2"
 
 [[test]]
 name = "raftstore-v2-failpoints"

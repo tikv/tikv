@@ -46,7 +46,7 @@ use tikv_util::{
     sys::SysQuota,
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{Builder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
@@ -54,10 +54,12 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
+    operation::{
+        ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+    },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{pd, tablet},
+    worker::{checkpoint, cleanup, pd, tablet},
     Error, Result,
 };
 
@@ -224,6 +226,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
     }
 
     fn handle_normal(&mut self, fsm: &mut impl DerefMut<Target = PeerFsm<EK, ER>>) -> HandleResult {
+        fail::fail_point!(
+            "pause_on_peer_collect_message",
+            fsm.deref_mut().peer().peer_id() == 1,
+            |_| unreachable!()
+        );
+        fail::fail_point!(
+            "on_peer_collect_message_2",
+            fsm.deref_mut().peer().peer_id() == 2,
+            |_| unreachable!()
+        );
         debug_assert!(self.peer_msg_buf.is_empty());
         let batch_size = self.messages_per_tick();
         let received_cnt = fsm.recv(&mut self.peer_msg_buf, batch_size);
@@ -415,7 +427,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 continue;
             }
             let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
-            // Keep the checkpoint even if source is destroyed.
             if prefix == MERGE_SOURCE_PREFIX {
                 continue;
             }
@@ -496,7 +507,9 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
     pub tablet: Scheduler<tablet::Task<EK>>,
+    pub checkpoint: Scheduler<checkpoint::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
+    pub cleanup: Scheduler<cleanup::Task>,
 
     // Following is not maintained by raftstore itself.
     pub split_check: Scheduler<SplitCheckTask>,
@@ -518,8 +531,10 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     async_read: Worker,
     pd: LazyWorker<pd::Task>,
     tablet: Worker,
+    checkpoint: Worker,
     async_write: StoreWriters<EK, ER>,
     purge: Option<Worker>,
+    cleanup_worker: Worker,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
@@ -527,12 +542,15 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
     fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
+        let checkpoint = Builder::new("checkpoint-worker").thread_count(2).create();
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet: Worker::new("tablet-worker"),
+            checkpoint,
             async_write: StoreWriters::new(None),
             purge,
+            cleanup_worker: Worker::new("cleanup-worker"),
             background,
         }
     }
@@ -542,6 +560,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         self.async_read.stop();
         self.pd.stop();
         self.tablet.stop();
+        self.checkpoint.stop();
         if let Some(w) = self.purge {
             w.stop();
         }
@@ -653,7 +672,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let tablet_gc_scheduler = workers.tablet.start_with_timer(
+        let tablet_scheduler = workers.tablet.start_with_timer(
             "tablet-worker",
             tablet::Runner::new(
                 tablet_registry.clone(),
@@ -662,12 +681,25 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
+        let compact_runner =
+            cleanup::CompactRunner::new(tablet_registry.clone(), self.logger.clone());
+        let cleanup_worker_scheduler = workers
+            .cleanup_worker
+            .start("cleanup-worker", cleanup::Runner::new(compact_runner));
+
+        let checkpoint_scheduler = workers.checkpoint.start(
+            "checkpoint-worker",
+            checkpoint::Runner::new(self.logger.clone(), tablet_registry.clone()),
+        );
+
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
-            tablet: tablet_gc_scheduler,
+            tablet: tablet_scheduler,
+            checkpoint: checkpoint_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
+            cleanup: cleanup_worker_scheduler,
         };
 
         let builder = StorePollerBuilder::new(
@@ -717,8 +749,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router.register_all(mailboxes);
 
         // Make sure Msg::Start is the first message each FSM received.
+        let watch = Arc::new(ReplayWatch::new(self.logger.clone()));
         for addr in address {
-            router.force_send(addr, PeerMsg::Start).unwrap();
+            router
+                .force_send(addr, PeerMsg::Start(Some(watch.clone())))
+                .unwrap();
         }
         router.send_control(StoreMsg::Start).unwrap();
         Ok(())
