@@ -2910,12 +2910,7 @@ where
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
-        let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        // Modify the region meta in memory.
         let mut region = self.region.clone();
-<<<<<<< HEAD
-        region.set_is_in_flashback(is_in_flashback);
-=======
         match req.get_cmd_type() {
             AdminCmdType::PrepareFlashback => {
                 PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
@@ -2923,9 +2918,6 @@ where
                 if !region.is_in_flashback {
                     PEER_IN_FLASHBACK_STATE.inc()
                 }
-
-                region.set_is_in_flashback(true);
-                region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
             }
             AdminCmdType::FinishFlashback => {
                 PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
@@ -2933,14 +2925,13 @@ where
                 if region.is_in_flashback {
                     PEER_IN_FLASHBACK_STATE.dec()
                 }
-
-                region.set_is_in_flashback(false);
-                region.clear_flashback_start_ts();
             }
             _ => unreachable!(),
         }
 
->>>>>>> b1954b0d22 (raftstore, metrics: add metrics for the number of peers in flashback state (#14774))
+        let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
+        // Modify the region meta in memory.
+        region.set_is_in_flashback(is_in_flashback);
         // Modify the `RegionLocalState` persisted in disk.
         write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
@@ -2949,15 +2940,6 @@ where
             )
         });
 
-        match req.get_cmd_type() {
-            AdminCmdType::PrepareFlashback => {
-                PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
-            }
-            AdminCmdType::FinishFlashback => {
-                PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
-            }
-            _ => unreachable!(),
-        }
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::SetFlashbackState { region }),
