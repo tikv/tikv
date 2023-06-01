@@ -107,7 +107,7 @@ mod imp;
 mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "mimalloc"))]
 #[path = "mimalloc.rs"]
-    mod imp;
+mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "snmalloc"))]
 #[path = "snmalloc.rs"]
 mod imp;

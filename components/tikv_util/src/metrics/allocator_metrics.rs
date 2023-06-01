@@ -28,7 +28,7 @@ impl AllocStatsCollector {
                 "allocator_thread_allocation",
                 "The allocation statistic for threads.",
             )
-            .namespace(ns.clone()),
+            .namespace(ns),
             &["type", "thread_name"],
         )?;
         Ok(AllocStatsCollector {

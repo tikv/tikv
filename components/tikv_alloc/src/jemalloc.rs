@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     ptr::{self, NonNull},
     slice,
-    sync::{atomic::AtomicU64, Mutex},
+    sync::Mutex,
     thread,
 };
 
@@ -263,7 +263,19 @@ mod profiling {
 
         use tempfile::Builder;
 
+        use super::super::THREAD_MEMORY_MAP;
+        use crate::{add_thread_memory_accessor, remove_thread_memory_accessor};
+
         const OPT_PROF: &[u8] = b"opt.prof\0";
+
+        fn assert_delta(name: impl std::fmt::Display, delta: f64, a: u64, b: u64) {
+            let (base, diff) = if a > b { (a, a - b) } else { (b, b - a) };
+            let error = diff as f64 / base as f64;
+            assert!(
+                error < delta,
+                "{name}: the difference is too huge: a={a}, b={b}, base={base}, diff={diff}, error={error}"
+            );
+        }
 
         fn is_profiling_on() -> bool {
             match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
@@ -320,6 +332,46 @@ mod profiling {
                 }
             }
             assert_eq!(prof_count, 2);
+        }
+        #[test]
+        #[ignore = "#ifdef MALLOC_CONF"]
+        fn test_allocation_stat() {
+            assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            for i in 1..5 {
+                let tx = tx.clone();
+                // It is in test... let skip calling hooks.
+                #[allow(clippy::disallowed_methods)]
+                std::thread::Builder::new()
+                    .name(format!("test_allocation_stat_{i}"))
+                    .spawn(move || {
+                        add_thread_memory_accessor();
+                        let (tx2, rx2) = std::sync::mpsc::channel::<()>();
+                        let v = vec![42u8; 1024 * 1024 * i];
+                        drop(v);
+                        let _v2 = vec![42u8; 512 * 1024 * i];
+                        tx.send((i, std::thread::current().id(), tx2)).unwrap();
+                        drop(tx);
+                        rx2.recv().unwrap();
+                        remove_thread_memory_accessor();
+                    })
+                    .unwrap();
+            }
+            drop(tx);
+
+            let chs = rx.into_iter().collect::<Vec<_>>();
+            let l = THREAD_MEMORY_MAP.lock().unwrap();
+            for (i, tid, tx) in chs {
+                let a = l.get(&tid).unwrap();
+                unsafe {
+                    let alloc = a.allocated.peek().unwrap();
+                    let dealloc = a.deallocated.peek().unwrap();
+                    assert_delta(i, 0.05, alloc, (1024 + 512) * 1024 * i as u64);
+                    assert_delta(i, 0.05, dealloc, (1024) * 1024 * i as u64);
+                }
+                tx.send(()).unwrap();
+            }
         }
     }
 }
