@@ -1598,11 +1598,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
         }
 
-        panic!("response channel is unexpectedly dropped, cid {}", cid);
         // If it's not finished while the channel is closed, it means the write
         // is undeterministic. in this case, we don't know whether the
         // request is finished or not, so we should not release latch as
         // it may break correctness.
+        // However, not release latch will cause deadlock which may ultimately block all
+        // following txns, so we panic here.
+        panic!("response channel is unexpectedly dropped, cid {}", cid);
     }
 
     /// Returns whether it succeeds to write pessimistic locks to the in-memory
