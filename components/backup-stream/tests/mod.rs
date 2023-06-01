@@ -777,25 +777,23 @@ impl Suite {
 
     pub fn wait_for_flush(&self) {
         let (tx, rx) = std::sync::mpsc::channel();
-        self.run({
-            || {
-                let tx = tx.clone();
-                Task::Sync(
-                    Box::new(move || {
-                        tx.send(()).unwrap();
-                    }),
-                    Box::new(move |r| {
-                        let task_names = block_on(r.select_task(TaskSelector::All.reference()));
-                        for task_name in task_names {
-                            let tsk = block_on(r.get_task_info(&task_name));
-                            if tsk.unwrap().is_flushing() {
-                                return false;
-                            }
+        self.run(|| {
+            let tx = tx.clone();
+            Task::Sync(
+                Box::new(move || {
+                    tx.send(()).unwrap();
+                }),
+                Box::new(move |r| {
+                    let task_names = block_on(r.select_task(TaskSelector::All.reference()));
+                    for task_name in task_names {
+                        let tsk = block_on(r.get_task_info(&task_name));
+                        if tsk.unwrap().is_flushing() {
+                            return false;
                         }
-                        true
-                    }),
-                )
-            }
+                    }
+                    true
+                }),
+            )
         });
         for _ in self.endpoints.iter() {
             // Receive messages from each store.
