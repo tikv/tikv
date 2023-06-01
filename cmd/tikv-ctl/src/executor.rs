@@ -938,8 +938,8 @@ impl DebugExecutor for DebugClient {
             Ok(_) => Ok(()),
             Err(err) => {
                 println!(
-                    "flashback key_range {:?} need to retry, err is {:?}",
-                    key_range, err
+                    "flashback key_range {:?} with start_ts {:?}, commit_ts {:?} need to retry, err is {:?}",
+                    key_range, start_ts, commit_ts, err
                 );
                 Err(key_range)
             }

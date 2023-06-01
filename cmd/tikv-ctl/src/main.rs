@@ -800,8 +800,8 @@ fn compact_whole_cluster(
     handles.into_iter().for_each(|h| h.join().unwrap());
 }
 
-pub const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
-pub const WAIT_APPLY_FLASHBACK_STATE: u64 = 100; // 100ms
+const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
+const WAIT_APPLY_FLASHBACK_STATE: u64 = 100; // 100ms
 
 fn flashback_whole_cluster(
     pd_client: &RpcClient,
@@ -814,7 +814,6 @@ fn flashback_whole_cluster(
 ) {
     let pd_client = pd_client.clone();
     let cfg = cfg.clone();
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("flashback")
         .enable_time()
@@ -885,10 +884,14 @@ fn flashback_whole_cluster(
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
                         continue;
                     }
+                    println!("prepare flashback success for the given key range!");
                     break;
                 }
                 Err(e) => {
-                    println!("prepare flashback timeout. err: {:?}", e);
+                    println!(
+                        "prepare flashback with start_ts {:?} timeout. err: {:?}",
+                        start_ts, e
+                    );
                     return;
                 }
             }
@@ -945,7 +948,10 @@ fn flashback_whole_cluster(
                     }
                 },
                 Err(e) => {
-                    println!("finish flashback timeout. err: {:?}", e);
+                    println!(
+                        "finish flashback with start_ts {:?}, commit_ts: {:?} timeout. err: {:?}",
+                        e, start_ts, commit_ts
+                    );
                     return;
                 }
             }
