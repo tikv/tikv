@@ -420,9 +420,7 @@ impl PdClient for RpcClient {
         end_key: &[u8],
         limit: i32,
     ) -> Result<Vec<pdpb::Region>> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .bootstrap_cluster
-            .start_coarse_timer();
+        let _timer = PD_REQUEST_HISTOGRAM_VEC.scan_regions.start_coarse_timer();
 
         let mut req = pdpb::ScanRegionsRequest::default();
         req.set_header(self.header());
