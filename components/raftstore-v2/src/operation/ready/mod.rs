@@ -49,7 +49,7 @@ use raftstore::{
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
-use slog::{debug, error, info, trace, warn, Logger};
+use slog::{debug, error, info, warn, Logger};
 use tikv_util::{
     log::SlogFormat,
     slog_panic,
@@ -545,7 +545,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.update_last_sent_snapshot_index(index);
         }
 
-        trace!(
+        debug!(
             self.logger,
             "send raft msg";
             "msg_type" => ?msg_type,
@@ -958,7 +958,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[cfg(feature = "testexport")]
     pub fn on_wait_flush(&mut self, ch: crate::router::FlushChannel) {
-        self.async_writer.subscirbe_flush(ch);
+        self.async_writer.subscribe_flush(ch);
     }
 
     pub fn on_role_changed<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
