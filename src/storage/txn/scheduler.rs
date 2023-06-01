@@ -534,7 +534,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     ) {
         let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
         let tracker = get_tls_tracker_token();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
+        corr_debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
@@ -718,7 +718,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         }
                         task.extra_op = extra_op;
 
-                        debug!(
+                        corr_debug!(
                             "process cmd with snapshot";
                             "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
                             "trakcer" => ?task.tracker
@@ -741,7 +741,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     where
         StorageError: From<ER>,
     {
-        debug!("write command finished with error"; "cid" => cid);
+        corr_debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
@@ -776,7 +776,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: CommandKind) {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
-        debug!("read command finished"; "cid" => cid);
+        corr_debug!("read command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
@@ -817,7 +817,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write command finished";
+        corr_debug!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -1082,7 +1082,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         tag: CommandKind,
         stage: CommandStageKind,
     ) {
-        debug!("early return response"; "cid" => cid);
+        corr_debug!("early return response"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
         cb.execute(pr);
         // It won't release locks here until write finished.
@@ -1146,7 +1146,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// `ReadFinished` message back to the `TxnScheduler`.
     fn process_read(self, snapshot: E::Snap, task: Task, sched_details: &mut SchedulerDetails) {
         fail_point!("txn_before_process_read");
-        debug!("process read cmd in worker pool"; "cid" => task.cid);
+        corr_debug!("process read cmd in worker pool"; "cid" => task.cid);
 
         let tag = task.cmd.tag();
 
@@ -1279,7 +1279,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed"; "cid" => cid, "err" => ?err);
+                corr_debug!("write command failed"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err, Some(sched_details));
                 return;
             }
