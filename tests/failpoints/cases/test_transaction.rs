@@ -687,6 +687,7 @@ fn test_read_index_with_max_ts() {
     fail::remove("on_apply_write_cmd");
 }
 
+// This test mocks the situation described in the PR#14863
 #[test]
 fn test_proposal_concurrent_with_conf_change_and_transfer_leader() {
     let (mut cluster, _, mut ctx) = test_raftstore_v2::must_new_cluster_mul(4);
@@ -745,7 +746,6 @@ fn test_proposal_concurrent_with_conf_change_and_transfer_leader() {
     })
     .unwrap();
 
-    let (client_clone, ctx_clone) = (client.clone(), ctx.clone());
     let handle = std::thread::spawn(move || {
         let mut mutations = vec![];
         for key in vec![b"key3".to_vec(), b"key4".to_vec()] {
@@ -754,7 +754,7 @@ fn test_proposal_concurrent_with_conf_change_and_transfer_leader() {
             mutation.set_key(key);
             mutations.push(mutation);
         }
-        let _ = try_kv_prewrite(&client_clone, ctx_clone, mutations, b"key3".to_vec(), 10);
+        let _ = try_kv_prewrite(&client, ctx, mutations, b"key3".to_vec(), 10);
     });
 
     rx.recv_timeout(std::time::Duration::from_secs(50)).unwrap();
