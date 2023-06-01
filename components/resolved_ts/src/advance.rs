@@ -21,7 +21,10 @@ use grpcio::{
     ChannelBuilder, CompressionAlgorithms, Environment, Error as GrpcError, RpcStatusCode,
 };
 use kvproto::{
-    kvrpcpb::{ApplySafeTsRequest, ApplySafeTsResponse, CheckLeaderRequest, CheckLeaderResponse},
+    kvrpcpb::{
+        ApplySafeTsRequest, ApplySafeTsResponse, CheckLeaderRequest, CheckLeaderResponse,
+        CheckedLeader, LeaderInfo,
+    },
     metapb::{Peer, PeerRole},
     tikvpb::TikvClient,
 };
@@ -127,16 +130,18 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 }
             }
 
-            let regions = if false {
-                leader_resolver.resolve(regions, min_ts).await
-            } else {
-                // Possible optimization here.
-                // 1. Use `resolve_by_raft` to get regions with valid leader states.
-                // 2. Send `CheckLeaderRequest` requests with as less information as possible
-                //  for valid leader regions, for example raft information like `term`,
-                // `epoch` could be saved. The proto needs to be changed accordingly.
-                resolve_by_raft(regions, min_ts, cdc_handler).await
-            };
+            let regions = leader_resolver
+                .resolve(regions, min_ts, Some(cdc_handler))
+                .await;
+            // let regions = if false {
+            // } else {
+            //     // Possible optimization here.
+            //     // 1. Use `resolve_by_raft` to get regions with valid leader states.
+            //     // 2. Send `CheckLeaderRequest` requests with as less information as
+            // possible     //  for valid leader regions, for example raft
+            // information like `term`,     // `epoch` could be saved. The proto
+            // needs to be changed accordingly.     resolve_by_raft(regions,
+            // min_ts, cdc_handler).await };
 
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
@@ -184,6 +189,7 @@ pub struct LeadershipResolver {
 
     gc_interval: Duration,
     last_gc_time: Instant,
+    // _phantom: PhantomData<(T, E)>,
 }
 
 impl LeadershipResolver {
@@ -210,6 +216,7 @@ impl LeadershipResolver {
             checking_regions: HashSet::default(),
             last_gc_time: Instant::now_coarse(),
             gc_interval,
+            // _phantom: Default::default(),
         }
     }
 
@@ -245,7 +252,12 @@ impl LeadershipResolver {
     // This function broadcasts a special message to all stores, gets the leader id
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.
-    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve<T: 'static + CdcHandle<E>, E: KvEngine>(
+        &mut self,
+        regions: Vec<u64>,
+        min_ts: TimeStamp,
+        cdc_handler: Option<T>,
+    ) -> Vec<u64> {
         if regions.is_empty() {
             return regions;
         }
@@ -269,13 +281,15 @@ impl LeadershipResolver {
         for region_id in &regions {
             checking_regions.insert(*region_id);
         }
+        let mut active_regions = 0;
+        let mut read_index_reqs = Vec::new();
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
                 if !checking_regions.contains(region_id) {
                     continue;
                 }
                 let core = read_progress.get_core();
-                let is_hibernated = core.is_hibernated();
+                let is_active = !core.is_hibernated(); // maybe change the active condition.
                 let local_leader_info = core.get_local_leader_info();
                 let leader_id = local_leader_info.get_leader_id();
                 let leader_store_id = local_leader_info.get_leader_store_id();
@@ -285,6 +299,40 @@ impl LeadershipResolver {
                     continue;
                 }
                 let leader_info = core.get_leader_info();
+                let has_cdc_handler = cdc_handler.is_some();
+                // check leader for action regions by read-index request.
+                if is_active && has_cdc_handler {
+                    active_regions += 1;
+                    let cdc_handle_clone = cdc_handler.as_ref().unwrap().clone();
+                    let leader_info = leader_info.clone();
+                    let region_id = *region_id;
+
+                    let peer_store_ids = peer_list.iter().map(|peer| peer.store_id).collect();
+                    let req = async move {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        let callback = Callback::read(Box::new(move |resp| {
+                            let resp = if resp.response.get_header().has_error() {
+                                None
+                            } else {
+                                Some(region_id)
+                            };
+                            if tx.send(resp).is_err() {
+                                error!("resolve send tso response failed"; "region_id" => region_id);
+                            }
+                        }));
+                        if let Err(e) = cdc_handle_clone.check_leadership(region_id, callback) {
+                            warn!("resolve send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
+                            return Ok(CheckLeaderResult::ReadIndex(None));
+                        }
+                        match rx.await {
+                            Ok(_) => Ok(CheckLeaderResult::ReadIndex(Some((peer_store_ids, leader_info)))),
+                            Err(_) => Ok(CheckLeaderResult::ReadIndex(None)),
+                        }
+                    }
+                    .boxed();
+                    read_index_reqs.push(req);
+                    continue;
+                }
 
                 let mut unvotes = 0;
                 for peer in peer_list {
@@ -303,11 +351,7 @@ impl LeadershipResolver {
                             req.set_store_id(store_id);
                             req
                         });
-                        if !is_hibernated {
-                            req.regions.push(leader_info.clone());
-                        } else {
-                            req.hibernated_regions.push(leader_info.region_id);
-                        }
+                        req.hibernated_regions.push(leader_info.region_id);
                         if peer.get_role() != PeerRole::Learner {
                             unvotes += 1;
                         }
@@ -382,7 +426,10 @@ impl LeadershipResolver {
                         if status.code() == RpcStatusCode::UNIMPLEMENTED =>
                     {
                         // Some stores like TiFlash don't implement it.
-                        return Ok((to_store, CheckLeaderResponse::default()));
+                        return Ok(CheckLeaderResult::CheckLeader(
+                            to_store,
+                            CheckLeaderResponse::default(),
+                        ));
                     }
                     Err(e) => return Err((to_store, true, format!("[rpc create failed]{}", e))),
                 };
@@ -394,11 +441,12 @@ impl LeadershipResolver {
                     .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
                     .await?
                     .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
-                Ok((to_store, resp))
+                Ok(CheckLeaderResult::CheckLeader(to_store, resp))
             }
             .boxed();
             check_leader_rpcs.push(rpc);
         }
+        check_leader_rpcs.extend(read_index_reqs);
         let start = Instant::now_coarse();
 
         defer!({
@@ -409,13 +457,19 @@ impl LeadershipResolver {
         let rpc_count = check_leader_rpcs.len();
         let mut failed_region_store_map = HashMap::default();
         let mut store_unsafe_regions_map = hash_map_with_capacity(rpc_count);
+        let mut valid_leader_infos = Vec::with_capacity(active_regions);
         for _ in 0..rpc_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
             let (res, _, remains) = select_all(check_leader_rpcs).await;
             check_leader_rpcs = remains;
             match res {
-                Ok((to_store, mut resp)) => {
+                Ok(CheckLeaderResult::ReadIndex(leader_info)) => {
+                    if let Some(leader_info) = leader_info {
+                        valid_leader_infos.push(leader_info);
+                    }
+                }
+                Ok(CheckLeaderResult::CheckLeader(to_store, mut resp)) => {
                     store_unsafe_regions_map.insert(to_store, Vec::new());
                     let failed_regions = HashSet::from_iter(resp.take_failed_regions());
                     for region in &failed_regions {
@@ -472,6 +526,22 @@ impl LeadershipResolver {
                 }
             }
         }
+
+        let mut store_checked_leader_map = hash_map_with_capacity(rpc_count);
+        let valid_leader_len_hint = valid_leader_infos.len();
+        for leader_info in valid_leader_infos.into_iter() {
+            for peer_store_id in leader_info.0 {
+                let mut checked_leader = CheckedLeader::default();
+                checked_leader.set_region_id(leader_info.1.get_region_id());
+                checked_leader.set_read_state(leader_info.1.get_read_state().clone());
+
+                store_checked_leader_map
+                    .entry(peer_store_id)
+                    .or_insert_with(|| Vec::with_capacity(valid_leader_len_hint))
+                    .push(checked_leader)
+            }
+        }
+
         let mut apply_safe_ts_rpcs = Vec::with_capacity(store_unsafe_regions_map.len());
         let rpc_count = store_unsafe_regions_map.len();
         for (to_store, unsafe_regions) in store_unsafe_regions_map {
@@ -480,6 +550,9 @@ impl LeadershipResolver {
             req.set_ts(min_ts.into_inner());
             req.set_unsafe_regions(unsafe_regions);
             req.set_store_id(store_id);
+            if let Some(checked_leaders) = store_checked_leader_map.remove(&to_store) {
+                req.set_checked_leaders(checked_leaders.into());
+            }
 
             // Apply safe_ts for regions besides `unsafe_reginos` on `to_store`.
             let rpc = async move {
@@ -539,6 +612,12 @@ impl LeadershipResolver {
         }
         self.valid_regions.drain().collect()
     }
+}
+
+// CheckLeaderResult union read-index result and check-leader result.
+enum CheckLeaderResult {
+    ReadIndex(Option<(Vec<u64>, LeaderInfo)>),
+    CheckLeader(u64, CheckLeaderResponse),
 }
 
 pub async fn resolve_by_raft<T, E>(regions: Vec<u64>, min_ts: TimeStamp, cdc_handle: T) -> Vec<u64>
