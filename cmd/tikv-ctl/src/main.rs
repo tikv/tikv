@@ -801,6 +801,7 @@ fn compact_whole_cluster(
 }
 
 pub const FLASHBACK_TIMEOUT: u64 = 1800; // 1800s
+pub const WAIT_APPLY_FLASHBACK_STATE: u64 = 100; // 100ms
 
 fn flashback_whole_cluster(
     pd_client: &RpcClient,
@@ -811,7 +812,6 @@ fn flashback_whole_cluster(
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 ) {
-    // Prepare flashback for all regions.
     let pd_client = pd_client.clone();
     let cfg = cfg.clone();
 
@@ -839,7 +839,7 @@ fn flashback_whole_cluster(
                             region_ids.is_empty() || region_ids.contains(region_id)
                         })
                         .for_each(|(key_range, region_id)| {
-                            // Get key range from region.
+                            // Prepare flashback region version by key range.
                             let key_range = build_key_range(&key_range.0, &key_range.1, false);
 
                             let addr = addr.clone();
@@ -870,18 +870,19 @@ fn flashback_whole_cluster(
                 Ok(res) => {
                     if let Err(key_range) = res {
                         // Retry specific key range to prepare flashback.
-                        let retry_stores_region = load_leaders_to_each_store(
+                        let retry_stores_leader = load_leaders_to_each_store(
                             &pd_client,
                             key_range.get_start_key().to_vec(),
                             key_range.get_end_key().to_vec(),
                         );
                         // Need to update `stores_leader` to replace stale key range.
-                        for (store_id, leaders) in retry_stores_region {
+                        for (store_id, leaders) in retry_stores_leader {
                             let regions = stores_leader
                                 .entry(store_id)
                                 .or_insert_with(HashMap::default);
                             regions.extend(leaders);
                         }
+                        thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
                         continue;
                     }
                     break;
@@ -908,7 +909,7 @@ fn flashback_whole_cluster(
                             region_ids.is_empty() || region_ids.contains(region_id)
                         })
                         .for_each(|(key_range, region_id)| {
-                            // Get key range from region.
+                            // Flashback region version by key range.
                             let key_range = build_key_range(&key_range.0, &key_range.1, false);
 
                             let addr = addr.clone();
@@ -936,12 +937,13 @@ fn flashback_whole_cluster(
             )
             .await
             {
-                Ok(res) => {
-                    match res {
-                        Ok(_) => break,
-                        Err(_) => continue,
+                Ok(res) => match res {
+                    Ok(_) => break,
+                    Err(_) => {
+                        thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
+                        continue;
                     }
-                }
+                },
                 Err(e) => {
                     println!("finish flashback timeout. err: {:?}", e);
                     return;

@@ -938,7 +938,7 @@ impl DebugExecutor for DebugClient {
             Ok(_) => Ok(()),
             Err(err) => {
                 println!(
-                    "prepare key_range {:?} flashback need to retry, err is {:?}",
+                    "flashback key_range {:?} need to retry, err is {:?}",
                     key_range, err
                 );
                 Err(key_range)
