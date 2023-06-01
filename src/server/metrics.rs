@@ -62,6 +62,7 @@ make_auto_flush_static_metric! {
         split_region,
         read_index,
         check_leader,
+        apply_safe_ts,
         batch_commands,
     }
 

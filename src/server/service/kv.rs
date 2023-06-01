@@ -1007,17 +1007,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let begin_instant = Instant::now();
         let addr = ctx.peer();
         let ts = request.get_ts();
+        let store_id = request.get_store_id();
         let leaders = request.take_regions().into();
+        let hibernates = request.take_hibernated_regions().into();
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
             check_leader_scheduler
-                .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
+                .schedule(CheckLeaderTask::CheckLeader {
+                    leaders,
+                    hibernates,
+                    cb,
+                    ts,
+                    store_id,
+                })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;
-            let regions = resp.await?;
+            let failed_regions = resp.await?;
             let mut resp = CheckLeaderResponse::default();
             resp.set_ts(ts);
-            resp.set_regions(regions);
+            resp.set_failed_regions(failed_regions);
             if let Err(e) = sink.success(resp).await {
                 // CheckLeader has a built-in fast-success mechanism, so `RemoteStopped`
                 // can be treated as a general situation.
@@ -1036,6 +1044,55 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             // CheckLeader only needs quorum responses, remote may drops
             // requests early.
             info!("call CheckLeader failed"; "err" => ?e, "address" => addr);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
+    fn apply_safe_ts(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut request: ApplySafeTsRequest,
+        sink: UnarySink<ApplySafeTsResponse>,
+    ) {
+        let begin_instant = Instant::now();
+        let addr = ctx.peer();
+        let ts = request.get_ts();
+        let store_id = request.get_store_id();
+        let unsafe_regions = request.take_unsafe_regions().into();
+        let (cb, resp) = paired_future_callback();
+        let check_leader_scheduler = self.check_leader_scheduler.clone();
+        let task = async move {
+            check_leader_scheduler
+                .schedule(CheckLeaderTask::ApplySafeTs {
+                    ts,
+                    unsafe_regions,
+                    store_id,
+                    cb,
+                })
+                .map_err(|e| Error::Other(format!("{}", e).into()))?;
+            resp.await?;
+            let mut resp = ApplySafeTsResponse::default();
+            resp.set_ts(ts);
+            if let Err(e) = sink.success(resp).await {
+                // CheckLeader has a built-in fast-success mechanism, so `RemoteStopped`
+                // can be treated as a general situation.
+                if let GrpcError::RemoteStopped = e {
+                    return ServerResult::Ok(());
+                }
+                return Err(Error::from(e));
+            }
+            let elapsed = begin_instant.saturating_elapsed();
+            GRPC_MSG_HISTOGRAM_STATIC
+                .apply_safe_ts
+                .observe(elapsed.as_secs_f64());
+            ServerResult::Ok(())
+        }
+        .map_err(move |e| {
+            // CheckLeader only needs quorum responses, remote may drops
+            // requests early.
+            info!("call ApplySafeTs failed"; "err" => ?e, "address" => addr);
         })
         .map(|_| ());
 
