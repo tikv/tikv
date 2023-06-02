@@ -24,6 +24,7 @@
 //! which is transparent to the scheduler.
 
 use std::{
+    fmt::Write,
     marker::PhantomData,
     mem,
     ops::{Deref, DerefMut},
@@ -549,7 +550,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .spawn(async move {
                 loop {
                     tokio::select! {
-                        msg = stop_rx.recv().await => {
+                        msg = stop_rx.recv() => {
                             assert!(msg.is_none());
                             break;
                         }
@@ -1548,6 +1549,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             loop {
                 tokio::select! {
                     msg = rx.recv() => {
+                        if msg.is_none() {
+                            warn!("process_write exited before receiving DiagnoseEvent::Finished"; "cid" => cid, "tag" => %tag, "region_id" => region_id, "start_time" => %async_write_start_time, "events" => ?events);
+                            break;
+                        }
+                        let msg = msg.unwrap();
+
                         events.push(msg);
                         if !matches!(msg.1, DiagnoseEvent::Finished) {
                             continue;

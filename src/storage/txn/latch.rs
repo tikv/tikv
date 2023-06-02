@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     collections::{hash_map::DefaultHasher, VecDeque},
+    fmt::Write,
     hash::{Hash, Hasher},
     ops::Deref,
     usize,
@@ -289,7 +290,7 @@ impl Latches {
                 continue;
             }
 
-            self.dump_slot(&mut str, slot_index, &slot);
+            self.dump_slot(&mut formatted_latch_state, slot_index, &slot);
         }
 
         formatted_latch_state

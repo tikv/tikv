@@ -2,7 +2,7 @@
 
 //! Core data types.
 
-use std::{fmt::Debug, sync::atomic::AtomicBool};
+use std::fmt::Debug;
 
 use kvproto::kvrpcpb;
 use txn_types::{Key, Value};
@@ -411,7 +411,7 @@ macro_rules! storage_callback {
                 }
             }
 
-            pub fn wrap(self, f: impl FnOnce()) -> Self {
+            pub fn wrap(self, f: impl FnOnce() + Send) -> Self {
                 match self {
                     $(StorageCallback::$variant(cb) => {
                         StorageCallback::$variant(Box::new(|v| {
@@ -470,7 +470,7 @@ impl GuardedStorageCallback {
         self.cid = cid;
     }
 
-    pub fn wrap(mut self, f: impl FnOnce()) -> Self {
+    pub fn wrap(mut self, f: impl FnOnce() + Send) -> Self {
         self.inner = Some(self.inner.take().unwrap().wrap(f));
         self
     }
