@@ -884,7 +884,6 @@ fn flashback_whole_cluster(
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
                         continue;
                     }
-                    println!("prepare flashback success for the given key range!");
                     break;
                 }
                 Err(e) => {
@@ -959,7 +958,7 @@ fn flashback_whole_cluster(
     }))
     .unwrap();
 
-    println!("flashback all stores success");
+    println!("flashback all stores success!");
 }
 
 fn load_leaders_to_each_store(
