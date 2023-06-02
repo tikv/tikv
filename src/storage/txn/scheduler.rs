@@ -542,7 +542,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         result
     }
 
-    pub fn start_latch_state_dumping(&self, stop_rx: tokio::sync::mpsc::Receiver<()>) {
+    pub fn start_latch_state_dumping(&self, mut stop_rx: tokio::sync::mpsc::Receiver<()>) {
         let self1 = self.clone();
         self.inner
             .high_priority_pool
@@ -559,7 +559,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                     let _g = self1.inner.latch_state_dump_lock.write();
 
-                    let mut formatted_latch_state = self1.inner.latches.dump_string();
+                    let formatted_latch_state = self1.inner.latches.dump_string();
 
                     let mut formatted_tasks = String::new();
                     for (slot_index, slot) in self1.inner.task_slots.iter().enumerate() {
@@ -575,13 +575,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 "    cid={}: tag={:?}, ts={}, latches={:?}, owned_count={}, elapsed={:?}, owned={}, cb={}, pr={}",
                                 key,
                                 item.tag,
-                                item.task.map_or_else(TimeStamp::zero, |task|task.cmd.ts()),
+                                item.task.as_ref().map_or_else(TimeStamp::zero, |task|task.cmd.ts()),
                                 item.lock.required_hashes,
                                 item.lock.owned_count,
                                 item._cmd_timer.begin.saturating_elapsed(),
                                 item.owned.load(Ordering::Acquire),
-                                item.cb.map_or("None", |_|"Some"),
-                                item.pr.map_or("None", |_|"Some")
+                                item.cb.as_ref().map_or("None", |_|"Some"),
+                                item.pr.as_ref().map_or("None", |_|"Some")
                             ).unwrap();
                         }
                     }

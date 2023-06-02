@@ -414,7 +414,7 @@ macro_rules! storage_callback {
             pub fn wrap(self, f: impl FnOnce() + Send) -> Self {
                 match self {
                     $(StorageCallback::$variant(cb) => {
-                        StorageCallback::$variant(Box::new(|v| {
+                        StorageCallback::$variant(Box::new(move |v| {
                             f();
                             cb(v)
                         }))
@@ -458,12 +458,12 @@ impl GuardedStorageCallback {
         &self.inner.as_ref().unwrap()
     }
 
-    pub fn into_inner(self) -> StorageCallback {
-        self.inner.unwrap()
+    pub fn into_inner(mut self) -> StorageCallback {
+        self.inner.take().unwrap()
     }
 
-    pub fn execute(self, pr: ProcessResult) {
-        self.inner.unwrap().execute(pr);
+    pub fn execute(mut self, pr: ProcessResult) {
+        self.inner.take().unwrap().execute(pr);
     }
 
     pub fn set_cid(&mut self, cid: u64) {
