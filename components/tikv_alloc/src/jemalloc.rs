@@ -28,17 +28,36 @@ lazy_static! {
 }
 
 thread_local! {
-    static MEMORY_STAT_ACCESSOR_STILL_ALIVE: std::cell::RefCell<Option<AccessorStillAlive>> = std::cell::RefCell::new(None);
+    static MEMORY_STAT_ACCESSOR_STILL_ALIVE: AccessorStillAlive = {
+        let thd = std::thread::current();
+        let name = thd.name().unwrap_or("<unknown>").to_owned();
+        // We must store the current thread ID here,
+        // or once we are running the destructor,
+        // we probably cannot access these anymore.
+        AccessorStillAlive(name, thd.id())
+    };
 }
 
-struct AccessorStillAlive;
+struct AccessorStillAlive(String, ThreadId);
 
 impl Drop for AccessorStillAlive {
     fn drop(&mut self) {
-        let current = std::thread::current();
-        if let Some(accessor) = THREAD_MEMORY_MAP.lock().unwrap().get_mut(&current.id()) {
+        let mut l = match THREAD_MEMORY_MAP.lock() {
+            Ok(l) => l,
+            Err(_) => {
+                // perhaps we are panicking, don't panic again (which leads to abort).
+                eprintln!("<tikv_alloc>: the global accessor has been poisoned!");
+                return;
+            }
+        };
+
+        if let Some(accessor) = l.get_mut(&self.1) {
             // NOTE: should we notify the code writer here? For example adding a
             // `debug_panic` here?
+            eprintln!(
+                "<tikv_alloc>: the thread {}({:?}) exits with accessor left. forgot to call `remove_thread_memory_accessor`?",
+                self.0, self.1,
+            );
             accessor.allocated.0 = None;
             accessor.deallocated.0 = None;
         }
@@ -116,15 +135,11 @@ impl MemoryStatsAccessor {
 }
 
 pub fn add_thread_memory_accessor() {
+    MEMORY_STAT_ACCESSOR_STILL_ALIVE.with(|_s| ());
+
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     let allocated = PeekableRemoteStat::allocated();
     let deallocated = PeekableRemoteStat::deallocated();
-    MEMORY_STAT_ACCESSOR_STILL_ALIVE.with(|s| {
-        let mut s = s.borrow_mut();
-        if s.is_none() {
-            *s = Some(AccessorStillAlive)
-        }
-    });
     thread_memory_map.insert(
         thread::current().id(),
         MemoryStatsAccessor {
@@ -197,6 +212,10 @@ pub fn fetch_stats() -> Result<Option<AllocStats>, Error> {
     ]))
 }
 
+fn trim_yatp_suffix(s: &str) -> &str {
+    s.trim_end_matches(|c: char| c.is_ascii_digit() || c == '-')
+}
+
 /// Iterate over the allocation stat.
 /// Format of the callback: `(name, allocated, deallocated)`.
 pub fn iterate_thread_allocation_stats(mut f: impl FnMut(&str, u64, u64)) {
@@ -205,7 +224,9 @@ pub fn iterate_thread_allocation_stats(mut f: impl FnMut(&str, u64, u64)) {
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     let mut collected = HashMap::<&str, (u64, u64)>::with_capacity(thread_memory_map.len());
     for (_, accessor) in thread_memory_map.iter() {
-        let ent = collected.entry(accessor.thread_name.as_str()).or_default();
+        let ent = collected
+            .entry(trim_yatp_suffix(&accessor.thread_name))
+            .or_default();
         ent.0 += accessor.get_allocated();
         ent.1 += accessor.get_deallocated();
     }
@@ -370,13 +391,16 @@ mod profiling {
 
             let (tx, rx) = std::sync::mpsc::channel();
             let mut threads = vec![];
-            for i in 1..5 {
+            for i in 1..6 {
                 let tx = tx.clone();
                 // It is in test... let skip calling hooks.
                 #[allow(clippy::disallowed_methods)]
                 let hnd = std::thread::Builder::new()
                     .name(format!("test_allocation_stat_{i}"))
                     .spawn(move || {
+                        if i == 5 {
+                            return;
+                        }
                         add_thread_memory_accessor();
                         let (tx2, rx2) = std::sync::mpsc::channel::<()>();
                         let v = vec![42u8; 1024 * 1024 * i];
@@ -385,9 +409,10 @@ mod profiling {
                         tx.send((i, std::thread::current().id(), tx2)).unwrap();
                         drop(tx);
                         rx2.recv().unwrap();
-                        if i != 3 {
-                            remove_thread_memory_accessor();
+                        if i == 3 {
+                            panic!("Oops... I forgot to remove the accessor.")
                         }
+                        remove_thread_memory_accessor();
                     })
                     .unwrap();
                 threads.push(hnd);
@@ -407,8 +432,13 @@ mod profiling {
                 tx.send(()).unwrap();
             }
             drop(l);
-            for th in threads {
-                th.join().unwrap();
+            for (i, th) in threads.into_iter().enumerate() {
+                let res = th.join();
+                if i == 2 {
+                    res.unwrap_err();
+                } else {
+                    res.unwrap();
+                }
             }
             let l = THREAD_MEMORY_MAP.lock().unwrap();
             assert_eq!(l.len(), 1);
