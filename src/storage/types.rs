@@ -2,7 +2,7 @@
 
 //! Core data types.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::atomic::AtomicBool};
 
 use kvproto::kvrpcpb;
 use txn_types::{Key, Value};
@@ -410,6 +410,17 @@ macro_rules! storage_callback {
                     },)*
                 }
             }
+
+            pub fn wrap(self, f: impl FnOnce()) -> Self {
+                match self {
+                    $(StorageCallback::$variant(cb) => {
+                        StorageCallback::$variant(Box::new(|v| {
+                            f();
+                            cb(v)
+                        })),
+                    })*
+                }
+            }
         }
 
         $(impl StorageCallbackType for $cb_ty {
@@ -435,4 +446,47 @@ storage_callback! {
 
 pub trait StorageCallbackType: Sized {
     fn callback(cb: Callback<Self>) -> StorageCallback;
+}
+
+pub struct GuardedStorageCallback {
+    inner: Option<StorageCallback>,
+    cid: u64,
+}
+
+impl GuardedStorageCallback {
+    pub fn inner(&self) -> &StorageCallback {
+        &self.inner.as_ref().unwrap()
+    }
+
+    pub fn into_inner(self) -> StorageCallback {
+        self.inner.unwrap()
+    }
+
+    pub fn execute(self, pr: ProcessResult) {
+        self.inner.unwrap().execute(pr);
+    }
+
+    pub fn set_cid(&mut self, cid: u64) {
+        self.cid = cid;
+    }
+
+    pub fn wrap(mut self, f: impl FnOnce()) -> Self {
+        self.inner = Some(self.inner.take().unwrap().wrap(f));
+        self
+    }
+}
+
+impl Drop for GuardedStorageCallback {
+    fn drop(&mut self) {
+        assert!(self.inner.is_none());
+    }
+}
+
+impl From<StorageCallback> for GuardedStorageCallback {
+    fn from(value: StorageCallback) -> Self {
+        GuardedStorageCallback {
+            inner: Some(value),
+            cid: 0,
+        }
+    }
 }

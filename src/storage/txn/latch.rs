@@ -4,6 +4,7 @@
 use std::{
     collections::{hash_map::DefaultHasher, VecDeque},
     hash::{Hash, Hasher},
+    ops::Deref,
     usize,
 };
 
@@ -24,7 +25,7 @@ const WAITING_LIST_MAX_CAPACITY: usize = 16;
 /// B in all the overlapping latches. This is an invariant ensured by the
 /// `gen_lock`, `acquire` and `release`.
 #[derive(Clone)]
-struct Latch {
+pub struct Latch {
     // store hash value of the key and command ID which requires this key.
     pub waiting: VecDeque<Option<(u64, u64)>>,
 }
@@ -159,7 +160,7 @@ impl Lock {
 /// interchangeably, but conceptually a latch is a queue, and a slot is an index
 /// to the queue.
 pub struct Latches {
-    slots: Vec<CachePadded<Mutex<Latch>>>,
+    pub slots: Vec<CachePadded<Mutex<Latch>>>,
     size: usize,
 }
 
@@ -185,6 +186,14 @@ impl Latches {
         let mut acquired_count: usize = 0;
         for &key_hash in &lock.required_hashes[lock.owned_count..] {
             let mut latch = self.lock_latch(key_hash);
+
+            if latch.waiting.len() > 200 {
+                let mut formatted_slot = String::new();
+                let slot_index = (key_hash as usize) & (self.size - 1);
+                self.dump_slot(&mut formatted_slot, slot_index, &latch);
+                warn!("too long latch"; "len" => latch.waiting.len(), "slot" => %formatted_slot);
+            }
+
             match latch.get_first_req_by_hash(key_hash) {
                 Some(cid) => {
                     if cid == who {
@@ -269,6 +278,39 @@ impl Latches {
     #[inline]
     fn lock_latch(&self, hash: u64) -> MutexGuard<'_, Latch> {
         self.slots[(hash as usize) & (self.size - 1)].lock()
+    }
+
+    pub fn dump_string(&self) -> String {
+        let mut formatted_latch_state = String::new();
+
+        for (slot_index, slot) in self.slots.iter().enumerate() {
+            let slot = slot.lock();
+            if slot.waiting.is_empty() {
+                continue;
+            }
+
+            self.dump_slot(&mut str, slot_index, &slot);
+        }
+
+        formatted_latch_state
+    }
+
+    pub fn dump_slot(
+        &self,
+        str: &mut String,
+        slot_index: usize,
+        slot: &impl Deref<Target = Latch>,
+    ) {
+        writeln!(str, "Slot {}:", slot_index).unwrap();
+
+        for (item_index, item) in slot.waiting.iter().enumerate() {
+            match item {
+                Some((hash, cid)) => {
+                    writeln!(str, "    {}: hash={}, cid={}", item_index, hash, cid).unwrap()
+                }
+                None => writeln!(str, "    {}: None", item_index).unwrap(),
+            }
+        }
     }
 }
 
