@@ -25,7 +25,7 @@ const WAITING_LIST_MAX_CAPACITY: usize = 16;
 /// If command A is ahead of command B in one latch, it must be ahead of command
 /// B in all the overlapping latches. This is an invariant ensured by the
 /// `gen_lock`, `acquire` and `release`.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Latch {
     // store hash value of the key and command ID which requires this key.
     pub waiting: VecDeque<Option<(u64, u64)>>,

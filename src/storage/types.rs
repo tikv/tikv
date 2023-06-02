@@ -455,7 +455,7 @@ pub struct GuardedStorageCallback {
 
 impl GuardedStorageCallback {
     pub fn inner(&self) -> &StorageCallback {
-        &self.inner.as_ref().unwrap()
+        self.inner.as_ref().unwrap()
     }
 
     pub fn into_inner(mut self) -> StorageCallback {

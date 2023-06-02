@@ -248,6 +248,7 @@ impl SchedulerTaskCallback {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     fn add_on_invoke(self, f: impl FnOnce() + Send + 'static) -> Self {
         match self {
             Self::NormalRequestCallback(cb) => Self::NormalRequestCallback(cb.wrap(f)),
@@ -268,7 +269,7 @@ struct SchedulerInner<L: LockManager> {
 
     latch_state_dump_lock: RwLock<()>,
 
-    stop_dump_latch_ch: tokio::sync::mpsc::Sender<()>,
+    _stop_dump_latch_ch: tokio::sync::mpsc::Sender<()>,
 
     sched_pending_write_threshold: usize,
 
@@ -315,6 +316,7 @@ fn id_index(cid: u64) -> usize {
 
 struct ComposedGuard<T, U> {
     pub primary_guard: T,
+    #[allow(dead_code)]
     pub secondary_guard: U,
 }
 
@@ -497,7 +499,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             id_alloc: AtomicU64::new(0).into(),
             latches: Latches::new(config.scheduler_concurrency),
             latch_state_dump_lock: RwLock::new(()),
-            stop_dump_latch_ch: dump_stop_tx,
+            _stop_dump_latch_ch: dump_stop_tx,
             running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
             worker_pool: SchedPool::new(
@@ -1576,7 +1578,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             match ev {
                 WriteEvent::Committed => {
                     async_write_check_event_ch
-                        .send((chrono::Local::now(), DiagnoseEvent::Committed));
+                        .send((chrono::Local::now(), DiagnoseEvent::Committed))
+                        .await
+                        .unwrap();
                     let early_return = (|| {
                         fail_point!("before_async_apply_prewrite_finish", |_| false);
                         true
@@ -1584,10 +1588,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     if WriteEvent::subscribed_committed(subscribed) && early_return {
                         // Currently, the only case that response is returned after finishing
                         // commit is async applying prewrites for async commit transactions.
-                        async_write_check_event_ch.send((
-                            chrono::Local::now(),
-                            DiagnoseEvent::EarlyResponseOnCommitted,
-                        ));
+                        async_write_check_event_ch
+                            .send((
+                                chrono::Local::now(),
+                                DiagnoseEvent::EarlyResponseOnCommitted,
+                            ))
+                            .await
+                            .unwrap();
                         let cb = scheduler.inner.take_task_cb(cid);
                         Self::early_response(
                             cid,
@@ -1600,7 +1607,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
                 WriteEvent::Proposed => {
                     async_write_check_event_ch
-                        .send((chrono::Local::now(), DiagnoseEvent::Proposed));
+                        .send((chrono::Local::now(), DiagnoseEvent::Proposed))
+                        .await
+                        .unwrap();
                     let early_return = (|| {
                         fail_point!("before_pipelined_write_finish", |_| false);
                         true
@@ -1617,7 +1626,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         // TODO: Unify the code structure of pipelined pessimistic lock and
                         // async apply prewrite.
                         async_write_check_event_ch
-                            .send((chrono::Local::now(), DiagnoseEvent::EarlyResponseOnProposed));
+                            .send((chrono::Local::now(), DiagnoseEvent::EarlyResponseOnProposed))
+                            .await
+                            .unwrap();
                         let cb = scheduler.inner.take_task_cb(cid);
                         Self::early_response(
                             cid,
@@ -1630,7 +1641,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
                 WriteEvent::Finished(res) => {
                     async_write_check_event_ch
-                        .send((chrono::Local::now(), DiagnoseEvent::Finished));
+                        .send((chrono::Local::now(), DiagnoseEvent::Finished))
+                        .await
+                        .unwrap();
 
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
