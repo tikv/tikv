@@ -248,7 +248,7 @@ impl SchedulerTaskCallback {
     }
 
     #[must_use]
-    fn add_on_invoke(self, f: impl FnOnce()) -> Self {
+    fn add_on_invoke(self, f: impl FnOnce() + Send) -> Self {
         match self {
             Self::NormalRequestCallback(cb) => Self::NormalRequestCallback(cb.wrap(f)),
             _ => panic!("LockKeyCallbacks not expected to be used in 6.5.x versions"),
@@ -1543,7 +1543,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             Finished,
         }
 
-        let (async_write_check_event_ch, rx) = tokio::sync::mpsc::channel(10);
+        let (async_write_check_event_ch, rx) =
+            tokio::sync::mpsc::channel::<(chrono::DateTime<chrono::Local>, DiagnoseEvent)>(10);
         self.inner.high_priority_pool.pool.spawn(async {
             let mut events = vec![];
             loop {
