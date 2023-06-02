@@ -51,6 +51,7 @@ use raftstore::{
 use thiserror::Error;
 use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{
+    callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
@@ -203,6 +204,25 @@ pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
     let mut err = errorpb::Error::default();
     err.set_message("async snapshot callback is dropped".to_string());
     Err(kv::Error::from(kv::ErrorInner::Request(err)))
+}
+
+pub fn async_write_callback_dropped_err() -> errorpb::Error {
+    let mut err = errorpb::Error::default();
+    err.set_message("async write on_applied callback is dropped".to_string());
+    err
+}
+
+pub fn drop_on_applied_callback() -> WriteResponse {
+    let bt = backtrace::Backtrace::new();
+    error!("async write on_applied callback is dropped"; "backtrace" => ?bt);
+    let mut write_resp = WriteResponse {
+        response: Default::default(),
+    };
+    write_resp
+        .response
+        .mut_header()
+        .set_error(async_write_callback_dropped_err());
+    write_resp
 }
 
 struct WriteResCore {
@@ -488,20 +508,30 @@ where
             Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
         };
         let applied_tx = tx.clone();
-        let applied_cb = Box::new(move |resp: WriteResponse| {
-            let mut res = match on_write_result::<E::Snapshot>(resp) {
-                Ok(CmdRes::Resp(_)) => {
-                    fail_point!("raftkv_async_write_finish");
-                    Ok(())
+        let applied_cb = must_call(
+            Box::new(move |resp: WriteResponse| {
+                fail_point!("applied_cb_return_undetermined_err", |_| {
+                    applied_tx.notify(Err(kv::Error::from(Error::RequestFailed(
+                        async_write_callback_dropped_err(),
+                    ))));
+                });
+                let mut res = match on_write_result::<E::Snapshot>(resp) {
+                    Ok(CmdRes::Resp(_)) => {
+                        fail_point!("raftkv_async_write_finish");
+                        Ok(())
+                    }
+                    Ok(CmdRes::Snap(_)) => {
+                        Err(box_err!("unexpect snapshot, should mutate instead."))
+                    }
+                    Err(e) => Err(kv::Error::from(e)),
+                };
+                if let Some(cb) = on_applied {
+                    cb(&mut res);
                 }
-                Ok(CmdRes::Snap(_)) => Err(box_err!("unexpect snapshot, should mutate instead.")),
-                Err(e) => Err(kv::Error::from(e)),
-            };
-            if let Some(cb) = on_applied {
-                cb(&mut res);
-            }
-            applied_tx.notify(res);
-        });
+                applied_tx.notify(res);
+            }),
+            drop_on_applied_callback,
+        );
 
         let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
         let extra_opts = RaftCmdExtraOpts {

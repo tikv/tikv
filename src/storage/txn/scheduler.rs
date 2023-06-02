@@ -832,6 +832,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 Err(e) => {
                     if !Self::is_undetermined_error(&e) {
                         do_wake_up = false;
+                    } else {
+                        panic!(
+                            "undetermined error: {:?} cid={}, tag={}, process result={:?}",
+                            e, cid, tag, &pr
+                        );
                     }
                     ProcessResult::Failed {
                         err: StorageError::from(e),
@@ -1069,10 +1074,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .unwrap();
     }
 
-    fn is_undetermined_error(_e: &tikv_kv::Error) -> bool {
-        // TODO: If there's some cases that `engine.async_write` returns error but it's
-        // still possible that the data is successfully written, return true.
-        false
+    // Return true if raftstore returns error and the underlying write status could
+    // not be decided.
+    fn is_undetermined_error(e: &tikv_kv::Error) -> bool {
+        if let tikv_kv::ErrorInner::Request(error_header) = &*(e.0) {
+            error_header.message == "async write on_applied callback is dropped"
+        } else {
+            false
+        }
     }
 
     fn early_response(
