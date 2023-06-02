@@ -7,7 +7,7 @@ use std::{
 
 use engine_traits::KvEngine;
 use fail::fail_point;
-use kvproto::kvrpcpb::{KeyRange, LeaderInfo};
+use kvproto::kvrpcpb::{CheckedLeader, KeyRange, LeaderInfo};
 use tikv_util::worker::Runnable;
 
 use crate::{
@@ -42,6 +42,7 @@ pub enum Task {
         ts: u64,
         unsafe_regions: Vec<u64>,
         store_id: u64,
+        checked_leaders: Vec<CheckedLeader>,
         cb: Box<dyn FnOnce(()) + Send>,
     },
 }
@@ -71,10 +72,12 @@ impl fmt::Display for Task {
                 ts,
                 ref unsafe_regions,
                 store_id,
+                ref checked_leaders,
                 ..
             } => de
-                .field("ts", ts)
                 .field("unsafe_region_num", &unsafe_regions.len())
+                .field("checked_leader_num", &checked_leaders.len())
+                .field("ts", ts)
                 .field("store_id", store_id)
                 .finish(),
         }
@@ -167,12 +170,14 @@ impl<S: StoreRegionMeta, E: KvEngine> Runnable for Runner<S, E> {
                 ts,
                 unsafe_regions,
                 store_id,
+                checked_leaders,
                 cb,
             } => {
                 self.region_read_progress.apply_safe_ts(
                     ts,
                     store_id,
                     unsafe_regions,
+                    checked_leaders,
                     &self.coprocessor,
                 );
                 cb(());

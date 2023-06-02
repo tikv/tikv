@@ -1061,6 +1061,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let ts = request.get_ts();
         let store_id = request.get_store_id();
         let unsafe_regions = request.take_unsafe_regions().into();
+        let checked_leaders = request.take_checked_leaders().into();
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
@@ -1069,6 +1070,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     ts,
                     unsafe_regions,
                     store_id,
+                    checked_leaders,
                     cb,
                 })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;

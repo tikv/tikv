@@ -18,7 +18,7 @@ use std::{
 use collections::HashSet;
 use engine_traits::KvEngine;
 use kvproto::{
-    kvrpcpb::{self, KeyRange, LeaderInfo},
+    kvrpcpb::{self, KeyRange, LeaderInfo, CheckedLeader},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftRequestHeader,
@@ -1245,6 +1245,7 @@ impl RegionReadProgressRegistry {
         ts: u64,
         store_id: u64,
         unsafe_regions: Vec<u64>,
+        checked_leaders: Vec<CheckedLeader>,
         coprocessor: &CoprocessorHost<E>,
     ) {
         let unsafe_regions = HashSet::from_iter(unsafe_regions.iter());
@@ -1276,6 +1277,11 @@ impl RegionReadProgressRegistry {
             }
             if let Some(rp) = registry.get(&region_id) {
                 rp.update_hibernate_safe_ts(ts, coprocessor);
+            }
+        }
+        for checked_leader in checked_leaders {
+            if let Some(rp) = registry.get(&checked_leader.region_id) {
+                rp.consume_checked_leader(checked_leader, coprocessor);
             }
         }
     }
@@ -1473,6 +1479,27 @@ impl RegionReadProgress {
         } else {
             false
         }
+    }
+
+    // Consume the provided `CheckedLeader` to update `safe_ts`
+    pub fn consume_checked_leader<E: KvEngine>(
+        &self,
+        checked_leader: CheckedLeader,
+        coprocessor: &CoprocessorHost<E>,
+    ) {
+        let mut core = self.core.lock().unwrap();
+        // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
+        // `read_state` is guaranteed to be valid when it is published by the leader
+        let rs = checked_leader.get_read_state();
+        let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
+        if apply_index != 0 && ts != 0 && !core.discard {
+            if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+                if !core.pause {
+                    self.safe_ts.store(ts, AtomicOrdering::Release);
+                }
+            }
+        }
+        coprocessor.on_update_safe_ts(checked_leader.region_id, self.safe_ts(), rs.get_safe_ts());
     }
 
     // Dump the `LeaderInfo` and the peer list
