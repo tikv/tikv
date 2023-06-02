@@ -1543,9 +1543,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             Finished,
         }
 
-        let (async_write_check_event_ch, rx) =
+        let (async_write_check_event_ch, mut rx) =
             tokio::sync::mpsc::channel::<(chrono::DateTime<chrono::Local>, DiagnoseEvent)>(10);
-        self.inner.high_priority_pool.pool.spawn(async {
+        self.inner.high_priority_pool.pool.spawn(async move {
             let mut events = vec![];
             loop {
                 tokio::select! {
