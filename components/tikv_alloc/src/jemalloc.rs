@@ -27,6 +27,24 @@ lazy_static! {
         Mutex::new(HashMap::new());
 }
 
+thread_local! {
+    static MEMORY_STAT_ACCESSOR_STILL_ALIVE: std::cell::RefCell<Option<AccessorStillAlive>> = std::cell::RefCell::new(None);
+}
+
+struct AccessorStillAlive;
+
+impl Drop for AccessorStillAlive {
+    fn drop(&mut self) {
+        let current = std::thread::current();
+        if let Some(accessor) = THREAD_MEMORY_MAP.lock().unwrap().get_mut(&current.id()) {
+            // NOTE: should we notify the code writer here? For example adding a
+            // `debug_panic` here?
+            accessor.allocated.0 = None;
+            accessor.deallocated.0 = None;
+        }
+    }
+}
+
 /// The struct for tracing the statistic of another thread.
 /// The target pointer should be bound to some TLS of another thread, this
 /// structure is just "peeking" it -- with out modifying.
@@ -59,7 +77,7 @@ impl<T: Copy> PeekableRemoteStat<T> {
 impl PeekableRemoteStat<u64> {
     fn allocated() -> Self {
         // SAFETY: it is transparent.
-        // NOTE: perhaps we'd better add something `as_raw()` for `ThreadLocal`...
+        // NOTE: perhaps we'd better add something like `as_raw()` for `ThreadLocal`...
         Self::from_raw(
             tikv_jemalloc_ctl::thread::allocatedp::read()
                 .map(|x| unsafe { std::mem::transmute(x) })
@@ -83,10 +101,30 @@ struct MemoryStatsAccessor {
     thread_name: String,
 }
 
+impl MemoryStatsAccessor {
+    fn get_allocated(&self) -> u64 {
+        // SAFETY: once the memory stats accessor has been added to the map,
+        // we registered the `StillAlive` structure for tracing the thread's lifetime.
+        unsafe { self.allocated.peek().unwrap_or_default() }
+    }
+
+    fn get_deallocated(&self) -> u64 {
+        // SAFETY: once the memory stats accessor has been added to the map,
+        // we registered the `StillAlive` structure for tracing the thread's lifetime.
+        unsafe { self.deallocated.peek().unwrap_or_default() }
+    }
+}
+
 pub fn add_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     let allocated = PeekableRemoteStat::allocated();
     let deallocated = PeekableRemoteStat::deallocated();
+    MEMORY_STAT_ACCESSOR_STILL_ALIVE.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.is_none() {
+            *s = Some(AccessorStillAlive)
+        }
+    });
     thread_memory_map.insert(
         thread::current().id(),
         MemoryStatsAccessor {
@@ -124,17 +162,15 @@ pub fn dump_stats() -> String {
 
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     for (_, accessor) in thread_memory_map.iter() {
-        unsafe {
-            let alloc = accessor.allocated.peek().unwrap_or_default();
-            let dealloc = accessor.deallocated.peek().unwrap_or_default();
-            memory_stats.push_str(
-                format!(
-                    "Thread [{}]: alloc_bytes={alloc},dealloc_bytes={dealloc}\n",
-                    accessor.thread_name
-                )
-                .as_str(),
-            );
-        }
+        let alloc = accessor.get_allocated();
+        let dealloc = accessor.get_deallocated();
+        memory_stats.push_str(
+            format!(
+                "Thread [{}]: alloc_bytes={alloc},dealloc_bytes={dealloc}\n",
+                accessor.thread_name
+            )
+            .as_str(),
+        );
     }
     memory_stats
 }
@@ -169,15 +205,9 @@ pub fn iterate_thread_allocation_stats(mut f: impl FnMut(&str, u64, u64)) {
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     let mut collected = HashMap::<&str, (u64, u64)>::with_capacity(thread_memory_map.len());
     for (_, accessor) in thread_memory_map.iter() {
-        // SAFETY: we have removed the thread info accessor in almost every path of
-        // creating thread by clippy.
-        unsafe {
-            let alloc = accessor.allocated.peek().unwrap_or_default();
-            let dealloc = accessor.allocated.peek().unwrap_or_default();
-            let ent = collected.entry(accessor.thread_name.as_str()).or_default();
-            ent.0 += alloc;
-            ent.1 += dealloc;
-        }
+        let ent = collected.entry(accessor.thread_name.as_str()).or_default();
+        ent.0 += accessor.get_allocated();
+        ent.1 += accessor.get_deallocated();
     }
     for (name, val) in collected {
         f(name, val.0, val.1)
@@ -273,7 +303,7 @@ mod profiling {
             let error = diff as f64 / base as f64;
             assert!(
                 error < delta,
-                "{name}: the difference is too huge: a={a}, b={b}, base={base}, diff={diff}, error={error}"
+                "{name}: the error is too huge: a={a}, b={b}, base={base}, diff={diff}, error={error}"
             );
         }
 
@@ -339,11 +369,12 @@ mod profiling {
             assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
 
             let (tx, rx) = std::sync::mpsc::channel();
+            let mut threads = vec![];
             for i in 1..5 {
                 let tx = tx.clone();
                 // It is in test... let skip calling hooks.
                 #[allow(clippy::disallowed_methods)]
-                std::thread::Builder::new()
+                let hnd = std::thread::Builder::new()
                     .name(format!("test_allocation_stat_{i}"))
                     .spawn(move || {
                         add_thread_memory_accessor();
@@ -354,9 +385,12 @@ mod profiling {
                         tx.send((i, std::thread::current().id(), tx2)).unwrap();
                         drop(tx);
                         rx2.recv().unwrap();
-                        remove_thread_memory_accessor();
+                        if i != 3 {
+                            remove_thread_memory_accessor();
+                        }
                     })
                     .unwrap();
+                threads.push(hnd);
             }
             drop(tx);
 
@@ -372,6 +406,15 @@ mod profiling {
                 }
                 tx.send(()).unwrap();
             }
+            drop(l);
+            for th in threads {
+                th.join().unwrap();
+            }
+            let l = THREAD_MEMORY_MAP.lock().unwrap();
+            assert_eq!(l.len(), 1);
+            let a = l.values().next().unwrap();
+            assert_eq!(a.get_allocated(), 0);
+            assert_eq!(a.get_deallocated(), 0);
         }
     }
 }
