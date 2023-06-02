@@ -417,7 +417,7 @@ macro_rules! storage_callback {
                         StorageCallback::$variant(Box::new(|v| {
                             f();
                             cb(v)
-                        })),
+                        }))
                     })*
                 }
             }
