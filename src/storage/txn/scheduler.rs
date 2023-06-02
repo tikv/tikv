@@ -248,7 +248,7 @@ impl SchedulerTaskCallback {
     }
 
     #[must_use]
-    fn add_on_invoke(self, f: impl FnOnce() + Send) -> Self {
+    fn add_on_invoke(self, f: impl FnOnce() + Send + 'static) -> Self {
         match self {
             Self::NormalRequestCallback(cb) => Self::NormalRequestCallback(cb.wrap(f)),
             _ => panic!("LockKeyCallbacks not expected to be used in 6.5.x versions"),

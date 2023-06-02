@@ -411,7 +411,7 @@ macro_rules! storage_callback {
                 }
             }
 
-            pub fn wrap(self, f: impl FnOnce() + Send) -> Self {
+            pub fn wrap(self, f: impl FnOnce() + Send + 'static) -> Self {
                 match self {
                     $(StorageCallback::$variant(cb) => {
                         StorageCallback::$variant(Box::new(move |v| {
@@ -470,7 +470,7 @@ impl GuardedStorageCallback {
         self.cid = cid;
     }
 
-    pub fn wrap(mut self, f: impl FnOnce() + Send) -> Self {
+    pub fn wrap(mut self, f: impl FnOnce() + Send + 'static) -> Self {
         self.inner = Some(self.inner.take().unwrap().wrap(f));
         self
     }
