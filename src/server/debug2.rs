@@ -304,10 +304,11 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             .map(|results| {
                 if let Err(e) = &results {
                     error!("{:?}", e);
-                }
-                for r in results.as_ref().unwrap() {
-                    if let Err(e) = r {
-                        error!("{:?}", e);
+                } else {
+                    for r in results.as_ref().unwrap() {
+                        if let Err(e) = r {
+                            error!("{:?}", e);
+                        }
                     }
                 }
                 results
