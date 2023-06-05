@@ -85,7 +85,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Match v1 on_set_flashback_state.
-    #[allow(unused_mut)]
     pub fn on_apply_res_flashback<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
