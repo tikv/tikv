@@ -1498,6 +1498,9 @@ pub async fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>
     }
     if matches!(res, Ok(())) {
         // Only finish when flashback executed successfully.
+        fail_point!("skip_finish_flashback_to_version", |_| {
+            Ok(FlashbackToVersionResponse::default())
+        });
         let f = storage.get_engine().end_flashback(req.get_context());
         res = f.await.map_err(storage::Error::from);
     }
