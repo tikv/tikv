@@ -2827,7 +2827,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#3dc79e77313957c720403f98daab699d82bd6246"
+source = "git+https://github.com/HuSharp/kvproto?branch=support_flashback_ctl#28247eebdae7e04342b5d8f653735a9242195e1e"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -6463,6 +6463,7 @@ dependencies = [
 name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "cc",
  "cdc",
