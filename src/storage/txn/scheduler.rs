@@ -1077,8 +1077,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     // Return true if raftstore returns error and the underlying write status could
     // not be decided.
     fn is_undetermined_error(e: &tikv_kv::Error) -> bool {
-        if let tikv_kv::ErrorInner::Request(error_header) = &*(e.0) {
-            error_header.message == "async write on_applied callback is dropped"
+        if let tikv_kv::ErrorInner::Undetermined(err_msg) = &*(e.0) {
+            error!(
+                "undetermined error is encountered, exit the tikv-server msg={:?}",
+                err_msg
+            );
+            true
         } else {
             false
         }

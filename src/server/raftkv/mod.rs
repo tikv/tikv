@@ -63,6 +63,8 @@ use crate::storage::{
     kv::{Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext, WriteData},
 };
 
+pub const ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG: &str = "async write on_applied callback is dropped";
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{}", .0.get_message())]
@@ -80,6 +82,9 @@ pub enum Error {
     #[error("{0}")]
     InvalidRequest(String),
 
+    #[error("{0}")]
+    Undetermined(String),
+
     #[error("timeout after {0:?}")]
     Timeout(Duration),
 }
@@ -94,6 +99,7 @@ pub fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         }
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
+        KvError(box tikv_kv::ErrorInner::Undetermined(_)) => RequestStatusKind::err_undetermind,
         KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
     }
 }
@@ -104,6 +110,7 @@ impl From<Error> for kv::Error {
     fn from(e: Error) -> kv::Error {
         match e {
             Error::RequestFailed(e) => KvError::from(KvErrorInner::Request(e)),
+            Error::Undetermined(e) => KvError::from(KvErrorInner::Undetermined(e)),
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
@@ -120,7 +127,11 @@ where
 
 pub fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
-        return Err(Error::RequestFailed(resp.take_header().take_error()));
+        let mut err = resp.take_header().take_error();
+        if err.get_message() == ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG {
+            return Err(Error::Undetermined(err.take_message()));
+        }
+        return Err(Error::RequestFailed(err));
     }
 
     Ok(())
@@ -208,7 +219,7 @@ pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
 
 pub fn async_write_callback_dropped_err() -> errorpb::Error {
     let mut err = errorpb::Error::default();
-    err.set_message("async write on_applied callback is dropped".to_string());
+    err.set_message(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string());
     err
 }
 
