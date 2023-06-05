@@ -57,7 +57,10 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+# TODO: updated if PR merged.
+# git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/LykxSassinator/rust-rocksdb"
+branch = "support_cf_ttl"
 package = "rocksdb"
 features = ["encryption"]
 
