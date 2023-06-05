@@ -9,6 +9,7 @@ use engine_traits::{
     CachedTablet, Iterable, MiscExt, Peekable, RaftEngine, RaftLogBatch, TabletContext,
     TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
+use futures::future::Future;
 use keys::{data_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
 use kvproto::{
     debugpb::Db as DbType,
@@ -664,6 +665,18 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
 
     fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
         self.raft_statistics = s;
+    }
+
+    fn key_range_flashback_to_version(
+        &self,
+        _version: u64,
+        _region_id: u64,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async move { unimplemented!() }
     }
 
     fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {

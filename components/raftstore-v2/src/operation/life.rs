@@ -37,7 +37,11 @@ use kvproto::{
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage},
 };
 use raftstore::store::{
-    fsm::life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
+    fsm::{
+        apply,
+        life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
+        Proposal,
+    },
     metrics::RAFT_PEER_PENDING_DURATION,
     util, Transport, WriteTask,
 };
@@ -777,6 +781,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let _ = ctx.router.send_raft_message(msg);
         }
         self.pending_reads_mut().clear_all(Some(region_id));
+        for Proposal { cb, .. } in self.proposals_mut().queue_mut().drain(..) {
+            apply::notify_req_region_removed(region_id, cb);
+        }
+
         self.clear_apply_scheduler();
     }
 }
