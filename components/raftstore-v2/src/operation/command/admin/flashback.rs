@@ -9,7 +9,10 @@ use kvproto::{
 use protobuf::Message;
 use raftstore::{
     coprocessor::RegionChangeReason,
-    store::metrics::{PEER_ADMIN_CMD_COUNTER, PEER_IN_FLASHBACK_STATE},
+    store::{
+        metrics::{PEER_ADMIN_CMD_COUNTER, PEER_IN_FLASHBACK_STATE},
+        LocksStatus,
+    },
     Result,
 };
 
@@ -85,7 +88,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_flashback<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        mut res: FlashbackResult,
+        #[allow(unused_mut)] mut res: FlashbackResult,
     ) {
         (|| {
             fail_point!("keep_peer_fsm_flashback_state_false", |_| {
@@ -113,6 +116,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .put_region_state(region_id, res.index, &res.region_state)
             .unwrap();
         self.set_has_extra_write();
+
+        let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
+        pessimistic_locks.status = if res.region_state.get_region().is_in_flashback {
+            // To prevent the insertion of any new pessimistic locks, set the lock status
+            // to `LocksStatus::IsInFlashback` and clear all the existing locks.
+            pessimistic_locks.clear();
+            LocksStatus::IsInFlashback
+        } else if self.is_leader() {
+            // If the region is not in flashback, the leader can continue to insert
+            // pessimistic locks.
+            LocksStatus::Normal
+        } else {
+            // If the region is not in flashback and the peer is not the leader, it
+            // cannot insert pessimistic locks.
+            LocksStatus::NotLeader
+        }
 
         // Compares to v1, v2 does not expire remote lease, because only
         // local reader can serve read requests.
