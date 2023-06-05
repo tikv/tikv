@@ -13,24 +13,15 @@ use kvproto::{
 };
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
-<<<<<<< HEAD
-use txn_types::WriteBatchFlags;
-=======
-use test_raftstore_macro::test_case;
 use tikv::storage::kv::SnapContext;
 use txn_types::{Key, PessimisticLock, WriteBatchFlags};
->>>>>>> 9aa1d7350d (raftstore: block in-memory pessimistic locks during the flashback (#14859))
 
 const TEST_KEY: &[u8] = b"k1";
 const TEST_VALUE: &[u8] = b"v1";
 
-<<<<<<< HEAD
 #[test]
-=======
-#[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_flashback_with_in_memory_pessimistic_locks() {
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -53,7 +44,6 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
                     min_commit_ts: 30.into(),
                     last_change_ts: 5.into(),
                     versions_to_last_change: 3,
-                    is_locked_with_conflict: false,
                 },
             )])
             .unwrap();
@@ -88,9 +78,7 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
     }
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
->>>>>>> 9aa1d7350d (raftstore: block in-memory pessimistic locks during the flashback (#14859))
+#[test]
 fn test_allow_read_only_request() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
