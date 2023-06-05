@@ -46,6 +46,7 @@ use super::{
 
 pub const CQ_COUNT: usize = 1;
 pub const CLIENT_PREFIX: &str = "pd";
+const DEFAULT_REGION_PER_BATCH: i32 = 128;
 
 #[derive(Clone)]
 pub struct RpcClient {
@@ -411,6 +412,53 @@ impl PdClient for RpcClient {
         sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, _| {
             client.watch_global_config(&req)
         })
+    }
+
+    fn scan_regions(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC.scan_regions.start_coarse_timer();
+
+        let mut req = pdpb::ScanRegionsRequest::default();
+        req.set_header(self.header());
+        req.set_start_key(start_key.to_vec());
+        req.set_end_key(end_key.to_vec());
+        req.set_limit(limit);
+
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.scan_regions_opt(&req, option)
+        })?;
+        check_resp_header(resp.get_header())?;
+        Ok(resp.take_regions().into())
+    }
+
+    fn batch_load_regions(
+        &self,
+        mut start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> Vec<Vec<pdpb::Region>> {
+        let mut res = Vec::new();
+
+        loop {
+            let regions = self
+                .scan_regions(&start_key, &end_key, DEFAULT_REGION_PER_BATCH)
+                .unwrap();
+            if regions.is_empty() {
+                break;
+            }
+            res.push(regions.clone());
+
+            let end_region = regions.last().unwrap().get_region();
+            if end_region.get_end_key().is_empty() {
+                break;
+            }
+            start_key = end_region.get_end_key().to_vec();
+        }
+
+        res
     }
 
     fn get_cluster_id(&self) -> Result<u64> {
