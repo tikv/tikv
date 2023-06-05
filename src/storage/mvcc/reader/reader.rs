@@ -5,9 +5,10 @@ use std::ops::Bound;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
-    errorpb::{self, EpochNotMatch, StaleCommand},
+    errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
 };
+use raftstore::store::LocksStatus;
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
@@ -146,6 +147,8 @@ pub struct MvccReader<S: EngineSnapshot> {
     term: u64,
     #[allow(dead_code)]
     version: u64,
+
+    allow_in_flashback: bool,
 }
 
 impl<S: EngineSnapshot> MvccReader<S> {
@@ -164,6 +167,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             fill_cache,
             term: 0,
             version: 0,
+            allow_in_flashback: false,
         }
     }
 
@@ -182,6 +186,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             fill_cache: !ctx.get_not_fill_cache(),
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
+            allow_in_flashback: false,
         }
     }
 
@@ -265,6 +270,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     let mut err = errorpb::Error::default();
                     // We don't know the current regions. Just return an empty EpochNotMatch error.
                     err.set_epoch_not_match(EpochNotMatch::default());
+                    return Some(Err(KvError::from(err).into()));
+                }
+                // If the region is in the flashback state, it should not be allowed to read the
+                // locks.
+                if locks.status == LocksStatus::IsInFlashback && !self.allow_in_flashback {
+                    let mut err = errorpb::Error::default();
+                    err.set_flashback_in_progress(FlashbackInProgress::default());
                     return Some(Err(KvError::from(err).into()));
                 }
 
@@ -767,6 +779,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
     pub fn snapshot(&self) -> &S {
         &self.snapshot
+    }
+
+    pub fn set_allow_in_flashback(&mut self, set_allow_in_flashback: bool) {
+        self.allow_in_flashback = set_allow_in_flashback;
     }
 }
 
@@ -1674,6 +1690,7 @@ pub mod tests {
                     for_update_ts,
                     0,
                     TimeStamp::zero(),
+                    false,
                 )
                 .set_last_change(
                     TimeStamp::zero(),

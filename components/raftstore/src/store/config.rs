@@ -20,7 +20,7 @@ use tikv_util::{
 use time::Duration as TimeDuration;
 
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
-use crate::Result;
+use crate::{coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE, Result};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -30,6 +30,15 @@ lazy_static! {
     )
     .unwrap();
 }
+
+#[doc(hidden)]
+pub const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
+
+// The default duration of waiting split. If a split does not finish in
+// one-third of receiving snapshot time, split is likely very slow, so it is
+// better to prioritize accepting a snapshot
+const DEFAULT_SNAP_WAIT_SPLIT_DURATION: ReadableDuration =
+    ReadableDuration::secs(RAFTSTORE_V2_SPLIT_SIZE.0 / DEFAULT_SNAP_MAX_BYTES_PER_SEC / 3);
 
 with_prefix!(prefix_apply "apply-");
 with_prefix!(prefix_store "store-");
@@ -118,6 +127,10 @@ pub struct Config {
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
     pub snap_gc_timeout: ReadableDuration,
+    /// The duration of snapshot waits for region split. It prevents leader from
+    /// sending unnecessary snapshots when split is slow.
+    /// It is only effective in raftstore v2.
+    pub snap_wait_split_duration: ReadableDuration,
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
@@ -144,6 +157,14 @@ pub struct Config {
 
     #[online_config(skip)]
     pub snap_apply_batch_size: ReadableSize,
+
+    /// When applying a Region snapshot, its SST files can be modified by TiKV
+    /// itself. However those files could be read-only, for example, a TiKV
+    /// [agent](cmd/tikv-agent) is started based on a read-only remains. So
+    /// we can set `snap_apply_copy_symlink` to `true` to make a copy on
+    /// those SST files.
+    #[online_config(skip)]
+    pub snap_apply_copy_symlink: bool,
 
     // used to periodically check whether schedule pending applies in region runner
     #[doc(hidden)]
@@ -386,6 +407,7 @@ impl Default for Config {
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
+            snap_wait_split_duration: DEFAULT_SNAP_WAIT_SPLIT_DURATION,
             messages_per_tick: 4096,
             max_peer_down_duration: ReadableDuration::minutes(10),
             max_leader_missing_duration: ReadableDuration::hours(2),
@@ -393,6 +415,7 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
+            snap_apply_copy_symlink: false,
             region_worker_tick_interval: if cfg!(feature = "test") {
                 ReadableDuration::millis(200)
             } else {

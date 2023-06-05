@@ -125,6 +125,7 @@ pub enum LocksStatus {
     TransferringLeader,
     MergingRegion,
     NotLeader,
+    IsInFlashback,
 }
 
 impl fmt::Debug for PeerPessimisticLocks {
@@ -326,6 +327,7 @@ mod tests {
             min_commit_ts: 110.into(),
             last_change_ts: 105.into(),
             versions_to_last_change: 2,
+            is_locked_with_conflict: false,
         }
     }
 
@@ -428,6 +430,7 @@ mod tests {
                         min_commit_ts: 20.into(),
                         last_change_ts: 5.into(),
                         versions_to_last_change: 2,
+                        is_locked_with_conflict: false,
                     },
                     deleted,
                 ),

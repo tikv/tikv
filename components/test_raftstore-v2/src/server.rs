@@ -885,6 +885,14 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
 
 impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
     pub fn must_get_snapshot_of_region(&mut self, region_id: u64) -> RegionSnapshot<EK::Snapshot> {
+        self.must_get_snapshot_of_region_with_ctx(region_id, SnapContext::default())
+    }
+
+    pub fn must_get_snapshot_of_region_with_ctx(
+        &mut self,
+        region_id: u64,
+        snap_ctx: SnapContext<'_>,
+    ) -> RegionSnapshot<EK::Snapshot> {
         let mut try_snapshot = || -> Option<RegionSnapshot<EK::Snapshot>> {
             let leader = self.leader_of_region(region_id)?;
             let store_id = leader.store_id;
@@ -897,7 +905,7 @@ impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
             let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
-                ..Default::default()
+                ..snap_ctx.clone()
             };
             storage.snapshot(snap_ctx).ok()
         };

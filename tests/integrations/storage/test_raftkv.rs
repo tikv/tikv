@@ -233,6 +233,7 @@ fn test_read_on_replica_check_memory_locks() {
         10.into(),
         1,
         20.into(),
+        false,
     );
     let guard = block_on(leader_cm.lock_key(&encoded_key));
     guard.with_lock(|l| *l = Some(lock.clone()));
