@@ -1604,7 +1604,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // it may break correctness.
         // However, not release latch will cause deadlock which may ultimately block all
         // following txns, so we panic here.
-        panic!("response channel is unexpectedly dropped, cid {}", cid);
+        panic!(
+            "response channel is unexpectedly dropped, tag {:?}, cid {}",
+            tag, cid
+        );
     }
 
     /// Returns whether it succeeds to write pessimistic locks to the in-memory
