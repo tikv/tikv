@@ -3061,7 +3061,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=support_cf_ttl#06440a0c5e76f4bbe3b08b0b4a2ae66480782344"
+source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=support_cf_ttl#691fd65f1a57ad6a71f411efff84773f1e7d61a5"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -3080,7 +3080,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=support_cf_ttl#06440a0c5e76f4bbe3b08b0b4a2ae66480782344"
+source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=support_cf_ttl#691fd65f1a57ad6a71f411efff84773f1e7d61a5"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5031,7 +5031,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=support_cf_ttl#06440a0c5e76f4bbe3b08b0b4a2ae66480782344"
+source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=support_cf_ttl#691fd65f1a57ad6a71f411efff84773f1e7d61a5"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
