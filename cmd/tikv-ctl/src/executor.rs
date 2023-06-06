@@ -1305,7 +1305,16 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     }
 
     fn print_bad_regions(&self) {
-        unimplemented!()
+        let bad_regions = self
+            .bad_regions()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::bad_regions", e));
+        if !bad_regions.is_empty() {
+            for (region_id, error) in bad_regions {
+                println!("{}: {}", region_id, error);
+            }
+            return;
+        }
+        println!("all regions are healthy")
     }
 
     fn remove_fail_stores(
