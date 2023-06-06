@@ -2132,6 +2132,7 @@ mod tests {
         let kv_engine = &debugger.engines.kv;
         let raft_engine = &debugger.engines.raft;
         let store_id = 1; // It's a fake id.
+        debugger.set_store_id(store_id);
 
         let mut wb1 = raft_engine.write_batch();
         let cf1 = CF_DEFAULT;
