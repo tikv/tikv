@@ -116,7 +116,10 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_active_memtable_stats_cf(&self, cf: &str) -> Result<Option<(u64, std::time::SystemTime)>> {
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>> {
         panic!()
     }
 }

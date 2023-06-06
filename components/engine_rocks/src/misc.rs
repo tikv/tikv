@@ -411,7 +411,10 @@ impl MiscExt for RocksEngine {
                 != 0
     }
 
-    fn get_active_memtable_stats_cf(&self, cf: &str) -> Result<Option<(u64, std::time::SystemTime)>> {
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(self
             .as_inner()

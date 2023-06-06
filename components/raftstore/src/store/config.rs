@@ -85,6 +85,7 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
+    // TODO: make it auto adjusted based on background flush rate.
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
