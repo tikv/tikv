@@ -229,7 +229,7 @@ impl Lock {
             self.last_change,
             LastChange::NotExist | LastChange::Exist(_)
         ) {
-            let (last_change_ts, versions) = self.last_change.into_parts();
+            let (last_change_ts, versions) = self.last_change.to_parts();
             b.push(LAST_CHANGE_PREFIX);
             b.encode_u64(last_change_ts.into_inner()).unwrap();
             b.encode_var_u64(versions).unwrap();

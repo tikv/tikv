@@ -593,9 +593,11 @@ impl WriteBatchFlags {
 #[derive(Clone, Eq, PartialEq)]
 pub enum LastChange {
     Unknown,
-    Exist(LastChangePosition), // The pointer may point to a PUT or a DELETE record.
-    NotExist,                  /* Either there is no previous write of the key **or the last
-                                * write is a DELETE**. */
+    /// The pointer may point to a PUT or a DELETE record.
+    Exist(LastChangePosition),
+    /// Either there is no previous write of the key or the last write is a
+    /// DELETE.
+    NotExist,
 }
 
 impl LastChange {
@@ -615,7 +617,7 @@ impl LastChange {
     // we accept any positive when deserializing.
     // (3) ts > 0 && version > 0 means Exist.
 
-    pub fn into_parts(&self) -> (TimeStamp, u64) {
+    pub fn to_parts(&self) -> (TimeStamp, u64) {
         match self {
             LastChange::Unknown => (TimeStamp::zero(), 0),
             LastChange::Exist(p) => (p.last_change_ts, p.estimated_versions_to_last_change),
@@ -849,7 +851,7 @@ mod tests {
             LastChange::make_exist(100.into(), 3),
         ];
         for obj in objs {
-            let (ts, versions) = obj.into_parts();
+            let (ts, versions) = obj.to_parts();
             assert_eq!(obj, LastChange::from_parts(ts, versions));
         }
     }
