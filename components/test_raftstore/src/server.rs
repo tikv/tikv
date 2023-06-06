@@ -8,7 +8,7 @@ use std::{
     usize,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{dispatch_api_version, ApiV1, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -53,6 +53,7 @@ use tikv::{
     read_pool::ReadPool,
     server::{
         create_raft_storage,
+        debug::Debugger,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
@@ -64,7 +65,8 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, SnapContext},
+        kv::{FakeExtension, MockEngine, SnapContext},
+        lock_manager::MockLockManager,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine,
     },
@@ -481,13 +483,13 @@ impl ServerCluster {
                 .build()
                 .unwrap(),
         );
-        let debug_thread_handle = debug_thread_pool.handle().clone();
-        let debug_service = DebugService::new(
+        let debugger: Debugger<_, MockEngine, MockLockManager, ApiV1> = Debugger::new(
             engines.clone(),
-            debug_thread_handle,
-            extension,
-            ConfigController::default(),
+            ConfigController::new(cfg.tikv.clone()),
+            None,
         );
+        let debug_thread_handle = debug_thread_pool.handle().clone();
+        let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
 
         let apply_router = system.apply_router();
         // Create node.

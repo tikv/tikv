@@ -92,6 +92,7 @@ use tikv::{
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
+        debug::Debugger,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
@@ -146,7 +147,7 @@ const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let mut tikv = TikvServer::<CER>::init::<F>(config);
+    let mut tikv = TikvServer::<CER, F>::init(config);
 
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
@@ -161,7 +162,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     let listener = tikv.init_flow_receiver();
     let (engines, engines_info) = tikv.init_raw_engines(listener);
     tikv.init_engines(engines.clone());
-    let server_config = tikv.init_servers::<F>();
+    let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_storage_stats_task(engines);
@@ -212,7 +213,7 @@ const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A complete TiKV server.
-struct TikvServer<ER: RaftEngine> {
+struct TikvServer<ER: RaftEngine, F: KvFormat> {
     config: TikvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
@@ -226,7 +227,7 @@ struct TikvServer<ER: RaftEngine> {
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TikvEngines<RocksEngine, ER>>,
-    servers: Option<Servers<RocksEngine, ER>>,
+    servers: Option<Servers<RocksEngine, ER, F>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -248,7 +249,7 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
     engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
 }
 
-struct Servers<EK: KvEngine, ER: RaftEngine> {
+struct Servers<EK: KvEngine, ER: RaftEngine, F: KvFormat> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
     node: Node<RpcClient, EK, ER>,
@@ -257,16 +258,18 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     cdc_memory_quota: MemoryQuota,
     rsmeter_pubsub_service: resource_metering::PubSubService,
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
+    debugger: Debugger<ER, RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, LockManager, F>,
 }
 
 type LocalServer<EK, ER> = Server<resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER> TikvServer<ER>
+impl<ER, F> TikvServer<ER, F>
 where
     ER: RaftEngine,
+    F: KvFormat,
 {
-    fn init<F: KvFormat>(mut config: TikvConfig) -> TikvServer<ER> {
+    fn init(mut config: TikvConfig) -> TikvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -669,7 +672,7 @@ where
         gc_worker
     }
 
-    fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+    fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
@@ -738,6 +741,7 @@ where
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
+                .enable_time()
                 .worker_threads(1)
                 .after_start_wrapper(move || {
                     tikv_alloc::add_thread_memory_accessor();
@@ -942,7 +946,7 @@ where
             node.id(),
             &server_config,
             &self.security_mgr,
-            storage,
+            storage.clone(),
             coprocessor::Endpoint::new(
                 &server_config.value(),
                 cop_read_pool_handle,
@@ -1170,6 +1174,13 @@ where
             )),
         );
 
+        // Create Debugger.
+        let debugger = Debugger::new(
+            engines.engines.clone(),
+            self.cfg_controller.as_ref().unwrap().clone(),
+            Some(storage),
+        );
+
         self.servers = Some(Servers {
             lock_mgr,
             server,
@@ -1179,6 +1190,7 @@ where
             cdc_memory_quota,
             rsmeter_pubsub_service,
             backup_stream_scheduler,
+            debugger,
         });
 
         server_config
@@ -1206,10 +1218,9 @@ where
 
         // Debug service.
         let debug_service = DebugService::new(
-            engines.engines.clone(),
+            servers.debugger.clone(),
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension().clone(),
-            self.cfg_controller.as_ref().unwrap().clone(),
         );
         if servers
             .server
@@ -1794,7 +1805,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
+impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
