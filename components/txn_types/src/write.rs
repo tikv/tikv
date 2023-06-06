@@ -354,7 +354,7 @@ impl WriteRef<'_> {
             short_value,
             has_overlapped_rollback,
             gc_fence,
-            last_change: LastChange::deserialize(last_change_ts, estimated_versions_to_last_change),
+            last_change: LastChange::from_parts(last_change_ts, estimated_versions_to_last_change),
             txn_source,
         })
     }
@@ -379,7 +379,7 @@ impl WriteRef<'_> {
             self.last_change,
             LastChange::NotExist | LastChange::Exist(_)
         ) {
-            let (last_change_ts, versions) = self.last_change.serialize();
+            let (last_change_ts, versions) = self.last_change.into_parts();
             b.push(LAST_CHANGE_PREFIX);
             b.encode_u64(last_change_ts.into_inner()).unwrap();
             b.encode_var_u64(versions).unwrap();

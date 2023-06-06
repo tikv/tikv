@@ -2548,7 +2548,7 @@ pub mod tests {
                 ts.into(),
                 false,
             )
-            .set_last_change(LastChange::deserialize(
+            .set_last_change(LastChange::from_parts(
                 last_change_ts.into(),
                 estimated_versions_to_last_change,
             ));

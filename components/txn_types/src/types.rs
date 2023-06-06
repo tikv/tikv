@@ -615,7 +615,7 @@ impl LastChange {
     // we accept any positive when deserializing.
     // (3) ts > 0 && version > 0 means Exist.
 
-    pub fn serialize(&self) -> (TimeStamp, u64) {
+    pub fn into_parts(&self) -> (TimeStamp, u64) {
         match self {
             LastChange::Unknown => (TimeStamp::zero(), 0),
             LastChange::Exist(p) => (p.last_change_ts, p.estimated_versions_to_last_change),
@@ -623,7 +623,7 @@ impl LastChange {
         }
     }
 
-    pub fn deserialize(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
+    pub fn from_parts(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
         if last_change_ts.is_zero() {
             if estimated_versions_to_last_change > 0 {
                 LastChange::NotExist
@@ -849,8 +849,8 @@ mod tests {
             LastChange::make_exist(100.into(), 3),
         ];
         for obj in objs {
-            let (ts, versions) = obj.serialize();
-            assert_eq!(obj, LastChange::deserialize(ts, versions));
+            let (ts, versions) = obj.into_parts();
+            assert_eq!(obj, LastChange::from_parts(ts, versions));
         }
     }
 }

@@ -1698,7 +1698,7 @@ pub mod tests {
                     TimeStamp::zero(),
                     false,
                 )
-                .set_last_change(LastChange::deserialize(
+                .set_last_change(LastChange::from_parts(
                     TimeStamp::zero(),
                     (lock_type == LockType::Lock || lock_type == LockType::Pessimistic) as u64,
                 )),

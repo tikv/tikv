@@ -981,11 +981,9 @@ pub mod test_util {
                     None,
                 )
             };
-            let write_value =
-                Write::new(wt, self.start_ts, short).set_last_change(LastChange::deserialize(
-                    self.last_change_ts,
-                    self.estimated_versions_to_last_change,
-                ));
+            let write_value = Write::new(wt, self.start_ts, short).set_last_change(
+                LastChange::from_parts(self.last_change_ts, self.estimated_versions_to_last_change),
+            );
             TxnEntry::Commit {
                 default: (key, value),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
@@ -1022,7 +1020,7 @@ pub mod test_util {
                 0.into(),
                 false,
             )
-            .set_last_change(LastChange::deserialize(
+            .set_last_change(LastChange::from_parts(
                 self.last_change_ts,
                 self.estimated_versions_to_last_change,
             ));

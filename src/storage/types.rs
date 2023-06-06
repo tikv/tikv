@@ -57,7 +57,7 @@ impl MvccInfo {
                         write.last_change,
                         LastChange::NotExist | LastChange::Exist(_)
                     ) {
-                        let (last_change_ts, versions) = write.last_change.serialize();
+                        let (last_change_ts, versions) = write.last_change.into_parts();
                         write_info.set_last_change_ts(last_change_ts.into_inner());
                         write_info.set_versions_to_last_change(versions);
                     }
@@ -83,7 +83,7 @@ impl MvccInfo {
                 lock.last_change,
                 LastChange::NotExist | LastChange::Exist(_)
             ) {
-                let (last_change_ts, versions) = lock.last_change.serialize();
+                let (last_change_ts, versions) = lock.last_change.into_parts();
                 lock_info.set_last_change_ts(last_change_ts.into_inner());
                 lock_info.set_versions_to_last_change(versions);
             }
