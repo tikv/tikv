@@ -99,7 +99,7 @@ pub fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         }
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
-        KvError(box tikv_kv::ErrorInner::Undetermined(_)) => RequestStatusKind::err_undetermind,
+        KvError(box KvErrorInner::Undetermined(_)) => RequestStatusKind::err_undetermind,
         KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
     }
 }
@@ -522,8 +522,8 @@ where
         let applied_cb = must_call(
             Box::new(move |resp: WriteResponse| {
                 fail_point!("applied_cb_return_undetermined_err", |_| {
-                    applied_tx.notify(Err(kv::Error::from(Error::RequestFailed(
-                        async_write_callback_dropped_err(),
+                    applied_tx.notify(Err(kv::Error::from(Error::Undetermined(
+                        ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string(),
                     ))));
                 });
                 let mut res = match on_write_result::<E::Snapshot>(resp) {

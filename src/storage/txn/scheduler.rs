@@ -834,7 +834,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         do_wake_up = false;
                     } else {
                         panic!(
-                            "undetermined error: {:?} cid={}, tag={}, process result={:?}",
+                            "undetermined error: {:?} cid={}, tag={}, process
+                        result={:?}",
                             e, cid, tag, &pr
                         );
                     }
