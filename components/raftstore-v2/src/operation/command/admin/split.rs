@@ -20,7 +20,7 @@
 //!   parent peer, then send to the store the relevant info needed to create and
 //!   initialize the split regions.
 //!
-//! Split peer creation and initlization:
+//! Split peer creation and initialization:
 //! - on_split_init: In normal cases, the uninitialized split region will be
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
@@ -36,7 +36,7 @@ use kvproto::{
     metapb::{self, Region, RegionEpoch},
     pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
-    raft_serverpb::RaftSnapshotData,
+    raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
 use protobuf::Message;
 use raft::{prelude::Snapshot, INVALID_ID};
@@ -175,6 +175,32 @@ impl SplitFlowControl {
     #[inline]
     pub fn approximate_keys(&self) -> Option<u64> {
         self.approximate_keys
+    }
+}
+
+pub struct SplitPendingAppend {
+    append_msg: Option<(Box<RaftMessage>, Instant)>,
+    range_overlapped: bool,
+}
+
+impl SplitPendingAppend {
+    pub fn set_range_overlapped(&mut self, range_overlapped: bool) {
+        if self.range_overlapped {
+            self.range_overlapped = range_overlapped;
+        }
+    }
+
+    pub fn take_append_message(&mut self) -> Option<Box<RaftMessage>> {
+        self.append_msg.take().map(|(msg, _)| msg)
+    }
+}
+
+impl Default for SplitPendingAppend {
+    fn default() -> SplitPendingAppend {
+        SplitPendingAppend {
+            append_msg: None,
+            range_overlapped: true,
+        }
     }
 }
 
@@ -549,6 +575,42 @@ async fn async_checkpoint<EK: KvEngine>(
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn ready_to_handle_first_append_message<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        msg: &RaftMessage,
+    ) -> bool {
+        // The peer does not overlap with other regions. It means the parent
+        // region in this node might be stale and has been removed, so there is
+        // no split init and messages need to be handled immediately.
+        if !self.split_pending_append_mut().range_overlapped {
+            return true;
+        }
+
+        if self.split_pending_append_mut().append_msg.is_none() {
+            self.split_pending_append_mut()
+                .append_msg
+                .replace((msg.clone().into(), Instant::now_coarse()));
+            return false;
+        }
+        let logger = self.logger.clone();
+        let append_msg = &mut self.split_pending_append_mut().append_msg;
+        let dur = append_msg.as_ref().unwrap().1.saturating_elapsed();
+        if dur < store_ctx.cfg.snap_wait_split_duration.0 {
+            append_msg.as_mut().unwrap().0 = msg.clone().into();
+            // We consider a message is too early if it is replaced.
+            store_ctx
+                .raft_metrics
+                .message_dropped
+                .region_nonexistent
+                .inc();
+            return false;
+        }
+        append_msg.take();
+        warn!(logger, "handle first message now, split may be slow"; "duration" => ?dur);
+        true
+    }
+
     pub fn on_apply_res_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,

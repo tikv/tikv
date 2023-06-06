@@ -98,13 +98,13 @@ fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
 /// received but there is no such region in `Store::region_peers`. In this case
 /// we should put `msg` into `pending_msg` instead of create the peer.
 #[inline]
-fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
+pub fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
     match msg.get_msg_type() {
         MessageType::MsgAppend => {
-            let ent = msg.get_entries();
-            ent.len() == 1
-                && ent[0].data.is_empty()
-                && ent[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
+            let entries = msg.get_entries();
+            !entries.is_empty()
+                && entries[0].data.is_empty()
+                && entries[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
         }
         _ => false,
     }
@@ -2075,12 +2075,12 @@ mod tests {
         for (msg_type, index, is_append) in tbl {
             let mut msg = Message::default();
             msg.set_msg_type(msg_type);
-            let ent = {
-                let mut e = Entry::default();
-                e.set_index(index);
-                e
-            };
-            msg.set_entries(vec![ent].into());
+            let mut ent = Entry::default();
+            ent.set_index(index);
+            msg.mut_entries().push(ent.clone());
+            assert_eq!(is_first_append_entry(&msg), is_append);
+            ent.set_index(index + 1);
+            msg.mut_entries().push(ent);
             assert_eq!(is_first_append_entry(&msg), is_append);
         }
     }
