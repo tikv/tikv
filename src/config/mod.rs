@@ -1277,7 +1277,7 @@ impl Default for DbConfig {
             allow_concurrent_memtable_write: None,
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
-            write_buffer_flush_oldest_first: false,
+            write_buffer_flush_oldest_first: true,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -3257,6 +3257,23 @@ impl TikvConfig {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
             if !self.raft_engine.enable {
                 return Err("partitioned-raft-kv only supports raft log engine.".into());
+            }
+            let recovery_threads = cmp::min((SysQuota::cpu_cores_quota() * 1.5) as usize, 16);
+            if self.raft_engine.config.recovery_threads < recovery_threads {
+                info!(
+                    "raft-engine.recovery-threads is too small. Set it to {} instead.",
+                    recovery_threads,
+                );
+                self.raft_engine.config.recovery_threads = recovery_threads;
+            }
+            // Filled in DbOptions::optimize_for.
+            let write_buffer_limit = self.rocksdb.write_buffer_limit.unwrap();
+            if self.raft_engine.config.purge_threshold.0 < write_buffer_limit.0 * 2 {
+                self.raft_engine.config.purge_threshold.0 = write_buffer_limit.0 * 2;
+                info!(
+                    "raft-engine.purge-threshold is too small. Set it to {} instead.",
+                    self.raft_engine.config.purge_threshold,
+                );
             }
             if self.rocksdb.titan.enabled {
                 return Err("partitioned-raft-kv doesn't support titan.".into());

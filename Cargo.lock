@@ -2926,7 +2926,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#9db52f6188f7052e87dae21f1f41772263aef3c6"
+>>>>>>> c486f7ce63 (raftstore-v2: reduce raft log size (#14700))
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2945,7 +2949,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#9db52f6188f7052e87dae21f1f41772263aef3c6"
+>>>>>>> c486f7ce63 (raftstore-v2: reduce raft log size (#14700))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3099,6 +3107,15 @@ name = "memmap2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "057a3db23999c867821a7a59feb06a578fcb03685e983dff90daf9e7d24ac08f"
+dependencies = [
+ "libc 0.2.139",
+]
+
+[[package]]
+name = "memmap2"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d28bba84adfe6646737845bc5ebbfa2c08424eb1c37e94a1fd2a82adb56a872"
 dependencies = [
  "libc 0.2.139",
 ]
@@ -4274,7 +4291,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/tikv/raft-engine.git#773b89fb24276995e5fd26a7e28550796966d9cd"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4288,7 +4305,7 @@ dependencies = [
  "libc 0.2.139",
  "log",
  "lz4-sys",
- "memmap2",
+ "memmap2 0.6.2",
  "nix 0.26.2",
  "num-derive",
  "num-traits",
@@ -4873,7 +4890,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#9db52f6188f7052e87dae21f1f41772263aef3c6"
+>>>>>>> c486f7ce63 (raftstore-v2: reduce raft log size (#14700))
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -5750,7 +5771,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac457d054f793cedfde6f32d21d692b8351cfec9084fefd0470c0373f6d799bc"
 dependencies = [
  "debugid",
- "memmap2",
+ "memmap2 0.5.3",
  "stable_deref_trait",
  "uuid 1.2.1",
 ]

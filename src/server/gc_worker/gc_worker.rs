@@ -1479,7 +1479,7 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_rocks::{util::get_cf_handle, RocksEngine};
+    use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ApiVersion, metapb::Peer};
@@ -1855,7 +1855,13 @@ mod tests {
             must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
             must_commit(&mut prefixed_engine, &k, 151, 152);
         }
+<<<<<<< HEAD
         db.flush_cf(cf, true).unwrap();
+=======
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
+>>>>>>> c486f7ce63 (raftstore-v2: reduce raft log size (#14700))
 
         db.compact_range_cf(cf, None, None);
         for i in 0..100 {
@@ -1930,7 +1936,13 @@ mod tests {
             must_commit(&mut prefixed_engine, &k, 151, 152);
             keys.push(Key::from_raw(&k));
         }
+<<<<<<< HEAD
         db.flush_cf(cf, true).unwrap();
+=======
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
+>>>>>>> c486f7ce63 (raftstore-v2: reduce raft log size (#14700))
 
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek, 0);
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.next, 0);
@@ -2088,7 +2100,13 @@ mod tests {
         for i in 10u64..30 {
             must_rollback(&mut prefixed_engine, b"k2\x00", i, true);
         }
+<<<<<<< HEAD
         db.flush_cf(cf, true).unwrap();
+=======
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
+>>>>>>> c486f7ce63 (raftstore-v2: reduce raft log size (#14700))
         must_gc(&mut prefixed_engine, b"k2\x00", 30);
 
         // Test tombstone counter works
@@ -2147,7 +2165,13 @@ mod tests {
             must_prewrite_put(&mut prefixed_engine, b"k2", b"v2", b"k2", start_ts);
             must_commit(&mut prefixed_engine, b"k2", start_ts, commit_ts);
         }
+<<<<<<< HEAD
         db.flush_cf(cf, true).unwrap();
+=======
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
+>>>>>>> c486f7ce63 (raftstore-v2: reduce raft log size (#14700))
         let safepoint = versions as u64 * 2;
 
         runner
@@ -2180,7 +2204,13 @@ mod tests {
         must_commit(&mut engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+<<<<<<< HEAD
         db.flush_cf(cf, true).unwrap();
+=======
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(true);
+        db.flush_cf(cf, &fopts).unwrap();
+>>>>>>> c486f7ce63 (raftstore-v2: reduce raft log size (#14700))
 
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
