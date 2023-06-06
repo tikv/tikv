@@ -1,10 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, str, string::ToString, sync::Arc,
+    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, result, str, string::ToString, sync::Arc,
     time::Duration, u64,
 };
 
+use api_version::{ApiV1, KvFormat};
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::util::{db_exist, new_engine_opt};
 use engine_traits::{
@@ -15,7 +16,7 @@ use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamEx
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},
-    kvrpcpb::MvccInfo,
+    kvrpcpb::{KeyRange, MvccInfo},
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::PeerState,
@@ -36,7 +37,12 @@ use tikv::{
         debug2::DebuggerImplV2,
         KvEngineFactoryBuilder,
     },
-    storage::config::EngineType,
+    storage::{
+        config::EngineType,
+        kv::MockEngine,
+        lock_manager::{LockManager, MockLockManager},
+        Engine,
+    },
 };
 use tikv_util::escape;
 
@@ -48,7 +54,7 @@ pub const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 pub const METRICS_JEMALLOC: &str = "jemalloc";
 pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
-type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
+type MvccInfoStream = Pin<Box<dyn Stream<Item = result::Result<(Vec<u8>, MvccInfo), String>>>>;
 
 pub fn new_debug_executor(
     cfg: &TikvConfig,
@@ -99,7 +105,9 @@ pub fn new_debug_executor(
             Err(e) => handle_engine_error(e),
         };
 
-        let debugger = DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller);
+        let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
+            DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
+
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
         let mut config = cfg.raft_engine.config();
@@ -116,7 +124,8 @@ pub fn new_debug_executor(
                     Err(e) => handle_engine_error(e),
                 };
 
-                let debugger = DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller);
+                let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
+                    DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
                 Box::new(debugger) as Box<dyn DebugExecutor>
             }
             EngineType::RaftKv2 => {
@@ -678,6 +687,15 @@ pub trait DebugExecutor {
     fn dump_cluster_info(&self);
 
     fn reset_to_version(&self, version: u64);
+
+    fn flashback_to_version(
+        &self,
+        _version: u64,
+        _region_id: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), KeyRange>;
 }
 
 impl DebugExecutor for DebugClient {
@@ -687,7 +705,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
-        DebugClient::get_all_regions_in_store(self, &GetAllRegionsInStoreRequest::default())
+        self.get_all_regions_in_store(&GetAllRegionsInStoreRequest::default())
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store", e))
             .take_regions()
     }
@@ -897,12 +915,45 @@ impl DebugExecutor for DebugClient {
     fn reset_to_version(&self, version: u64) {
         let mut req = ResetToVersionRequest::default();
         req.set_ts(version);
-        DebugClient::reset_to_version(self, &req)
+        self.reset_to_version(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
+    }
+
+    fn flashback_to_version(
+        &self,
+        version: u64,
+        region_id: u64,
+        key_range: KeyRange,
+        start_ts: u64,
+        commit_ts: u64,
+    ) -> Result<(), KeyRange> {
+        let mut req = FlashbackToVersionRequest::default();
+        req.set_version(version);
+        req.set_region_id(region_id);
+        req.set_start_key(key_range.get_start_key().to_owned());
+        req.set_end_key(key_range.get_end_key().to_owned());
+        req.set_start_ts(start_ts);
+        req.set_commit_ts(commit_ts);
+        match self.flashback_to_version(&req) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                println!(
+                    "flashback key_range {:?} with start_ts {:?}, commit_ts {:?} need to retry, err is {:?}",
+                    key_range, start_ts, commit_ts, err
+                );
+                Err(key_range)
+            }
+        }
     }
 }
 
-impl<ER: RaftEngine> DebugExecutor for DebuggerImpl<ER> {
+impl<ER, E, L, K> DebugExecutor for DebuggerImpl<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     fn check_local_mode(&self) {}
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
@@ -1085,7 +1136,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImpl<ER> {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        println!("only available for online mode");
+        println!("only available for remote mode");
         tikv_util::logger::exit_process_gracefully(-1);
     }
 
@@ -1134,6 +1185,17 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImpl<ER> {
 
     fn reset_to_version(&self, version: u64) {
         Debugger::reset_to_version(self, version);
+    }
+
+    fn flashback_to_version(
+        &self,
+        _version: u64,
+        _region_id: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), KeyRange> {
+        unimplemented!("only available for remote mode");
     }
 }
 
@@ -1262,7 +1324,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        println!("only available for online mode");
+        println!("only available for remote mode");
         tikv_util::logger::exit_process_gracefully(-1);
     }
 
@@ -1311,5 +1373,16 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
 
     fn reset_to_version(&self, _version: u64) {
         unimplemented!()
+    }
+
+    fn flashback_to_version(
+        &self,
+        _region_id: u64,
+        _version: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
+    ) -> Result<(), KeyRange> {
+        unimplemented!("only available for remote mode");
     }
 }
