@@ -155,7 +155,7 @@ pub struct Write {
     pub gc_fence: Option<TimeStamp>,
 
     /// The position of the last actual write (PUT or DELETE), used to skip
-    /// consecutive LOCK or ROLLBACK records when reading.
+    /// consecutive LOCK records when reading.
     pub last_change: LastChange,
     /// The source of this txn.
     pub txn_source: u64,

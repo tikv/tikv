@@ -90,7 +90,7 @@ pub struct Lock {
     pub rollback_ts: Vec<TimeStamp>,
 
     /// The position of the last actual write (PUT or DELETE), used to skip
-    /// consecutive LOCK or ROLLBACK records when reading.
+    /// consecutive LOCK records when reading.
     pub last_change: LastChange,
     /// The source of this txn. It is used by ticdc, if the value is 0 ticdc
     /// will sync the kv change event to downstream, if it is not 0, ticdc

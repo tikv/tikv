@@ -587,13 +587,15 @@ impl WriteBatchFlags {
     }
 }
 
-/// The position info of the last actual write (PUT or DELETE) of a LOCK or
-/// ROLLBACK record.
+/// The position info of the last actual write (PUT or DELETE) of a LOCK record.
+/// Note that if the last change is a DELETE, its LastChange can be either
+/// Exist(which points to it) or NotExist.
 #[derive(Clone, Eq, PartialEq)]
 pub enum LastChange {
     Unknown,
-    Exist(LastChangePosition),
-    NotExist, // Either there is no previous write of the key **or the last write is a DELETE**.
+    Exist(LastChangePosition), // The pointer may point to a PUT or a DELETE record.
+    NotExist,                  /* Either there is no previous write of the key **or the last
+                                * write is a DELETE**. */
 }
 
 impl LastChange {
@@ -607,6 +609,11 @@ impl LastChange {
     }
 
     // How `LastChange` is stored.
+    // (1) ts == 0 && version == 0 means Unknown.
+    // (2) ts == 0 && version > 0 means NotExist. In current implementation version
+    // is set to 1. In older implementations it can be any positive integer. So
+    // we accept any positive when deserializing.
+    // (3) ts > 0 && version > 0 means Exist.
 
     pub fn serialize(&self) -> (TimeStamp, u64) {
         match self {
