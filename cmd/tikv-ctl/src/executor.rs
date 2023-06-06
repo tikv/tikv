@@ -11,6 +11,7 @@ use engine_traits::{
     Engines, Error as EngineError, RaftEngine, TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK,
     CF_WRITE, DATA_CFS,
 };
+use file_system::read_dir;
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -50,6 +51,27 @@ pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
 type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
+fn get_engine_type(dir: &str) -> EngineType {
+    let mut entries = read_dir(dir).unwrap();
+    let mut engine1 = false;
+    let mut engine2 = false;
+    while let Some(Ok(e)) = entries.next() {
+        if let Ok(ty) = e.file_type() && ty.is_dir() {
+            if e.file_name() == "tablets" {
+                engine2 = true;
+            } else if e.file_name() == "db" {
+                engine1 = true;
+            }
+        }
+    }
+    assert_ne!(engine1, engine2);
+    if engine1 {
+        EngineType::RaftKv
+    } else {
+        EngineType::RaftKv2
+    }
+}
+
 pub fn new_debug_executor(
     cfg: &TikvConfig,
     data_dir: Option<&str>,
@@ -62,15 +84,13 @@ pub fn new_debug_executor(
 
     // TODO: perhaps we should allow user skip specifying data path.
     let data_dir = data_dir.unwrap();
+    let engine_type = get_engine_type(data_dir);
 
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
 
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(cfg.storage.engine);
+    let cache = cfg.storage.block_cache.build_shared_cache(engine_type);
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
@@ -81,7 +101,7 @@ pub fn new_debug_executor(
 
     let cfg_controller = ConfigController::default();
     if !cfg.raft_engine.enable {
-        assert_eq!(EngineType::RaftKv, cfg.storage.engine);
+        assert_eq!(EngineType::RaftKv, engine_type);
         let raft_db_opts = cfg.raftdb.build_opt(env, None);
         let raft_db_cf_opts = cfg.raftdb.build_cf_opts(factory.block_cache());
         let raft_path = cfg.infer_raft_db_path(Some(data_dir)).unwrap();
@@ -109,7 +129,7 @@ pub fn new_debug_executor(
             tikv_util::logger::exit_process_gracefully(-1);
         }
         let raft_db = RaftLogEngine::new(config, key_manager, None /* io_rate_limiter */).unwrap();
-        match cfg.storage.engine {
+        match engine_type {
             EngineType::RaftKv => {
                 let kv_db = match factory.create_shared_db(data_dir) {
                     Ok(db) => db,
