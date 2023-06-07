@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::RaftEngineReadOnly;
+use engine_traits::{RaftEngineDebug, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
 use pd_client::PdClient;
