@@ -1,13 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::UnsafeCell,
     cmp,
     ffi::CString,
-    future::Future,
     iter::FromIterator,
     marker::PhantomData,
-    pin::Pin,
     sync::{
         atomic::{AtomicI32, Ordering},
         Arc, Mutex as stdMutex,
@@ -15,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use collections::{hash_map_with_capacity, HashMap, HashSet};
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
@@ -218,7 +215,7 @@ struct ResolverBuffer {
     failed_region_store_map: HashMap<u64, Vec<u64>>,
     store_unsafe_regions_map: HashMap<u64, Vec<u64>>,
     valid_leader_infos: Vec<(LeaderInfo, Vec<u64>)>,
-    store_checked_leader_map: HashMap<u64, Vec<u64>>,
+    store_checked_leader_map: HashMap<u64, Vec<CheckedLeader>>,
 }
 
 impl ResolverBuffer {
@@ -241,7 +238,7 @@ impl ResolverBuffer {
     fn clear(&mut self) {
         for v in self.store_req_map.values_mut() {
             v.regions.clear();
-            v.hibernated_regions.clear();
+            v.inactive_regions.clear();
             v.ts = 0;
         }
         for v in self.region_map.values_mut() {
@@ -471,7 +468,7 @@ impl LeadershipResolver {
         // handle check-leader results.
         let check_leader_count = check_leader_rpcs.len();
         let failed_region_store_map = &mut buffer.failed_region_store_map;
-        let mut valid_leader_infos = &mut buffer.valid_leader_infos;
+        let valid_leader_infos = &mut buffer.valid_leader_infos;
         for _ in 0..check_leader_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
@@ -543,29 +540,29 @@ impl LeadershipResolver {
 
         let store_checked_leader_map = &mut buffer.store_checked_leader_map;
         for leader_info in valid_leader_infos.into_iter() {
-            for peer_store_id in leader_info.0 {
+            for peer_store_id in &leader_info.1 {
                 let mut checked_leader = CheckedLeader::default();
-                checked_leader.set_region_id(leader_info.1.get_region_id());
-                checked_leader.set_read_state(leader_info.1.get_read_state().clone());
+                checked_leader.set_region_id(leader_info.0.get_region_id());
+                checked_leader.set_read_state(leader_info.0.get_read_state().clone());
 
                 store_checked_leader_map
-                    .entry(peer_store_id)
+                    .entry(*peer_store_id)
                     .or_insert_with(|| Vec::new())
-                    .push(checked_leader)
+                    .push(checked_leader);
             }
         }
 
         let mut apply_safe_ts_rpcs = Vec::with_capacity(store_unsafe_regions_map.len());
-        let rpc_count = store_unsafe_regions_map.len();
         for (to_store, unsafe_regions) in store_unsafe_regions_map {
             let env = env.clone();
             let mut req = ApplySafeTsRequest::default();
             req.set_ts(min_ts.into_inner());
-            req.set_unsafe_regions(unsafe_regions);
+            req.set_unsafe_regions(unsafe_regions.to_owned());
             req.set_store_id(store_id);
             if let Some(checked_leaders) = store_checked_leader_map.remove(&to_store) {
                 req.set_checked_leaders(checked_leaders.into());
             }
+            let to_store = *to_store;
 
             // Apply safe_ts for regions besides `unsafe_reginos` on `to_store`.
             let rpc = async move {
