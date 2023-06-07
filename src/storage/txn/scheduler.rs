@@ -1885,11 +1885,11 @@ struct SchedulerDetails {
     tracker: TrackerToken,
     stat: Statistics,
     start_process_instant: Instant,
-    // A write command processing could be divided into 4 stages:
-    // 1. Process the command using snapshot and generate the write content.
-    // 2. Delay if the quota is exceeded.
-    // 3. Throttle if the write flow exceeds the limit.
-    // 4. Send the write request to the raftkv and wait for responses.
+    // A write command processing can be divided into four stages:
+    // 1. The command is processed using a snapshot to generate the write content.
+    // 2. If the quota is exceeded, there will be a delay.
+    // 3. If the write flow exceeds the limit, it will be throttled.
+    // 4. Finally, the write request is sent to raftkv and responses are awaited.
     cmd_process_nanos: u64,
     quota_limit_delay_nanos: u64,
     flow_control_nanos: u64,
