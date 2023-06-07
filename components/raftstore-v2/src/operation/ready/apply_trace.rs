@@ -177,14 +177,19 @@ pub struct ApplyTrace {
 impl ApplyTrace {
     fn recover(region_id: u64, engine: &impl RaftEngine) -> Result<(Self, RegionLocalState)> {
         let mut trace = ApplyTrace::default();
+        let mut panic_msg = String::new();
+        let mut add_panic_msg = |msg| {
+            panic_msg = format!("{}\n{}", panic_msg, msg);
+        };
         // Get all the recorded apply index from data CFs.
         for (off, cf) in DATA_CFS.iter().enumerate() {
             // There should be at least one record.
             let i = engine.get_flushed_index(region_id, cf)?.unwrap_or_else(|| {
-                panic!(
+                add_panic_msg(format!(
                     "failed to get flushed index [region_id={}] [cf={}] [apply_trace={:?}]",
                     region_id, cf, trace
-                )
+                ));
+                0
             });
             trace.data_cfs[off].flushed = i;
             trace.data_cfs[off].last_modified = i;
@@ -192,10 +197,11 @@ impl ApplyTrace {
         let i = engine
             .get_flushed_index(region_id, CF_RAFT)?
             .unwrap_or_else(|| {
-                panic!(
+                add_panic_msg(format!(
                     "failed to get flushed index [region_id={}] [cf={}] [apply_trace={:?}]",
                     region_id, CF_RAFT, trace
-                )
+                ));
+                0
             });
         // Index of raft CF means all data before that must be persisted.
         trace.admin.flushed = i;
@@ -204,11 +210,17 @@ impl ApplyTrace {
         trace.last_flush_trigger = i;
         let applied_region_state = match engine.get_region_state(region_id, trace.admin.flushed)? {
             Some(s) => s,
-            None => panic!(
-                "failed to get region state [region_id={}] [apply_trace={:?}]",
-                region_id, trace
-            ),
+            None => {
+                add_panic_msg(format!(
+                    "failed to get region state [region_id={}] [apply_trace={:?}]",
+                    region_id, trace
+                ));
+                RegionLocalState::default()
+            }
         };
+        if !panic_msg.is_empty() {
+            panic!("{}\n{:?}\n{:?}", panic_msg, trace, applied_region_state);
+        }
         Ok((trace, applied_region_state))
     }
 
