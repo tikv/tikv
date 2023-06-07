@@ -250,10 +250,81 @@ extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        add_thread_memory_accessor, imp::THREAD_MEMORY_MAP, remove_thread_memory_accessor,
+    };
 
+    fn assert_delta(name: impl std::fmt::Display, delta: f64, a: u64, b: u64) {
+        let (base, diff) = if a > b { (a, a - b) } else { (b, b - a) };
+        let error = diff as f64 / base as f64;
+        assert!(
+            error < delta,
+            "{name}: the error is too huge: a={a}, b={b}, base={base}, diff={diff}, error={error}"
+        );
+    }
     #[test]
     fn dump_stats() {
         assert_ne!(super::dump_stats().len(), 0);
+    }
+
+    #[test]
+    fn test_allocation_stat() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut threads = vec![];
+        for i in 1..6 {
+            let tx = tx.clone();
+            // It is in test... let skip calling hooks.
+            #[allow(clippy::disallowed_methods)]
+            let hnd = std::thread::Builder::new()
+                .name(format!("test_allocation_stat_{i}"))
+                .spawn(move || {
+                    if i == 5 {
+                        return;
+                    }
+                    add_thread_memory_accessor();
+                    let (tx2, rx2) = std::sync::mpsc::channel::<()>();
+                    let v = vec![42u8; 1024 * 1024 * i];
+                    drop(v);
+                    let _v2 = vec![42u8; 512 * 1024 * i];
+                    tx.send((i, std::thread::current().id(), tx2)).unwrap();
+                    drop(tx);
+                    rx2.recv().unwrap();
+                    if i == 3 {
+                        panic!("Oops... I forgot to remove the accessor.")
+                    }
+                    remove_thread_memory_accessor();
+                })
+                .unwrap();
+            threads.push(hnd);
+        }
+        drop(tx);
+
+        let chs = rx.into_iter().collect::<Vec<_>>();
+        let l = THREAD_MEMORY_MAP.lock().unwrap();
+        for (i, tid, tx) in chs {
+            let a = l.get(&tid).unwrap();
+            unsafe {
+                let alloc = a.allocated.peek().unwrap();
+                let dealloc = a.deallocated.peek().unwrap();
+                assert_delta(i, 0.05, alloc, (1024 + 512) * 1024 * i as u64);
+                assert_delta(i, 0.05, dealloc, (1024) * 1024 * i as u64);
+            }
+            tx.send(()).unwrap();
+        }
+        drop(l);
+        for (i, th) in threads.into_iter().enumerate() {
+            let res = th.join();
+            if i == 2 {
+                res.unwrap_err();
+            } else {
+                res.unwrap();
+            }
+        }
+        let l = THREAD_MEMORY_MAP.lock().unwrap();
+        assert_eq!(l.len(), 1);
+        let a = l.values().next().unwrap();
+        assert_eq!(a.get_allocated(), 0);
+        assert_eq!(a.get_deallocated(), 0);
     }
 }
 
@@ -319,15 +390,6 @@ mod profiling {
 
         const OPT_PROF: &[u8] = b"opt.prof\0";
 
-        fn assert_delta(name: impl std::fmt::Display, delta: f64, a: u64, b: u64) {
-            let (base, diff) = if a > b { (a, a - b) } else { (b, b - a) };
-            let error = diff as f64 / base as f64;
-            assert!(
-                error < delta,
-                "{name}: the error is too huge: a={a}, b={b}, base={base}, diff={diff}, error={error}"
-            );
-        }
-
         fn is_profiling_on() -> bool {
             match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
                 Err(e) => {
@@ -383,68 +445,6 @@ mod profiling {
                 }
             }
             assert_eq!(prof_count, 2);
-        }
-        #[test]
-        #[ignore = "#ifdef MALLOC_CONF"]
-        fn test_allocation_stat() {
-            assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
-
-            let (tx, rx) = std::sync::mpsc::channel();
-            let mut threads = vec![];
-            for i in 1..6 {
-                let tx = tx.clone();
-                // It is in test... let skip calling hooks.
-                #[allow(clippy::disallowed_methods)]
-                let hnd = std::thread::Builder::new()
-                    .name(format!("test_allocation_stat_{i}"))
-                    .spawn(move || {
-                        if i == 5 {
-                            return;
-                        }
-                        add_thread_memory_accessor();
-                        let (tx2, rx2) = std::sync::mpsc::channel::<()>();
-                        let v = vec![42u8; 1024 * 1024 * i];
-                        drop(v);
-                        let _v2 = vec![42u8; 512 * 1024 * i];
-                        tx.send((i, std::thread::current().id(), tx2)).unwrap();
-                        drop(tx);
-                        rx2.recv().unwrap();
-                        if i == 3 {
-                            panic!("Oops... I forgot to remove the accessor.")
-                        }
-                        remove_thread_memory_accessor();
-                    })
-                    .unwrap();
-                threads.push(hnd);
-            }
-            drop(tx);
-
-            let chs = rx.into_iter().collect::<Vec<_>>();
-            let l = THREAD_MEMORY_MAP.lock().unwrap();
-            for (i, tid, tx) in chs {
-                let a = l.get(&tid).unwrap();
-                unsafe {
-                    let alloc = a.allocated.peek().unwrap();
-                    let dealloc = a.deallocated.peek().unwrap();
-                    assert_delta(i, 0.05, alloc, (1024 + 512) * 1024 * i as u64);
-                    assert_delta(i, 0.05, dealloc, (1024) * 1024 * i as u64);
-                }
-                tx.send(()).unwrap();
-            }
-            drop(l);
-            for (i, th) in threads.into_iter().enumerate() {
-                let res = th.join();
-                if i == 2 {
-                    res.unwrap_err();
-                } else {
-                    res.unwrap();
-                }
-            }
-            let l = THREAD_MEMORY_MAP.lock().unwrap();
-            assert_eq!(l.len(), 1);
-            let a = l.values().next().unwrap();
-            assert_eq!(a.get_allocated(), 0);
-            assert_eq!(a.get_deallocated(), 0);
         }
     }
 }
