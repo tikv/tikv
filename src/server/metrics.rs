@@ -462,6 +462,17 @@ make_auto_flush_static_metric! {
         err_store_not_match,
         err_raft_entry_too_large,
         err_leader_memory_lock_check,
+<<<<<<< HEAD
+=======
+        err_read_index_not_ready,
+        err_proposal_in_merging_mode,
+        err_data_is_not_ready,
+        err_region_not_initialized,
+        err_disk_full,
+        err_recovery_in_progress,
+        err_flashback_in_progress,
+        err_undetermind,
+>>>>>>> c0eb6b65fa (scheduler: use must_call for async write callback, add assertion for expected path (#14872))
     }
 
     pub label_enum RequestTypeKind {
