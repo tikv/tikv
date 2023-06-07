@@ -188,6 +188,7 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_size_limit: Some(ReadableSize::kb(1)),
         raft_log_reserve_max_ticks: 100,
         raft_engine_purge_interval: ReadableDuration::minutes(20),
+        max_manual_flush_rate: 5.0,
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
@@ -325,7 +326,7 @@ fn test_serde_custom_tikv_config() {
         enable_unordered_write: true,
         write_buffer_limit: Some(ReadableSize::gb(1)),
         write_buffer_stall_ratio: 0.0,
-        write_buffer_flush_oldest_first: false,
+        write_buffer_flush_oldest_first: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -382,6 +383,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -453,6 +456,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -524,6 +529,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -595,6 +602,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config.clone(),
     };
@@ -681,6 +690,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config,
     };

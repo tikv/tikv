@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::RaftEngineReadOnly;
+use engine_traits::{RaftEngineDebug, RaftEngineReadOnly};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
