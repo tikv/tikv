@@ -31,6 +31,14 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<()> {
+        panic!()
+    }
+
     fn delete_ranges_cf(
         &self,
         cf: &str,
@@ -105,6 +113,13 @@ impl MiscExt for PanicEngine {
     }
 
     fn is_stalled_or_stopped(&self) -> bool {
+        panic!()
+    }
+
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>> {
         panic!()
     }
 }
