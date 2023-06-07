@@ -4,6 +4,7 @@ use engine_traits::{
     data_cf_offset, DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange, ALL_CFS,
     CF_DEFAULT,
 };
+use fail::fail_point;
 use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
@@ -132,6 +133,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             };
             let (data, chs) = encoder.encode();
             let res = self.propose(ctx, data);
+            fail_point!("after_propose_pending_writes");
+
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);
         }
     }
