@@ -3,7 +3,7 @@
 use std::{
     sync::{
         mpsc::{channel, sync_channel},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -18,6 +18,7 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
+use raft::prelude::{ConfChangeType, MessageType};
 use raftstore::store::LocksStatus;
 use storage::{
     mvcc::{
@@ -26,7 +27,10 @@ use storage::{
     },
     txn::{self, commands},
 };
-use test_raftstore::{configure_for_lease_read, new_server_cluster};
+use test_raftstore::{
+    configure_for_lease_read, new_learner_peer, new_server_cluster, try_kv_prewrite,
+    DropMessageFilter,
+};
 use tikv::storage::{
     self,
     kv::SnapshotExt,
@@ -37,7 +41,10 @@ use tikv::storage::{
     },
     Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
-use tikv_util::{store::new_peer, HandyRwLock};
+use tikv_util::{
+    store::{new_peer, peer::new_incoming_voter},
+    HandyRwLock,
+};
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
 
 #[test]
@@ -678,4 +685,92 @@ fn test_read_index_with_max_ts() {
     assert!(resp.region_error.is_none());
     assert_eq!(resp.error.unwrap().locked.unwrap().lock_version, start_ts);
     fail::remove("on_apply_write_cmd");
+}
+
+// This test mocks the situation described in the PR#14863
+#[test]
+fn test_proposal_concurrent_with_conf_change_and_transfer_leader() {
+    let (mut cluster, _, mut ctx) = test_raftstore_v2::must_new_cluster_mul(4);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    pd_client.add_peer(1, new_learner_peer(4, 4));
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    pd_client.joint_confchange(
+        1,
+        vec![
+            (ConfChangeType::AddNode, new_peer(4, 4)),
+            (ConfChangeType::AddLearnerNode, new_learner_peer(1, 1)),
+        ],
+    );
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    let leader = cluster.leader_of_region(1).unwrap();
+    let epoch = cluster.get_region_epoch(1);
+    ctx.set_region_id(1);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(epoch);
+
+    let env = Arc::new(Environment::new(1));
+    let ch = ChannelBuilder::new(env)
+        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(ch);
+
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(DropMessageFilter::new(Arc::new(move |m| {
+            let msg_type = m.get_message().get_msg_type();
+            let to_store = m.get_to_peer().get_store_id();
+            !(msg_type == MessageType::MsgAppend && (to_store == 2 || to_store == 3))
+        }))),
+    );
+
+    cluster.add_send_filter_on_node(
+        4,
+        Box::new(DropMessageFilter::new(Arc::new(move |m| {
+            let msg_type = m.get_message().get_msg_type();
+            let to_store = m.get_to_peer().get_store_id();
+            !(msg_type == MessageType::MsgAppend && to_store == 1)
+        }))),
+    );
+
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    // ensure the cmd is proposed before transfer leader
+    fail::cfg_callback("after_propose_pending_writes", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    let handle = std::thread::spawn(move || {
+        let mut mutations = vec![];
+        for key in vec![b"key3".to_vec(), b"key4".to_vec()] {
+            let mut mutation = kvproto::kvrpcpb::Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(key);
+            mutations.push(mutation);
+        }
+        let _ = try_kv_prewrite(&client, ctx, mutations, b"key3".to_vec(), 10);
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(50)).unwrap();
+    pd_client.transfer_leader(1, new_peer(4, 4), vec![]);
+
+    pd_client.region_leader_must_be(1, new_incoming_voter(4, 4));
+    pd_client.must_leave_joint(1);
+
+    pd_client.must_joint_confchange(
+        1,
+        vec![(ConfChangeType::RemoveNode, new_learner_peer(1, 1))],
+    );
+    pd_client.must_leave_joint(1);
+
+    cluster.clear_send_filter_on_node(1);
+    cluster.clear_send_filter_on_node(4);
+
+    handle.join().unwrap();
 }
