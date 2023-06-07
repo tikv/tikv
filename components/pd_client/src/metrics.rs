@@ -32,6 +32,7 @@ make_static_metric! {
         is_recovering_marked,
         store_heartbeat,
         tso,
+        scan_regions,
 
         meta_storage_put,
         meta_storage_get,
