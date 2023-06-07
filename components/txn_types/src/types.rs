@@ -590,11 +590,17 @@ impl WriteBatchFlags {
 /// The position info of the last actual write (PUT or DELETE) of a LOCK record.
 /// Note that if the last change is a DELETE, its LastChange can be either
 /// Exist(which points to it) or NotExist.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub enum LastChange {
     Unknown,
     /// The pointer may point to a PUT or a DELETE record.
-    Exist(LastChangePosition),
+    Exist {
+        /// The commit TS of the latest PUT/DELETE record
+        last_change_ts: TimeStamp,
+        /// The estimated number of versions that need skipping from this record
+        /// to find the latest PUT/DELETE record. Note this could be inaccurate.
+        estimated_versions_to_last_change: u64,
+    },
     /// Either there is no previous write of the key or the last write is a
     /// DELETE.
     NotExist,
@@ -604,10 +610,10 @@ impl LastChange {
     pub fn make_exist(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
         assert!(!last_change_ts.is_zero());
         assert!(estimated_versions_to_last_change > 0);
-        LastChange::Exist(LastChangePosition {
+        LastChange::Exist {
             last_change_ts,
             estimated_versions_to_last_change,
-        })
+        }
     }
 
     // How `LastChange` is stored.
@@ -620,7 +626,10 @@ impl LastChange {
     pub fn to_parts(&self) -> (TimeStamp, u64) {
         match self {
             LastChange::Unknown => (TimeStamp::zero(), 0),
-            LastChange::Exist(p) => (p.last_change_ts, p.estimated_versions_to_last_change),
+            LastChange::Exist {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            } => (*last_change_ts, *estimated_versions_to_last_change),
             LastChange::NotExist => (TimeStamp::zero(), 1),
         }
     }
@@ -638,23 +647,6 @@ impl LastChange {
     }
 }
 
-impl Debug for LastChange {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LastChange::Unknown => write!(f, "Unknown"),
-            LastChange::NotExist => write!(f, "NotExist"),
-            LastChange::Exist(LastChangePosition {
-                last_change_ts,
-                estimated_versions_to_last_change,
-            }) => write!(
-                f,
-                "Exist {{ last_change_ts: {}, estimated_versions_to_last_change: {} }}",
-                last_change_ts, estimated_versions_to_last_change
-            ),
-        }
-    }
-}
-
 impl Default for LastChange {
     fn default() -> Self {
         LastChange::Unknown
@@ -662,13 +654,7 @@ impl Default for LastChange {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct LastChangePosition {
-    /// The commit TS of the latest PUT/DELETE record
-    pub last_change_ts: TimeStamp,
-    /// The estimated number of versions that need skipping from this record
-    /// to find the latest PUT/DELETE record. Note this could be inaccurate.
-    pub estimated_versions_to_last_change: u64,
-}
+pub struct LastChangePosition {}
 
 #[cfg(test)]
 mod tests {

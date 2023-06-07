@@ -55,7 +55,7 @@ impl MvccInfo {
                     write_info.set_short_value(write.short_value.unwrap_or_default());
                     if !matches!(
                         write.last_change,
-                        LastChange::NotExist | LastChange::Exist(_)
+                        LastChange::NotExist | LastChange::Exist { .. }
                     ) {
                         let (last_change_ts, versions) = write.last_change.to_parts();
                         write_info.set_last_change_ts(last_change_ts.into_inner());
@@ -81,7 +81,7 @@ impl MvccInfo {
             lock_info.set_short_value(lock.short_value.unwrap_or_default());
             if matches!(
                 lock.last_change,
-                LastChange::NotExist | LastChange::Exist(_)
+                LastChange::NotExist | LastChange::Exist { .. }
             ) {
                 let (last_change_ts, versions) = lock.last_change.to_parts();
                 lock_info.set_last_change_ts(last_change_ts.into_inner());

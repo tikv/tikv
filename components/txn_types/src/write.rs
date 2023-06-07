@@ -377,7 +377,7 @@ impl WriteRef<'_> {
         }
         if matches!(
             self.last_change,
-            LastChange::NotExist | LastChange::Exist(_)
+            LastChange::NotExist | LastChange::Exist { .. }
         ) {
             let (last_change_ts, versions) = self.last_change.to_parts();
             b.push(LAST_CHANGE_PREFIX);
@@ -402,7 +402,7 @@ impl WriteRef<'_> {
         }
         if matches!(
             self.last_change,
-            LastChange::NotExist | LastChange::Exist(_)
+            LastChange::NotExist | LastChange::Exist { .. }
         ) {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }

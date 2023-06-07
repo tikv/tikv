@@ -227,7 +227,7 @@ impl Lock {
         }
         if matches!(
             self.last_change,
-            LastChange::NotExist | LastChange::Exist(_)
+            LastChange::NotExist | LastChange::Exist { .. }
         ) {
             let (last_change_ts, versions) = self.last_change.to_parts();
             b.push(LAST_CHANGE_PREFIX);
@@ -272,7 +272,7 @@ impl Lock {
         }
         if matches!(
             self.last_change,
-            LastChange::NotExist | LastChange::Exist(_)
+            LastChange::NotExist | LastChange::Exist { .. }
         ) {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }
@@ -1107,7 +1107,7 @@ mod tests {
             min_commit_ts: TimeStamp(127), use_async_commit: true, \
             secondaries: [7365636F6E646172795F6B31, 7365636F6E646172795F6B6B6B6B6B32, \
             7365636F6E646172795F6B336B336B336B336B336B33, 7365636F6E646172795F6B34], rollback_ts: [], \
-            last_change: Exist { last_change_ts: 80, estimated_versions_to_last_change: 4 }, txn_source: 0\
+            last_change: Exist { last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4 }, txn_source: 0\
             , is_locked_with_conflict: false }"
         );
         log_wrappers::set_redact_info_log(true);
@@ -1118,7 +1118,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, \
             short_value: ?, for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [?, ?, ?, ?], rollback_ts: [], \
-            last_change: Exist { last_change_ts: 80, estimated_versions_to_last_change: 4 }, txn_source: 0\
+            last_change: Exist { last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4 }, txn_source: 0\
             , is_locked_with_conflict: false }"
         );
 
@@ -1129,7 +1129,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: 706B, start_ts: TimeStamp(100), ttl: 3, short_value: , \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [], \
-            last_change: Exist { last_change_ts: 80, estimated_versions_to_last_change: 4 }, txn_source: 0\
+            last_change: Exist { last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4 }, txn_source: 0\
              , is_locked_with_conflict: false }"
         );
         log_wrappers::set_redact_info_log(true);
@@ -1140,7 +1140,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [], \
-            last_change: Exist { last_change_ts: 80, estimated_versions_to_last_change: 4 }, txn_source: 0\
+            last_change: Exist { last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4 }, txn_source: 0\
             , is_locked_with_conflict: false }"
         );
     }

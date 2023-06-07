@@ -479,10 +479,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                         LastChange::NotExist => {
                             break None;
                         }
-                        LastChange::Exist(LastChangePosition {
+                        LastChange::Exist {
                             last_change_ts,
                             estimated_versions_to_last_change,
-                        }) if estimated_versions_to_last_change >= SEEK_BOUND => {
+                        } if estimated_versions_to_last_change >= SEEK_BOUND => {
                             // Seek to the expected version directly.
                             let key_with_ts = current_user_key.clone().append_ts(last_change_ts);
                             cursors.write.seek(&key_with_ts, &mut statistics.write)?;

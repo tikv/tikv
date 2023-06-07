@@ -416,10 +416,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
                             LastChange::NotExist => {
                                 return Ok(None);
                             }
-                            LastChange::Exist(LastChangePosition {
+                            LastChange::Exist {
                                 last_change_ts: commit_ts,
                                 estimated_versions_to_last_change,
-                            }) if estimated_versions_to_last_change >= SEEK_BOUND => {
+                            } if estimated_versions_to_last_change >= SEEK_BOUND => {
                                 let key_with_ts = key.clone().append_ts(commit_ts);
                                 let Some(value) = self
                                         .snapshot

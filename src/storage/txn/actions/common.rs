@@ -19,9 +19,12 @@ pub fn next_last_change_info<S: Snapshot>(
         WriteType::Put | WriteType::Delete => Ok(LastChange::make_exist(commit_ts, 1)),
         WriteType::Lock | WriteType::Rollback => {
             match &write.last_change {
-                LastChange::Exist(pos) => Ok(LastChange::make_exist(
-                    pos.last_change_ts,
-                    pos.estimated_versions_to_last_change + 1,
+                LastChange::Exist {
+                    last_change_ts,
+                    estimated_versions_to_last_change,
+                } => Ok(LastChange::make_exist(
+                    *last_change_ts,
+                    estimated_versions_to_last_change + 1,
                 )),
                 LastChange::NotExist => Ok(LastChange::NotExist),
                 LastChange::Unknown => {
