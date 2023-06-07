@@ -4,6 +4,7 @@
 
 use std::{
     collections::HashMap,
+    convert::identity,
     fs::File as SyncOsFile,
     path::{Path, PathBuf},
     pin::Pin,
@@ -79,6 +80,7 @@ enum PersistentFile {
     Plain(OsFile),
     #[cfg(test)]
     Dynamic(Pin<Box<dyn AsyncWrite + Send + 'static>>),
+    Closed,
 }
 
 impl std::fmt::Debug for PersistentFile {
@@ -87,6 +89,7 @@ impl std::fmt::Debug for PersistentFile {
             Self::Plain(_) => f.debug_tuple("Plain").finish(),
             #[cfg(test)]
             Self::Dynamic(_) => f.debug_tuple("Dynamic").finish(),
+            Self::Closed => f.debug_tuple("Closed").finish(),
         }
     }
 }
@@ -333,23 +336,20 @@ impl ForWriteCore {
         // it is almost impossible to implement some `poll` like things based on
         // it. We also cannot use an async mutex to guard the `content` : that will
         // make implementing `AsyncRead` and `AsyncWrite` become very very hard.
-        let res = tokio::task::spawn_blocking(move || {
-            let mut st = core_lock.lock().unwrap();
-            if let Some(PersistentFile::Plain(c)) = st.external_file.take() {
-                // The current `sync` implementation of tokio file is spawning a new blocking
-                // thread. When we are spawning many blocking operations in the
-                // blocking threads, it is possible to dead lock (The current
-                // thread waiting for a thread that will be spawned after the
-                // current thread exits.)
-                // So we convert it to the std file and using the block version call.
-                let std_file = tokio::runtime::Handle::current().block_on(c.into_std());
-                std_file.sync_all()?;
-                st.external_file = Some(PersistentFile::Plain(OsFile::from_std(std_file)));
-            }
-            Result::Ok(())
-        })
-        .map_err(|err| annotate!(err, "joining the background `done` job"))
-        .await?;
+        let res = if core_lock.lock().unwrap().external_file.is_some() {
+            tokio::task::spawn_blocking(move || {
+                let mut st = core_lock.lock().unwrap();
+                if let Some(ext_file) = st.external_file.replace(PersistentFile::Closed) {
+                    tokio::runtime::Handle::current().block_on(ext_file.done())?;
+                }
+                Result::Ok(())
+            })
+            .map_err(|err| annotate!(err, "joining the background `done` job"))
+            .await
+            .and_then(identity)
+        } else {
+            Ok(())
+        };
 
         // Some of `done` implementations may take the ownership to `self`, it will be
         // really hard and dirty to make them retryable. given `done` merely
@@ -600,6 +600,11 @@ impl AsyncWrite for PersistentFile {
             PersistentFile::Plain(f) => Pin::new(f).poll_write(cx, buf),
             #[cfg(test)]
             PersistentFile::Dynamic(d) => d.as_mut().poll_write(cx, buf),
+            PersistentFile::Closed => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "write to the tempfile has been marked done",
+            ))
+            .into(),
         }
     }
 
@@ -611,6 +616,7 @@ impl AsyncWrite for PersistentFile {
             PersistentFile::Plain(f) => Pin::new(f).poll_flush(cx),
             #[cfg(test)]
             PersistentFile::Dynamic(d) => d.as_mut().poll_flush(cx),
+            PersistentFile::Closed => Ok(()).into(),
         }
     }
 
@@ -622,6 +628,28 @@ impl AsyncWrite for PersistentFile {
             PersistentFile::Plain(f) => Pin::new(f).poll_shutdown(cx),
             #[cfg(test)]
             PersistentFile::Dynamic(d) => d.as_mut().poll_shutdown(cx),
+            PersistentFile::Closed => Ok(()).into(),
+        }
+    }
+}
+
+impl PersistentFile {
+    async fn done(self) -> Result<()> {
+        match self {
+            PersistentFile::Plain(c) => {
+                // The current `sync` implementation of tokio file is spawning a new blocking
+                // thread. When we are spawning many blocking operations in the
+                // blocking threads, it is possible to dead lock (The current
+                // thread waiting for a thread that will be spawned after the
+                // current thread exits.)
+                // So we convert it to the std file and using the block version call.
+                let std_file = c.into_std().await;
+                std_file.sync_all()?;
+                Ok(())
+            }
+            #[cfg(test)]
+            PersistentFile::Dynamic(_) => Ok(()),
+            PersistentFile::Closed => Ok(()),
         }
     }
 }
