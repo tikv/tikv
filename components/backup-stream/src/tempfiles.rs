@@ -113,7 +113,7 @@ pub struct ForWriteCore {
 
     rel_path: PathBuf,
     ref_counter: Arc<AtomicU8>,
-    done: bool,
+    done_result: Option<std::result::Result<(), String>>,
 }
 
 #[derive(Debug)]
@@ -173,7 +173,7 @@ impl TempFilePool {
             core: Arc::clone(&f.content),
             ref_counter: Arc::clone(&f.writer_count),
             rel_path: p.to_owned(),
-            done: false,
+            done_result: None,
         };
         f.writer_count.fetch_add(1, Ordering::SeqCst);
         match self.cfg.content_compression {
@@ -321,8 +321,11 @@ impl ForWriteCore {
     pub async fn done(&mut self) -> Result<()> {
         // Given we have blocked new writes after we have `done`, it is safe to skip
         // flushing here.
-        if self.done {
-            return Ok(());
+        if let Some(res) = &self.done_result {
+            return res
+                .as_ref()
+                .map_err(|err| annotate!(err, "impossible to retry `done`"))
+                .copied();
         }
         let core_lock = self.core.clone();
         // FIXME: For now, it cannot be awaited directly because `content` should be
@@ -330,7 +333,7 @@ impl ForWriteCore {
         // it is almost impossible to implement some `poll` like things based on
         // it. We also cannot use an async mutex to guard the `content` : that will
         // make implementing `AsyncRead` and `AsyncWrite` become very very hard.
-        tokio::task::spawn_blocking(move || {
+        let res = tokio::task::spawn_blocking(move || {
             let mut st = core_lock.lock().unwrap();
             if let Some(PersistentFile::Plain(c)) = st.external_file.take() {
                 // The current `sync` implementation of tokio file is spawning a new blocking
@@ -340,19 +343,21 @@ impl ForWriteCore {
                 // current thread exits.)
                 // So we convert it to the std file and using the block version call.
                 let std_file = tokio::runtime::Handle::current().block_on(c.into_std());
-                let res = std_file.sync_all();
-                // Fillback the file so once the sync_all call failed, we are able to retry.
+                std_file.sync_all()?;
                 st.external_file = Some(PersistentFile::Plain(OsFile::from_std(std_file)));
-                res?;
             }
             Result::Ok(())
         })
         .map_err(|err| annotate!(err, "joining the background `done` job"))
-        .await??;
+        .await?;
 
-        self.done = true;
+        // Some of `done` implementations may take the ownership to `self`, it will be
+        // really hard and dirty to make them retryable. given `done` merely
+        // fails, and once it failed, it is possible to lose data, just store and always
+        // return the error, so the task eventually fail.
+        self.done_result = Some(res.as_ref().map_err(|err| err.to_string()).copied());
         self.ref_counter.fetch_sub(1, Ordering::SeqCst);
-        Ok(())
+        res
     }
 }
 
@@ -443,7 +448,7 @@ impl AsyncWrite for ForWriteCore {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         use std::io::{Error as IoErr, ErrorKind};
-        if self.done {
+        if self.done_result.is_some() {
             return Err(IoErr::new(
                 ErrorKind::BrokenPipe,
                 "the write part has been closed",
@@ -500,7 +505,7 @@ impl Drop for FileCore {
 
 impl Drop for ForWriteCore {
     fn drop(&mut self) {
-        if !self.done {
+        if self.done_result.is_none() {
             self.ref_counter.fetch_sub(1, Ordering::SeqCst);
         }
     }
