@@ -146,4 +146,15 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
         &self,
         cf: &str,
     ) -> Result<Option<(u64, std::time::SystemTime)>>;
+
+    fn has_old_active_memtable(&self, threshold: std::time::SystemTime) -> bool {
+        for cf in self.cf_names() {
+            if let Ok(Some((_, age))) = self.get_active_memtable_stats_cf(cf) {
+                if age < threshold {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }

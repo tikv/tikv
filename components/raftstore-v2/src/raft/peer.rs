@@ -48,7 +48,6 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
-    tablet_being_flushed: bool,
 
     /// Statistics for self.
     self_stat: PeerStat,
@@ -171,7 +170,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
-            tablet_being_flushed: false,
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
@@ -321,16 +319,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer().get_id()
-    }
-
-    #[inline]
-    pub fn tablet_being_flushed(&self) -> bool {
-        self.tablet_being_flushed
-    }
-
-    #[inline]
-    pub fn set_tablet_being_flushed(&mut self, v: bool) {
-        self.tablet_being_flushed = v;
     }
 
     #[inline]

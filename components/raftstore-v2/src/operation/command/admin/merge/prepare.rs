@@ -49,10 +49,11 @@ use raftstore::{
     store::{metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext, Transport},
     Error, Result,
 };
-use slog::{debug, info};
+use slog::{debug, error, info, warn};
 use tikv_util::{
     box_err, log::SlogFormat, slog_panic, store::region_on_same_stores, time::Instant,
 };
+use txn_types::WriteBatchFlags;
 
 use super::merge_source_path;
 use crate::{
@@ -60,7 +61,7 @@ use crate::{
     fsm::ApplyResReporter,
     operation::{command::parse_at, AdminCmdResult, SimpleWriteReqDecoder},
     raft::{Apply, Peer},
-    router::CmdResChannel,
+    router::{CmdResChannel, PeerMsg, RaftRequest},
 };
 
 const TRIM_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -76,6 +77,8 @@ pub enum PrepareStatus {
         start_time: Instant,
         // Peers that we are not sure if trimmed.
         pending_peers: HashMap<u64, RegionEpoch>,
+        // Only when all peers are trimmed, this proposal will be taken into the tablet flush
+        // callback.
         req: Option<RaftCmdRequest>,
     },
     /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
@@ -125,6 +128,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let pre_propose = if let Some(r) = self.already_checked_pessimistic_locks()? {
             r
         } else if self.already_checked_trim_status()? {
+            if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                .contains(WriteBatchFlags::PRE_FLUSH_FINISHED)
+            {
+                // We will always schedule flush (`merge_on_availability_response`) when trim
+                // status passed.
+                warn!(
+                    self.logger,
+                    "flush should already be scheduled for prepare merge"
+                );
+                return Err(Error::PendingPrepareMerge);
+            }
             let r = self.check_logs_before_prepare_merge(store_ctx)?;
             self.check_pessimistic_locks(r, &mut req)?
         } else {
@@ -345,6 +359,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         from_peer: u64,
         resp: &ExtraMessage,
     ) {
+        let region_id = self.region_id();
         if self.merge_context().is_some()
             && let Some(PrepareStatus::WaitForTrimStatus { pending_peers, req, .. }) = self
                 .merge_context_mut()
@@ -373,9 +388,36 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             if pending_peers.is_empty() {
-                let (ch, _) = CmdResChannel::pair();
-                let req = req.take().unwrap();
-                self.on_admin_command(store_ctx, req, ch);
+                let mailbox = match store_ctx.router.mailbox(region_id) {
+                    Some(mailbox) => mailbox,
+                    None => {
+                        assert!(
+                            store_ctx.router.is_shutdown(),
+                            "{} router should have been closed",
+                            SlogFormat(&self.logger)
+                        );
+                        return;
+                    }
+                };
+                let mut req = req.take().unwrap();
+                req.mut_header().set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
+                let logger = self.logger.clone();
+                let on_flush_finish = move || {
+                    let (ch, _) = CmdResChannel::pair();
+                    if let Err(e) = mailbox.try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch))) {
+                        error!(
+                            logger,
+                            "send split request fail after pre-flush finished";
+                            "err" => ?e,
+                        );
+                    }
+                };
+                self.start_pre_flush(
+                    store_ctx,
+                    "prepare_merge",
+                    &self.region().clone(),
+                    Box::new(on_flush_finish),
+                );
             }
         }
     }

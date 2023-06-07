@@ -14,6 +14,7 @@ use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
+    config::ReadableDuration,
     time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
@@ -44,12 +45,14 @@ pub enum Task<EK> {
     DirectDestroy { tablet: Either<EK, PathBuf> },
     /// Cleanup ssts.
     CleanupImportSst(Box<[SstMeta]>),
-    /// Flush memtable before split
-    ///
-    /// cb is some iff the task is sent from leader, it is used to real propose
-    /// split when flush finishes
+    /// Flush memtable.
     Flush {
         region_id: u64,
+        reason: &'static str,
+        /// Do not flush if the active memtable is just flushed within this
+        /// threshold.
+        threshold: Option<Duration>,
+        /// Callback will be called if memtable is fresh.
         cb: Option<Box<dyn FnOnce() + Send>>,
     },
 }
@@ -71,32 +74,32 @@ impl<EK> Display for Task<EK> {
                 ..
             } => write!(
                 f,
-                "prepare destroy tablet for region_id {}, wait_for_persisted {}",
-                region_id, wait_for_persisted,
+                "prepare destroy tablet for region_id {region_id}, wait_for_persisted {wait_for_persisted}",
             ),
             Task::Destroy {
                 region_id,
                 persisted_index,
             } => write!(
                 f,
-                "destroy tablet for region_id {} persisted_index {}",
-                region_id, persisted_index,
+                "destroy tablet for region_id {region_id}, persisted_index {persisted_index}",
             ),
             Task::DirectDestroy { .. } => {
                 write!(f, "direct destroy tablet")
             }
             Task::CleanupImportSst(ssts) => {
-                write!(f, "cleanup import ssts {:?}", ssts)
+                write!(f, "cleanup import ssts {ssts:?}")
             }
             Task::Flush {
                 region_id,
+                reason,
+                threshold,
                 cb: on_flush_finish,
             } => {
                 write!(
                     f,
-                    "flush tablet for region_id {}, is leader {}",
-                    region_id,
-                    on_flush_finish.is_some()
+                    "flush tablet for region_id {region_id}, reason {reason}, threshold {:?}, has_cb {}",
+                    threshold,
+                    on_flush_finish.is_some(),
                 )
             }
         }
@@ -356,12 +359,18 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    fn flush_tablet(&self, region_id: u64, cb: Option<Box<dyn FnOnce() + Send>>) {
+    fn flush_tablet(
+        &self,
+        region_id: u64,
+        reason: &'static str,
+        threshold: Option<Duration>,
+        cb: Option<Box<dyn FnOnce() + Send>>,
+    ) {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
-            .map(|mut cache| cache.latest().cloned()) else {return};
-
+            .map(|mut cache| cache.latest().cloned()) else { return };
+        let threshold = threshold.map(|t| std::time::SystemTime::now() - t);
         // The callback `cb` being some means it's the task sent from
         // leader, we should sync flush memtables and call it after the flush complete
         // where the split will be proposed again with extra flag.
@@ -371,28 +380,57 @@ impl<EK: KvEngine> Runner<EK> {
             self.background_pool
                 .spawn(async move {
                     // sync flush for leader to let the flush happend before later checkpoint.
-                    tablet.flush_cfs(DATA_CFS, true).unwrap();
-                    let elapsed = now.saturating_elapsed();
-                    // to be removed after when it's stable
-                    info!(
-                        logger,
-                        "flush memtable for leader";
-                        "region_id" => region_id,
-                        "duration" => ?elapsed,
-                    );
-
+                    if threshold.is_none() || tablet.has_old_active_memtable(threshold.unwrap()) {
+                        // tablet.flush_cfs(DATA_CFS, true).unwrap();
+                        let r = tablet.flush_cfs(DATA_CFS, true);
+                        let elapsed = now.saturating_elapsed();
+                        if let Err(e) = r {
+                            warn!(
+                                logger,
+                                "flush memtable for leader failed";
+                                "region_id" => region_id,
+                                "reason" => reason,
+                                "err" => ?e,
+                            );
+                            return;
+                        } else {
+                            info!(
+                                logger,
+                                "flush memtable for leader";
+                                "region_id" => region_id,
+                                "reason" => reason,
+                                "duration" => %ReadableDuration(elapsed),
+                            );
+                        }
+                    }
                     drop(tablet);
                     cb();
                 })
                 .unwrap();
+        } else if threshold.is_none() || tablet.has_old_active_memtable(threshold.unwrap()) {
+            if let Err(e) = tablet.flush_cfs(DATA_CFS, false) {
+                warn!(
+                    self.logger,
+                    "flush memtable for follower failed";
+                    "region_id" => region_id,
+                    "reason" => reason,
+                    "err" => ?e,
+                );
+            } else {
+                info!(
+                    self.logger,
+                    "flush memtable for follower";
+                    "region_id" => region_id,
+                    "reason" => reason,
+                );
+            }
         } else {
             info!(
                 self.logger,
-                "flush memtable for follower";
+                "skipped flush memtable for follower";
                 "region_id" => region_id,
+                "reason" => reason,
             );
-
-            tablet.flush_cfs(DATA_CFS, false).unwrap();
         }
     }
 }
@@ -423,7 +461,12 @@ where
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
-            Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
+            Task::Flush {
+                region_id,
+                reason,
+                threshold,
+                cb,
+            } => self.flush_tablet(region_id, reason, threshold, cb),
         }
     }
 }
