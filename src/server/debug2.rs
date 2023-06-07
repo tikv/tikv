@@ -1010,8 +1010,8 @@ fn get_all_region_states_with_normal_state<ER: RaftEngine>(
 }
 
 // This method devide all regions into `threads` of groups where each group has
-// similar data volume so that we use `threads` of threads to execute them
-// concurrently.
+// similar data volume (estimated by region size) so that we use `threads` of
+// threads to execute them concurrently.
 // Note: we cannot guarantee that we can divde them into exactly `threads` of
 // groups for some cases, ex: [0, 0, 0, 0, 0, 100], we can at most return two
 // groups for this.
