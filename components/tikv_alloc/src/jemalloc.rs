@@ -71,8 +71,11 @@ impl Drop for AccessorStillAlive {
 #[repr(transparent)]
 struct PeekableRemoteStat<T>(Option<NonNull<T>>);
 
-// SAFETY: we need to keep the thread called add_thread_memory_accessor always
-// call remove_thread_memory_accessor before exit.
+// SAFETY: all constructors of `PeekableRemoteStat` returns pointer points to a
+// thread local variable. Once this be sent, a reasonable life time of this
+// variable should be as long as the thread holding the underlying thread local
+// variable. But it is impossible express such lifetime in current Rust.
+// Then it is the user's responsibility to trace that lifetime.
 unsafe impl<T: Send> Send for PeekableRemoteStat<T> {}
 
 impl<T: Copy> PeekableRemoteStat<T> {
