@@ -48,6 +48,7 @@ use tikv_util::{
     timer::SteadyTimer,
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+    Either,
 };
 use tokio::{
     runtime::{Builder, Runtime},
@@ -1077,7 +1078,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
                     leader_resolver
-                        .resolve(regions, min_ts, Some(cdc_handle))
+                        .resolve(Either::Left(regions), min_ts, Some(cdc_handle))
                         .await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);

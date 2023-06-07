@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     fmt,
     marker::PhantomData,
     sync::{
@@ -11,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use grpcio::Environment;
@@ -67,7 +67,7 @@ enum PendingLock {
 // Records information related to observed region.
 // observe_id is used for avoiding ABA problems in incremental scan task,
 // advance resolved ts task, and command observing.
-struct ObserveRegion {
+pub struct ObserveRegion {
     meta: Region,
     handle: ObserveHandle,
     // TODO: Get lease from raftstore.
@@ -264,6 +264,11 @@ impl ObserveRegion {
             }
         }
     }
+
+    #[inline]
+    pub fn get_tracked_index(&self) -> u64 {
+        self.resolver.tracked_index
+    }
 }
 
 pub struct Endpoint<T, E, S>
@@ -277,7 +282,7 @@ where
     advance_notify: Arc<Notify>,
     store_meta: Arc<Mutex<S>>,
     region_read_progress: RegionReadProgressRegistry,
-    regions: HashMap<u64, ObserveRegion>,
+    regions: Arc<Mutex<HashMap<u64, ObserveRegion>>>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task>,
     advance_worker: AdvanceTsWorker<T, E>,
@@ -304,12 +309,19 @@ where
             let meta = store_meta.lock().unwrap();
             (meta.region_read_progress().clone(), meta.store_id())
         };
+        let advance_cdc_handle = if cfg.enable_traffic_optimization {
+            Some(cdc_handle.clone())
+        } else {
+            None
+        };
+        let regions = Arc::new(Mutex::new(HashMap::default()));
         let advance_worker = AdvanceTsWorker::new(
             cfg.advance_ts_interval.0,
             pd_client.clone(),
             scheduler.clone(),
             concurrency_manager,
-            cdc_handle.clone(),
+            regions.clone(),
+            advance_cdc_handle,
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
         let store_resolver_gc_interval = Duration::from_secs(60);
@@ -330,7 +342,7 @@ where
             region_read_progress,
             advance_worker,
             scanner_pool,
-            regions: HashMap::default(),
+            regions,
             _phantom: PhantomData::default(),
         };
         ep.handle_advance_resolved_ts(leader_resolver);
@@ -339,7 +351,8 @@ where
 
     fn register_region(&mut self, region: Region) {
         let region_id = region.get_id();
-        assert!(self.regions.get(&region_id).is_none());
+        let mut regions = self.regions.lock().unwrap();
+        assert!(regions.get(&region_id).is_none());
         let observe_region = {
             if let Some(read_progress) = self.region_read_progress.get(&region_id) {
                 info!(
@@ -363,7 +376,8 @@ where
         observe_region
             .read_progress()
             .update_advance_resolved_ts_notify(self.advance_notify.clone());
-        self.regions.insert(region_id, observe_region);
+        regions.insert(region_id, observe_region);
+        drop(regions);
 
         let scan_task = self.build_scan_task(region, observe_handle, cancelled);
         self.scanner_pool.spawn_task(scan_task);
@@ -412,7 +426,9 @@ where
     }
 
     fn deregister_region(&mut self, region_id: u64) {
-        if let Some(observe_region) = self.regions.remove(&region_id) {
+        let regions = self.regions.clone();
+        let mut regions = regions.lock().unwrap();
+        if let Some(observe_region) = regions.remove(&region_id) {
             let ObserveRegion {
                 handle,
                 resolver_status,
@@ -438,7 +454,9 @@ where
 
     fn region_updated(&mut self, incoming_region: Region) {
         let region_id = incoming_region.get_id();
-        if let Some(obs_region) = self.regions.get_mut(&region_id) {
+        let regions = self.regions.clone();
+        let mut regions = regions.lock().unwrap();
+        if let Some(obs_region) = regions.get_mut(&region_id) {
             if obs_region.meta.get_region_epoch().get_version()
                 == incoming_region.get_region_epoch().get_version()
             {
@@ -459,7 +477,9 @@ where
     // scheduled by observer. To prevent destroying region for wrong peer, it
     // should check the region epoch at first.
     fn region_destroyed(&mut self, region: Region) {
-        if let Some(observe_region) = self.regions.get(&region.id) {
+        let regions = self.regions.clone();
+        let regions = regions.lock().unwrap();
+        if let Some(observe_region) = regions.get(&region.id) {
             if util::compare_region_epoch(
                 observe_region.meta.get_region_epoch(),
                 &region,
@@ -483,7 +503,9 @@ where
 
     // Deregister current observed region and try to register it again.
     fn re_register_region(&mut self, region_id: u64, observe_id: ObserveId, cause: String) {
-        if let Some(observe_region) = self.regions.get(&region_id) {
+        let regions = self.regions.clone();
+        let regions = regions.lock().unwrap();
+        if let Some(observe_region) = regions.get(&region_id) {
             if observe_region.handle.id != observe_id {
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
@@ -510,12 +532,13 @@ where
 
     // Update advanced resolved ts.
     // Must ensure all regions are leaders at the point of ts.
-    fn handle_resolved_ts_advanced(&mut self, regions: Vec<u64>, ts: TimeStamp) {
-        if regions.is_empty() {
+    fn handle_resolved_ts_advanced(&mut self, advance_regions: Vec<u64>, ts: TimeStamp) {
+        if advance_regions.is_empty() {
             return;
         }
-        for region_id in regions.iter() {
-            if let Some(observe_region) = self.regions.get_mut(region_id) {
+        let mut regions = self.regions.lock().unwrap();
+        for region_id in advance_regions.iter() {
+            if let Some(observe_region) = regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
                     let _ = observe_region.resolver.resolve(ts);
                 }
@@ -529,11 +552,13 @@ where
     fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
+        let regions = self.regions.clone();
+        let mut regions = regions.lock().unwrap();
         for batch in cmd_batch {
             if batch.is_empty() {
                 continue;
             }
-            if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
+            if let Some(observe_region) = regions.get_mut(&batch.region_id) {
                 let observe_id = batch.rts_id;
                 let region_id = observe_region.meta.id;
                 if observe_region.handle.id == observe_id {
@@ -560,7 +585,8 @@ where
         entries: Vec<ScanEntry>,
         apply_index: u64,
     ) {
-        match self.regions.get_mut(&region_id) {
+        let mut regions = self.regions.lock().unwrap();
+        match regions.get_mut(&region_id) {
             Some(observe_region) => {
                 if observe_region.handle.id == observe_id {
                     observe_region.track_scan_locks(entries, apply_index);
@@ -573,9 +599,7 @@ where
     }
 
     fn handle_advance_resolved_ts(&self, leader_resolver: LeadershipResolver) {
-        let regions = self.regions.keys().into_iter().copied().collect();
         self.advance_worker.advance_ts_for_regions(
-            regions,
             leader_resolver,
             self.cfg.advance_ts_interval.0,
             self.advance_notify.clone(),
@@ -795,7 +819,8 @@ where
         });
         let mut lock_heap_size = 0;
         let (mut resolved_count, mut unresolved_count) = (0, 0);
-        for observe_region in self.regions.values() {
+        let regions = self.regions.lock().unwrap();
+        for observe_region in regions.values() {
             match &observe_region.resolver_status {
                 ResolverStatus::Pending { locks, .. } => {
                     for l in locks {

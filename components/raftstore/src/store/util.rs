@@ -18,7 +18,7 @@ use std::{
 use collections::HashSet;
 use engine_traits::KvEngine;
 use kvproto::{
-    kvrpcpb::{self, KeyRange, LeaderInfo, CheckedLeader},
+    kvrpcpb::{self, CheckedLeader, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftRequestHeader,
@@ -1203,13 +1203,13 @@ impl RegionReadProgressRegistry {
     pub fn handle_check_leaders<E: KvEngine>(
         &self,
         leaders: Vec<LeaderInfo>,
-        hibernates: Vec<u64>,
+        inactives: Vec<u64>,
         coprocessor: &CoprocessorHost<E>,
         ts: u64,
         store_id: u64,
     ) -> Vec<u64> {
         let mut failed_regions = Vec::with_capacity(16);
-        let mut valid_regions = Vec::with_capacity(hibernates.len());
+        let mut valid_regions = Vec::with_capacity(inactives.len());
         let registry = self.registry.lock().unwrap();
         for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
@@ -1220,9 +1220,9 @@ impl RegionReadProgressRegistry {
             }
             failed_regions.push(region_id);
         }
-        for region_id in &hibernates {
+        for region_id in &inactives {
             if let Some(rp) = registry.get(&region_id) {
-                if rp.check_hibernate_region_state() {
+                if rp.check_inactive_region_state() {
                     valid_regions.push(*region_id);
                     continue;
                 }
@@ -1276,7 +1276,7 @@ impl RegionReadProgressRegistry {
                 continue;
             }
             if let Some(rp) = registry.get(&region_id) {
-                rp.update_hibernate_safe_ts(ts, coprocessor);
+                rp.update_inactive_region_safe_ts(ts, coprocessor);
             }
         }
         for checked_leader in checked_leaders {
@@ -1399,11 +1399,15 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn update_hibernate_safe_ts<E: KvEngine>(&self, ts: u64, coprocessor: &CoprocessorHost<E>) {
+    pub fn update_inactive_region_safe_ts<E: KvEngine>(
+        &self,
+        ts: u64,
+        coprocessor: &CoprocessorHost<E>,
+    ) {
         let mut core = self.core.lock().unwrap();
         match core.group_state {
             Some(GroupState::Idle) => {
-                if let Some(ts) = core.update_hibernate_ts(ts) {
+                if let Some(ts) = core.update_inactive_region_safe_ts(ts) {
                     coprocessor.on_update_safe_ts(core.region_id, ts, ts);
                     if !core.pause {
                         self.safe_ts.store(ts, AtomicOrdering::Release);
@@ -1414,19 +1418,12 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn check_hibernate_region_state(&self) -> bool {
+    pub fn check_inactive_region_state(&self) -> bool {
         let core = self.core.lock().unwrap();
         match core.group_state {
-            Some(GroupState::Idle) => {
-                if core
-                    .last_term
-                    .map_or(false, |last_term| last_term == core.leader_info.leader_term)
-                {
-                    true
-                } else {
-                    false
-                }
-            }
+            Some(GroupState::Idle) => core
+                .last_term
+                .map_or(false, |last_term| last_term == core.leader_info.leader_term),
             _ => false,
         }
     }
@@ -1593,7 +1590,11 @@ pub struct RegionReadProgressCore {
     // The hibernated region's read progress can be pushed without region epoch checking.
     group_state: Option<GroupState>,
     // `last_term` is used to check if leader changed when `leader_info` is missing.
+    // for leader, when term and applied index both unchanged, it's inactive.
+    // for follower, when term is unchanged, it's inactive.
     last_term: Option<u64>,
+    // `last_applied_index` is used by leader to check whether it's inactive.
+    last_applied_index: Option<u64>,
 }
 
 // A helpful wrapper of `(apply_index, safe_ts)` item
@@ -1668,6 +1669,7 @@ impl RegionReadProgressCore {
             advance_notify: None,
             group_state: Some(GroupState::Ordered),
             last_term: None,
+            last_applied_index: None,
         }
     }
 
@@ -1756,7 +1758,7 @@ impl RegionReadProgressCore {
     }
 
     // Return the `safe_ts` if it is updated
-    fn update_hibernate_ts(&mut self, ts: u64) -> Option<u64> {
+    fn update_inactive_region_safe_ts(&mut self, ts: u64) -> Option<u64> {
         if self.read_state.ts >= ts {
             None
         } else {
@@ -1804,12 +1806,15 @@ impl RegionReadProgressCore {
         &self.leader_info
     }
 
-    pub fn is_hibernated(&self) -> bool {
-        matches!(self.group_state, Some(GroupState::Idle))
+    pub fn is_inactive(&self, applied_index: &u64) -> bool {
+        self.last_applied_index
+            .map_or(false, |ref last_applied_index| {
+                applied_index == last_applied_index
+            })
     }
 
-    pub fn set_group_state(&mut self, state: GroupState) {
-        self.group_state = self.group_state.map(|_| state);
+    pub fn set_last_applied_index(&mut self, applied_index: u64) {
+        self.last_applied_index.replace(applied_index);
     }
 }
 

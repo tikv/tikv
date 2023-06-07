@@ -387,7 +387,6 @@ where
         if state == GroupState::Idle {
             self.peer.raft_group.raft.maybe_free_inflight_buffers();
         }
-        self.peer.read_progress.get_core().set_group_state(state);
     }
 
     pub fn maybe_hibernate(&mut self) -> bool {

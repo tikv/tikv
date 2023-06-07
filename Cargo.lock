@@ -2932,7 +2932,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/you06/kvproto?branch=hibernated-regions-optimization#a651fbd66121b1732e9f5fa9ff006044f5a9d22e"
+source = "git+https://github.com/you06/kvproto?branch=resolved-ts-opt#1030597ce323234fd114195c4c67d76c0e8dafd1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

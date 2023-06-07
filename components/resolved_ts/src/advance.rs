@@ -1,13 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cell::UnsafeCell,
     cmp,
     ffi::CString,
+    future::Future,
     iter::FromIterator,
     marker::PhantomData,
+    pin::Pin,
     sync::{
         atomic::{AtomicI32, Ordering},
-        Arc,
+        Arc, Mutex as stdMutex,
     },
     time::Duration,
 };
@@ -41,6 +44,7 @@ use tikv_util::{
     time::{Instant, SlowTimer},
     timer::SteadyTimer,
     worker::Scheduler,
+    Either,
 };
 use tokio::{
     runtime::{Builder, Runtime},
@@ -48,7 +52,10 @@ use tokio::{
 };
 use txn_types::TimeStamp;
 
-use crate::{endpoint::Task, metrics::*};
+use crate::{
+    endpoint::{ObserveRegion, Task},
+    metrics::*,
+};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
@@ -63,8 +70,19 @@ pub struct AdvanceTsWorker<T: 'static + CdcHandle<E>, E: KvEngine> {
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
-    cdc_handler: T,
+    cdc_handler: Option<T>,
+    regions: Arc<stdMutex<HashMap<u64, ObserveRegion>>>,
     _phantom: PhantomData<E>,
+}
+
+fn get_regions(mu: Arc<stdMutex<HashMap<u64, ObserveRegion>>>) -> HashMap<u64, Option<u64>> {
+    let mut regions: HashMap<u64, Option<u64>> = Default::default();
+    let regions_guard = mu.lock().unwrap();
+    regions.extend(regions_guard.iter().map(|(region_id, observe_region)| {
+        (region_id.clone(), Some(observe_region.get_tracked_index()))
+    }));
+    drop(regions_guard);
+    regions
 }
 
 impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
@@ -73,7 +91,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
-        cdc_handler: T,
+        regions: Arc<stdMutex<HashMap<u64, ObserveRegion>>>,
+        cdc_handler: Option<T>,
     ) -> Self {
         let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
@@ -91,6 +110,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             timer: SteadyTimer::default(),
             concurrency_manager,
             cdc_handler,
+            regions,
             _phantom: Default::default(),
         }
     }
@@ -100,7 +120,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
     // Advance ts asynchronously and register RegisterAdvanceEvent when its done.
     pub fn advance_ts_for_regions(
         &self,
-        regions: Vec<u64>,
         mut leader_resolver: LeadershipResolver,
         advance_ts_interval: Duration,
         advance_notify: Arc<Notify>,
@@ -114,10 +133,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             self.advance_ts_interval,
         ));
         let cdc_handler = self.cdc_handler.clone();
+        let regions_mutex = self.regions.clone();
 
         let fut = async move {
             // Ignore get tso errors since we will retry every `advdance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
+            // Get the region after min_ts is generated.
+            let regions = get_regions(regions_mutex);
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
@@ -131,7 +153,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             }
 
             let regions = leader_resolver
-                .resolve(regions, min_ts, Some(cdc_handler))
+                .resolve(Either::Right(regions), min_ts, cdc_handler)
                 .await;
             // let regions = if false {
             // } else {
@@ -178,18 +200,89 @@ pub struct LeadershipResolver {
     region_read_progress: RegionReadProgressRegistry,
     store_id: u64,
 
+    buffer: ResolverBuffer,
+}
+
+struct ResolverBuffer {
+    last_gc_time: Instant,
+    gc_interval: Duration,
     // store_id -> check leader request, record the request to each stores.
     store_req_map: HashMap<u64, CheckLeaderRequest>,
     // region_id -> region, cache the information of regions.
     region_map: HashMap<u64, Vec<Peer>>,
     // region_id -> peers id, record the responses.
     resp_map: HashMap<u64, Vec<u64>>,
-    checking_regions: HashSet<u64>,
     valid_regions: HashSet<u64>,
+    // store_id -> checking region_id sent to this store.
+    store_region_map: HashMap<u64, Vec<u64>>,
+    failed_region_store_map: HashMap<u64, Vec<u64>>,
+    store_unsafe_regions_map: HashMap<u64, Vec<u64>>,
+    valid_leader_infos: Vec<(LeaderInfo, Vec<u64>)>,
+    store_checked_leader_map: HashMap<u64, Vec<u64>>,
+}
 
-    gc_interval: Duration,
-    last_gc_time: Instant,
-    // _phantom: PhantomData<(T, E)>,
+impl ResolverBuffer {
+    fn new(gc_interval: Duration) -> Self {
+        ResolverBuffer {
+            gc_interval,
+            last_gc_time: Instant::now_coarse(),
+            store_req_map: HashMap::default(),
+            region_map: HashMap::default(),
+            resp_map: HashMap::default(),
+            valid_regions: HashSet::default(),
+            store_region_map: HashMap::default(),
+            failed_region_store_map: HashMap::default(),
+            store_unsafe_regions_map: HashMap::default(),
+            valid_leader_infos: Vec::default(),
+            store_checked_leader_map: HashMap::default(),
+        }
+    }
+
+    fn clear(&mut self) {
+        for v in self.store_req_map.values_mut() {
+            v.regions.clear();
+            v.hibernated_regions.clear();
+            v.ts = 0;
+        }
+        for v in self.region_map.values_mut() {
+            v.clear();
+        }
+        for v in self.resp_map.values_mut() {
+            v.clear();
+        }
+        for v in self.store_region_map.values_mut() {
+            v.clear();
+        }
+        self.valid_regions.clear();
+        for v in self.failed_region_store_map.values_mut() {
+            v.clear();
+        }
+        for v in self.store_unsafe_regions_map.values_mut() {
+            v.clear();
+        }
+        self.valid_leader_infos.clear();
+        for v in self.store_checked_leader_map.values_mut() {
+            v.clear();
+        }
+    }
+
+    // release the memory of buffer and return whether the GC take effects.
+    fn gc(&mut self) -> bool {
+        let now = Instant::now_coarse();
+        if now - self.last_gc_time > self.gc_interval {
+            self.store_req_map = HashMap::default();
+            self.region_map = HashMap::default();
+            self.resp_map = HashMap::default();
+            self.valid_regions = HashSet::default();
+            self.failed_region_store_map = HashMap::default();
+            self.store_unsafe_regions_map = HashMap::default();
+            self.valid_leader_infos = Vec::default();
+            self.store_checked_leader_map = HashMap::default();
+            self.last_gc_time = now;
+            return true;
+        }
+        false
+    }
 }
 
 impl LeadershipResolver {
@@ -208,44 +301,8 @@ impl LeadershipResolver {
             env,
             security_mgr,
             region_read_progress,
-
-            store_req_map: HashMap::default(),
-            region_map: HashMap::default(),
-            resp_map: HashMap::default(),
-            valid_regions: HashSet::default(),
-            checking_regions: HashSet::default(),
-            last_gc_time: Instant::now_coarse(),
-            gc_interval,
-            // _phantom: Default::default(),
+            buffer: ResolverBuffer::new(gc_interval),
         }
-    }
-
-    fn gc(&mut self) {
-        let now = Instant::now_coarse();
-        if now - self.last_gc_time > self.gc_interval {
-            self.store_req_map = HashMap::default();
-            self.region_map = HashMap::default();
-            self.resp_map = HashMap::default();
-            self.valid_regions = HashSet::default();
-            self.checking_regions = HashSet::default();
-            self.last_gc_time = now;
-        }
-    }
-
-    fn clear(&mut self) {
-        for v in self.store_req_map.values_mut() {
-            v.regions.clear();
-            v.hibernated_regions.clear();
-            v.ts = 0;
-        }
-        for v in self.region_map.values_mut() {
-            v.clear();
-        }
-        for v in self.resp_map.values_mut() {
-            v.clear();
-        }
-        self.checking_regions.clear();
-        self.valid_regions.clear();
     }
 
     // Confirms leadership of region peer before trying to advance resolved ts.
@@ -254,82 +311,83 @@ impl LeadershipResolver {
     // leadership.
     pub async fn resolve<T: 'static + CdcHandle<E>, E: KvEngine>(
         &mut self,
-        regions: Vec<u64>,
+        regions: Either<Vec<u64>, HashMap<u64, Option<u64>>>,
         min_ts: TimeStamp,
         cdc_handler: Option<T>,
     ) -> Vec<u64> {
-        if regions.is_empty() {
-            return regions;
-        }
-
-        // Clear previous result before resolving.
-        self.clear();
-        // GC when necessary to prevent memory leak.
-        self.gc();
+        let regions = match regions {
+            Either::Left(vec_regions) => {
+                if vec_regions.is_empty() {
+                    return vec_regions;
+                }
+                vec_regions
+                    .into_iter()
+                    .map(|region_id| (region_id, None))
+                    .collect()
+            }
+            Either::Right(map_regions) => {
+                if map_regions.is_empty() {
+                    return Vec::new();
+                }
+                map_regions
+            }
+        };
 
         PENDING_RTS_COUNT.inc();
         defer!(PENDING_RTS_COUNT.dec());
         fail_point!("before_sync_replica_read_state", |_| regions.clone());
 
         let store_id = self.store_id;
-        let valid_regions = &mut self.valid_regions;
-        let region_map = &mut self.region_map;
-        let resp_map = &mut self.resp_map;
-        let store_req_map = &mut self.store_req_map;
-        let mut store_region_map = HashMap::default();
-        let checking_regions = &mut self.checking_regions;
-        for region_id in &regions {
-            checking_regions.insert(*region_id);
+
+        let buffer = &mut self.buffer;
+        // GC when necessary to prevent memory leak.
+        if !buffer.gc() {
+            // Clear previous result before reusing buffer and resolving.
+            buffer.clear();
         }
+        let valid_regions = &mut buffer.valid_regions;
+        let region_map = &mut buffer.region_map;
+        let resp_map = &mut buffer.resp_map;
+        let store_req_map = &mut buffer.store_req_map;
+        let store_region_map = &mut buffer.store_region_map;
+
         let mut active_regions = 0;
         let mut read_index_reqs = Vec::new();
+
+        // init regions need to be check.
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
-                if !checking_regions.contains(region_id) {
+                let applied_index = regions.get(region_id);
+                if applied_index.is_none() {
                     continue;
                 }
-                let core = read_progress.get_core();
-                let is_active = !core.is_hibernated(); // maybe change the active condition.
+                let applied_index = applied_index.unwrap();
+                let mut core = read_progress.get_core();
+                let is_inactive = applied_index
+                    .map_or(false, |ref applied_index| !core.is_inactive(applied_index));
+                if !is_inactive && applied_index.is_some() {
+                    core.set_last_applied_index(applied_index.unwrap());
+                }
                 let local_leader_info = core.get_local_leader_info();
                 let leader_id = local_leader_info.get_leader_id();
                 let leader_store_id = local_leader_info.get_leader_store_id();
                 let peer_list = local_leader_info.get_peers();
-                // Check if the leader in this store
+                // Check if the leader in this store.
                 if leader_store_id != Some(store_id) {
                     continue;
                 }
                 let leader_info = core.get_leader_info();
                 let has_cdc_handler = cdc_handler.is_some();
                 // check leader for action regions by read-index request.
-                if is_active && has_cdc_handler {
+                if is_inactive && has_cdc_handler {
                     active_regions += 1;
-                    let cdc_handle_clone = cdc_handler.as_ref().unwrap().clone();
+                    let cdc_handler = cdc_handler.as_ref().unwrap().clone();
                     let leader_info = leader_info.clone();
                     let region_id = *region_id;
-
                     let peer_store_ids = peer_list.iter().map(|peer| peer.store_id).collect();
-                    let req = async move {
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        let callback = Callback::read(Box::new(move |resp| {
-                            let resp = if resp.response.get_header().has_error() {
-                                None
-                            } else {
-                                Some(region_id)
-                            };
-                            if tx.send(resp).is_err() {
-                                error!("resolve send tso response failed"; "region_id" => region_id);
-                            }
-                        }));
-                        if let Err(e) = cdc_handle_clone.check_leadership(region_id, callback) {
-                            warn!("resolve send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
-                            return Ok(CheckLeaderResult::ReadIndex(None));
-                        }
-                        match rx.await {
-                            Ok(_) => Ok(CheckLeaderResult::ReadIndex(Some((peer_store_ids, leader_info)))),
-                            Err(_) => Ok(CheckLeaderResult::ReadIndex(None)),
-                        }
-                    }
-                    .boxed();
+                    let req =
+                        check_leader_by_raft(cdc_handler, leader_info, region_id, peer_store_ids)
+                            .boxed();
                     read_index_reqs.push(req);
                     continue;
                 }
@@ -346,12 +404,11 @@ impl LeadershipResolver {
                         // because performing stale read on learners require it.
                         let req = store_req_map.entry(peer.store_id).or_insert_with(|| {
                             let mut req = CheckLeaderRequest::default();
-                            req.regions = Vec::with_capacity(registry.len()).into();
-                            req.hibernated_regions = Vec::with_capacity(registry.len()).into();
+                            req.inactive_regions = Vec::with_capacity(registry.len()).into();
                             req.set_store_id(store_id);
                             req
                         });
-                        req.hibernated_regions.push(leader_info.region_id);
+                        req.inactive_regions.push(leader_info.region_id);
                         if peer.get_role() != PeerRole::Learner {
                             unvotes += 1;
                         }
@@ -374,6 +431,7 @@ impl LeadershipResolver {
             }
         });
 
+        // create check-leader rpc futures.
         let env = &self.env;
         let pd_client = &self.pd_client;
         let security_mgr = &self.security_mgr;
@@ -382,7 +440,7 @@ impl LeadershipResolver {
         let leader_info_size = store_req_map
             .values()
             .find(|req| !req.regions.is_empty())
-            .map_or(0, |req| req.regions[0].compute_size());
+            .map_or(0, |req| req.regions[0].compute_size()) as usize;
         let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
         for (store_id, req) in store_req_map {
@@ -390,58 +448,13 @@ impl LeadershipResolver {
             if req.regions.is_empty() {
                 continue;
             }
-            let env = env.clone();
             let to_store = *store_id;
-            let region_num = req.regions.len() as u32;
-            CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
-            CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
-
-            // Check leadership for `regions` on `to_store`.
+            let env = env.clone();
             let rpc = async move {
-                PENDING_CHECK_LEADER_REQ_COUNT.inc();
-                defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
                 let client = get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients)
                     .await
                     .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
-
-                // Set min_ts in the request.
-                req.set_ts(min_ts.into_inner());
-                let slow_timer = SlowTimer::default();
-                defer!({
-                    slow_log!(
-                        T
-                        slow_timer,
-                        "check leader rpc costs too long, to_store: {}",
-                        to_store
-                    );
-                    let elapsed = slow_timer.saturating_elapsed();
-                    RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
-                        .with_label_values(&["rpc"])
-                        .observe(elapsed.as_secs_f64());
-                });
-
-                let rpc = match client.check_leader_async(req) {
-                    Ok(rpc) => rpc,
-                    Err(GrpcError::RpcFailure(status))
-                        if status.code() == RpcStatusCode::UNIMPLEMENTED =>
-                    {
-                        // Some stores like TiFlash don't implement it.
-                        return Ok(CheckLeaderResult::CheckLeader(
-                            to_store,
-                            CheckLeaderResponse::default(),
-                        ));
-                    }
-                    Err(e) => return Err((to_store, true, format!("[rpc create failed]{}", e))),
-                };
-
-                PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
-                defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
-                let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
-                let resp = tokio::time::timeout(timeout, rpc)
-                    .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
-                    .await?
-                    .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
-                Ok(CheckLeaderResult::CheckLeader(to_store, resp))
+                check_leader_by_rpc(to_store, client, req, min_ts, leader_info_size).await
             }
             .boxed();
             check_leader_rpcs.push(rpc);
@@ -454,11 +467,12 @@ impl LeadershipResolver {
                 .with_label_values(&["all"])
                 .observe(start.saturating_elapsed_secs());
         });
-        let rpc_count = check_leader_rpcs.len();
-        let mut failed_region_store_map = HashMap::default();
-        let mut store_unsafe_regions_map = hash_map_with_capacity(rpc_count);
-        let mut valid_leader_infos = Vec::with_capacity(active_regions);
-        for _ in 0..rpc_count {
+
+        // handle check-leader results.
+        let check_leader_count = check_leader_rpcs.len();
+        let failed_region_store_map = &mut buffer.failed_region_store_map;
+        let mut valid_leader_infos = &mut buffer.valid_leader_infos;
+        for _ in 0..check_leader_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
             let (res, _, remains) = select_all(check_leader_rpcs).await;
@@ -470,7 +484,6 @@ impl LeadershipResolver {
                     }
                 }
                 Ok(CheckLeaderResult::CheckLeader(to_store, mut resp)) => {
-                    store_unsafe_regions_map.insert(to_store, Vec::new());
                     let failed_regions = HashSet::from_iter(resp.take_failed_regions());
                     for region in &failed_regions {
                         failed_region_store_map
@@ -489,7 +502,7 @@ impl LeadershipResolver {
                             .push(to_store);
                     }
                 }
-                Err((to_store, reconnect, err)) => {
+                Err((to_store, reconnect, _err)) => {
                     if reconnect {
                         self.tikv_clients.lock().await.remove(&to_store);
                     }
@@ -497,6 +510,7 @@ impl LeadershipResolver {
             }
         }
 
+        let store_unsafe_regions_map = &mut buffer.store_unsafe_regions_map;
         for (region_id, prs) in region_map {
             if prs.is_empty() {
                 // The peer had the leadership before, but now it's no longer
@@ -527,8 +541,7 @@ impl LeadershipResolver {
             }
         }
 
-        let mut store_checked_leader_map = hash_map_with_capacity(rpc_count);
-        let valid_leader_len_hint = valid_leader_infos.len();
+        let store_checked_leader_map = &mut buffer.store_checked_leader_map;
         for leader_info in valid_leader_infos.into_iter() {
             for peer_store_id in leader_info.0 {
                 let mut checked_leader = CheckedLeader::default();
@@ -537,7 +550,7 @@ impl LeadershipResolver {
 
                 store_checked_leader_map
                     .entry(peer_store_id)
-                    .or_insert_with(|| Vec::with_capacity(valid_leader_len_hint))
+                    .or_insert_with(|| Vec::new())
                     .push(checked_leader)
             }
         }
@@ -610,14 +623,94 @@ impl LeadershipResolver {
                 }
             }
         }
-        self.valid_regions.drain().collect()
+        valid_regions.drain().collect()
     }
 }
 
 // CheckLeaderResult union read-index result and check-leader result.
 enum CheckLeaderResult {
-    ReadIndex(Option<(Vec<u64>, LeaderInfo)>),
+    ReadIndex(Option<(LeaderInfo, Vec<u64>)>),
     CheckLeader(u64, CheckLeaderResponse),
+}
+
+async fn check_leader_by_rpc(
+    to_store: u64,
+    client: TikvClient,
+    req: &mut CheckLeaderRequest,
+    min_ts: TimeStamp,
+    leader_info_size: usize,
+) -> std::result::Result<CheckLeaderResult, (u64, bool, std::string::String)> {
+    let region_num = req.regions.len();
+    CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
+    PENDING_CHECK_LEADER_REQ_COUNT.inc();
+    defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
+
+    // Set min_ts in the request.
+    req.set_ts(min_ts.into_inner());
+    let slow_timer = SlowTimer::default();
+    defer!({
+        slow_log!(
+            T
+            slow_timer,
+            "check leader rpc costs too long, to_store: {}",
+            to_store
+        );
+        let elapsed = slow_timer.saturating_elapsed();
+        RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+            .with_label_values(&["rpc"])
+            .observe(elapsed.as_secs_f64());
+    });
+
+    let rpc = match client.check_leader_async(req) {
+        Ok(rpc) => rpc,
+        Err(GrpcError::RpcFailure(status)) if status.code() == RpcStatusCode::UNIMPLEMENTED => {
+            // Some stores like TiFlash don't implement it.
+            return Ok(CheckLeaderResult::CheckLeader(
+                to_store,
+                CheckLeaderResponse::default(),
+            ));
+        }
+        Err(e) => return Err((to_store, true, format!("[rpc create failed]{}", e))),
+    };
+
+    PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
+    defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
+    let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
+    let resp = tokio::time::timeout(timeout, rpc)
+        .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
+        .await?
+        .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
+    Ok(CheckLeaderResult::CheckLeader(to_store, resp))
+}
+
+async fn check_leader_by_raft<T: 'static + CdcHandle<E>, E: KvEngine>(
+    cdc_handler: T,
+    leader_info: LeaderInfo,
+    region_id: u64,
+    peer_store_ids: Vec<u64>,
+) -> std::result::Result<CheckLeaderResult, (u64, bool, std::string::String)> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let callback = Callback::read(Box::new(move |resp| {
+        let resp = if resp.response.get_header().has_error() {
+            None
+        } else {
+            Some(region_id)
+        };
+        if tx.send(resp).is_err() {
+            error!("resolve send tso response failed"; "region_id" => region_id);
+        }
+    }));
+    if let Err(e) = cdc_handler.check_leadership(region_id, callback) {
+        warn!("resolve send LeaderCallback failed"; "err" => ?e);
+        return Ok(CheckLeaderResult::ReadIndex(None));
+    }
+    match rx.await {
+        Ok(_) => Ok(CheckLeaderResult::ReadIndex(Some((
+            leader_info,
+            peer_store_ids,
+        )))),
+        Err(_) => Ok(CheckLeaderResult::ReadIndex(None)),
+    }
 }
 
 pub async fn resolve_by_raft<T, E>(regions: Vec<u64>, min_ts: TimeStamp, cdc_handle: T) -> Vec<u64>

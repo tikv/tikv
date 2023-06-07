@@ -19,7 +19,7 @@ pub struct Resolver {
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
     // The highest index `Resolver` had been tracked
-    tracked_index: u64,
+    pub(crate) tracked_index: u64,
     // The region read progress used to utilize `resolved_ts` to serve stale read request
     pub(crate) read_progress: Option<Arc<RegionReadProgress>>,
     // The timestamps that advance the resolved_ts when there is no more write.

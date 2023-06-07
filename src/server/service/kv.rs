@@ -1009,14 +1009,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let ts = request.get_ts();
         let store_id = request.get_store_id();
         let leaders = request.take_regions().into();
-        let hibernates = request.take_hibernated_regions().into();
+        let inactives = request.take_inactive_regions().into();
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
             check_leader_scheduler
                 .schedule(CheckLeaderTask::CheckLeader {
                     leaders,
-                    hibernates,
+                    inactives,
                     cb,
                     ts,
                     store_id,

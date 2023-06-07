@@ -28,7 +28,7 @@ pub enum Task {
     // Check if the provided `LeaderInfo`s are same as ours local `LeaderInfo`
     CheckLeader {
         leaders: Vec<LeaderInfo>,
-        hibernates: Vec<u64>,
+        inactives: Vec<u64>,
         ts: u64,
         store_id: u64,
         cb: Box<dyn FnOnce(Vec<u64>) + Send>,
@@ -53,14 +53,14 @@ impl fmt::Display for Task {
         match self {
             Task::CheckLeader {
                 ref leaders,
-                ref hibernates,
+                ref inactives,
                 ts,
                 store_id,
                 ..
             } => de
                 .field("name", &"check_leader")
                 .field("leader_num", &leaders.len())
-                .field("hibernates_num", &hibernates.len())
+                .field("inactives_num", &inactives.len())
                 .field("ts", ts)
                 .field("store_id", store_id)
                 .finish(),
@@ -138,7 +138,7 @@ impl<S: StoreRegionMeta, E: KvEngine> Runnable for Runner<S, E> {
         match task {
             Task::CheckLeader {
                 leaders,
-                hibernates,
+                inactives,
                 ts,
                 store_id,
                 cb,
@@ -155,7 +155,7 @@ impl<S: StoreRegionMeta, E: KvEngine> Runnable for Runner<S, E> {
                 );
                 let regions = self.region_read_progress.handle_check_leaders(
                     leaders,
-                    hibernates,
+                    inactives,
                     &self.coprocessor,
                     ts,
                     store_id,

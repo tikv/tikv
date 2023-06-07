@@ -27,7 +27,7 @@ use tikv_util::{
     time::{Instant, Limiter},
     warn,
     worker::{Runnable, Scheduler},
-    HandyRwLock,
+    Either, HandyRwLock,
 };
 use tokio::{
     io::Result as TokioResult,
@@ -1050,7 +1050,10 @@ where
 {
     pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
         match self {
-            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts, None as Option<RT>).await,
+            BackupStreamResolver::V1(x) => {
+                x.resolve(Either::Left(regions), min_ts, None as Option<RT>)
+                    .await
+            }
             BackupStreamResolver::V2(x, _) => {
                 let x = x.clone();
                 resolve_by_raft(regions, min_ts, x).await
