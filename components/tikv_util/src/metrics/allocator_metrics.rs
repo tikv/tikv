@@ -12,7 +12,7 @@ pub fn monitor_allocator_stats<S: Into<String>>(namespace: S) -> Result<()> {
 
 struct AllocStatsCollector {
     descs: Vec<Desc>,
-    global_statistic: IntGaugeVec,
+    memory_stats: IntGaugeVec,
     allocation: IntGaugeVec,
 }
 
@@ -37,7 +37,7 @@ impl AllocStatsCollector {
                 .flat_map(|m| m.desc().into_iter().cloned())
                 .collect(),
             allocation,
-            global_statistic: stats,
+            memory_stats: stats,
         })
     }
 }
@@ -50,7 +50,7 @@ impl Collector for AllocStatsCollector {
     fn collect(&self) -> Vec<MetricFamily> {
         if let Ok(Some(stats)) = tikv_alloc::fetch_stats() {
             for stat in stats {
-                self.global_statistic
+                self.memory_stats
                     .with_label_values(&[stat.0])
                     .set(stat.1 as i64);
             }
@@ -63,7 +63,7 @@ impl Collector for AllocStatsCollector {
                 .with_label_values(&["dealloc", name])
                 .set(dealloc as _);
         });
-        let mut g = self.global_statistic.collect();
+        let mut g = self.memory_stats.collect();
         g.extend(self.allocation.collect().into_iter());
         g
     }
