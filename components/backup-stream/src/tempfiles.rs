@@ -324,8 +324,6 @@ impl ForWriteCore {
         if self.done {
             return Ok(());
         }
-        self.done = true;
-        self.ref_counter.fetch_sub(1, Ordering::SeqCst);
         let core_lock = self.core.clone();
         // FIXME: For now, it cannot be awaited directly because `content` should be
         // guarded by a sync mutex. Given the `sync_all` is an async function,
@@ -351,6 +349,9 @@ impl ForWriteCore {
         })
         .map_err(|err| annotate!(err, "joining the background `done` job"))
         .await??;
+
+        self.done = true;
+        self.ref_counter.fetch_sub(1, Ordering::SeqCst);
         Ok(())
     }
 }
