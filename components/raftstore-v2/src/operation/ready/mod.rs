@@ -41,7 +41,11 @@ use raftstore::{
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
+<<<<<<< HEAD
 use slog::{debug, error, info, trace, warn};
+=======
+use slog::{debug, error, info, warn, Logger};
+>>>>>>> 3e787242cc (raftstore-v2: support warm up log cache and enable tests (#14846))
 use tikv_util::{
     log::SlogFormat,
     slog_panic,
@@ -131,7 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 },
             ));
         }
-        let entry_storage = self.storage().entry_storage();
+        let entry_storage = self.entry_storage();
         let committed_index = entry_storage.commit_index();
         let applied_index = entry_storage.applied_index();
         if committed_index > applied_index {
@@ -350,15 +354,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Callback for fetching logs asynchronously.
-    pub fn on_logs_fetched(&mut self, fetched_logs: FetchedLogs) {
+    pub fn on_raft_log_fetched(&mut self, fetched_logs: FetchedLogs) {
         let FetchedLogs { context, logs } = fetched_logs;
         let low = logs.low;
-        if !self.is_leader() {
+        // If the peer is not the leader anymore and it's not in entry cache warmup
+        // state, or it is being destroyed, ignore the result.
+        if !self.is_leader() && self.entry_storage().entry_cache_warmup_state().is_none()
+            || !self.serving()
+        {
             self.entry_storage_mut().clean_async_fetch_res(low);
             return;
         }
         if self.term() != logs.term {
             self.entry_storage_mut().clean_async_fetch_res(low);
+        } else if self.entry_storage().entry_cache_warmup_state().is_some() {
+            if self.entry_storage_mut().maybe_warm_up_entry_cache(*logs) {
+                self.ack_transfer_leader_msg(false);
+                self.set_has_ready();
+            }
+            self.entry_storage_mut().clean_async_fetch_res(low);
+            return;
         } else {
             self.entry_storage_mut()
                 .update_async_fetch_res(low, Some(logs));
@@ -449,7 +464,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.update_last_sent_snapshot_index(index);
         }
 
-        trace!(
+        debug!(
             self.logger,
             "send raft msg";
             "msg_type" => ?msg_type,
@@ -862,7 +877,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[cfg(feature = "testexport")]
     pub fn on_wait_flush(&mut self, ch: crate::router::FlushChannel) {
-        self.async_writer.subscirbe_flush(ch);
+        self.async_writer.subscribe_flush(ch);
     }
 
     pub fn on_role_changed<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {

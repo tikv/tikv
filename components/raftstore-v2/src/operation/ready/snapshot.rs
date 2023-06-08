@@ -233,6 +233,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .set_last_applying_index(persisted_index);
         let snapshot_index = self.entry_storage().truncated_index();
         assert!(snapshot_index >= RAFT_INIT_LOG_INDEX, "{:?}", self.logger);
+        self.compact_log_context_mut()
+            .set_last_compacted_idx(snapshot_index + 1 /* first index */);
         // If leader sends a message append to the follower while it's applying
         // snapshot (via split init for example), the persisted_index may be larger
         // than the first index. But as long as first index is not larger, the

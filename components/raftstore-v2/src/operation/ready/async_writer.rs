@@ -170,7 +170,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
 
 #[cfg(feature = "testexport")]
 impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
-    pub fn subscirbe_flush(&mut self, ch: crate::router::FlushChannel) {
+    pub fn subscribe_flush(&mut self, ch: crate::router::FlushChannel) {
         self.flush_subscribers
             .push_back((self.known_largest_number(), ch));
     }
