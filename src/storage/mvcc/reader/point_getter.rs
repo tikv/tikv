@@ -5,7 +5,6 @@ use std::borrow::Cow;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
-use tikv_kv::SEEK_BOUND;
 use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 use crate::storage::{
@@ -321,8 +320,8 @@ impl<S: Snapshot> PointGetter<S> {
                         }
                         LastChange::Exist {
                             last_change_ts: commit_ts,
-                            estimated_versions_to_last_change,
-                        } if estimated_versions_to_last_change >= SEEK_BOUND => {
+                            ..
+                        } => {
                             let key_with_ts = user_key.clone().append_ts(commit_ts);
                             match self.snapshot.get_cf(CF_WRITE, &key_with_ts)? {
                                 Some(v) => owned_value = v,

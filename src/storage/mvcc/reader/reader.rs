@@ -9,7 +9,7 @@ use kvproto::{
     kvrpcpb::Context,
 };
 use raftstore::store::LocksStatus;
-use tikv_kv::{SnapshotExt, SEEK_BOUND};
+use tikv_kv::SnapshotExt;
 use txn_types::{Key, LastChange, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use crate::storage::{
@@ -415,8 +415,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
                             }
                             LastChange::Exist {
                                 last_change_ts: commit_ts,
-                                estimated_versions_to_last_change,
-                            } if estimated_versions_to_last_change >= SEEK_BOUND => {
+                                ..
+                            } => {
                                 let key_with_ts = key.clone().append_ts(commit_ts);
                                 let Some(value) = self
                                         .snapshot
