@@ -1979,6 +1979,7 @@ where
                 self.register_check_leader_lease_tick();
                 self.register_report_region_buckets_tick();
                 self.register_check_peers_availability_tick();
+                self.register_check_long_uncommitted_tick();
             }
 
             if let Some(ForceLeaderState::ForceLeader { .. }) = self.fsm.peer.force_leader {
@@ -2851,6 +2852,7 @@ where
         if self.fsm.peer.is_leader() {
             self.register_check_leader_lease_tick();
             self.register_report_region_buckets_tick();
+            self.register_check_long_uncommitted_tick();
         }
     }
 
@@ -5617,6 +5619,11 @@ where
         {
             return;
         }
+        fail_point!(
+            "on_check_long_uncommitted_tick_1",
+            self.fsm.peer.peer_id() == 1,
+            |_| {}
+        );
         self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
         self.register_check_long_uncommitted_tick();
     }
