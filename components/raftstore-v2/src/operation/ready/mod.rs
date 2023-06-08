@@ -518,6 +518,64 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.read_progress_mut().discard();
         }
     }
+<<<<<<< HEAD
+=======
+
+    /// Check if there is long uncommitted proposal.
+    ///
+    /// This will increase the threshold when a long uncommitted proposal is
+    /// detected, and reset the threshold when there is no long uncommitted
+    /// proposal.
+    fn has_long_uncommitted_proposals<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) -> bool {
+        let mut has_long_uncommitted = false;
+        let base_threshold = ctx.cfg.long_uncommitted_base_threshold.0;
+        if let Some(propose_time) = self.proposals().oldest().and_then(|p| p.propose_time) {
+            // When a proposal was proposed with this ctx before, the current_time can be
+            // some.
+            let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
+            let elapsed = match (current_time - propose_time).to_std() {
+                Ok(elapsed) => elapsed,
+                Err(_) => return false,
+            };
+            // Increase the threshold for next turn when a long uncommitted proposal is
+            // detected.
+            let threshold = self.long_uncommitted_threshold();
+            if elapsed >= threshold {
+                has_long_uncommitted = true;
+                self.set_long_uncommitted_threshold(threshold + base_threshold);
+            } else if elapsed < base_threshold {
+                self.set_long_uncommitted_threshold(base_threshold);
+            }
+        } else {
+            self.set_long_uncommitted_threshold(base_threshold);
+        }
+        has_long_uncommitted
+    }
+
+    fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        fail::fail_point!(
+            "on_check_long_uncommitted_proposals_1",
+            self.peer_id() == 1,
+            |_| {}
+        );
+        if self.has_long_uncommitted_proposals(ctx) {
+            let status = self.raft_group().status();
+            let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
+            if let Some(prs) = status.progress {
+                for (id, p) in prs.iter() {
+                    buffer.push((*id, p.commit_group_id, p.matched));
+                }
+            }
+            warn!(
+                self.logger,
+                "found long uncommitted proposals";
+                "progress" => ?buffer,
+                "cache_first_index" => ?self.entry_storage().entry_cache_first_index(),
+                "next_turn_threshold" => ?self.long_uncommitted_threshold(),
+            );
+        }
+    }
+>>>>>>> 79caea614c (raftstore: fix missing CheckLongUncommitted tick (#14894))
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {

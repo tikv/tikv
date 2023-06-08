@@ -3025,6 +3025,11 @@ where
 
     /// Check long uncommitted proposals and log some info to help find why.
     pub fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        fail_point!(
+            "on_check_long_uncommitted_proposals_1",
+            self.peer_id() == 1,
+            |_| {}
+        );
         if self.has_long_uncommitted_proposals(ctx) {
             let status = self.raft_group.status();
             let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
