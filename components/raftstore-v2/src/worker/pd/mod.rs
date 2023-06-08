@@ -12,7 +12,7 @@ use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    metrics::STORE_INSPECT_DURTION_HISTOGRAM,
+    metrics::STORE_INSPECT_DURATION_HISTOGRAM,
     util::{KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
     AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor, ReadStats,
     RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
@@ -442,22 +442,22 @@ impl StoreStatsReporter for PdReporter {
                 Box::new(move |tick_id, duration| {
                     let dur = duration.sum();
 
-                    STORE_INSPECT_DURTION_HISTOGRAM
+                    STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["store_process"])
                         .observe(tikv_util::time::duration_to_sec(
                             duration.store_process_duration.unwrap(),
                         ));
-                    STORE_INSPECT_DURTION_HISTOGRAM
+                    STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["store_wait"])
                         .observe(tikv_util::time::duration_to_sec(
                             duration.store_wait_duration.unwrap(),
                         ));
-                    STORE_INSPECT_DURTION_HISTOGRAM
+                    STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["store_commit"])
                         .observe(tikv_util::time::duration_to_sec(
                             duration.store_commit_duration.unwrap(),
                         ));
-                    STORE_INSPECT_DURTION_HISTOGRAM
+                    STORE_INSPECT_DURATION_HISTOGRAM
                         .with_label_values(&["all"])
                         .observe(tikv_util::time::duration_to_sec(dur));
                     if let Err(e) =
