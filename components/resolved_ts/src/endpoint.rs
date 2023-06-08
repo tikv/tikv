@@ -282,7 +282,7 @@ where
     advance_notify: Arc<Notify>,
     store_meta: Arc<Mutex<S>>,
     region_read_progress: RegionReadProgressRegistry,
-    regions: Arc<Mutex<HashMap<u64, ObserveRegion>>>,
+    regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task>,
     advance_worker: AdvanceTsWorker<T, E>,
@@ -314,13 +314,12 @@ where
         } else {
             None
         };
-        let regions = Arc::new(Mutex::new(HashMap::default()));
+        let regions = HashMap::default();
         let advance_worker = AdvanceTsWorker::new(
             cfg.advance_ts_interval.0,
             pd_client.clone(),
             scheduler.clone(),
             concurrency_manager,
-            regions.clone(),
             advance_cdc_handle,
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
@@ -351,8 +350,7 @@ where
 
     fn register_region(&mut self, region: Region) {
         let region_id = region.get_id();
-        let mut regions = self.regions.lock().unwrap();
-        assert!(regions.get(&region_id).is_none());
+        assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
             if let Some(read_progress) = self.region_read_progress.get(&region_id) {
                 info!(
@@ -376,8 +374,7 @@ where
         observe_region
             .read_progress()
             .update_advance_resolved_ts_notify(self.advance_notify.clone());
-        regions.insert(region_id, observe_region);
-        drop(regions);
+        self.regions.insert(region_id, observe_region);
 
         let scan_task = self.build_scan_task(region, observe_handle, cancelled);
         self.scanner_pool.spawn_task(scan_task);
@@ -426,9 +423,7 @@ where
     }
 
     fn deregister_region(&mut self, region_id: u64) {
-        let regions = self.regions.clone();
-        let mut regions = regions.lock().unwrap();
-        if let Some(observe_region) = regions.remove(&region_id) {
+        if let Some(observe_region) = self.regions.remove(&region_id) {
             let ObserveRegion {
                 handle,
                 resolver_status,
@@ -454,9 +449,7 @@ where
 
     fn region_updated(&mut self, incoming_region: Region) {
         let region_id = incoming_region.get_id();
-        let regions = self.regions.clone();
-        let mut regions = regions.lock().unwrap();
-        if let Some(obs_region) = regions.get_mut(&region_id) {
+        if let Some(obs_region) = self.regions.get_mut(&region_id) {
             if obs_region.meta.get_region_epoch().get_version()
                 == incoming_region.get_region_epoch().get_version()
             {
@@ -477,9 +470,7 @@ where
     // scheduled by observer. To prevent destroying region for wrong peer, it
     // should check the region epoch at first.
     fn region_destroyed(&mut self, region: Region) {
-        let regions = self.regions.clone();
-        let regions = regions.lock().unwrap();
-        if let Some(observe_region) = regions.get(&region.id) {
+        if let Some(observe_region) = self.regions.get(&region.id) {
             if util::compare_region_epoch(
                 observe_region.meta.get_region_epoch(),
                 &region,
@@ -503,9 +494,7 @@ where
 
     // Deregister current observed region and try to register it again.
     fn re_register_region(&mut self, region_id: u64, observe_id: ObserveId, cause: String) {
-        let regions = self.regions.clone();
-        let regions = regions.lock().unwrap();
-        if let Some(observe_region) = regions.get(&region_id) {
+        if let Some(observe_region) = self.regions.get(&region_id) {
             if observe_region.handle.id != observe_id {
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
@@ -536,9 +525,8 @@ where
         if advance_regions.is_empty() {
             return;
         }
-        let mut regions = self.regions.lock().unwrap();
         for region_id in advance_regions.iter() {
-            if let Some(observe_region) = regions.get_mut(region_id) {
+            if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
                     let _ = observe_region.resolver.resolve(ts);
                 }
@@ -552,13 +540,11 @@ where
     fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
-        let regions = self.regions.clone();
-        let mut regions = regions.lock().unwrap();
         for batch in cmd_batch {
             if batch.is_empty() {
                 continue;
             }
-            if let Some(observe_region) = regions.get_mut(&batch.region_id) {
+            if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
                 let observe_id = batch.rts_id;
                 let region_id = observe_region.meta.id;
                 if observe_region.handle.id == observe_id {
@@ -585,8 +571,7 @@ where
         entries: Vec<ScanEntry>,
         apply_index: u64,
     ) {
-        let mut regions = self.regions.lock().unwrap();
-        match regions.get_mut(&region_id) {
+        match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
                 if observe_region.handle.id == observe_id {
                     observe_region.track_scan_locks(entries, apply_index);
@@ -627,6 +612,14 @@ where
             self.store_id
         })
     }
+
+    fn get_regions(& self) -> HashMap<u64, Option<u64>> {
+        let mut regions: HashMap<u64, Option<u64>> = Default::default();
+        regions.extend(self.regions.iter().map(|(region_id, observe_region)| {
+            (region_id.clone(), Some(observe_region.get_tracked_index()))
+        }));
+        regions
+    }
 }
 
 pub enum Task {
@@ -662,6 +655,9 @@ pub enum Task {
     ChangeConfig {
         change: ConfigChange,
     },
+    GetRegions {
+        cb: Box<dyn FnOnce(HashMap<u64, Option<u64>>) + Send>,
+    }
 }
 
 impl fmt::Debug for Task {
@@ -719,6 +715,9 @@ impl fmt::Debug for Task {
                 .field("name", &"change_config")
                 .field("change", &change)
                 .finish(),
+            Task::GetRegions {..} => de
+                .field("name", &"get_regions")
+                .finish(),
         }
     }
 }
@@ -763,6 +762,9 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::ChangeConfig { change } => self.handle_change_config(change),
+            Task::GetRegions{ cb } => {
+                cb(self.get_regions());
+            }
         }
     }
 }
@@ -819,8 +821,7 @@ where
         });
         let mut lock_heap_size = 0;
         let (mut resolved_count, mut unresolved_count) = (0, 0);
-        let regions = self.regions.lock().unwrap();
-        for observe_region in regions.values() {
+        for observe_region in self.regions.values() {
             match &observe_region.resolver_status {
                 ResolverStatus::Pending { locks, .. } => {
                     for l in locks {

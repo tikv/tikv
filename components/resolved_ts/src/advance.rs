@@ -7,7 +7,7 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicI32, Ordering},
-        Arc, Mutex as stdMutex,
+        Arc,
     },
     time::Duration,
 };
@@ -41,6 +41,7 @@ use tikv_util::{
     time::{Instant, SlowTimer},
     timer::SteadyTimer,
     worker::Scheduler,
+    future::paired_future_callback,
     Either,
 };
 use tokio::{
@@ -50,7 +51,7 @@ use tokio::{
 use txn_types::TimeStamp;
 
 use crate::{
-    endpoint::{ObserveRegion, Task},
+    endpoint::Task,
     metrics::*,
 };
 
@@ -68,18 +69,7 @@ pub struct AdvanceTsWorker<T: 'static + CdcHandle<E>, E: KvEngine> {
     /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
     cdc_handler: Option<T>,
-    regions: Arc<stdMutex<HashMap<u64, ObserveRegion>>>,
     _phantom: PhantomData<E>,
-}
-
-fn get_regions(mu: Arc<stdMutex<HashMap<u64, ObserveRegion>>>) -> HashMap<u64, Option<u64>> {
-    let mut regions: HashMap<u64, Option<u64>> = Default::default();
-    let regions_guard = mu.lock().unwrap();
-    regions.extend(regions_guard.iter().map(|(region_id, observe_region)| {
-        (region_id.clone(), Some(observe_region.get_tracked_index()))
-    }));
-    drop(regions_guard);
-    regions
 }
 
 impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
@@ -88,7 +78,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
-        regions: Arc<stdMutex<HashMap<u64, ObserveRegion>>>,
         cdc_handler: Option<T>,
     ) -> Self {
         let worker = Builder::new_multi_thread()
@@ -107,7 +96,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             timer: SteadyTimer::default(),
             concurrency_manager,
             cdc_handler,
-            regions,
             _phantom: Default::default(),
         }
     }
@@ -130,13 +118,19 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             self.advance_ts_interval,
         ));
         let cdc_handler = self.cdc_handler.clone();
-        let regions_mutex = self.regions.clone();
+        let start = Instant::now();
 
         let fut = async move {
             // Ignore get tso errors since we will retry every `advdance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
-            // Get the region after min_ts is generated.
-            let regions = get_regions(regions_mutex);
+            let get_pd_millis = start.saturating_elapsed().as_millis();
+            
+            let (cb, resp) = paired_future_callback();
+            if let Err(e) = scheduler.schedule(Task::GetRegions { cb }) {
+                info!("failed to schedule get_regions event"; "err" => ?e);
+            }
+            let regions = resp.await.unwrap_or_default();
+            let get_regions_millis = start.saturating_elapsed().as_millis() - get_pd_millis;
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
@@ -152,6 +146,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             let regions = leader_resolver
                 .resolve(Either::Right(regions), min_ts, cdc_handler)
                 .await;
+            let elapsed = start.saturating_elapsed().as_millis();
+            let resolve_millis = elapsed - get_pd_millis - get_regions_millis;
+            info!("DBG resolve regions done";
+                "elapsed" => elapsed,
+                "resolve_millis" => resolve_millis,
+                "get_regions_millis" => get_regions_millis,
+                "get_pd_millis" => get_pd_millis);
             // let regions = if false {
             // } else {
             //     // Possible optimization here.
@@ -271,6 +272,7 @@ impl ResolverBuffer {
             self.region_map = HashMap::default();
             self.resp_map = HashMap::default();
             self.valid_regions = HashSet::default();
+            self.store_region_map = HashMap::default();
             self.failed_region_store_map = HashMap::default();
             self.store_unsafe_regions_map = HashMap::default();
             self.valid_leader_infos = Vec::default();
@@ -312,6 +314,7 @@ impl LeadershipResolver {
         min_ts: TimeStamp,
         cdc_handler: Option<T>,
     ) -> Vec<u64> {
+        let resolve_start = Instant::now();
         let regions = match regions {
             Either::Left(vec_regions) => {
                 if vec_regions.is_empty() {
@@ -354,11 +357,10 @@ impl LeadershipResolver {
         // init regions need to be check.
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
-                let applied_index = regions.get(region_id);
-                if applied_index.is_none() {
-                    continue;
-                }
-                let applied_index = applied_index.unwrap();
+                let applied_index = match regions.get(region_id) {
+                    Some(index) => index,
+                    None => continue,
+                };
                 let mut core = read_progress.get_core();
                 let is_inactive = applied_index
                     .map_or(false, |ref applied_index| !core.is_inactive(applied_index));
@@ -374,21 +376,26 @@ impl LeadershipResolver {
                     continue;
                 }
                 let leader_info = core.get_leader_info();
-                let has_cdc_handler = cdc_handler.is_some();
                 // check leader for action regions by read-index request.
-                if is_inactive && has_cdc_handler {
-                    active_regions += 1;
-                    let cdc_handler = cdc_handler.as_ref().unwrap().clone();
-                    let leader_info = leader_info.clone();
-                    let region_id = *region_id;
-                    let peer_store_ids = peer_list.iter().map(|peer| peer.store_id).collect();
-                    let req =
-                        check_leader_by_raft(cdc_handler, leader_info, region_id, peer_store_ids)
-                            .boxed();
-                    read_index_reqs.push(req);
-                    continue;
+                match (cdc_handler.clone(), is_inactive) {
+                    (Some(cdc_handler), false) => {
+                        active_regions += 1;
+                        let cdc_handler = cdc_handler.clone();
+                        let leader_info = leader_info.clone();
+                        let region_id = *region_id;
+                        let peer_store_ids = peer_list.iter().map(|peer| peer.store_id).collect();
+                        let req = check_leader_by_raft(
+                            cdc_handler,
+                            leader_info,
+                            region_id,
+                            peer_store_ids,
+                        )
+                        .boxed();
+                        read_index_reqs.push(req);
+                        continue;
+                    }
+                    _ => {}
                 }
-
                 let mut unvotes = 0;
                 for peer in peer_list {
                     if peer.store_id == store_id && peer.id == leader_id {
@@ -405,7 +412,11 @@ impl LeadershipResolver {
                             req.set_store_id(store_id);
                             req
                         });
-                        req.inactive_regions.push(leader_info.region_id);
+                        if is_inactive {
+                            req.inactive_regions.push(leader_info.region_id);
+                        } else {
+                            req.regions.push(leader_info.clone());
+                        }
                         if peer.get_role() != PeerRole::Learner {
                             unvotes += 1;
                         }
@@ -442,7 +453,7 @@ impl LeadershipResolver {
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
         for (store_id, req) in store_req_map {
             // TODO: send empty request to push resolve ts of hibernated regions.
-            if req.regions.is_empty() {
+            if req.regions.is_empty() && req.inactive_regions.is_empty() {
                 continue;
             }
             let to_store = *store_id;
@@ -464,7 +475,7 @@ impl LeadershipResolver {
                 .with_label_values(&["all"])
                 .observe(start.saturating_elapsed_secs());
         });
-
+        info!("DBG p1 before send"; "check_leader_count" => check_leader_rpcs.len(), "regions" => regions.len(), "elapsed" => resolve_start.saturating_elapsed().as_millis());
         // handle check-leader results.
         let check_leader_count = check_leader_rpcs.len();
         let failed_region_store_map = &mut buffer.failed_region_store_map;
@@ -506,6 +517,7 @@ impl LeadershipResolver {
                 }
             }
         }
+        info!("DBG p2 after send"; "elapsed" => resolve_start.saturating_elapsed().as_millis());
 
         let store_unsafe_regions_map = &mut buffer.store_unsafe_regions_map;
         for (region_id, prs) in region_map {
@@ -608,6 +620,8 @@ impl LeadershipResolver {
             apply_safe_ts_rpcs.push(rpc);
         }
 
+        info!("DBG p3 before send apply"; "apply_safe_ts_rpcs" => apply_safe_ts_rpcs.len(), "elapsed" => resolve_start.saturating_elapsed().as_millis());
+
         let resps = futures::future::join_all(apply_safe_ts_rpcs).await;
         for resp in resps.into_iter() {
             match resp {
@@ -620,6 +634,8 @@ impl LeadershipResolver {
                 }
             }
         }
+        info!("DBG p4 after send apply"; "elapsed" => resolve_start.saturating_elapsed().as_millis());
+
         valid_regions.drain().collect()
     }
 }
@@ -641,6 +657,8 @@ async fn check_leader_by_rpc(
     CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
     PENDING_CHECK_LEADER_REQ_COUNT.inc();
     defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
+
+    info!("DBG check_leader_by_rpc"; "inactives" => req.get_inactive_regions().len(), "min_ts" => min_ts);
 
     // Set min_ts in the request.
     req.set_ts(min_ts.into_inner());
@@ -842,13 +860,19 @@ mod tests {
         time::Duration,
     };
 
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
     use pd_client::PdClient;
-    use raftstore::store::util::RegionReadProgress;
+    use raftstore::{
+        router::CdcRaftRouter,
+        store::{fsm::RaftRouter, util::RegionReadProgress},
+    };
     use tikv_util::store::new_peer;
 
     use super::*;
+
+    type TestCDCHandler = CdcRaftRouter<RaftRouter<KvTestEngine, RaftTestEngine>>;
 
     #[derive(Clone)]
     struct MockTikv {
@@ -924,19 +948,121 @@ mod tests {
             .region_read_progress
             .insert(2, Arc::new(progress2));
 
-        leader_resolver.resolve(vec![1, 2], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(
+                Either::Left(vec![1, 2]),
+                TimeStamp::new(1),
+                None as Option<TestCDCHandler>,
+            )
+            .await;
         let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(req.regions.len(), 2);
 
         // Checking one region only send 1 region in request.
-        leader_resolver.resolve(vec![1], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(
+                Either::Left(vec![1]),
+                TimeStamp::new(1),
+                None as Option<TestCDCHandler>,
+            )
+            .await;
         let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(req.regions.len(), 1);
 
         // Checking zero region does not send request.
-        leader_resolver.resolve(vec![], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(
+                Either::Left(vec![]),
+                TimeStamp::new(1),
+                None as Option<TestCDCHandler>,
+            )
+            .await;
         rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
 
         let _ = server.shutdown().await;
+    }
+
+    #[test]
+    fn test_buffer_clear_and_gc() {
+        let mut buffer = ResolverBuffer::new(Duration::from_secs(0));
+        fn mutate(buffer: &mut ResolverBuffer) {
+            let mut check_leader = CheckLeaderRequest::default();
+            check_leader.regions.push(LeaderInfo::default());
+            check_leader.inactive_regions.push(1);
+            check_leader.set_ts(1);
+            check_leader.set_store_id(1);
+            buffer.store_req_map.insert(1, check_leader);
+            buffer.region_map.insert(1, vec![Peer::default()]);
+            buffer.resp_map.insert(1, vec![1]);
+            buffer.valid_regions.insert(1);
+            buffer.store_region_map.insert(1, vec![1]);
+            buffer.failed_region_store_map.insert(1, vec![1]);
+            buffer.store_unsafe_regions_map.insert(1, vec![1]);
+            buffer
+                .valid_leader_infos
+                .push((LeaderInfo::default(), vec![1]));
+            buffer
+                .store_checked_leader_map
+                .insert(1, vec![CheckedLeader::default()]);
+        }
+
+        // clear keep the keys of maps.
+        mutate(&mut buffer);
+        buffer.clear();
+        assert!(
+            buffer
+                .store_req_map
+                .get(&1)
+                .unwrap()
+                .get_regions()
+                .is_empty()
+        );
+        assert!(
+            buffer
+                .store_req_map
+                .get(&1)
+                .unwrap()
+                .get_inactive_regions()
+                .is_empty()
+        );
+        assert_eq!(buffer.store_req_map.get(&1).unwrap().get_ts(), 0);
+        assert_eq!(buffer.store_req_map.get(&1).unwrap().get_store_id(), 1);
+        assert!(
+            buffer
+                .store_req_map
+                .get(&1)
+                .unwrap()
+                .get_regions()
+                .is_empty()
+        );
+        assert!(
+            buffer
+                .store_req_map
+                .get(&1)
+                .unwrap()
+                .get_inactive_regions()
+                .is_empty()
+        );
+        assert!(buffer.region_map.get(&1).unwrap().is_empty());
+        assert!(buffer.resp_map.get(&1).unwrap().is_empty());
+        assert!(buffer.valid_regions.is_empty());
+        assert!(buffer.store_region_map.get(&1).unwrap().is_empty());
+        assert!(buffer.failed_region_store_map.get(&1).unwrap().is_empty());
+        assert!(buffer.store_unsafe_regions_map.get(&1).unwrap().is_empty());
+        assert!(buffer.valid_leader_infos.is_empty());
+        assert!(buffer.store_checked_leader_map.get(&1).unwrap().is_empty());
+
+        // gc will clear all.
+        mutate(&mut buffer);
+        buffer.gc();
+        assert!(buffer.store_req_map.get(&1).is_none());
+        assert!(buffer.region_map.get(&1).is_none());
+        assert!(buffer.resp_map.get(&1).is_none());
+        assert!(buffer.valid_regions.is_empty());
+        assert!(buffer.store_region_map.get(&1).is_none());
+        assert!(buffer.failed_region_store_map.get(&1).is_none());
+        assert!(buffer.store_unsafe_regions_map.get(&1).is_none());
+        assert!(buffer.valid_leader_infos.is_empty());
+        assert!(buffer.store_checked_leader_map.get(&1).is_none());
     }
 }

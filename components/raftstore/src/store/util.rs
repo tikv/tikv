@@ -43,7 +43,7 @@ use time::{Duration, Timespec};
 use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
-use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config, GroupState};
+use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
 use crate::{
     coprocessor::CoprocessorHost,
     store::{simple_write::SimpleWriteReqDecoder, snap::SNAPSHOT_VERSION},
@@ -1229,6 +1229,7 @@ impl RegionReadProgressRegistry {
             }
             failed_regions.push(*region_id);
         }
+        let valid_regions_len = valid_regions.len();
         self.checked_states.lock().unwrap().insert(
             store_id,
             CheckedState {
@@ -1405,8 +1406,11 @@ impl RegionReadProgress {
         coprocessor: &CoprocessorHost<E>,
     ) {
         let mut core = self.core.lock().unwrap();
-        match core.group_state {
-            Some(GroupState::Idle) => {
+        match core.last_term {
+            Some(last_term) => {
+                if last_term != core.leader_info.leader_term {
+                    return;
+                }
                 if let Some(ts) = core.update_inactive_region_safe_ts(ts) {
                     coprocessor.on_update_safe_ts(core.region_id, ts, ts);
                     if !core.pause {
@@ -1419,13 +1423,11 @@ impl RegionReadProgress {
     }
 
     pub fn check_inactive_region_state(&self) -> bool {
-        let core = self.core.lock().unwrap();
-        match core.group_state {
-            Some(GroupState::Idle) => core
-                .last_term
-                .map_or(false, |last_term| last_term == core.leader_info.leader_term),
-            _ => false,
-        }
+        let mut core: MutexGuard<RegionReadProgressCore> = self.core.lock().unwrap();
+        let curr_term = core.leader_info.leader_term;
+        core.last_term
+            .replace(curr_term)
+            .map_or(false, |last_term| last_term == curr_term)
     }
 
     pub fn merge_safe_ts<E: KvEngine>(
@@ -1587,8 +1589,6 @@ pub struct RegionReadProgressCore {
     discard: bool,
     // A notify to trigger advancing resolved ts immediately.
     advance_notify: Option<Arc<Notify>>,
-    // The hibernated region's read progress can be pushed without region epoch checking.
-    group_state: Option<GroupState>,
     // `last_term` is used to check if leader changed when `leader_info` is missing.
     // for leader, when term and applied index both unchanged, it's inactive.
     // for follower, when term is unchanged, it's inactive.
@@ -1667,7 +1667,6 @@ impl RegionReadProgressCore {
             pause: is_witness,
             discard: is_witness,
             advance_notify: None,
-            group_state: Some(GroupState::Ordered),
             last_term: None,
             last_applied_index: None,
         }
