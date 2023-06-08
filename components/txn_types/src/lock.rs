@@ -1191,7 +1191,7 @@ mod tests {
             format!("{:?}", pessimistic_lock),
             "PessimisticLock { primary_key: 7072696D617279, start_ts: TimeStamp(5), ttl: 1000, \
             for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), \
-            last_change: Exist { last_change_ts: 8, estimated_versions_to_last_change: 2 }\
+            last_change: Exist { last_change_ts: TimeStamp(8), estimated_versions_to_last_change: 2 }\
             , is_locked_with_conflict: false }"
         );
         log_wrappers::set_redact_info_log(true);
@@ -1201,7 +1201,7 @@ mod tests {
             redact_result,
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
             for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), \
-            last_change: Exist { last_change_ts: 8, estimated_versions_to_last_change: 2 }\
+            last_change: Exist { last_change_ts: TimeStamp(8), estimated_versions_to_last_change: 2 }\
             , is_locked_with_conflict: false }"
         );
     }
