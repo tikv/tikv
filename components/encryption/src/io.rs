@@ -3,12 +3,14 @@
 use std::{
     io::{Error as IoError, ErrorKind, Read, Result as IoResult, Seek, SeekFrom, Write},
     pin::Pin,
+    task::ready,
 };
 
 use file_system::File;
 use futures_util::{
     io::AsyncRead,
     task::{Context, Poll},
+    AsyncWrite,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
@@ -171,6 +173,21 @@ impl EncrypterWriter<File> {
     #[inline]
     pub fn sync_all(&self) -> IoResult<()> {
         self.0.sync_all()
+    }
+}
+
+// SAFETY: all callings to `Pin::map_unchecked_mut` are trivial projection.
+impl<W: AsyncWrite> AsyncWrite for EncrypterWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<IoResult<usize>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_close(cx)
     }
 }
 
@@ -354,6 +371,42 @@ impl<W: Seek> Seek for CrypterWriter<W> {
             crypter.reset_crypter(offset)?;
         }
         Ok(offset)
+    }
+}
+
+impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<IoResult<usize>> {
+        // SAFETY: trivial projection.
+        let (writer, crypt) = unsafe {
+            let this = self.get_unchecked_mut();
+            (Pin::new_unchecked(&mut this.writer), &mut this.crypter)
+        };
+        let content_to_write = if let Some(crypter) = crypt.as_mut() {
+            let crypted = crypter.do_crypter(buf)?;
+            debug_assert!(crypted.len() == buf.len());
+            crypted
+        } else {
+            &buf[..]
+        };
+
+        // NOTE: once the write doesn't fully written to the underlying writer, we may
+        // need to encrypt the rest content in the next call. When the underlying writer
+        // puts small contents, the extra overhead might be overwhelmed. The same
+        // problem exists in the synchronous version too.
+        let res = ready!(AsyncWrite::poll_write(writer, cx, content_to_write))?;
+        Ok(res).into()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        // SAFETY: trivial projection.
+        let writer = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().writer) };
+        AsyncWrite::poll_flush(writer, cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        // SAFETY: trivial projection.
+        let writer = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().writer) };
+        AsyncWrite::poll_close(writer, cx)
     }
 }
 

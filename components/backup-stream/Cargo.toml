@@ -36,6 +36,7 @@ error_code = { workspace = true }
 # We cannot update the etcd-client to latest version because of the cyclic requirement.
 # Also we need wait until https://github.com/etcdv3/etcd-client/pull/43/files to be merged.
 etcd-client = { git = "https://github.com/pingcap/etcd-client", rev = "41d393c32a7a7c728550cee1d9a138dafe6f3e27", features = ["pub-response-field", "tls-openssl-vendored"], optional = true }
+encryption = { workspace = true }
 external_storage = { workspace = true }
 external_storage_export = { workspace = true }
 fail = "0.5"

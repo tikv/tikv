@@ -4,6 +4,7 @@ use std::{
     error::Error as StdError, fmt::Display, io::Error as IoError, result::Result as StdResult,
 };
 
+use encryption::Error as EncryptionError;
 use error_code::ErrorCodeExt;
 #[cfg(feature = "metastore-etcd")]
 use etcd_client::Error as EtcdError;
@@ -45,6 +46,8 @@ pub enum Error {
     RaftRequest(StoreError),
     #[error("Error from raftstore: {0}")]
     RaftStore(#[from] RaftStoreError),
+    #[error("Error when encrypting content")]
+    Encryption(#[from] EncryptionError),
     #[error("{context}: {inner_error}")]
     Contextual {
         context: String,
@@ -91,6 +94,7 @@ impl ErrorCodeExt for Error {
             Error::RaftStore(_) => RAFTSTORE,
             Error::ObserveCanceled(..) => OBSERVE_CANCELED,
             Error::Grpc(_) => GRPC,
+            Error::Encryption(_) => ENCRYPTION,
         }
     }
 }
