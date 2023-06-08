@@ -262,7 +262,7 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     let lock_ts = get_tso(&pd_client);
     lead_client.must_kv_pessimistic_lock(b"k8".to_vec(), lock_ts);
 
-    // Test pessmistic rollback is allowed.
+    // Test pessimistic rollback is allowed.
     fail::cfg(get_fp(usage, 1), "return").unwrap();
     lead_client.must_kv_pessimistic_rollback(b"k8".to_vec(), lock_ts);
 
