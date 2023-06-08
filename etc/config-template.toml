@@ -802,7 +802,7 @@
 
 ## The lower bound of SST file size when compaction guard is enabled. The config prevent SST files
 ## being too small when compaction guard is enabled.
-# compaction-guard-min-output-file-size = "8M"
+# compaction-guard-min-output-file-size = "1M"
 
 ## The upper bound of SST file size when compaction guard is enabled. The config prevent SST files
 ## being too large when compaction guard is enabled. This config overrides target-file-size-base
@@ -941,7 +941,7 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
 # enable-compaction-guard = true
-# compaction-guard-min-output-file-size = "8M"
+# compaction-guard-min-output-file-size = "1M"
 # compaction-guard-max-output-file-size = "128M"
 # format-version = 2
 # prepopulate-block-cache = "disabled"
