@@ -168,10 +168,7 @@ fn test_node_lease_expired() {
     must_error_read_on_peer(&mut cluster, peer, region, key, Duration::from_secs(1));
 }
 
-// Test leader holds unsafe lease during the leader transfer procedure,
-// so it will not do lease read.
-// Since raft will not propose any request during leader transfer procedure,
-// consistent read/write could not be performed neither.
+// Test leader holds unsafe lease during the leader transfer procedure.
 // When leader transfer procedure aborts later, the leader would use and update
 // the lease as usual.
 #[test_case(test_raftstore::new_node_cluster)]
