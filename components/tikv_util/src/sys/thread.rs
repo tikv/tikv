@@ -7,6 +7,7 @@
 use std::{io, io::Result, sync::Mutex, thread};
 
 use collections::HashMap;
+use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
 
 /// A cross-platform CPU statistics data structure.
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
@@ -423,9 +424,11 @@ impl StdThreadBuildWrapper for std::thread::Builder {
         #[allow(clippy::disallowed_methods)]
         self.spawn(|| {
             call_thread_start_hooks();
+            add_thread_memory_accessor();
             add_thread_name_to_map();
             let res = f();
             remove_thread_name_from_map();
+            remove_thread_memory_accessor();
             res
         })
     }
@@ -439,6 +442,7 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
         #[allow(clippy::disallowed_methods)]
         self.on_thread_start(move || {
             call_thread_start_hooks();
+            add_thread_memory_accessor();
             add_thread_name_to_map();
             f();
         })
@@ -452,6 +456,7 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
         self.on_thread_stop(move || {
             f();
             remove_thread_name_from_map();
+            remove_thread_memory_accessor();
         })
     }
 }

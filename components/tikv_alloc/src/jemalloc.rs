@@ -141,16 +141,18 @@ pub fn add_thread_memory_accessor() {
     MEMORY_STAT_ACCESSOR_STILL_ALIVE.with(|_s| ());
 
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    let allocated = PeekableRemoteStat::allocated();
-    let deallocated = PeekableRemoteStat::deallocated();
-    thread_memory_map.insert(
-        thread::current().id(),
-        MemoryStatsAccessor {
-            thread_name: thread::current().name().unwrap().to_string(),
-            allocated,
-            deallocated,
-        },
-    );
+    thread_memory_map
+        .entry(thread::current().id())
+        .or_insert_with(|| {
+            let allocated = PeekableRemoteStat::allocated();
+            let deallocated = PeekableRemoteStat::deallocated();
+
+            MemoryStatsAccessor {
+                thread_name: thread::current().name().unwrap_or("<unknown>").to_string(),
+                allocated,
+                deallocated,
+            }
+        });
 }
 
 pub fn remove_thread_memory_accessor() {

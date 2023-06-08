@@ -28,4 +28,4 @@ pub fn add_thread_memory_accessor() {}
 
 pub fn remove_thread_memory_accessor() {}
 
-pub fn iterate_thread_allocation_stats(f: impl FnMut(&str, u64, u64)) {}
+pub fn iterate_thread_allocation_stats(_f: impl FnMut(&str, u64, u64)) {}
