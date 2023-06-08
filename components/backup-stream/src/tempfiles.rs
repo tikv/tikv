@@ -15,8 +15,9 @@ use std::{
     task::{ready, Context, Poll},
 };
 
-use encryption::{DecrypterReader, EncrypterWriter, Iv};
-use futures::TryFutureExt;
+use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
+use engine_traits::EncryptionKeyManager;
+use futures::{AsyncWriteExt, TryFutureExt};
 use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
 use rand::Rng;
 use tikv_util::warn;
@@ -38,7 +39,6 @@ use crate::{
     utils::{CompressionWriter, ZstdCompressionWriter},
 };
 
-#[derive(Debug)]
 pub struct Config {
     /// The max memory usage of the in memory file content.
     pub cache_size: AtomicUsize,
@@ -56,7 +56,26 @@ pub struct Config {
     pub write_buffer_size: usize,
     /// The encryption applied to swapped out files.
     /// The in-memory content will be plaintext always.
-    pub encryption: EncryptionMethod,
+    pub encryption: Option<Arc<DataKeyManager>>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("cache_size", &self.cache_size)
+            .field("swap_files", &self.swap_files)
+            .field("content_compression", &self.content_compression)
+            .field(
+                "minimal_swap_out_file_size",
+                &self.minimal_swap_out_file_size,
+            )
+            .field("write_buffer_size", &self.write_buffer_size)
+            .field(
+                "encryption",
+                &self.encryption.as_ref().map(|enc| enc.encryption_method()),
+            )
+            .finish()
+    }
 }
 
 // NOTE: Perhaps we can implement tokio I/O traits to get rid of the hell of
@@ -69,68 +88,10 @@ struct Encryption {
     method: EncryptionMethod,
 }
 
-impl Encryption {
-    fn new(method: EncryptionMethod) -> Self {
-        Self { method }
-    }
-
-    fn rand_key_encrypted(&self, p: OsFile) -> Result<PersistentFile> {
-        match self.method {
-            EncryptionMethod::Unknown => Err(Self::unknown_err()),
-            EncryptionMethod::Plaintext => Ok(PersistentFile::Plain(p)),
-            EncryptionMethod::Aes128Ctr
-            | EncryptionMethod::Aes192Ctr
-            | EncryptionMethod::Aes256Ctr
-            | EncryptionMethod::Sm4Ctr => {
-                let key = self.generate_cipher_key();
-                let iv = Iv::new_ctr();
-                let writer =
-                    EncrypterWriter::new(p.compat_write(), self.method, &key, iv)?.compat_write();
-                Ok(PersistentFile::Encrypted { writer, iv, key })
-            }
-        }
-    }
-
-    fn decrypted(&self, file: OsFile, iv: &Iv, key: &[u8]) -> Result<Decrypted<OsFile>> {
-        match self.method {
-            EncryptionMethod::Unknown => Err(Self::unknown_err()),
-            EncryptionMethod::Plaintext
-            | EncryptionMethod::Aes128Ctr
-            | EncryptionMethod::Aes192Ctr
-            | EncryptionMethod::Aes256Ctr
-            | EncryptionMethod::Sm4Ctr => {
-                let reader = DecrypterReader::new(file.compat(), self.method, key, *iv)?.compat();
-                Ok(reader)
-            }
-        }
-    }
-
-    const fn unknown_err() -> Error {
-        Error::Encryption(encryption::Error::UnknownEncryption)
-    }
-
-    fn generate_cipher_key(&self) -> Vec<u8> {
-        use openssl::cipher::Cipher;
-        // NOTE: should we make them constants?
-        let key_len = match self.method {
-            EncryptionMethod::Unknown | EncryptionMethod::Plaintext => 0,
-            EncryptionMethod::Aes128Ctr => Cipher::aes_128_ctr().key_length(),
-            EncryptionMethod::Aes192Ctr => Cipher::aes_192_ctr().key_length(),
-            EncryptionMethod::Aes256Ctr => Cipher::aes_256_ctr().key_length(),
-            EncryptionMethod::Sm4Ctr => Cipher::sm4_ctr().key_length(),
-        };
-
-        let mut buf = vec![0u8; key_len];
-        rand::thread_rng().fill(buf.as_mut_slice());
-        buf
-    }
-}
-
 pub struct TempFilePool {
     cfg: Config,
     current: AtomicUsize,
     files: BlockMutex<FileSet>,
-    encryption: Encryption,
 
     #[cfg(test)]
     override_swapout: Option<
@@ -155,11 +116,7 @@ struct File {
 
 enum PersistentFile {
     Plain(OsFile),
-    Encrypted {
-        writer: Encrypted<OsFile>,
-        iv: Iv,
-        key: Vec<u8>,
-    },
+    Encrypted(Encrypted<OsFile>),
     #[cfg(test)]
     Dynamic(Pin<Box<dyn AsyncWrite + Send + 'static>>),
     Closed,
@@ -233,16 +190,17 @@ impl TempFilePool {
     pub fn new(cfg: Config) -> Result<Self> {
         if let Ok(true) = std::fs::metadata(&cfg.swap_files).map(|x| x.is_dir()) {
             warn!("find content in the swap file directory node. truncating them."; "dir" => %cfg.swap_files.display());
+            if let Some(enc) = &cfg.encryption {
+                enc.remove_dir(&cfg.swap_files, None)?;
+            }
             std::fs::remove_dir_all(&cfg.swap_files)?;
         }
         std::fs::create_dir_all(&cfg.swap_files)?;
-        let encryption = Encryption::new(cfg.encryption);
 
         let this = Self {
             cfg,
             current: AtomicUsize::new(0usize),
             files: BlockMutex::default(),
-            encryption,
 
             #[cfg(test)]
             override_swapout: None,
@@ -329,16 +287,10 @@ impl TempFilePool {
         }
         let st = f.content.lock().unwrap();
         let myfile = match &st.external_file {
-            Some(PersistentFile::Encrypted { iv, key, .. }) => Some(
-                self.encryption
-                    .decrypted(self.open_relative(p)?, iv, key.as_slice())
-                    .context(format_args!("reading encrypted file {}", p.display()))?,
-            ),
-            Some(_) => Some(
-                self.encryption
-                    .decrypted(self.open_relative(p)?, &Iv::Empty, &[])
-                    .context(format_args!("reading plain file {}", p.display()))?,
-            ),
+            Some(_) => {
+                let f = self.open_relative(p)?;
+                Some(f)
+            }
             None => None,
         };
         Ok(ForRead {
@@ -376,27 +328,49 @@ impl TempFilePool {
             Some(f) => return Ok(PersistentFile::Dynamic(f(&abs_path))),
             None => {}
         }
-        let file = OsFile::from_std(SyncOsFile::create(abs_path)?);
-        let pfile = self.encryption.rand_key_encrypted(file).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to decrypt: {err}"),
-            )
-        })?;
+        let file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
+        let pfile = match &self.cfg.encryption {
+            Some(enc) => PersistentFile::Encrypted(
+                enc.open_file_with_writer(&abs_path, file.compat_write(), true)
+                    .map_err(Self::convert_encrypt_error_to_io)?
+                    .compat_write(),
+            ),
+            None => PersistentFile::Plain(file),
+        };
+
         Ok(pfile)
     }
 
     /// Open a file by a relative path.
     /// This will open a raw OS file for reading. The file content may be
     /// compressed if the configuration requires.
-    fn open_relative(&self, p: &Path) -> std::io::Result<OsFile> {
-        let file = SyncOsFile::open(self.cfg.swap_files.join(p))?;
-        Ok(OsFile::from_std(file))
+    fn open_relative(&self, p: &Path) -> std::io::Result<Decrypted<OsFile>> {
+        let abs_path = self.cfg.swap_files.join(p);
+        let file = SyncOsFile::open(&abs_path)?;
+        let async_file = OsFile::from_std(file).compat();
+        let decrypted_file = match &self.cfg.encryption {
+            Some(enc) => enc
+                .open_file_with_reader(&abs_path, async_file)
+                .map_err(Self::convert_encrypt_error_to_io)?
+                .compat(),
+            None => DecrypterReader::new(async_file, EncryptionMethod::Plaintext, &[], Iv::Empty)
+                .map_err(Self::convert_encrypt_error_to_io)?
+                .compat(),
+        };
+        Ok(decrypted_file)
     }
 
     fn delete_relative(&self, p: &Path) -> std::io::Result<()> {
-        std::fs::remove_file(self.cfg.swap_files.join(p))?;
+        let abs_path = self.cfg.swap_files.join(p);
+        if let Some(enc) = &self.cfg.encryption {
+            enc.delete_file(&abs_path.to_string_lossy())?;
+        }
+        std::fs::remove_file(&abs_path)?;
         Ok(())
+    }
+
+    fn convert_encrypt_error_to_io(err: encryption::Error) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, err)
     }
 }
 
@@ -706,7 +680,7 @@ impl AsyncWrite for PersistentFile {
             PersistentFile::Plain(f) => Pin::new(f).poll_write(cx, buf),
             #[cfg(test)]
             PersistentFile::Dynamic(d) => d.as_mut().poll_write(cx, buf),
-            PersistentFile::Encrypted { writer, .. } => Pin::new(writer).poll_write(cx, buf),
+            PersistentFile::Encrypted(writer) => Pin::new(writer).poll_write(cx, buf),
             PersistentFile::Closed => Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "write to the tempfile has been marked done",
@@ -723,7 +697,7 @@ impl AsyncWrite for PersistentFile {
             PersistentFile::Plain(f) => Pin::new(f).poll_flush(cx),
             #[cfg(test)]
             PersistentFile::Dynamic(d) => d.as_mut().poll_flush(cx),
-            PersistentFile::Encrypted { writer, .. } => Pin::new(writer).poll_flush(cx),
+            PersistentFile::Encrypted(writer) => Pin::new(writer).poll_flush(cx),
             PersistentFile::Closed => Ok(()).into(),
         }
     }
@@ -736,7 +710,7 @@ impl AsyncWrite for PersistentFile {
             PersistentFile::Plain(f) => Pin::new(f).poll_shutdown(cx),
             #[cfg(test)]
             PersistentFile::Dynamic(d) => d.as_mut().poll_shutdown(cx),
-            PersistentFile::Encrypted { writer, .. } => Pin::new(writer).poll_shutdown(cx),
+            PersistentFile::Encrypted(writer) => Pin::new(writer).poll_shutdown(cx),
             PersistentFile::Closed => Ok(()).into(),
         }
     }
@@ -759,7 +733,13 @@ impl PersistentFile {
             #[cfg(test)]
             PersistentFile::Dynamic(_) => Ok(()),
             PersistentFile::Closed => Ok(()),
-            PersistentFile::Encrypted { writer, iv, key } => writer.into_inner().finalize()?,
+            PersistentFile::Encrypted(c) => {
+                let mut enc = c.into_inner();
+                enc.flush().await?;
+                let file = enc.finalize()?.into_inner().into_std().await;
+                file.sync_all()?;
+                Ok(())
+            }
         }
     }
 }
@@ -799,8 +779,10 @@ mod test {
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
+    use encryption::DataKeyManager;
     use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
     use tempfile::tempdir;
+    use test_util::new_test_key_manager;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
     use walkdir::WalkDir;
 
@@ -825,7 +807,7 @@ mod test {
             content_compression: CompressionType::Unknown,
             minimal_swap_out_file_size: 8192,
             write_buffer_size: 4096,
-            encryption: EncryptionMethod::Plaintext,
+            encryption: None,
         };
         m(&mut cfg);
         Arc::new(TempFilePool::new(cfg).unwrap())
@@ -891,13 +873,9 @@ mod test {
 
         // The newly written bytes would be kept in memory.
         let excepted = b"Once the word count...Reachs 30. The content of files shall be swaped out to the disk.";
-        let mut local_file = pool
-            .open_relative("world.txt".as_ref())
-            .unwrap()
-            .try_into_std()
-            .unwrap();
+        let mut local_file = pool.open_relative("world.txt".as_ref()).unwrap();
         buf.clear();
-        local_file.read_to_end(&mut buf).unwrap();
+        rt.block_on(local_file.read_to_end(&mut buf)).unwrap();
         assert_eq!(
             excepted,
             buf.as_slice(),
@@ -1113,10 +1091,11 @@ mod test {
         assert_dir_empty(tmp.path());
     }
 
-    fn test_encryption(method: EncryptionMethod) {
+    fn test_encryption(enc: DataKeyManager) {
         let tmp = tempdir().unwrap();
+        let method = enc.encryption_method();
         let pool = simple_pool_with_modify(|cfg| {
-            cfg.encryption = method;
+            cfg.encryption = Some(Arc::new(enc));
             cfg.minimal_swap_out_file_size = 15;
             cfg.write_buffer_size = 15;
             cfg.cache_size = AtomicUsize::new(15);
@@ -1125,9 +1104,9 @@ mod test {
         let rt = rt_for_test();
         let content_to_write: [&[u8]; 4] = [
             b"Now let's test the encryption.",
-            b"We didn't reuse the DataKeyManager, because it is a little heavy...",
-            b"Thankfully, our files are temporary files. We just need them in the current run.",
-            b"So, we generated a random key for each file, and only store it in memory. Well, cool.",
+            b"With the `DataKeyManager`, we can now encrypt the files.",
+            b"Before, we tried to make a simpler version of encryption.",
+            b"Like, we generated a random key for each file, and only store it in memory. Well, cool.",
         ];
         let path = format!("{:?}-encrypted.txt", method);
         let path: &Path = path.as_ref();
@@ -1135,38 +1114,45 @@ mod test {
         for content in content_to_write {
             assert_eq!(rt.block_on(f.write(content)).unwrap(), content.len());
         }
-        let mut the_local = rt.block_on(
-            pool.open_relative(path)
-                .expect("not swapped out")
-                .into_std(),
-        );
+        let mut the_local = rt
+            .block_on(tokio::fs::File::open(tmp.path().join(path)))
+            .unwrap();
         assert!(
-            the_local.metadata().unwrap().len() > 0,
+            rt.block_on(the_local.metadata()).unwrap().len() > 0,
             "zero sized swapped out file"
         );
         let mut buf = vec![];
-        the_local.read_to_end(&mut buf).unwrap();
+        rt.block_on(the_local.read_to_end(&mut buf)).unwrap();
         // A naive check that the content has been encrypted.
         assert!(!buf.starts_with(content_to_write[0]));
+        println!("{}", buf.escape_ascii());
         buf.clear();
 
         drop(f);
         let mut r = pool.open_raw_for_read(path).unwrap();
         rt.block_on(r.read_to_end(&mut buf)).unwrap();
+        let a = content_to_write.join(&b""[..]);
+        let b = buf.as_slice();
         assert_eq!(
-            content_to_write.join(&b""[..]),
-            buf.as_slice(),
-            "{} vs {}",
-            content_to_write.join(&b""[..]).escape_ascii(),
-            buf.escape_ascii()
+            a,
+            b,
+            "{}(len = {}) vs {}(len = {})",
+            a.escape_ascii(),
+            a.len(),
+            b.escape_ascii(),
+            b.len()
         );
     }
 
     #[test]
     fn test_various_encryption() {
         use EncryptionMethod::*;
-        for e in [Aes128Ctr, Aes192Ctr, Aes256Ctr, Sm4Ctr] {
-            test_encryption(e)
+        for e in [Aes256Ctr, Sm4Ctr] {
+            let tmp = tempdir().unwrap();
+            let enc = new_test_key_manager(&tmp, Some(e), None, None)
+                .unwrap()
+                .unwrap();
+            test_encryption(enc)
         }
     }
 }

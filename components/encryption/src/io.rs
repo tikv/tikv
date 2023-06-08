@@ -381,26 +381,43 @@ impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
             let this = self.get_unchecked_mut();
             (Pin::new_unchecked(&mut this.writer), &mut this.crypter)
         };
-        let content_to_write = if let Some(crypter) = crypt.as_mut() {
-            let crypted = crypter.do_crypter(buf)?;
-            debug_assert!(crypted.len() == buf.len());
-            crypted
-        } else {
-            &buf[..]
+        let crypter = match crypt.as_mut() {
+            Some(crypter) => crypter,
+            None => {
+                return writer.poll_write(cx, buf);
+            }
         };
 
-        // NOTE: once the write doesn't fully written to the underlying writer, we may
-        // need to encrypt the rest content in the next call. When the underlying writer
-        // puts small contents, the extra overhead might be overwhelmed. The same
-        // problem exists in the synchronous version too.
-        let res = ready!(AsyncWrite::poll_write(writer, cx, content_to_write))?;
-        Ok(res).into()
+        if crypter.buffer().is_empty() {
+            crypter.do_crypter(buf)?;
+        }
+
+        while !crypter.buffer().is_empty() {
+            let n = ready!(writer.poll_write(cx, crypter.buffer()))?;
+            crypter.advance_buffer(n);
+        }
+        Ok(n).into()
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
         // SAFETY: trivial projection.
-        let writer = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().writer) };
-        AsyncWrite::poll_flush(writer, cx)
+        let (mut writer, crypt) = unsafe {
+            let this = self.get_unchecked_mut();
+            (Pin::new_unchecked(&mut this.writer), &mut this.crypter)
+        };
+        let crypter = match crypt.as_mut() {
+            Some(crypter) => crypter,
+            None => return writer.as_mut().poll_flush(cx),
+        };
+
+        loop {
+            if crypter.buffer().is_empty() {
+                return writer.as_mut().poll_flush(cx);
+            }
+
+            let n = ready!(writer.as_mut().poll_write(cx, crypter.buffer()))?;
+            crypter.advance_buffer(n);
+        }
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
@@ -449,6 +466,8 @@ struct CrypterCore {
     block_size: usize,
 
     buffer: Vec<u8>,
+    consumed_index: usize,
+    buffed_length: usize,
 }
 
 impl CrypterCore {
@@ -462,6 +481,8 @@ impl CrypterCore {
             block_size: 0,
             initial_iv: iv,
             buffer: Vec::new(),
+            consumed_index: 0,
+            buffed_length: 0,
         })
     }
 
@@ -469,6 +490,8 @@ impl CrypterCore {
         // OCrypter require the output buffer to have block_size extra bytes, or it will
         // panic.
         self.buffer.resize(size + self.block_size, 0);
+        self.consumed_index = 0;
+        self.buffed_length = 0;
     }
 
     pub fn reset_crypter(&mut self, offset: u64) -> IoResult<()> {
@@ -543,6 +566,7 @@ impl CrypterCore {
                 ),
             ));
         }
+        self.buffed_length = count;
         Ok(&self.buffer[..count])
     }
 
@@ -557,6 +581,14 @@ impl CrypterCore {
             );
         }
         Ok(())
+    }
+
+    fn advance_buffer(&mut self, consumed: usize) {
+        self.consumed_index += consumed;
+    }
+
+    fn buffer(&self) -> &[u8] {
+        &self.buffer[self.consumed_index..self.buffed_length]
     }
 }
 

@@ -636,7 +636,7 @@ impl DataKeyManager {
         self.open_file_with_writer(path, file_writer, true /* create */)
     }
 
-    pub fn open_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
+    pub fn open_file_with_writer<P: AsRef<Path>, W>(
         &self,
         path: P,
         writer: W,
