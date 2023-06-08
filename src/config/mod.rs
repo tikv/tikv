@@ -380,6 +380,14 @@ macro_rules! cf_config {
             pub checksum: ChecksumType,
             #[online_config(skip)]
             pub max_compactions: u32,
+            // `ttl == None` means using default setting in Rocksdb.
+            // `ttl` in Rocksdb is 30 days as default.
+            #[online_config(skip)]
+            pub ttl: Option<ReadableDuration>,
+            // `periodic_compaction_seconds == None` means using default setting in Rocksdb.
+            // `periodic_compaction_seconds` in Rocksdb is 30 days as default.
+            #[online_config(skip)]
+            pub periodic_compaction_seconds: Option<ReadableDuration>,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -648,6 +656,12 @@ macro_rules! build_cf_opt {
         if let Some(r) = $compaction_limiter {
             cf_opts.set_compaction_thread_limiter(r);
         }
+        if let Some(ttl) = $opt.ttl {
+            cf_opts.set_ttl(ttl.0.as_secs());
+        }
+        if let Some(secs) = $opt.periodic_compaction_seconds {
+            cf_opts.set_periodic_compaction_seconds(secs.0.as_secs());
+        }
         cf_opts
     }};
 }
@@ -718,6 +732,8 @@ impl Default for DefaultCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -884,6 +900,8 @@ impl Default for WriteCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -1004,6 +1022,8 @@ impl Default for LockCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -1099,6 +1119,8 @@ impl Default for RaftCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -1621,6 +1643,8 @@ impl Default for RaftDefaultCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -5888,6 +5912,18 @@ mod tests {
         cfg.rocksdb.lockcf.ribbon_filter_above_level = None;
         cfg.rocksdb.raftcf.ribbon_filter_above_level = None;
         cfg.raftdb.defaultcf.ribbon_filter_above_level = None;
+        // ColumnFamily::ttl
+        cfg.rocksdb.defaultcf.ttl = None;
+        cfg.rocksdb.writecf.ttl = None;
+        cfg.rocksdb.lockcf.ttl = None;
+        cfg.rocksdb.raftcf.ttl = None;
+        cfg.raftdb.defaultcf.ttl = None;
+        // ColumnFamily::periodic_compaction_seconds
+        cfg.rocksdb.defaultcf.periodic_compaction_seconds = None;
+        cfg.rocksdb.writecf.periodic_compaction_seconds = None;
+        cfg.rocksdb.lockcf.periodic_compaction_seconds = None;
+        cfg.rocksdb.raftcf.periodic_compaction_seconds = None;
+        cfg.raftdb.defaultcf.periodic_compaction_seconds = None;
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
