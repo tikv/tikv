@@ -633,9 +633,10 @@ fn test_when_warmup_succeed_and_not_become_leader() {
     assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap());
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_check_long_uncommitted_proposals_after_became_leader() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     let base_tick_ms = 50;
     configure_for_lease_read(&mut cluster.cfg, Some(base_tick_ms), Some(1000));
     cluster.cfg.raft_store.check_long_uncommitted_interval = ReadableDuration::millis(200);
