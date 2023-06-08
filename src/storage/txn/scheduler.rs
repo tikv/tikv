@@ -1237,13 +1237,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         .map_err(StorageError::from)
                 })
             };
+            let cmd_process_duration = begin_instant.saturating_elapsed();
+            sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
             SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                 .get(tag)
-                .observe(begin_instant.saturating_elapsed_secs());
+                .observe(cmd_process_duration.as_secs_f64());
             res
         };
 
-        let process_end = Instant::now();
         if write_result.is_ok() {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
@@ -1267,8 +1268,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         sample.add_read_bytes(read_bytes);
         let quota_delay = quota_limiter.consume_sample(sample, true).await;
         if !quota_delay.is_zero() {
-            let actual_quota_delay = process_end.saturating_elapsed();
-            sched_details.quota_limit_delay_nanos = actual_quota_delay.as_nanos() as u64;
+            sched_details.quota_limit_delay_nanos = quota_delay.as_nanos() as u64;
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)
                 .inc_by(quota_delay.as_micros() as u64);
@@ -1526,6 +1526,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
         });
 
+        let async_write_start = Instant::now_coarse();
         let mut res = unsafe {
             with_tls_engine(|e: &mut E| {
                 e.async_write(&ctx, to_be_write, subscribed, Some(on_applied))
@@ -1607,6 +1608,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                             sched.inner.flow_controller.unconsume(region_id, write_size);
                         }
                     }
+                    sched_details.async_write_nanos =
+                        async_write_start.saturating_elapsed().as_nanos() as u64;
                     return;
                 }
             }
@@ -1882,8 +1885,15 @@ struct SchedulerDetails {
     tracker: TrackerToken,
     stat: Statistics,
     start_process_instant: Instant,
+    // A write command processing can be divided into four stages:
+    // 1. The command is processed using a snapshot to generate the write content.
+    // 2. If the quota is exceeded, there will be a delay.
+    // 3. If the write flow exceeds the limit, it will be throttled.
+    // 4. Finally, the write request is sent to raftkv and responses are awaited.
+    cmd_process_nanos: u64,
     quota_limit_delay_nanos: u64,
     flow_control_nanos: u64,
+    async_write_nanos: u64,
 }
 
 impl SchedulerDetails {
@@ -1892,8 +1902,10 @@ impl SchedulerDetails {
             tracker,
             stat: Default::default(),
             start_process_instant,
+            cmd_process_nanos: 0,
             quota_limit_delay_nanos: 0,
             flow_control_nanos: 0,
+            async_write_nanos: 0,
         }
     }
 }
