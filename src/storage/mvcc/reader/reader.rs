@@ -10,10 +10,7 @@ use kvproto::{
 };
 use raftstore::store::LocksStatus;
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
-use txn_types::{
-    Key, LastChange, LastChangePosition, Lock, OldValue, TimeStamp, Value, Write, WriteRef,
-    WriteType,
-};
+use txn_types::{Key, LastChange, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use crate::storage::{
     kv::{

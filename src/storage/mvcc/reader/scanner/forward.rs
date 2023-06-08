@@ -5,10 +5,7 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
-use txn_types::{
-    Key, LastChange, LastChangePosition, Lock, LockType, OldValue, TimeStamp, Value, WriteRef,
-    WriteType,
-};
+use txn_types::{Key, LastChange, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::{

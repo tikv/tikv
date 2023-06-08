@@ -653,9 +653,6 @@ impl Default for LastChange {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct LastChangePosition {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

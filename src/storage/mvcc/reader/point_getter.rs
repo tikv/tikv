@@ -6,10 +6,7 @@ use std::borrow::Cow;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
 use tikv_kv::SEEK_BOUND;
-use txn_types::{
-    Key, LastChange, LastChangePosition, Lock, LockType, TimeStamp, TsSet, Value, WriteRef,
-    WriteType,
-};
+use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 use crate::storage::{
     kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics},
