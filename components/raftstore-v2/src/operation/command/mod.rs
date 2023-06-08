@@ -368,10 +368,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         apply_res: ApplyRes,
     ) {
-        if !self.serving() || !apply_res.admin_result.is_empty() {
-            // TODO: remove following log once stable.
-            debug!(self.logger, "on_apply_res"; "apply_res" => ?apply_res, "apply_trace" => ?self.storage().apply_trace());
-        }
+        debug!(
+            self.logger,
+            "async apply finish";
+            "res" => ?apply_res,
+            "serving" => self.serving(),
+            "apply_trace" => ?self.storage().apply_trace(),
+        );
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
             // Ignore admin command side effects, otherwise it may split incomplete
@@ -391,7 +394,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .on_admin_modify(res.tablet_index);
                     self.on_apply_res_split(ctx, res)
                 }
-                AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
+                AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(term),
                 AdminCmdResult::CompactLog(res) => self.on_apply_res_compact_log(ctx, res),
                 AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
@@ -547,6 +550,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
+        fail::fail_point!("on_handle_apply_1003", self.peer_id() == 1003, |_| {});
         fail::fail_point!("on_handle_apply_2", self.peer_id() == 2, |_| {});
         let now = std::time::Instant::now();
         let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
