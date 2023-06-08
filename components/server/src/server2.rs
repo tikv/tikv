@@ -17,7 +17,11 @@ use std::{
     marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{atomic::AtomicU64, mpsc, Arc},
+    sync::{
+        atomic::AtomicU64,
+        mpsc::{self, sync_channel},
+        Arc,
+    },
     time::Duration,
     u64,
 };
@@ -31,9 +35,7 @@ use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
-use engine_traits::{
-    Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE, DATA_CFS,
-};
+use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -60,7 +62,10 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
-use raftstore_v2::{router::RaftRouter, StateStorage};
+use raftstore_v2::{
+    router::{PeerMsg, RaftRouter},
+    StateStorage,
+};
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
@@ -1240,39 +1245,26 @@ where
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
         info!("flush begin");
-        let threads = 10;
         let engines = self.engines.take().unwrap();
-        let tablet_registry = self.tablet_registry.take().unwrap();
-        let mut tablets = vec![];
+        let router = self.router.unwrap();
+        let mut rxs = vec![];
         engines
             .raft_engine
             .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
-                if let Some(mut cache) = tablet_registry.get(region_id) {
-                    if let Some(tablet) = cache.latest() {
-                        tablets.push(tablet.clone());
-                    }
-                }
+                let (tx, rx) = sync_channel(1);
+                rxs.push(rx);
+                let flush_msg = PeerMsg::FlushBeforeClose { tx };
+                if let Err(e) = router.store_router().force_send(region_id, flush_msg) {
+                    panic!("panic during flush closing {:?}", e);
+                };
                 Ok(())
             })
             .unwrap();
-        let group_size = (threads + 9) / 10;
-        let mut handlers = vec![];
-        for group in tablets.chunks(group_size) {
-            let group = group.to_vec();
-            handlers.push(std::thread::spawn(|| {
-                for tablet in group {
-                    tablet.flush_cfs(DATA_CFS, true).unwrap();
-                    info!(
-                        "tablet flush done";
-                        "tablet_path" => tablet.path(),
-                    );
-                }
-            }));
+
+        for rx in rxs {
+            rx.recv().unwrap();
         }
 
-        for handler in handlers {
-            handler.join().unwrap();
-        }
         info!(
             "flush_done";
         );

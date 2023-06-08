@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::Arc;
+use std::sync::{mpsc::SyncSender, Arc};
 
 use kvproto::{
     import_sstpb::SstMeta,
@@ -241,6 +241,9 @@ pub enum PeerMsg {
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
+    FlushBeforeClose {
+        tx: SyncSender<()>,
+    },
 }
 
 impl ResourceMetered for PeerMsg {}

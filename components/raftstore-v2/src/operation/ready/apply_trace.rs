@@ -27,12 +27,16 @@
 //! All apply related states are associated with an apply index. During
 //! recovery states corresponding to the start index should be used.
 
-use std::{cmp, sync::Mutex};
+use std::{
+    cmp,
+    path::Path,
+    sync::{atomic::Ordering, mpsc::SyncSender, Mutex},
+};
 
 use encryption_export::DataKeyManager;
 use engine_traits::{
-    data_cf_offset, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
+    data_cf_offset, offset_to_cf, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch,
+    TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use fail::fail_point;
 use kvproto::{
@@ -46,6 +50,7 @@ use slog::{info, trace, Logger};
 use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
+    batch::StoreContext,
     operation::{
         command::temp_split_path,
         ready::snapshot::{install_tablet, recv_snap_path},
@@ -397,6 +402,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
 
         let (trace, region_state) = ApplyTrace::recover(region_id, &engine)?;
+        info!(
+            logger,
+            "initial apply trace";
+            "apply_trace" => ?trace,
+            "region_id" => region_id,
+        );
 
         let raft_state = match engine.get_raft_state(region_id) {
             Ok(Some(s)) => s,
@@ -543,6 +554,63 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         apply_trace.maybe_advance_admin_flushed(apply_index);
+    }
+
+    pub fn flush_before_close<T>(&mut self, ctx: &StoreContext<EK, ER, T>, tx: SyncSender<()>) {
+        let region_id = self.region_id();
+        if let Some(tablet) = self.tablet().cloned() {
+            tablet.flush_cfs(DATA_CFS, true).unwrap();
+
+            let flush_state = self.flush_state().clone();
+            let logger = self.logger.clone();
+            let mut apply_trace = self.storage_mut().apply_trace_mut();
+            let mut max_flush_index = 0;
+
+            let flushed_indexes = flush_state.as_ref().flushed_index();
+            for i in 0..flushed_indexes.len() {
+                let flush_index = flushed_indexes[i].load(Ordering::SeqCst);
+                let cf = offset_to_cf(i);
+                apply_trace.on_flush(cf, flush_index);
+                max_flush_index = u64::max(max_flush_index, flush_index);
+            }
+
+            let prev_admin = apply_trace.persisted_applied;
+            apply_trace.maybe_advance_admin_flushed(max_flush_index);
+            let (_, _, tablet_index) = ctx
+                .tablet_registry
+                .parse_tablet_name(Path::new(tablet.path()))
+                .unwrap();
+
+            let admin_flush = apply_trace.admin.flushed;
+            if admin_flush > prev_admin {
+                let mut lb = ctx.engine.log_batch(1);
+                lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
+                    .unwrap();
+                apply_trace.try_persist = false;
+                apply_trace.persisted_applied = admin_flush;
+                ctx.engine.consume(&mut lb, true).unwrap();
+
+                info!(
+                    self.logger,
+                    "persisting admin flushed before close";
+                    "tablet_index" => tablet_index,
+                    "flushed" => admin_flush
+                );
+            } else {
+                info!(
+                    logger,
+                    "persisting admin flushed before close, not progress";
+                    "apply_trace" => ?apply_trace,
+                );
+            }
+        } else {
+            info!(
+                self.logger,
+                "persisting admin flushed before close, no tablet";
+            );
+        }
+
+        let _ = tx.send(());
     }
 }
 

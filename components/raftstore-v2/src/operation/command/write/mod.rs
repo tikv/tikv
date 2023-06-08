@@ -140,6 +140,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
+const MAGIC_KEY: &str = "magic_delete";
+
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub fn apply_put(&mut self, cf: &str, index: u64, key: &[u8], value: &[u8]) -> Result<()> {
@@ -276,8 +278,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "range_end" => log_wrappers::Value::key(&end_key),
             "notify_only" => notify_only,
             "use_delete_range" => use_delete_range,
+            "index" => index,
         );
 
+        let tablet = self.tablet();
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
@@ -292,7 +296,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     "error" => ?e,
                 )
             };
-            let tablet = self.tablet();
             tablet
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
@@ -312,7 +315,35 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
             //     .unwrap_or_else(move |e| fail_f(e,
             // DeleteStrategy::DeleteBlobs));
+        } else {
+            info!(
+                self.logger,
+                "execute delete range not notified";
+            );
         }
+
+        self.ensure_write_buffer();
+        let res = if cf.is_empty() || cf == CF_DEFAULT {
+            // TODO: use write_vector
+            self.write_batch
+                .as_mut()
+                .unwrap()
+                .delete(MAGIC_KEY.as_bytes())
+        } else {
+            self.write_batch
+                .as_mut()
+                .unwrap()
+                .delete_cf(cf, MAGIC_KEY.as_bytes())
+        };
+        res.unwrap_or_else(|e| {
+            slog_panic!(
+                self.logger,
+                "failed to delete magic in delete range";
+                "cf" => cf,
+                "error" => ?e
+            );
+        });
+
         if index != u64::MAX {
             self.modifications_mut()[off] = index;
         }
