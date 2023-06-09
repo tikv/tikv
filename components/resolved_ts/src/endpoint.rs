@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use collections::HashMap;
+use collections::{HashMap, hash_map_with_capacity};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use grpcio::Environment;
@@ -67,7 +67,7 @@ enum PendingLock {
 // Records information related to observed region.
 // observe_id is used for avoiding ABA problems in incremental scan task,
 // advance resolved ts task, and command observing.
-pub struct ObserveRegion {
+struct ObserveRegion {
     meta: Region,
     handle: ObserveHandle,
     // TODO: Get lease from raftstore.
@@ -614,7 +614,7 @@ where
     }
 
     fn get_regions(& self) -> HashMap<u64, Option<u64>> {
-        let mut regions: HashMap<u64, Option<u64>> = Default::default();
+        let mut regions = hash_map_with_capacity(self.regions.len());
         regions.extend(self.regions.iter().map(|(region_id, observe_region)| {
             (region_id.clone(), Some(observe_region.get_tracked_index()))
         }));

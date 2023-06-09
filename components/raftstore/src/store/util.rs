@@ -1229,7 +1229,6 @@ impl RegionReadProgressRegistry {
             }
             failed_regions.push(*region_id);
         }
-        let valid_regions_len = valid_regions.len();
         self.checked_states.lock().unwrap().insert(
             store_id,
             CheckedState {
