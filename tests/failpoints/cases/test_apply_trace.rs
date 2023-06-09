@@ -7,7 +7,7 @@ use engine_traits::{
 };
 
 #[test]
-fn test_flush_before_stop2() {
+fn test_flush_before_stop() {
     use test_raftstore_v2::*;
 
     let mut cluster = new_server_cluster(0, 3);
