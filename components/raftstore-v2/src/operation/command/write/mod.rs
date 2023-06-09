@@ -33,8 +33,6 @@ pub use raftstore::store::simple_write::{
     SimpleWrite, SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder,
 };
 
-const MAGIC_KEY: &str = "!magic_delete";
-
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn on_simple_write<T>(
