@@ -424,11 +424,14 @@ impl StdThreadBuildWrapper for std::thread::Builder {
         #[allow(clippy::disallowed_methods)]
         self.spawn(|| {
             call_thread_start_hooks();
-            add_thread_memory_accessor();
+            // SAFETY: we will call `remove_thread_memory_accessor` at defer.
+            unsafe { add_thread_memory_accessor() };
             add_thread_name_to_map();
+            defer! {{
+                remove_thread_name_from_map();
+                remove_thread_memory_accessor();
+            }};
             let res = f();
-            remove_thread_name_from_map();
-            remove_thread_memory_accessor();
             res
         })
     }
@@ -442,7 +445,9 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
         #[allow(clippy::disallowed_methods)]
         self.on_thread_start(move || {
             call_thread_start_hooks();
-            add_thread_memory_accessor();
+            // SAFETY: we will call `remove_thread_memory_accessor` at
+            // `before-stop_wrapper`.
+            unsafe { add_thread_memory_accessor(); }
             add_thread_name_to_map();
             f();
         })

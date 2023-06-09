@@ -229,7 +229,6 @@ impl ResetToVersionManager {
                 .name("reset_to_version".to_string())
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
 
                     while worker
                         .process_next_batch(BATCH_SIZE, &mut wb)
@@ -243,8 +242,6 @@ impl ResetToVersionManager {
                     {}
                     *worker.state.lock().unwrap() = ResetToVersionState::Done;
                     info!("Reset to version done!");
-
-                    tikv_alloc::remove_thread_memory_accessor();
                 })
                 .expect("failed to spawn reset_to_version thread"),
         );

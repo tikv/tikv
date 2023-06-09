@@ -364,7 +364,7 @@ impl<ER: RaftEngine> DebuggerImpl<ER> {
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
+
                     info!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
@@ -374,7 +374,7 @@ impl<ER: RaftEngine> DebuggerImpl<ER> {
 
                     let result =
                         recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index);
-                    tikv_alloc::remove_thread_memory_accessor();
+
                     result
                 })
                 .unwrap();

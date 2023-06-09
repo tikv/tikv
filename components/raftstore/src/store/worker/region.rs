@@ -823,7 +823,6 @@ where
                     start: UnixSecs::now(),
                 };
                 self.pool.spawn(async move {
-                    tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
                         region_id,
                         last_applied_term,
@@ -834,7 +833,6 @@ where
                         for_balance,
                         allow_multi_files_snapshot,
                     );
-                    tikv_alloc::remove_thread_memory_accessor();
                 });
             }
             task @ Task::Apply { .. } => {

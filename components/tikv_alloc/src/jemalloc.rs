@@ -137,7 +137,17 @@ impl MemoryStatsAccessor {
     }
 }
 
-pub fn add_thread_memory_accessor() {
+/// Register the current thread to the collector that collects the jemalloc
+/// allocation / deallocation info.
+///
+/// Generally you should call this via `spawn_wrapper`s instead of invoke this
+/// directly. The former is a safe function.
+///
+/// # Safety
+///
+/// Make sure the `remove_thread_memory_accessor` is called before the thread
+/// exits.
+pub unsafe fn add_thread_memory_accessor() {
     MEMORY_STAT_ACCESSOR_STILL_ALIVE.with(|_s| ());
 
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
@@ -286,7 +296,10 @@ mod tests {
                     if i == 5 {
                         return;
                     }
-                    add_thread_memory_accessor();
+                    // SAFETY: we call `remove_thread_memory_accessor` below.
+                    unsafe {
+                        add_thread_memory_accessor();
+                    }
                     let (tx2, rx2) = std::sync::mpsc::channel::<()>();
                     let v = vec![42u8; 1024 * 1024 * i];
                     drop(v);
@@ -294,9 +307,6 @@ mod tests {
                     tx.send((i, std::thread::current().id(), tx2)).unwrap();
                     drop(tx);
                     rx2.recv().unwrap();
-                    if i == 3 {
-                        panic!("Oops... I forgot to remove the accessor.")
-                    }
                     remove_thread_memory_accessor();
                 })
                 .unwrap();
@@ -391,7 +401,6 @@ mod profiling {
         use tempfile::Builder;
 
         use super::super::THREAD_MEMORY_MAP;
-        use crate::{add_thread_memory_accessor, remove_thread_memory_accessor};
 
         const OPT_PROF: &[u8] = b"opt.prof\0";
 

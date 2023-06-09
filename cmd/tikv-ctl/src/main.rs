@@ -646,7 +646,6 @@ fn compact_whole_cluster(
         let h = thread::Builder::new()
             .name(format!("compact-{}", addr))
             .spawn_wrapper(move || {
-                tikv_alloc::add_thread_memory_accessor();
                 let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
                 for cf in cfs {
                     debug_executor.compact(
@@ -659,7 +658,6 @@ fn compact_whole_cluster(
                         bottommost,
                     );
                 }
-                tikv_alloc::remove_thread_memory_accessor();
             })
             .unwrap();
         handles.push(h);

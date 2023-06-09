@@ -24,7 +24,11 @@ pub fn deactivate_prof() -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
 
-pub fn add_thread_memory_accessor() {}
+/// # Safety
+///
+/// It is safe. The unsafe marker is just for matching the function signature.
+/// (So clippy will get happy even jemalloc isn't enabled.)
+pub unsafe fn add_thread_memory_accessor() {}
 
 pub fn remove_thread_memory_accessor() {}
 
