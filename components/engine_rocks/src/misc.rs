@@ -8,8 +8,12 @@ use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
-    engine::RocksEngine, r2e, rocks_metrics::RocksStatisticsReporter, rocks_metrics_defs::*,
-    sst::RocksSstWriterBuilder, util, RocksSstWriter,
+    engine::RocksEngine,
+    r2e,
+    rocks_metrics::{RocksStatisticsReporter, STORE_ENGINE_EVENT_COUNTER_VEC},
+    rocks_metrics_defs::*,
+    sst::RocksSstWriterBuilder,
+    util, RocksSstWriter,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -419,6 +423,13 @@ impl MiscExt for RocksEngine {
         Ok(self
             .as_inner()
             .get_approximate_active_memtable_stats_cf(handle))
+    }
+
+    fn get_accumulated_flush_count(cf: &str) -> Result<u64> {
+        let n = STORE_ENGINE_EVENT_COUNTER_VEC
+            .with_label_values(&["kv", cf, "flush"])
+            .get();
+        Ok(n)
     }
 }
 

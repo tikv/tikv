@@ -122,4 +122,8 @@ impl MiscExt for PanicEngine {
     ) -> Result<Option<(u64, std::time::SystemTime)>> {
         panic!()
     }
+
+    fn get_accumulated_flush_count(cf: &str) -> Result<u64> {
+        panic!()
+    }
 }
