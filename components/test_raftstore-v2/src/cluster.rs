@@ -1149,6 +1149,55 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+<<<<<<< HEAD
+=======
+    pub fn wait_last_index(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        expected: u64,
+        timeout: Duration,
+    ) {
+        let timer = Instant::now();
+        loop {
+            let raft_state = self.raft_local_state(region_id, store_id);
+            let cur_index = raft_state.get_last_index();
+            if cur_index >= expected {
+                return;
+            }
+            if timer.saturating_elapsed() >= timeout {
+                panic!(
+                    "[region {}] last index still not reach {}: {:?}",
+                    region_id, expected, raft_state
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub fn wait_applied_index(&mut self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let applied_index = self.apply_state(region_id, store_id).applied_index;
+            if applied_index >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not applied to {}: {} on store {}",
+                    region_id, index, applied_index, store_id,
+                );
+            }
+            let _ = self
+                .get_engine(store_id)
+                .get_tablet_by_id(region_id)
+                .unwrap()
+                .flush_cfs(&[], true);
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+>>>>>>> 8de74cc6a2 (raftstore-v2: propose no-op cmd for read index during transfer leader (#14878))
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         self.get_impl(CF_DEFAULT, key, false)
     }
