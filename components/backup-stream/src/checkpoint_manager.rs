@@ -525,10 +525,7 @@ pub mod tests {
     use txn_types::TimeStamp;
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
-    use crate::{
-        subscription_track::{CheckpointType, ResolveResult},
-        GetCheckpointResult,
-    };
+    use crate::GetCheckpointResult;
 
     fn region(id: u64, version: u64, conf_version: u64) -> Region {
         let mut r = Region::new();
