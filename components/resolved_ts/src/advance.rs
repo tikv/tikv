@@ -36,12 +36,12 @@ use raftstore::{
 };
 use security::SecurityManager;
 use tikv_util::{
+    future::paired_future_callback,
     info,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, SlowTimer},
     timer::SteadyTimer,
     worker::Scheduler,
-    future::paired_future_callback,
     Either,
 };
 use tokio::{
@@ -50,10 +50,7 @@ use tokio::{
 };
 use txn_types::TimeStamp;
 
-use crate::{
-    endpoint::Task,
-    metrics::*,
-};
+use crate::{endpoint::Task, metrics::*};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
@@ -124,7 +121,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             // Ignore get tso errors since we will retry every `advdance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
             let get_pd_millis = start.saturating_elapsed().as_millis();
-            
+
             let (cb, resp) = paired_future_callback();
             if let Err(e) = scheduler.schedule(Task::GetRegions { cb }) {
                 info!("failed to schedule get_regions event"; "err" => ?e);
@@ -217,6 +214,8 @@ struct ResolverBuffer {
     store_unsafe_regions_map: HashMap<u64, Vec<u64>>,
     valid_leader_infos: Vec<(LeaderInfo, Vec<u64>)>,
     store_checked_leader_map: HashMap<u64, Vec<CheckedLeader>>,
+    active_2_inactive: HashSet<u64>,
+    inactive_2_active: Vec<u64>,
 }
 
 impl ResolverBuffer {
@@ -233,6 +232,8 @@ impl ResolverBuffer {
             store_unsafe_regions_map: HashMap::default(),
             valid_leader_infos: Vec::default(),
             store_checked_leader_map: HashMap::default(),
+            active_2_inactive: HashSet::default(),
+            inactive_2_active: Vec::default(),
         }
     }
 
@@ -262,6 +263,8 @@ impl ResolverBuffer {
         for v in self.store_checked_leader_map.values_mut() {
             v.clear();
         }
+        self.active_2_inactive.clear();
+        self.inactive_2_active.clear();
     }
 
     // release the memory of buffer and return whether the GC take effects.
@@ -277,6 +280,8 @@ impl ResolverBuffer {
             self.store_unsafe_regions_map = HashMap::default();
             self.valid_leader_infos = Vec::default();
             self.store_checked_leader_map = HashMap::default();
+            self.active_2_inactive = HashSet::default();
+            self.inactive_2_active = Vec::default();
             self.last_gc_time = now;
             return true;
         }
@@ -350,6 +355,7 @@ impl LeadershipResolver {
         let resp_map = &mut buffer.resp_map;
         let store_req_map = &mut buffer.store_req_map;
         let store_region_map = &mut buffer.store_region_map;
+        let active_2_inactive = &mut buffer.active_2_inactive;
 
         let mut active_regions = 0;
         let mut read_index_reqs = Vec::new();
@@ -412,10 +418,19 @@ impl LeadershipResolver {
                             req.set_store_id(store_id);
                             req
                         });
-                        if is_inactive {
-                            req.inactive_regions.push(leader_info.region_id);
-                        } else {
-                            req.regions.push(leader_info.clone());
+                        match (is_inactive, core.get_leader_info_synced()) {
+                            (true, true) => req.inactive_regions.push(leader_info.region_id),
+                            (true, false) => {
+                                active_2_inactive.insert(*region_id);
+                                let mut inactive_leader_info = LeaderInfo::default();
+                                inactive_leader_info.set_region_id(leader_info.get_region_id());
+                                inactive_leader_info.set_peer_id(leader_info.get_peer_id());
+                                inactive_leader_info.set_term(leader_info.get_term());
+                                inactive_leader_info
+                                    .set_region_epoch(leader_info.get_region_epoch().clone());
+                                req.regions.push(inactive_leader_info)
+                            }
+                            _ => req.regions.push(leader_info.clone()),
                         }
                         if peer.get_role() != PeerRole::Learner {
                             unvotes += 1;
@@ -452,7 +467,6 @@ impl LeadershipResolver {
         let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
         for (store_id, req) in store_req_map {
-            // TODO: send empty request to push resolve ts of hibernated regions.
             if req.regions.is_empty() && req.inactive_regions.is_empty() {
                 continue;
             }
@@ -480,6 +494,7 @@ impl LeadershipResolver {
         let check_leader_count = check_leader_rpcs.len();
         let failed_region_store_map = &mut buffer.failed_region_store_map;
         let valid_leader_infos = &mut buffer.valid_leader_infos;
+        let inactive_2_active = &mut buffer.inactive_2_active;
         for _ in 0..check_leader_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
@@ -498,6 +513,8 @@ impl LeadershipResolver {
                             .entry(*region)
                             .or_insert_with(|| Vec::with_capacity(3))
                             .push(to_store);
+                        active_2_inactive.remove(region);
+                        inactive_2_active.push(*region);
                     }
                     let regions = store_region_map.get(&to_store).unwrap();
                     for region in regions {
@@ -635,6 +652,23 @@ impl LeadershipResolver {
             }
         }
         info!("DBG p4 after send apply"; "elapsed" => resolve_start.saturating_elapsed().as_millis());
+
+        if active_2_inactive.len() > 0 || inactive_2_active.len() > 0 {
+            self.region_read_progress.with(|registry| {
+                for region_id in active_2_inactive.iter() {
+                    if let Some(rp) = Arc::new(registry).get(&region_id) {
+                        let mut core = rp.get_core();
+                        core.set_leader_info_synced(true);
+                    }
+                }
+                for region_id in inactive_2_active {
+                    if let Some(rp) = Arc::new(registry).get(&region_id) {
+                        let mut core = rp.get_core();
+                        core.set_leader_info_synced(false);
+                    }
+                }
+            });
+        }
 
         valid_regions.drain().collect()
     }

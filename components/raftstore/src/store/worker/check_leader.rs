@@ -60,7 +60,7 @@ impl fmt::Display for Task {
             } => de
                 .field("name", &"check_leader")
                 .field("leader_num", &leaders.len())
-                .field("inactives_num", &inactives.len())
+                .field("inactive_num", &inactives.len())
                 .field("ts", ts)
                 .field("store_id", store_id)
                 .finish(),

@@ -1130,6 +1130,7 @@ pub struct RegionReadProgressRegistry {
 struct CheckedState {
     safe_ts: u64,
     valid_regions: Vec<u64>,
+    leader_infos: Vec<LeaderInfo>,
 }
 
 impl RegionReadProgressRegistry {
@@ -1210,11 +1211,15 @@ impl RegionReadProgressRegistry {
     ) -> Vec<u64> {
         let mut failed_regions = Vec::with_capacity(16);
         let mut valid_regions = Vec::with_capacity(inactives.len());
+        let mut leader_infos = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
-        for leader_info in &leaders {
+        for leader_info in leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor) {
+                if rp.consume_leader_info(&leader_info, coprocessor) {
+                    if !leader_info.has_read_state() {
+                        leader_infos.push(leader_info);
+                    }
                     continue;
                 }
             }
@@ -1234,6 +1239,7 @@ impl RegionReadProgressRegistry {
             CheckedState {
                 safe_ts: ts,
                 valid_regions,
+                leader_infos,
             },
         );
         failed_regions
@@ -1255,13 +1261,15 @@ impl RegionReadProgressRegistry {
             Some(CheckedState {
                 safe_ts,
                 ref valid_regions,
+                ref leader_infos,
             }) => {
                 if safe_ts != ts {
                     info!("safe ts not matched, discard checked state";
-                        "store_id" => store_id,
-                        "ts" => ts,
+                        "valid_region_num" => &valid_regions.len(),
+                        "leader_info_num" => &leader_infos.len(),
                         "safe_ts" => safe_ts,
-                        "valid_regions_num" => valid_regions.len());
+                        "ts" => ts,
+                        "store_id" => store_id);
                     return;
                 }
             }
@@ -1269,8 +1277,18 @@ impl RegionReadProgressRegistry {
                 return;
             }
         }
-        let valid_regions = checked_state.unwrap().valid_regions;
+        let checked_state = checked_state.unwrap();
+        let valid_regions = checked_state.valid_regions;
+        let leader_infos = checked_state.leader_infos;
         let registry = self.registry.lock().unwrap();
+        for leader_info in leader_infos {
+            if unsafe_regions.contains(&leader_info.region_id) {
+                continue;
+            }
+            if let Some(rp) = registry.get(&leader_info.get_region_id()) {
+                rp.update_inactive_leader_info(leader_info, ts, coprocessor);
+            }
+        }
         for region_id in valid_regions {
             if unsafe_regions.contains(&region_id) {
                 continue;
@@ -1405,28 +1423,21 @@ impl RegionReadProgress {
         coprocessor: &CoprocessorHost<E>,
     ) {
         let mut core = self.core.lock().unwrap();
-        match core.last_term {
-            Some(last_term) => {
-                if last_term != core.leader_info.leader_term {
-                    return;
-                }
-                if let Some(ts) = core.update_inactive_region_safe_ts(ts) {
-                    coprocessor.on_update_safe_ts(core.region_id, ts, ts);
-                    if !core.pause {
-                        self.safe_ts.store(ts, AtomicOrdering::Release);
-                    }
-                }
+        if let Some(ts) = core.update_inactive_region_safe_ts(ts) {
+            coprocessor.on_update_safe_ts(core.region_id, ts, ts);
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
             }
-            _ => {}
         }
     }
 
     pub fn check_inactive_region_state(&self) -> bool {
-        let mut core: MutexGuard<RegionReadProgressCore> = self.core.lock().unwrap();
-        let curr_term = core.leader_info.leader_term;
-        core.last_term
-            .replace(curr_term)
-            .map_or(false, |last_term| last_term == curr_term)
+        let core: MutexGuard<RegionReadProgressCore> = self.core.lock().unwrap();
+        core.last_leader_info.as_ref().map_or(false, |leader_info| {
+            core.leader_info.leader_term == leader_info.term
+                && core.leader_info.leader_id == leader_info.peer_id
+                && is_region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
+        })
     }
 
     pub fn merge_safe_ts<E: KvEngine>(
@@ -1458,21 +1469,27 @@ impl RegionReadProgress {
         if core.leader_info.leader_term == leader_info.term
             && core.leader_info.leader_id == leader_info.peer_id
             && is_region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
-            && leader_info.has_read_state()
         {
-            // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
-            // `read_state` is guaranteed to be valid when it is published by the leader
-            let rs = leader_info.get_read_state();
-            let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
-            if apply_index != 0 && ts != 0 && !core.discard {
-                if let Some(ts) = core.update_safe_ts(apply_index, ts) {
-                    if !core.pause {
-                        self.safe_ts.store(ts, AtomicOrdering::Release);
+            if leader_info.has_read_state() {
+                // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
+                // `read_state` is guaranteed to be valid when it is published by the leader
+                let rs = leader_info.get_read_state();
+                let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
+                if apply_index != 0 && ts != 0 && !core.discard {
+                    if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+                        if !core.pause {
+                            self.safe_ts.store(ts, AtomicOrdering::Release);
+                        }
                     }
                 }
+                coprocessor.on_update_safe_ts(
+                    leader_info.region_id,
+                    self.safe_ts(),
+                    rs.get_safe_ts(),
+                );
             }
-            coprocessor.on_update_safe_ts(leader_info.region_id, self.safe_ts(), rs.get_safe_ts());
-            core.last_term.replace(leader_info.term);
+            // if there is no read state, it means the region is going to enter the inactive
+            // status, cache the leader_info and wait for the apply.
             true
         } else {
             false
@@ -1523,6 +1540,22 @@ impl RegionReadProgress {
         }
         core.leader_info.leader_store_id =
             find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
+    }
+
+    pub fn update_inactive_leader_info<E: KvEngine>(
+        &self,
+        leader_info: LeaderInfo,
+        ts: u64,
+        coprocessor: &CoprocessorHost<E>,
+    ) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.update_inactive_region_safe_ts(ts) {
+            coprocessor.on_update_safe_ts(core.region_id, ts, ts);
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
+        }
+        core.last_leader_info = Some(leader_info);
     }
 
     /// Reset `safe_ts` to 0 and stop updating it
@@ -1588,10 +1621,14 @@ pub struct RegionReadProgressCore {
     discard: bool,
     // A notify to trigger advancing resolved ts immediately.
     advance_notify: Option<Arc<Notify>>,
+    // If leader_info_synced is true, it means the current leader info is synced in all of the
+    // followers, in this case, we can apply the optimizations for checking leadership with
+    // region id only. Unless the leader info should be sent.
+    leader_info_synced: bool,
     // `last_term` is used to check if leader changed when `leader_info` is missing.
     // for leader, when term and applied index both unchanged, it's inactive.
     // for follower, when term is unchanged, it's inactive.
-    last_term: Option<u64>,
+    last_leader_info: Option<LeaderInfo>,
     // `last_applied_index` is used by leader to check whether it's inactive.
     last_applied_index: Option<u64>,
 }
@@ -1666,7 +1703,8 @@ impl RegionReadProgressCore {
             pause: is_witness,
             discard: is_witness,
             advance_notify: None,
-            last_term: None,
+            leader_info_synced: false,
+            last_leader_info: None,
             last_applied_index: None,
         }
     }
@@ -1802,6 +1840,14 @@ impl RegionReadProgressCore {
 
     pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
         &self.leader_info
+    }
+
+    pub fn set_leader_info_synced(&mut self, synced: bool) {
+        self.leader_info_synced = synced;
+    }
+
+    pub fn get_leader_info_synced(&self) -> bool {
+        self.leader_info_synced
     }
 
     pub fn is_inactive(&self, applied_index: &u64) -> bool {

@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use collections::{HashMap, hash_map_with_capacity};
+use collections::{hash_map_with_capacity, HashMap};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use grpcio::Environment;
@@ -613,7 +613,7 @@ where
         })
     }
 
-    fn get_regions(& self) -> HashMap<u64, Option<u64>> {
+    fn get_regions(&self) -> HashMap<u64, Option<u64>> {
         let mut regions = hash_map_with_capacity(self.regions.len());
         regions.extend(self.regions.iter().map(|(region_id, observe_region)| {
             (region_id.clone(), Some(observe_region.get_tracked_index()))
@@ -657,7 +657,7 @@ pub enum Task {
     },
     GetRegions {
         cb: Box<dyn FnOnce(HashMap<u64, Option<u64>>) + Send>,
-    }
+    },
 }
 
 impl fmt::Debug for Task {
@@ -715,9 +715,7 @@ impl fmt::Debug for Task {
                 .field("name", &"change_config")
                 .field("change", &change)
                 .finish(),
-            Task::GetRegions {..} => de
-                .field("name", &"get_regions")
-                .finish(),
+            Task::GetRegions { .. } => de.field("name", &"get_regions").finish(),
         }
     }
 }
@@ -762,7 +760,7 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::ChangeConfig { change } => self.handle_change_config(change),
-            Task::GetRegions{ cb } => {
+            Task::GetRegions { cb } => {
                 cb(self.get_regions());
             }
         }
