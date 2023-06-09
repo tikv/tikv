@@ -622,10 +622,15 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let router = router.clone();
             let registry = tablet_registry.clone();
             let limiter = Limiter::new(MIN_MANUAL_FLUSH_RATE);
-            let mut max_rate = cfg.value().max_manual_flush_rate;
-            if max_rate < MIN_MANUAL_FLUSH_RATE {
-                max_rate = MIN_MANUAL_FLUSH_RATE;
-            }
+            let max_rate = if cfg.value().max_manual_flush_rate < MIN_MANUAL_FLUSH_RATE {
+                MIN_MANUAL_FLUSH_RATE
+            } else {
+                cfg.value().max_manual_flush_rate
+            };
+            let mut last_flush_count = (
+                EK::get_accumulated_flush_count(None).unwrap(),
+                TiInstant::now_coarse(),
+            );
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
@@ -634,9 +639,26 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                             return;
                         }
                         warn!(logger, "flushing oldest cf of regions {regions:?}");
+                        let flush_count = EK::get_accumulated_flush_count(None).unwrap();
+                        let now = TiInstant::now_coarse();
+                        let mut dynamic_max_rate = (flush_count - last_flush_count.0) as f64
+                            / now
+                                .saturating_duration_since(last_flush_count.1)
+                                .as_secs_f64()
+                            / 5.0;
+                        if dynamic_max_rate > max_rate {
+                            dynamic_max_rate = max_rate;
+                        }
+                        last_flush_count = (flush_count, now);
                         // Try to finish flush in 1m.
                         let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
-                        let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, max_rate);
+                        slog::info!(
+                            logger,
+                            "debug_manual_flush";
+                            "dynamic_max_rate" => dynamic_max_rate,
+                            "rate" => rate
+                        );
+                        let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, dynamic_max_rate);
                         limiter.set_speed_limit(rate);
                         // Return early if there're too many regions.
                         regions.truncate((rate * MAX_MANUAL_FLUSH_PERIOD.as_secs_f64()) as usize);

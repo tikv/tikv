@@ -123,7 +123,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_accumulated_flush_count(cf: &str) -> Result<u64> {
+    fn get_accumulated_flush_count(cf: Option<&str>) -> Result<u64> {
         panic!()
     }
 }

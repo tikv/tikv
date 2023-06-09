@@ -148,5 +148,5 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     ) -> Result<Option<(u64, std::time::SystemTime)>>;
 
     // Global method.
-    fn get_accumulated_flush_count(cf: &str) -> Result<u64>;
+    fn get_accumulated_flush_count(cf: Option<&str>) -> Result<u64>;
 }

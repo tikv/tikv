@@ -425,11 +425,19 @@ impl MiscExt for RocksEngine {
             .get_approximate_active_memtable_stats_cf(handle))
     }
 
-    fn get_accumulated_flush_count(cf: &str) -> Result<u64> {
-        let n = STORE_ENGINE_EVENT_COUNTER_VEC
-            .with_label_values(&["kv", cf, "flush"])
-            .get();
-        Ok(n)
+    fn get_accumulated_flush_count(cf: Option<&str>) -> Result<u64> {
+        if let Some(cf) = cf {
+            let n = STORE_ENGINE_EVENT_COUNTER_VEC
+                .with_label_values(&["kv", cf, "flush"])
+                .get();
+            Ok(n)
+        } else {
+            let mut n = 0;
+            for cf in engine_traits::ALL_CFS {
+                n += Self::get_accumulated_flush_count(Some(cf))?;
+            }
+            Ok(n)
+        }
     }
 }
 
