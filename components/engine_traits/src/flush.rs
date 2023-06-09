@@ -23,7 +23,7 @@ use std::{
 use slog_global::info;
 use tikv_util::set_panic_mark;
 
-use crate::{data_cf_offset, RaftEngine, RaftLogBatch, CF_RAFT, DATA_CFS_LEN};
+use crate::{data_cf_offset, RaftEngine, RaftLogBatch, DATA_CFS_LEN};
 
 #[derive(Debug)]
 pub struct ApplyProgress {
