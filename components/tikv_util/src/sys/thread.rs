@@ -447,7 +447,9 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
             call_thread_start_hooks();
             // SAFETY: we will call `remove_thread_memory_accessor` at
             // `before-stop_wrapper`.
-            unsafe { add_thread_memory_accessor(); }
+            unsafe {
+                add_thread_memory_accessor();
+            }
             add_thread_name_to_map();
             f();
         })
