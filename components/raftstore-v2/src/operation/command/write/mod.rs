@@ -315,22 +315,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         self.ensure_write_buffer();
         // Delete range may not fill anything in memtable if the range is fit well with
-        // sst files. If no further write/delete is performaned for this cf, flushed
-        // index and modified index in apply trace will never matched, which makes admin
-        // flush index never progress. It severely impacts raft log gc and raft log
-        // replay.
-        // So artificially add a magic delete here to make at least one element will be
-        // put in memtable.
+        // sst files or they are not overlapped. If no further write/delete is
+        // performaned for this cf, flushed index and modified index in apply
+        // trace will never matched, which makes admin flush index never
+        // progress. It severely impacts raft log gc and raft log replay.
+        // So artificially add a duplicate start_key delete here to make at least one
+        // element will be put in memtable.
         let res = if cf.is_empty() || cf == CF_DEFAULT {
-            self.write_batch
-                .as_mut()
-                .unwrap()
-                .delete(MAGIC_KEY.as_bytes())
+            self.write_batch.as_mut().unwrap().delete(&start_key)
         } else {
-            self.write_batch
-                .as_mut()
-                .unwrap()
-                .delete_cf(cf, MAGIC_KEY.as_bytes())
+            self.write_batch.as_mut().unwrap().delete_cf(cf, &start_key)
         };
         res.unwrap_or_else(|e| {
             slog_panic!(
