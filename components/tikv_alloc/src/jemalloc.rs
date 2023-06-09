@@ -27,43 +27,6 @@ lazy_static! {
         Mutex::new(HashMap::new());
 }
 
-thread_local! {
-    static MEMORY_STAT_ACCESSOR_STILL_ALIVE: AccessorStillAlive = {
-        let thd = std::thread::current();
-        let name = thd.name().unwrap_or("<unknown>").to_owned();
-        // We must store the current thread ID here,
-        // or once we are running the destructor,
-        // we probably cannot access these anymore.
-        AccessorStillAlive(name, thd.id())
-    };
-}
-
-struct AccessorStillAlive(String, ThreadId);
-
-impl Drop for AccessorStillAlive {
-    fn drop(&mut self) {
-        let mut l = match THREAD_MEMORY_MAP.lock() {
-            Ok(l) => l,
-            Err(_) => {
-                // perhaps we are panicking, don't panic again (which leads to abort).
-                eprintln!("<tikv_alloc>: the global accessor has been poisoned!");
-                return;
-            }
-        };
-
-        if let Some(accessor) = l.get_mut(&self.1) {
-            // NOTE: should we notify the code writer here? For example adding a
-            // `debug_panic` here?
-            eprintln!(
-                "<tikv_alloc>: the thread {}({:?}) exits with accessor left. forgot to call `remove_thread_memory_accessor`?",
-                self.0, self.1,
-            );
-            accessor.allocated.0 = None;
-            accessor.deallocated.0 = None;
-        }
-    }
-}
-
 /// The struct for tracing the statistic of another thread.
 /// The target pointer should be bound to some TLS of another thread, this
 /// structure is just "peeking" it -- with out modifying.
@@ -148,8 +111,6 @@ impl MemoryStatsAccessor {
 /// Make sure the `remove_thread_memory_accessor` is called before the thread
 /// exits.
 pub unsafe fn add_thread_memory_accessor() {
-    MEMORY_STAT_ACCESSOR_STILL_ALIVE.with(|_s| ());
-
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     thread_memory_map
         .entry(thread::current().id())
@@ -399,8 +360,6 @@ mod profiling {
         use std::fs;
 
         use tempfile::Builder;
-
-        use super::super::THREAD_MEMORY_MAP;
 
         const OPT_PROF: &[u8] = b"opt.prof\0";
 
