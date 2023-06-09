@@ -280,7 +280,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .peer_mut()
                     .on_persisted(self.store_ctx, peer_id, ready_number),
                 PeerMsg::LogsFetched(fetched_logs) => {
-                    self.fsm.peer_mut().on_logs_fetched(fetched_logs)
+                    self.fsm.peer_mut().on_raft_log_fetched(fetched_logs)
                 }
                 PeerMsg::SnapshotGenerated(snap_res) => {
                     self.fsm.peer_mut().on_snapshot_generated(snap_res)
