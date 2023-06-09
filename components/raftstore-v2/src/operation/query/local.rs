@@ -216,7 +216,7 @@ where
                         let snapshot_ts = monotonic_raw_now();
 
                         if !delegate.is_in_leader_lease(snapshot_ts) && !has_read_index_success {
-                            // Redirect if it's not in lease or it has not finish read index.
+                            // Redirect if it's not in lease and it has not finish read index.
                             return ReadResult::Redirect;
                         }
 
