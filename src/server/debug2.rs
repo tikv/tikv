@@ -2,6 +2,7 @@
 
 use std::{sync::Arc, thread::JoinHandle};
 
+use collections::HashSet;
 use engine_rocks::{
     raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator, RocksStatistics,
 };
@@ -471,6 +472,29 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             box_try!(self.raft_engine.consume(&mut lb, true));
         }
         Ok(errors)
+    }
+
+    pub fn remove_failed_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    ) -> Result<()> {
+        let store_id = self.get_store_ident()?.get_store_id();
+        if store_ids.iter().any(|&s| s == store_id) {
+            let msg = format!("Store {} in the failed list", store_id);
+            return Err(Error::Other(msg.into()));
+        }
+
+        let raft_engine = &self.raft_engine;
+        let store_ids = HashSet::<u64>::from_iter(store_ids);
+
+        {
+            // index of region state in raft_engine equals to
+            // applied_state.applied_index ?
+        }
+
+        Ok(())
     }
 }
 

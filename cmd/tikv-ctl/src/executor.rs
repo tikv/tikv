@@ -1349,11 +1349,14 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
 
     fn remove_fail_stores(
         &self,
-        _store_ids: Vec<u64>,
-        _region_ids: Option<Vec<u64>>,
-        _promote_learner: bool,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
     ) {
-        unimplemented!()
+        println!("removing stores {:?} from configurations...", store_ids);
+        self.remove_failed_stores(store_ids, region_ids, promote_learner)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
     }
 
     fn drop_unapplied_raftlog(&self, _region_ids: Option<Vec<u64>>) {}
