@@ -41,7 +41,7 @@ use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{
-    kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp},
+    kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp, ResourceControlContext},
     pdpb::QueryKind,
 };
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
@@ -380,7 +380,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
     fn acquire_lock_on_wakeup(
         &self,
         cid: u64,
-    ) -> Result<Option<Task>, (String, CommandPri, StorageError)> {
+    ) -> Result<Option<Task>, (ResourceControlContext, CommandPri, StorageError)> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests
@@ -393,7 +393,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
             // acquired count is one more than the `owned_count` recorded in the
             // lock, so we increase one to make `release` work.
             tctx.lock.owned_count += 1;
-            return Err((cmd.group_name(), cmd.priority(), e.into()));
+            return Err((cmd.resource_control_ctx().clone(), cmd.priority(), e.into()));
         }
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
@@ -568,7 +568,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let deadline = cmd.deadline();
         let sched = self.clone();
         self.get_sched_pool()
-            .spawn(&cmd.group_name(), cmd.priority(), async move {
+            .spawn(cmd.resource_control_ctx(), cmd.priority(), async move {
                 match unsafe {
                     with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx))
                 } {
@@ -622,12 +622,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.execute(task);
             }
             Ok(None) => {}
-            Err((group_name, pri, err)) => {
+            Err((resource_control_ctx, pri, err)) => {
                 // Spawn the finish task to the pool to avoid stack overflow
                 // when many queuing tasks fail successively.
                 let this = self.clone();
                 self.get_sched_pool()
-                    .spawn(&group_name, pri, async move {
+                    .spawn(&resource_control_ctx, pri, async move {
                         this.finish_with_err(cid, err);
                     })
                     .unwrap();
@@ -666,9 +666,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     fn execute(&self, mut task: Task) {
         set_tls_tracker_token(task.tracker);
         let sched = self.clone();
+        let resource_control_ctx = task.cmd.resource_control_ctx().clone();
 
         self.get_sched_pool()
-            .spawn(&task.cmd.group_name(), task.cmd.priority(), async move {
+            .spawn(&resource_control_ctx, task.cmd.priority(), async move {
                 fail_point!("scheduler_start_execute");
                 if sched.check_task_deadline_exceeded(&task) {
                     return;
@@ -784,7 +785,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         async_apply_prewrite: bool,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
         tag: CommandKind,
-        group_name: &str,
+        resource_control_ctx: &ResourceControlContext,
         sched_details: &SchedulerDetails,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
@@ -842,7 +843,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.on_acquired_locks_finished(group_name, new_acquired_locks);
+        self.on_acquired_locks_finished(&resource_control_ctx, new_acquired_locks);
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -929,7 +930,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_release_locks(
         &self,
-        group_name: &str,
+        resource_control_ctx: &ResourceControlContext,
         released_locks: ReleasedLocks,
     ) -> SVec<Box<LockWaitEntry>> {
         // This function is always called when holding the latch of the involved keys.
@@ -973,7 +974,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         if !legacy_wake_up_list.is_empty() || !delay_wake_up_futures.is_empty() {
             self.wake_up_legacy_pessimistic_locks(
-                group_name,
+                &resource_control_ctx,
                 legacy_wake_up_list,
                 delay_wake_up_futures,
             );
@@ -984,7 +985,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_acquired_locks_finished(
         &self,
-        group_name: &str,
+        resource_control_ctx: &ResourceControlContext,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
     ) {
         if new_acquired_locks.is_empty() || self.inner.lock_wait_queues.is_empty() {
@@ -1000,7 +1001,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
             self.get_sched_pool()
-                .spawn(group_name, CommandPri::High, async move {
+                .spawn(&resource_control_ctx, CommandPri::High, async move {
                     lock_wait_queues.update_lock_wait(new_acquired_locks);
                 })
                 .unwrap();
@@ -1009,16 +1010,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn wake_up_legacy_pessimistic_locks(
         &self,
-        group_name: &str,
+        resource_control_ctx: &ResourceControlContext,
         legacy_wake_up_list: impl IntoIterator<Item = (Box<LockWaitEntry>, ReleasedLock)>
         + Send
         + 'static,
         delayed_wake_up_futures: impl IntoIterator<Item = DelayedNotifyAllFuture> + Send + 'static,
     ) {
         let self1 = self.clone();
-        let group_name1 = group_name.to_owned();
+        let resource_control_ctx1 = resource_control_ctx.clone();
         self.get_sched_pool()
-            .spawn(group_name, CommandPri::High, async move {
+            .spawn(&resource_control_ctx, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
@@ -1038,7 +1039,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     let self2 = self1.clone();
                     self1
                         .get_sched_pool()
-                        .spawn(&group_name1, CommandPri::High, async move {
+                        .spawn(&resource_control_ctx1, CommandPri::High, async move {
                             let res = f.await;
                             if let Some(resumable_lock_wait_entry) = res {
                                 self2.schedule_awakened_pessimistic_locks(
@@ -1162,7 +1163,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
-        let group_name = task.cmd.group_name();
+        let resource_control_ctx = task.cmd.resource_control_ctx().clone();
         let tracker = task.tracker;
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
@@ -1313,7 +1314,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
 
         let woken_up_resumable_entries = if !released_locks.is_empty() {
-            scheduler.on_release_locks(&group_name, released_locks)
+            scheduler.on_release_locks(&resource_control_ctx, released_locks)
         } else {
             smallvec![]
         };
@@ -1334,7 +1335,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 new_acquired_locks,
                 tag,
-                &group_name,
+                &resource_control_ctx,
                 sched_details,
             );
             return;
@@ -1366,7 +1367,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 new_acquired_locks,
                 tag,
-                &group_name,
+                &resource_control_ctx,
                 sched_details,
             );
             return;
@@ -1556,7 +1557,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         is_async_apply_prewrite,
                         new_acquired_locks,
                         tag,
-                        &group_name,
+                        &resource_control_ctx,
                         sched_details,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC

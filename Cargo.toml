@@ -21,37 +21,15 @@ snmalloc = ["tikv_alloc/snmalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
-failpoints = [
-  "fail/failpoints",
-  "raftstore/failpoints",
-  "tikv_util/failpoints",
-  "engine_rocks/failpoints",
-]
-cloud-aws = [
-  "encryption_export/cloud-aws",
-  "sst_importer/cloud-aws",
-]
-cloud-gcp = [
-  "encryption_export/cloud-gcp",
-  "sst_importer/cloud-gcp",
-]
-cloud-azure = [
-  "encryption_export/cloud-azure",
-  "sst_importer/cloud-azure",
-]
+failpoints = ["fail/failpoints", "raftstore/failpoints", "tikv_util/failpoints", "engine_rocks/failpoints"]
+cloud-aws = ["encryption_export/cloud-aws", "sst_importer/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp", "sst_importer/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure", "sst_importer/cloud-azure"]
 testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport"]
-test-engine-kv-rocksdb = [
-  "engine_test/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "engine_test/test-engine-raft-raft-engine"
-]
-test-engines-rocksdb = [
-  "engine_test/test-engines-rocksdb",
-]
-test-engines-panic = [
-  "engine_test/test-engines-panic",
-]
+test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
+test-engines-panic = ["engine_test/test-engines-panic"]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 pprof-fp = ["pprof/frame-pointer"]

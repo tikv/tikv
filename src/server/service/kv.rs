@@ -197,9 +197,9 @@ macro_rules! handle_request {
             let begin_instant = Instant::now();
 
             let source = req.mut_context().take_request_source();
-            let resource_control_ctx = req.get_context().get_resource_control_context();
+            let resource_control_ctx = req.get_context().get_resource_control_context().clone();
             if let Some(resource_manager) = &self.resource_manager {
-                resource_manager.consume_penalty(resource_control_ctx);
+                resource_manager.consume_penalty(&resource_control_ctx);
             }
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -479,9 +479,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.mut_context().take_request_source();
-        let resource_control_ctx = req.get_context().get_resource_control_context();
+        let resource_control_ctx = req.get_context().get_resource_control_context().clone();
         if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_penalty(resource_control_ctx);
+            resource_manager.consume_penalty(&resource_control_ctx);
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
             .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -517,9 +517,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
         let source = req.mut_context().take_request_source();
-        let resource_control_ctx = req.get_context().get_resource_control_context();
+        let resource_control_ctx = req.get_context().get_resource_control_context().clone();
         if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_penalty(resource_control_ctx);
+            resource_manager.consume_penalty(&resource_control_ctx);
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
             .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -606,9 +606,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         mut sink: ServerStreamingSink<Response>,
     ) {
         let begin_instant = Instant::now();
-        let resource_control_ctx = req.get_context().get_resource_control_context();
+        let resource_control_ctx = req.get_context().get_resource_control_context().clone();
         if let Some(resource_manager) = &self.resource_manager {
-            resource_manager.consume_penalty(resource_control_ctx);
+            resource_manager.consume_penalty(&resource_control_ctx);
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
             .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -1150,9 +1150,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default());
                 },
                 Some(batch_commands_request::request::Cmd::Get(mut req)) => {
-                    let resource_control_ctx = req.get_context().get_resource_control_context();
+                    let resource_control_ctx = req.get_context().get_resource_control_context().clone();
                     if let Some(resource_manager) = resource_manager {
-                        resource_manager.consume_penalty(resource_control_ctx);
+                        resource_manager.consume_penalty(&resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -1171,9 +1171,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
-                    let resource_control_ctx = req.get_context().get_resource_control_context();
+                    let resource_control_ctx = req.get_context().get_resource_control_context().clone();
                     if let Some(resource_manager) = resource_manager {
-                        resource_manager.consume_penalty(resource_control_ctx);
+                        resource_manager.consume_penalty(&resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -1192,9 +1192,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
-                    let resource_control_ctx = req.get_context().get_resource_control_context();
+                    let resource_control_ctx = req.get_context().get_resource_control_context().clone();
                     if let Some(resource_manager) = resource_manager {
-                        resource_manager.consume_penalty(resource_control_ctx);
+                        resource_manager.consume_penalty(&resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -1226,9 +1226,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
-                    let resource_control_ctx = req.get_context().get_resource_control_context();
+                    let resource_control_ctx = req.get_context().get_resource_control_context().clone();
                     if let Some(resource_manager) = resource_manager {
-                        resource_manager.consume_penalty(resource_control_ctx);
+                        resource_manager.consume_penalty(&resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name()])

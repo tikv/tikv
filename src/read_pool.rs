@@ -13,10 +13,13 @@ use std::{
 
 use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
-use kvproto::{errorpb, kvrpcpb::CommandPri};
+use kvproto::{
+    errorpb,
+    kvrpcpb::{CommandPri, ResourceControlContext},
+};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
-use resource_control::{ControlledFuture, ResourceController};
+use resource_control::{ControlledFuture, ResourceController, TaskMetadata};
 use thiserror::Error;
 use tikv_util::{
     sys::{cpu_time::ProcessStat, SysQuota},
@@ -120,7 +123,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        group_meta: Vec<u8>,
+        resource_control_ctx: &ResourceControlContext,
     ) -> Result<(), ReadPoolError>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -162,7 +165,11 @@ impl ReadPoolHandle {
                     CommandPri::Low => Some(2),
                 };
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
-                extras.set_metadata(group_meta.clone());
+                let metadata = TaskMetadata {
+                    group_name: resource_control_ctx.get_resource_group_name().to_owned(),
+                    override_priority: resource_control_ctx.get_override_priority() as u32,
+                };
+                extras.set_metadata(metadata.to_vec());
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
                     TaskCell::new(
                         TrackedFuture::new(ControlledFuture::new(
@@ -171,7 +178,10 @@ impl ReadPoolHandle {
                                 running_tasks.dec();
                             },
                             resource_ctl.clone(),
-                            group_meta,
+                            resource_control_ctx
+                                .get_resource_group_name()
+                                .as_bytes()
+                                .to_owned(),
                         )),
                         extras,
                     )
@@ -195,7 +205,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        group_meta: Vec<u8>,
+        resource_control_ctx: &ResourceControlContext,
     ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
         F: Future<Output = T> + Send + 'static,
@@ -209,7 +219,7 @@ impl ReadPoolHandle {
             },
             priority,
             task_id,
-            group_meta,
+            resource_control_ctx,
         );
         async move {
             res?;
