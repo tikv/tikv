@@ -1,6 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 use engine_traits::{
     MiscExt, RaftEngineReadOnly, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS,
@@ -9,7 +12,7 @@ use engine_traits::{
 // It tests that delete range for an empty cf does not block the progress of
 // persisted_applied. See the description of the PR #14905.
 #[test]
-fn test_flush_before_stop() {
+fn test_delete_range_does_not_block_flushed_index() {
     use test_raftstore_v2::*;
 
     let mut cluster = new_server_cluster(0, 3);
@@ -29,9 +32,19 @@ fn test_flush_before_stop() {
     let tablet = cache.latest().unwrap();
     tablet.flush_cfs(DATA_CFS, true).unwrap();
 
-    // wait for persist admin flush index
-    std::thread::sleep(Duration::from_secs(5));
-
-    let admin_flush = raft_engine.get_flushed_index(1, CF_RAFT).unwrap().unwrap();
-    assert!(admin_flush > 200);
+    let start = Instant::now();
+    loop {
+        let admin_flush = raft_engine.get_flushed_index(1, CF_RAFT).unwrap().unwrap();
+        if admin_flush > 200 {
+            return;
+        }
+        if start.elapsed() > Duration::from_secs(5) {
+            panic!(
+                "persisted_apply is not progressed, current persisted_apply {}",
+                admin_flush
+            );
+        }
+        // wait for persist admin flush index
+        sleep(Duration::from_millis(200));
+    }
 }
