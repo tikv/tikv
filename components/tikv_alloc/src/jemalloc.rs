@@ -84,6 +84,22 @@ struct MemoryStatsAccessor {
     allocated: PeekableRemoteStat<u64>,
     deallocated: PeekableRemoteStat<u64>,
     thread_name: String,
+
+    #[cfg(test)]
+    removal: bool,
+}
+
+#[cfg(test)]
+impl Drop for MemoryStatsAccessor {
+    fn drop(&mut self) {
+        // Don't panic during panicking, or we may lose the stack trace.
+        if !self.removal && !std::thread::panicking() {
+            panic!(
+                "the memory stats accessor for thread {} isn't removed!",
+                self.thread_name
+            );
+        }
+    }
 }
 
 impl MemoryStatsAccessor {
@@ -122,13 +138,20 @@ pub unsafe fn add_thread_memory_accessor() {
                 thread_name: thread::current().name().unwrap_or("<unknown>").to_string(),
                 allocated,
                 deallocated,
+                #[cfg(test)]
+                removal: false,
             }
         });
 }
 
 pub fn remove_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    #[cfg(not(test))]
     thread_memory_map.remove(&thread::current().id());
+    #[cfg(test)]
+    if let Some(mut a) = thread_memory_map.remove(&thread::current().id()) {
+        a.removal = true;
+    }
 }
 
 use std::thread::ThreadId;

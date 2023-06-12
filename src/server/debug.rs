@@ -371,11 +371,7 @@ impl<ER: RaftEngine> DebuggerImpl<ER> {
                         log_wrappers::Value::key(&start_key),
                         log_wrappers::Value::key(&end_key)
                     );
-
-                    let result =
-                        recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index);
-
-                    result
+                    recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
                 })
                 .unwrap();
 

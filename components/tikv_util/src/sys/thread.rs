@@ -431,8 +431,7 @@ impl StdThreadBuildWrapper for std::thread::Builder {
                 remove_thread_name_from_map();
                 remove_thread_memory_accessor();
             }};
-            let res = f();
-            res
+            f()
         })
     }
 }
@@ -477,6 +476,12 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
         #[allow(clippy::disallowed_methods)]
         self.after_start(move |_| {
             call_thread_start_hooks();
+            // SAFETY: we will call `remove_thread_memory_accessor` at
+            // `before-stop_wrapper`.
+            // FIXME: What if the user only calls `after_start_wrapper`?
+            unsafe {
+                add_thread_memory_accessor();
+            }
             add_thread_name_to_map();
             f();
         })
@@ -490,6 +495,7 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
         self.before_stop(move |_| {
             f();
             remove_thread_name_from_map();
+            remove_thread_memory_accessor();
         })
     }
 }
