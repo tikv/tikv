@@ -1254,7 +1254,7 @@ where
                 let flush_msg = PeerMsg::FlushBeforeClose { tx };
                 if let Err(e) = router.store_router().force_send(region_id, flush_msg) {
                     warn!(
-                        "flush-before_close: force send error",
+                        "flush-before_close: force send error";
                         "error" => ?e,
                         "region_id" => region_id,
                     );
