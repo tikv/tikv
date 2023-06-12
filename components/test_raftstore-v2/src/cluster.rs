@@ -1167,6 +1167,30 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn wait_last_index(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        expected: u64,
+        timeout: Duration,
+    ) {
+        let timer = Instant::now();
+        loop {
+            let raft_state = self.raft_local_state(region_id, store_id);
+            let cur_index = raft_state.get_last_index();
+            if cur_index >= expected {
+                return;
+            }
+            if timer.saturating_elapsed() >= timeout {
+                panic!(
+                    "[region {}] last index still not reach {}: {:?}",
+                    region_id, expected, raft_state
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn wait_applied_index(&mut self, region_id: u64, store_id: u64, index: u64) {
         let timer = Instant::now();
         loop {
