@@ -128,7 +128,6 @@ pub unsafe fn add_thread_memory_accessor() {
 
 pub fn remove_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    #[cfg(not(test))]
     thread_memory_map.remove(&thread::current().id());
 }
 
