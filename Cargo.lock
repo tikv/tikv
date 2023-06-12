@@ -6187,7 +6187,6 @@ dependencies = [
  "raft",
  "raft_log_engine",
  "raftstore",
- "raftstore-v2",
  "rand 0.8.5",
  "rand_xorshift",
  "resource_control",
