@@ -20,8 +20,9 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequ
 use protobuf::Message;
 use raftstore::{
     store::{
-        fsm::new_admin_request, metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport,
-        WriteTask, RAFT_INIT_LOG_INDEX,
+        entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME, fsm::new_admin_request,
+        metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport, WriteTask,
+        RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
@@ -42,6 +43,8 @@ pub struct CompactLogContext {
     skipped_ticks: usize,
     approximate_log_size: u64,
     last_applying_index: u64,
+    /// The index of last compacted raft log.
+    last_compacted_idx: u64,
     /// Tombstone tablets can only be destroyed when the tablet that replaces it
     /// is persisted. This is a list of tablet index that awaits to be
     /// persisted. When persisted_apply is advanced, we need to notify tablet
@@ -55,6 +58,7 @@ impl CompactLogContext {
             skipped_ticks: 0,
             approximate_log_size: 0,
             last_applying_index,
+            last_compacted_idx: 0,
             tombstone_tablets_wait_index: vec![],
         }
     }
@@ -80,6 +84,14 @@ impl CompactLogContext {
     #[inline]
     pub fn last_applying_index(&self) -> u64 {
         self.last_applying_index
+    }
+
+    pub fn set_last_compacted_idx(&mut self, index: u64) {
+        self.last_compacted_idx = index;
+    }
+
+    pub fn last_compacted_idx(&self) -> u64 {
+        self.last_compacted_idx
     }
 }
 
@@ -454,7 +466,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             res.compact_index,
             self.compact_log_context().last_applying_index
         );
-        // TODO: check entry_cache_warmup_state
+
+        // Since this peer may be warming up the entry cache, log compaction should be
+        // temporarily skipped. Otherwise, the warmup task may fail.
+        if let Some(state) = self.entry_storage_mut().entry_cache_warmup_state_mut() {
+            if !state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
+                return;
+            }
+        }
+
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
         self.storage_mut()
@@ -464,7 +484,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .entry_storage_mut()
             .apply_state_mut()
             .mut_truncated_state();
-        let old_truncated = truncated_state.get_index();
         truncated_state.set_index(res.compact_index);
         truncated_state.set_term(res.compact_term);
 
@@ -476,8 +495,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .unwrap();
         self.set_has_extra_write();
 
-        // All logs < perssited_apply will be deleted, so should check with +1.
-        if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index()
+        // All logs < persisted_apply will be deleted.
+        let prev_first_index = first_index;
+        if prev_first_index < self.storage().apply_trace().persisted_apply_index()
             && let Some(index) = self.compact_log_index()
         {
             // Raft Engine doesn't care about first index.
@@ -487,12 +507,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             {
                 error!(self.logger, "failed to compact raft logs"; "err" => ?e);
             }
+            self.compact_log_context_mut().set_last_compacted_idx(index);
             // Extra write set right above.
         }
 
         let context = self.compact_log_context_mut();
         let applied = context.last_applying_index;
-        let total_cnt = applied - old_truncated;
+        let total_cnt = applied - prev_first_index;
         let remain_cnt = applied - res.compact_index;
         context.approximate_log_size =
             (context.approximate_log_size as f64 * (remain_cnt as f64 / total_cnt as f64)) as u64;
@@ -549,9 +570,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn compact_log_index(&mut self) -> Option<u64> {
-        let truncated = self.entry_storage().truncated_index() + 1;
+        let first_index = self.entry_storage().first_index();
         let persisted_applied = self.storage().apply_trace().persisted_apply_index();
-        let compact_index = std::cmp::min(truncated, persisted_applied);
+        let compact_index = std::cmp::min(first_index, persisted_applied);
         if compact_index == RAFT_INIT_LOG_INDEX + 1 {
             // There is no logs at RAFT_INIT_LOG_INDEX, nothing to delete.
             return None;

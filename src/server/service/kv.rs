@@ -423,7 +423,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let begin_instant = Instant::now();
 
         let source = req.mut_context().take_request_source();
-        let resp = future_prepare_flashback_to_version(&self.storage, req);
+        let resp = future_prepare_flashback_to_version(self.storage.clone(), req);
         let task = async move {
             let resp = resp.await?;
             let elapsed = begin_instant.saturating_elapsed();
@@ -454,7 +454,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let begin_instant = Instant::now();
 
         let source = req.mut_context().take_request_source();
-        let resp = future_flashback_to_version(&self.storage, req);
+        let resp = future_flashback_to_version(self.storage.clone(), req);
         let task = async move {
             let resp = resp.await?;
             let elapsed = begin_instant.saturating_elapsed();
@@ -1259,8 +1259,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
         Gc, future_gc(), kv_gc;
         DeleteRange, future_delete_range(storage), kv_delete_range;
-        PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage), kv_prepare_flashback_to_version;
-        FlashbackToVersion, future_flashback_to_version(storage), kv_flashback_to_version;
+        PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage.clone()), kv_prepare_flashback_to_version;
+        FlashbackToVersion, future_flashback_to_version(storage.clone()), kv_flashback_to_version;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
         RawPut, future_raw_put(storage), raw_put;
         RawBatchPut, future_raw_batch_put(storage), raw_batch_put;
@@ -1578,65 +1578,59 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 // the actual flashback operation.
 // NOTICE: the caller needs to make sure the version we want to flashback won't
 // be between any transactions that have not been fully committed.
-fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
+pub async fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     // Keep this param to hint the type of E for the compiler.
-    storage: &Storage<E, L, F>,
+    storage: Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
-) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
-    let storage = storage.clone();
-    async move {
-        let f = storage
-            .get_engine()
-            .start_flashback(req.get_context(), req.get_start_ts());
-        let mut res = f.await.map_err(storage::Error::from);
+) -> ServerResult<PrepareFlashbackToVersionResponse> {
+    let f = storage
+        .get_engine()
+        .start_flashback(req.get_context(), req.get_start_ts());
+    let mut res = f.await.map_err(storage::Error::from);
+    if matches!(res, Ok(())) {
+        // After the region is put into the flashback state, we need to do a special
+        // prewrite to prevent `resolved_ts` from advancing.
+        let (cb, f) = paired_future_callback();
+        res = storage.sched_txn_command(req.clone().into(), cb);
         if matches!(res, Ok(())) {
-            // After the region is put into the flashback state, we need to do a special
-            // prewrite to prevent `resolved_ts` from advancing.
-            let (cb, f) = paired_future_callback();
-            res = storage.sched_txn_command(req.clone().into(), cb);
-            if matches!(res, Ok(())) {
-                res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
-            }
+            res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
         }
-        let mut resp = PrepareFlashbackToVersionResponse::default();
-        if let Some(e) = extract_region_error(&res) {
-            resp.set_region_error(e);
-        } else if let Err(e) = res {
-            resp.set_error(format!("{}", e));
-        }
-        Ok(resp)
     }
+    let mut resp = PrepareFlashbackToVersionResponse::default();
+    if let Some(e) = extract_region_error(&res) {
+        resp.set_region_error(e);
+    } else if let Err(e) = res {
+        resp.set_error(format!("{}", e));
+    }
+    Ok(resp)
 }
 
 // Flashback the region to a specific point with the given `version`, please
 // make sure the region is "locked" by `PrepareFlashbackToVersion` first,
 // otherwise this request will fail.
-fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
-    storage: &Storage<E, L, F>,
+pub async fn future_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
+    storage: Storage<E, L, F>,
     req: FlashbackToVersionRequest,
-) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
-    let storage = storage.clone();
-    async move {
-        // Perform the data flashback transaction command. We will check if the region
-        // is in the flashback state when proposing the flashback modification.
-        let (cb, f) = paired_future_callback();
-        let mut res = storage.sched_txn_command(req.clone().into(), cb);
-        if matches!(res, Ok(())) {
-            res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
-        }
-        if matches!(res, Ok(())) {
-            // Only finish when flashback executed successfully.
-            let f = storage.get_engine().end_flashback(req.get_context());
-            res = f.await.map_err(storage::Error::from);
-        }
-        let mut resp = FlashbackToVersionResponse::default();
-        if let Some(err) = extract_region_error(&res) {
-            resp.set_region_error(err);
-        } else if let Err(e) = res {
-            resp.set_error(format!("{}", e));
-        }
-        Ok(resp)
+) -> ServerResult<FlashbackToVersionResponse> {
+    // Perform the data flashback transaction command. We will check if the region
+    // is in the flashback state when proposing the flashback modification.
+    let (cb, f) = paired_future_callback();
+    let mut res = storage.sched_txn_command(req.clone().into(), cb);
+    if matches!(res, Ok(())) {
+        res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
     }
+    if matches!(res, Ok(())) {
+        // Only finish when flashback executed successfully.
+        let f = storage.get_engine().end_flashback(req.get_context());
+        res = f.await.map_err(storage::Error::from);
+    }
+    let mut resp = FlashbackToVersionResponse::default();
+    if let Some(err) = extract_region_error(&res) {
+        resp.set_region_error(err);
+    } else if let Err(e) = res {
+        resp.set_error(format!("{}", e));
+    }
+    Ok(resp)
 }
 
 fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(

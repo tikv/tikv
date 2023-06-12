@@ -920,7 +920,7 @@ pub mod merge_helper {
 pub mod life_helper {
     use std::assert_matches::assert_matches;
 
-    use engine_traits::RaftEngine;
+    use engine_traits::RaftEngineDebug;
     use kvproto::raft_serverpb::{ExtraMessageType, PeerState};
 
     use super::*;
@@ -951,7 +951,11 @@ pub mod life_helper {
 
     // TODO: make raft engine support more suitable way to verify range is empty.
     /// Verify all states in raft engine are cleared.
-    pub fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb::Peer) {
+    pub fn assert_tombstone(
+        raft_engine: &impl RaftEngineDebug,
+        region_id: u64,
+        peer: &metapb::Peer,
+    ) {
         let mut buf = vec![];
         raft_engine.get_all_entries_to(region_id, &mut buf).unwrap();
         assert!(buf.is_empty(), "{:?}", buf);
