@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, thread::JoinHandle};
 
 use engine_rocks::{
     raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator, RocksStatistics,
@@ -17,10 +17,23 @@ use kvproto::{
     raft_serverpb::{PeerState, RegionLocalState, StoreIdent},
 };
 use nom::AsBytes;
+<<<<<<< HEAD
 use raft::prelude::Entry;
 use raftstore::store::util::check_key_in_region;
+=======
+use raft::{prelude::Entry, RawNode};
+use raftstore::{
+    coprocessor::{get_region_approximate_middle, get_region_approximate_size},
+    store::util::check_key_in_region,
+};
+use raftstore_v2::Storage;
+use slog::o;
+use tikv_util::{
+    config::ReadableSize, store::find_peer, sys::thread::StdThreadBuildWrapper, worker::Worker,
+};
+>>>>>>> 1391934474 (tikv-ctl: implement region recover for raftstore-v2 (#14869))
 
-use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use super::debug::{recover_mvcc_for_range, BottommostLevelCompaction, Debugger, RegionInfo};
 use crate::{
     config::ConfigController,
     server::debug::{Error, Result},
@@ -211,6 +224,315 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             raft_statistics: None,
         }
     }
+<<<<<<< HEAD
+=======
+
+    pub fn recover_regions(
+        &self,
+        regions: Vec<metapb::Region>,
+        read_only: bool,
+    ) -> Result<Vec<(u64, Error)>> {
+        let mut errors = Vec::with_capacity(regions.len());
+        for region in regions {
+            let region_id = region.get_id();
+            let region_state = box_try!(self.raft_engine.get_region_state(region_id, u64::MAX))
+                .ok_or_else(|| Error::NotFound(format!("Not found region {:?}", region_id)))?;
+            if region_state.get_state() != PeerState::Normal {
+                info!(
+                    "skip region";
+                    "region_id" => region_id,
+                    "peer_state" => ?region_state.get_state(),
+                );
+                continue;
+            }
+
+            let mut tablet_cache =
+                get_tablet_cache(&self.tablet_reg, region_id, Some(region_state))?;
+            let tablet = tablet_cache.latest().unwrap();
+
+            if let Err(e) = recover_mvcc_for_range(
+                tablet,
+                region.get_start_key(),
+                region.get_end_key(),
+                read_only,
+                0,
+            ) {
+                errors.push((region_id, e));
+            }
+        }
+
+        Ok(errors)
+    }
+
+    pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
+        info!("Calculating split keys...");
+
+        let region_groups =
+            deivde_regions_for_concurrency(&self.raft_engine, &self.tablet_reg, threads as u64)?;
+
+        let mut handles = Vec::new();
+        for (thread_index, region_group) in region_groups.into_iter().enumerate() {
+            let props = tikv_util::thread_group::current_properties();
+
+            let mut tablets = vec![];
+            for r in &region_group {
+                let mut cache = get_tablet_cache(&self.tablet_reg, r.get_id(), None).unwrap();
+                tablets.push(cache.latest().unwrap().clone());
+            }
+            let thread = std::thread::Builder::new()
+                .name(format!("mvcc-recover-thread-{}", thread_index))
+                .spawn_wrapper(move || {
+                    tikv_util::thread_group::set_properties(props);
+                    tikv_alloc::add_thread_memory_accessor();
+
+                    let mut results = vec![];
+                    for (region, tablet) in region_group.into_iter().zip(tablets) {
+                        info!(
+                            "mvcc recover";
+                            "thread_index" => thread_index,
+                            "region" => ?region,
+                        );
+                        results.push(recover_mvcc_for_range(
+                            &tablet,
+                            region.get_start_key(),
+                            region.get_end_key(),
+                            read_only,
+                            thread_index,
+                        ));
+                    }
+
+                    tikv_alloc::remove_thread_memory_accessor();
+                    results
+                })
+                .unwrap();
+
+            handles.push(thread);
+        }
+
+        let res = handles
+            .into_iter()
+            .map(|h: JoinHandle<Vec<Result<()>>>| h.join())
+            .map(|results| {
+                if let Err(e) = &results {
+                    error!("{:?}", e);
+                } else {
+                    for r in results.as_ref().unwrap() {
+                        if let Err(e) = r {
+                            error!("{:?}", e);
+                        }
+                    }
+                }
+                results
+            })
+            .all(|results| {
+                if results.is_err() {
+                    return false;
+                }
+                for r in &results.unwrap() {
+                    if !r.is_ok() {
+                        return false;
+                    }
+                }
+                true
+            });
+
+        if res {
+            Ok(())
+        } else {
+            Err(box_err!("Not all threads finished successfully."))
+        }
+    }
+
+    pub fn bad_regions(&self) -> Result<Vec<(u64, Error)>> {
+        let store_id = self.get_store_ident()?.get_store_id();
+        let mut res = Vec::new();
+        let fake_read_worker = Worker::new("fake-read-worker").lazy_build("fake-read-worker");
+
+        let logger = slog_global::borrow_global().new(o!());
+        let check_region_state = |region_id: u64| -> Result<()> {
+            let region_state =
+                box_try!(self.raft_engine.get_region_state(region_id, u64::MAX)).unwrap();
+            match region_state.get_state() {
+                PeerState::Tombstone | PeerState::Applying => return Ok(()),
+                _ => {}
+            }
+
+            let region = region_state.get_region();
+            let peer_id = find_peer(region, store_id)
+                .map(|peer| peer.get_id())
+                .ok_or_else(|| {
+                    Error::Other(
+                        format!(
+                            "RegionLocalState doesn't contains peer itself, {:?}",
+                            region_state
+                        )
+                        .into(),
+                    )
+                })?;
+
+            let logger = logger.new(o!("region_id" => region_id, "peer_id" => peer_id));
+            let storage = box_try!(Storage::<RocksEngine, ER>::new(
+                region_id,
+                store_id,
+                self.raft_engine.clone(),
+                fake_read_worker.scheduler(),
+                &logger
+            ))
+            .unwrap();
+
+            let raft_cfg = raft::Config {
+                id: peer_id,
+                election_tick: 10,
+                heartbeat_tick: 2,
+                max_size_per_msg: ReadableSize::mb(1).0,
+                max_inflight_msgs: 256,
+                check_quorum: true,
+                skip_bcast_commit: true,
+                ..Default::default()
+            };
+
+            box_try!(RawNode::new(&raft_cfg, storage, &logger));
+            Ok(())
+        };
+
+        box_try!(
+            self.raft_engine
+                .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                    if let Err(e) = check_region_state(region_id) {
+                        res.push((region_id, e));
+                    }
+
+                    Ok(())
+                })
+        );
+
+        Ok(res)
+    }
+
+    /// Set regions to tombstone by manual, and apply other status(such as
+    /// peers, version, and key range) from `region` which comes from PD
+    /// normally.
+    pub fn set_region_tombstone(&self, regions: Vec<metapb::Region>) -> Result<Vec<(u64, Error)>> {
+        let store_id = self.get_store_ident()?.get_store_id();
+        let mut lb = self.raft_engine.log_batch(regions.len());
+
+        let mut errors = Vec::with_capacity(regions.len());
+        for region in regions {
+            let region_id = region.get_id();
+            if let Err(e) = set_region_tombstone(&self.raft_engine, store_id, region, &mut lb) {
+                errors.push((region_id, e));
+            }
+        }
+
+        if errors.is_empty() {
+            box_try!(self.raft_engine.consume(&mut lb, true));
+        }
+
+        Ok(errors)
+    }
+
+    pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) -> Result<Vec<(u64, Error)>> {
+        let mut lb = self.raft_engine.log_batch(regions.len());
+        let mut errors = Vec::with_capacity(regions.len());
+        for region_id in regions {
+            let mut region_state = match self
+                .raft_engine
+                .get_region_state(region_id, u64::MAX)
+                .map_err(|e| box_err!(e))
+                .and_then(|s| s.ok_or_else(|| Error::Other("Can't find RegionLocalState".into())))
+            {
+                Ok(region_state) => region_state,
+                Err(e) => {
+                    errors.push((region_id, e));
+                    continue;
+                }
+            };
+
+            let apply_state = match self
+                .raft_engine
+                .get_apply_state(region_id, u64::MAX)
+                .map_err(|e| box_err!(e))
+                .and_then(|s| s.ok_or_else(|| Error::Other("Can't find RaftApplyState".into())))
+            {
+                Ok(apply_state) => apply_state,
+                Err(e) => {
+                    errors.push((region_id, e));
+                    continue;
+                }
+            };
+
+            if region_state.get_state() == PeerState::Tombstone {
+                info!("skip {} because it's already tombstone", region_id);
+                continue;
+            }
+            region_state.set_state(PeerState::Tombstone);
+            box_try!(lb.put_region_state(
+                region_id,
+                apply_state.get_applied_index(),
+                &region_state
+            ));
+        }
+
+        if errors.is_empty() {
+            box_try!(self.raft_engine.consume(&mut lb, true));
+        }
+        Ok(errors)
+    }
+}
+
+fn set_region_tombstone<ER: RaftEngine>(
+    raft_engine: &ER,
+    store_id: u64,
+    region: metapb::Region,
+    lb: &mut <ER as RaftEngine>::LogBatch,
+) -> Result<()> {
+    let id = region.get_id();
+
+    let mut region_state = raft_engine
+        .get_region_state(id, u64::MAX)
+        .map_err(|e| box_err!(e))
+        .and_then(|s| s.ok_or_else(|| Error::Other("Can't find RegionLocalState".into())))?;
+    if region_state.get_state() == PeerState::Tombstone {
+        return Ok(());
+    }
+
+    let peer_id = region_state
+        .get_region()
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .map(|p| p.get_id())
+        .ok_or_else(|| Error::Other("RegionLocalState doesn't contains the peer itself".into()))?;
+
+    let old_conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
+    let new_conf_ver = region.get_region_epoch().get_conf_ver();
+    if new_conf_ver <= old_conf_ver {
+        return Err(box_err!(
+            "invalid conf_ver: please make sure you have removed the peer by PD"
+        ));
+    }
+
+    // If the store is not in peers, or it's still in but its peer_id
+    // has changed, we know the peer is marked as tombstone success.
+    let scheduled = region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .map_or(true, |p| p.get_id() != peer_id);
+    if !scheduled {
+        return Err(box_err!("The peer is still in target peers"));
+    }
+
+    let apply_state = raft_engine
+        .get_apply_state(id, u64::MAX)
+        .map_err(|e| box_err!(e))
+        .and_then(|s| s.ok_or_else(|| Error::Other("Can't find RaftApplyState".into())))?;
+    region_state.set_state(PeerState::Tombstone);
+    region_state.set_region(region);
+    box_try!(lb.put_region_state(id, apply_state.get_applied_index(), &region_state));
+
+    Ok(())
+>>>>>>> 1391934474 (tikv-ctl: implement region recover for raftstore-v2 (#14869))
 }
 
 impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
@@ -303,20 +625,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             ));
         }
 
-        let mut region_states = vec![];
-        self.raft_engine
-            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
-                let region_state = self
-                    .raft_engine
-                    .get_region_state(region_id, u64::MAX)
-                    .unwrap()
-                    .unwrap();
-                if region_state.state == PeerState::Normal {
-                    region_states.push(region_state);
-                }
-                Ok(())
-            })
-            .unwrap();
+        let mut region_states = get_all_region_states_with_normal_state(&self.raft_engine);
 
         region_states.sort_by(|r1, r2| {
             r1.get_region()
@@ -582,6 +891,88 @@ fn get_tablet_cache(
     }
 }
 
+fn get_all_region_states_with_normal_state<ER: RaftEngine>(
+    raft_engine: &ER,
+) -> Vec<RegionLocalState> {
+    let mut region_states = vec![];
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+            let region_state = raft_engine
+                .get_region_state(region_id, u64::MAX)
+                .unwrap()
+                .unwrap();
+            if region_state.state == PeerState::Normal {
+                region_states.push(region_state);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    region_states
+}
+
+// This method devide all regions into `threads` of groups where each group has
+// similar data volume (estimated by region size) so that we use `threads` of
+// threads to execute them concurrently.
+// Note: we cannot guarantee that we can divde them into exactly `threads` of
+// groups for some cases, ex: [0, 0, 0, 0, 0, 100], we can at most return two
+// groups for this.
+fn deivde_regions_for_concurrency<ER: RaftEngine>(
+    raft_engine: &ER,
+    registry: &TabletRegistry<RocksEngine>,
+    threads: u64,
+) -> Result<Vec<Vec<metapb::Region>>> {
+    let region_states = get_all_region_states_with_normal_state(raft_engine);
+
+    if threads == 1 {
+        return Ok(vec![
+            region_states
+                .into_iter()
+                .map(|mut r| r.take_region())
+                .collect(),
+        ]);
+    }
+
+    let mut regions_groups = vec![];
+    let mut region_sizes = vec![];
+    let mut total_size = 0;
+    for region_state in region_states {
+        let mut tablet_cache = get_tablet_cache(
+            registry,
+            region_state.get_region().get_id(),
+            Some(region_state.clone()),
+        )?;
+        let tablet = tablet_cache.latest().unwrap();
+        let region_size = box_try!(get_region_approximate_size(
+            tablet,
+            region_state.get_region(),
+            0
+        ));
+        region_sizes.push((region_size, region_state));
+        total_size += region_size;
+    }
+    region_sizes.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let group_size = (total_size + threads - 1) / threads;
+    let mut cur_group = vec![];
+    let mut cur_size = 0;
+    for (region_size, mut region_state) in region_sizes.into_iter() {
+        cur_group.push(region_state.take_region());
+        cur_size += region_size;
+        if cur_size >= group_size {
+            cur_size = 0;
+            regions_groups.push(cur_group);
+            cur_group = vec![];
+        }
+    }
+    if !cur_group.is_empty() {
+        regions_groups.push(cur_group);
+    }
+
+    assert!(regions_groups.len() <= threads as usize);
+    Ok(regions_groups)
+}
+
 // `key1` and `key2` should both be start_key or end_key.
 fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
     if end_key && key1.is_empty() {
@@ -614,10 +1005,26 @@ fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
 mod tests {
     use std::path::Path;
 
+<<<<<<< HEAD
     use engine_traits::{RaftLogBatch, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::{metapb, raft_serverpb::*};
     use raft::prelude::EntryType;
     use raft_log_engine::RaftLogEngine;
+=======
+    use collections::HashMap;
+    use engine_traits::{
+        RaftEngineReadOnly, RaftLogBatch, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
+        DATA_CFS,
+    };
+    use kvproto::{
+        metapb::{self, Peer, PeerRole},
+        raft_serverpb::*,
+    };
+    use raft::prelude::EntryType;
+    use raft_log_engine::RaftLogEngine;
+    use raftstore::store::RAFT_INIT_LOG_INDEX;
+    use tikv_util::store::new_peer;
+>>>>>>> 1391934474 (tikv-ctl: implement region recover for raftstore-v2 (#14869))
 
     use super::*;
     use crate::{
@@ -1031,4 +1438,338 @@ mod tests {
             );
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_divide_regions_even() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+
+        let mut lb = debugger.raft_engine.log_batch(30);
+        for i in 0..20 {
+            let mut region = metapb::Region::default();
+            region.set_peers(vec![new_peer(1, i + 1)].into());
+            region.set_id(i + 1);
+            let ctx = TabletContext::new(&region, Some(5));
+            let mut cache = debugger.tablet_reg.load(ctx, true).unwrap();
+            let tablet = cache.latest().unwrap();
+            for j in 0..10 {
+                // (6 + 3) * 10
+                let k = format!("zk{:04}", i * 100 + j);
+                tablet.put(k.as_bytes(), b"val").unwrap();
+            }
+            tablet.flush_cfs(DATA_CFS, true).unwrap();
+
+            let mut region_state = RegionLocalState::default();
+            region_state.set_region(region);
+            region_state.set_tablet_index(5);
+            lb.put_region_state(i + 1, 5, &region_state).unwrap();
+        }
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 4).unwrap();
+        assert_eq!(groups.len(), 4);
+        for g in groups {
+            assert_eq!(g.len(), 5);
+        }
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 3).unwrap();
+        assert_eq!(groups[0].len(), 7);
+        assert_eq!(groups[1].len(), 7);
+        assert_eq!(groups[2].len(), 6);
+    }
+
+    #[test]
+    fn test_divide_regions_uneven() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+
+        let mut lb = debugger.raft_engine.log_batch(30);
+        let mut region_sizes = HashMap::default();
+        let mut total_size = 0;
+        let mut max_region_size = 0;
+        for i in 0..20 {
+            let mut region = metapb::Region::default();
+            region.set_peers(vec![new_peer(1, i + 1)].into());
+            region.set_id(i + 1);
+            let ctx = TabletContext::new(&region, Some(5));
+            let mut cache = debugger.tablet_reg.load(ctx, true).unwrap();
+            let tablet = cache.latest().unwrap();
+            for j in 0..=i {
+                let k = format!("zk{:04}", i * 100 + j);
+                tablet.put(k.as_bytes(), b"val").unwrap();
+            }
+
+            let group_size = (6 + 3) * (i + 1);
+            max_region_size = group_size;
+            total_size += group_size;
+            region_sizes.insert(i + 1, group_size);
+            tablet.flush_cfs(DATA_CFS, true).unwrap();
+
+            let mut region_state = RegionLocalState::default();
+            region_state.set_region(region);
+            region_state.set_tablet_index(5);
+            lb.put_region_state(i + 1, 5, &region_state).unwrap();
+        }
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+
+        let check_group = |groups: Vec<Vec<metapb::Region>>, group_size_threshold| {
+            let count = groups.iter().fold(0, |count, group| count + group.len());
+            assert_eq!(count, 20);
+            for (i, group) in groups.iter().enumerate() {
+                let mut current_group_size = 0;
+                for region in group {
+                    current_group_size += *region_sizes.get(&region.get_id()).unwrap();
+                }
+                // All groups should have total size > `group_size_threshold` except for the
+                // last region.
+                if i != groups.len() - 1 {
+                    assert!(
+                        current_group_size >= group_size_threshold
+                            && current_group_size < group_size_threshold + max_region_size
+                    );
+                }
+            }
+        };
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 4).unwrap();
+        let group_size_threshold = total_size / 4;
+        check_group(groups, group_size_threshold);
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 7).unwrap();
+        let group_size_threshold = total_size / 7;
+        check_group(groups, group_size_threshold);
+    }
+
+    #[test]
+    fn test_bad_regions() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+        let store_id = 1;
+        debugger.set_store_id(store_id);
+
+        let mut lb = debugger.raft_engine.log_batch(30);
+
+        let put_region_state =
+            |lb: &mut raft_log_engine::RaftLogBatch, region_id: u64, peers: &[u64]| {
+                let mut region_state = RegionLocalState::default();
+                region_state.set_state(PeerState::Normal);
+                let region = region_state.mut_region();
+                region.set_id(region_id);
+                let peers = peers
+                    .iter()
+                    .enumerate()
+                    .map(|(_, &sid)| Peer {
+                        id: region_id,
+                        store_id: sid,
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>();
+                region.set_peers(peers.into());
+                lb.put_region_state(region_id, 5, &region_state).unwrap();
+            };
+
+        let put_apply_state =
+            |lb: &mut raft_log_engine::RaftLogBatch, region_id: u64, apply_index: u64| {
+                let mut apply_state = RaftApplyState::default();
+                apply_state.set_applied_index(apply_index);
+                lb.put_apply_state(region_id, apply_index, &apply_state)
+                    .unwrap();
+
+                for cf in ALL_CFS {
+                    lb.put_flushed_index(region_id, cf, 5, apply_index).unwrap();
+                }
+            };
+
+        let put_raft_state = |lb: &mut raft_log_engine::RaftLogBatch,
+                              region_id: u64,
+                              last_index: u64,
+                              commit_index: u64| {
+            let mut raft_state = RaftLocalState::default();
+            raft_state.set_last_index(last_index);
+            raft_state.mut_hard_state().set_commit(commit_index);
+            lb.put_raft_state(region_id, &raft_state).unwrap();
+        };
+
+        for &region_id in &[10, 11, 12] {
+            put_region_state(&mut lb, region_id, &[store_id]);
+        }
+
+        // last index < commit index
+        put_raft_state(&mut lb, 10, 100, 110);
+        put_apply_state(&mut lb, 10, RAFT_INIT_LOG_INDEX);
+
+        // commit index < last index < apply index, or commit index < apply index < last
+        // index.
+        put_raft_state(&mut lb, 11, 100, 90);
+        put_apply_state(&mut lb, 11, 110);
+        put_raft_state(&mut lb, 12, 100, 90);
+        put_apply_state(&mut lb, 12, 95);
+
+        // region state doesn't contains the peer itself.
+        put_region_state(&mut lb, 13, &[]);
+
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+
+        let mut bad_regions = debugger.bad_regions().unwrap();
+        bad_regions.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(bad_regions.len(), 4);
+        for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
+            assert_eq!(region_id, (10 + i) as u64);
+        }
+    }
+
+    #[test]
+    fn test_tombstone_regions() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+        debugger.set_store_id(11);
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(5);
+        let mut lb = debugger.raft_engine.log_batch(10);
+
+        // region 1 with peers at stores 11, 12, 13.
+        let region_1 = init_region_state(&debugger.raft_engine, 1, &[11, 12, 13], 0);
+        lb.put_apply_state(1, 5, &apply_state).unwrap();
+        // Got the target region from pd, which doesn't contains the store.
+        let mut target_region_1 = region_1.clone();
+        target_region_1.mut_peers().remove(0);
+        target_region_1.mut_region_epoch().set_conf_ver(100);
+
+        // region 2 with peers at stores 11, 12, 13.
+        let region_2 = init_region_state(&debugger.raft_engine, 2, &[11, 12, 13], 0);
+        lb.put_apply_state(2, 5, &apply_state).unwrap();
+        // Got the target region from pd, which has different peer_id.
+        let mut target_region_2 = region_2.clone();
+        target_region_2.mut_peers()[0].set_id(100);
+        target_region_2.mut_region_epoch().set_conf_ver(100);
+
+        // region 3 with peers at stores 21, 22, 23.
+        let region_3 = init_region_state(&debugger.raft_engine, 3, &[21, 22, 23], 0);
+        lb.put_apply_state(3, 5, &apply_state).unwrap();
+        // Got the target region from pd but the peers are not changed.
+        let mut target_region_3 = region_3;
+        target_region_3.mut_region_epoch().set_conf_ver(100);
+
+        // region 4 with peers at stores 11, 12, 13.
+        let region_4 = init_region_state(&debugger.raft_engine, 4, &[11, 12, 13], 0);
+        lb.put_apply_state(4, 5, &apply_state).unwrap();
+        // Got the target region from pd but region epoch are not changed.
+        let mut target_region_4 = region_4;
+        target_region_4.mut_peers()[0].set_id(100);
+
+        // region 5 with peers at stores 11, 12, 13.
+        let region_5 = init_region_state(&debugger.raft_engine, 5, &[11, 12, 13], 0);
+        lb.put_apply_state(5, 5, &apply_state).unwrap();
+        // Got the target region from pd but peer is not scheduled.
+        let mut target_region_5 = region_5;
+        target_region_5.mut_region_epoch().set_conf_ver(100);
+
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+
+        let must_meet_error = |region_with_error: metapb::Region| {
+            let error_region_id = region_with_error.get_id();
+            let regions = vec![
+                target_region_1.clone(),
+                target_region_2.clone(),
+                region_with_error,
+            ];
+            let errors = debugger.set_region_tombstone(regions).unwrap();
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].0, error_region_id);
+            assert_eq!(
+                debugger
+                    .raft_engine
+                    .get_region_state(1, u64::MAX)
+                    .unwrap()
+                    .unwrap()
+                    .take_region(),
+                region_1
+            );
+
+            assert_eq!(
+                debugger
+                    .raft_engine
+                    .get_region_state(2, u64::MAX)
+                    .unwrap()
+                    .unwrap()
+                    .take_region(),
+                region_2
+            );
+        };
+
+        // Test with bad target region. No region state in rocksdb should be changed.
+        must_meet_error(target_region_3);
+        must_meet_error(target_region_4);
+        must_meet_error(target_region_5);
+
+        // After set_region_tombstone success, all region should be adjusted.
+        let target_regions = vec![target_region_1, target_region_2];
+        let errors = debugger.set_region_tombstone(target_regions).unwrap();
+        assert!(errors.is_empty());
+        for &region_id in &[1, 2] {
+            let state = debugger
+                .raft_engine
+                .get_region_state(region_id, u64::MAX)
+                .unwrap()
+                .unwrap()
+                .get_state();
+            assert_eq!(state, PeerState::Tombstone);
+        }
+    }
+
+    #[test]
+    fn test_tombstone_regions_by_id() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+        debugger.set_store_id(11);
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(5);
+        let mut lb = debugger.raft_engine.log_batch(10);
+
+        // tombstone region 1 which currently not exists.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(!errors.is_empty());
+
+        // region 1 with peers at stores 11, 12, 13.
+        init_region_state(&debugger.raft_engine, 1, &[11, 12, 13], 0);
+        lb.put_apply_state(1, 5, &apply_state).unwrap();
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+        let mut expected_state = debugger
+            .raft_engine
+            .get_region_state(1, u64::MAX)
+            .unwrap()
+            .unwrap();
+        expected_state.set_state(PeerState::Tombstone);
+
+        // tombstone region 1.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(
+            debugger
+                .raft_engine
+                .get_region_state(1, u64::MAX)
+                .unwrap()
+                .unwrap(),
+            expected_state
+        );
+
+        // tombstone region 1 again.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(
+            debugger
+                .raft_engine
+                .get_region_state(1, u64::MAX)
+                .unwrap()
+                .unwrap(),
+            expected_state
+        );
+    }
+>>>>>>> 1391934474 (tikv-ctl: implement region recover for raftstore-v2 (#14869))
 }
