@@ -769,7 +769,7 @@ lazy_static! {
         "Total number of pending write tasks from io rescheduling peers"
     ).unwrap();
 
-    pub static ref STORE_INSPECT_DURTION_HISTOGRAM: HistogramVec =
+    pub static ref STORE_INSPECT_DURATION_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_inspect_duration_seconds",
             "Bucketed histogram of inspect duration.",
@@ -875,4 +875,9 @@ lazy_static! {
         &["store"]
     )
     .unwrap();
+
+    pub static ref PEER_IN_FLASHBACK_STATE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_peer_in_flashback_state",
+        "Total number of peers in the flashback state"
+    ).unwrap();
 }

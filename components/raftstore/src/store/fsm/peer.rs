@@ -1963,6 +1963,7 @@ where
                 self.register_check_leader_lease_tick();
                 self.register_report_region_buckets_tick();
                 self.register_check_peers_availability_tick();
+                self.register_check_long_uncommitted_tick();
             }
 
             if let Some(ForceLeaderState::ForceLeader { .. }) = self.fsm.peer.force_leader {
@@ -2835,6 +2836,7 @@ where
         if self.fsm.peer.is_leader() {
             self.register_check_leader_lease_tick();
             self.register_report_region_buckets_tick();
+            self.register_check_long_uncommitted_tick();
         }
     }
 
@@ -5012,7 +5014,7 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::SetFlashbackState { region } => self.on_set_flashback_state(region),
+                ExecResult::Flashback { region } => self.on_set_flashback_state(region),
                 ExecResult::BatchSwitchWitness(switches) => {
                     self.on_ready_batch_switch_witness(switches)
                 }
@@ -5260,10 +5262,13 @@ where
         // the apply phase and because a read-only request doesn't need to be applied,
         // so it will be allowed during the flashback progress, for example, a snapshot
         // request.
+        let header = msg.get_header();
+        let admin_type = msg.admin_request.as_ref().map(|req| req.get_cmd_type());
         if let Err(e) = util::check_flashback_state(
             self.region().is_in_flashback,
             self.region().flashback_start_ts,
-            msg,
+            header,
+            admin_type,
             region_id,
             true,
         ) {
@@ -5280,7 +5285,7 @@ where
                     .invalid_proposal
                     .flashback_not_prepared
                     .inc(),
-                _ => unreachable!(),
+                _ => unreachable!("{:?}", e),
             }
             return Err(e);
         }
@@ -5598,6 +5603,11 @@ where
         {
             return;
         }
+        fail_point!(
+            "on_check_long_uncommitted_tick_1",
+            self.fsm.peer.peer_id() == 1,
+            |_| {}
+        );
         self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
         self.register_check_long_uncommitted_tick();
     }
@@ -6486,6 +6496,21 @@ where
         })());
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
+        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = if self.region().is_in_flashback {
+            // To prevent the insertion of any new pessimistic locks, set the lock status
+            // to `LocksStatus::IsInFlashback` and clear all the existing locks.
+            pessimistic_locks.clear();
+            LocksStatus::IsInFlashback
+        } else if self.fsm.peer.is_leader() {
+            // If the region is not in flashback, the leader can continue to insert
+            // pessimistic locks.
+            LocksStatus::Normal
+        } else {
+            // If the region is not in flashback and the peer is not the leader, it
+            // cannot insert pessimistic locks.
+            LocksStatus::NotLeader
+        }
     }
 
     fn on_ready_batch_switch_witness(&mut self, sw: SwitchWitness) {

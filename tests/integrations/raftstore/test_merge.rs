@@ -1356,6 +1356,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1374,6 +1375,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1445,10 +1447,10 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 
     // The gap is too large, so the previous merge should fail. And this new put
     // request should be allowed.
-    let res = cluster.async_put(b"k1", b"new_val").unwrap();
+    let mut res = cluster.async_put(b"k1", b"new_val").unwrap();
 
     cluster.clear_send_filters();
-    res.recv().unwrap();
+    res.recv_timeout(Duration::from_secs(5)).unwrap();
 
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
 }
@@ -1485,6 +1487,7 @@ fn test_merge_pessimistic_locks_repeated_merge() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks

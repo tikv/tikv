@@ -298,16 +298,23 @@ impl ApplyTrace {
     /// `None` is returned.
     #[inline]
     pub fn log_recovery(&self) -> Option<Box<DataTrace>> {
-        let mut flushed_indexes = [0; DATA_CFS_LEN];
-        for (off, pr) in self.data_cfs.iter().enumerate() {
-            flushed_indexes[off] = pr.flushed;
-        }
+        let flushed_indexes = self.flushed_indexes();
         for i in flushed_indexes {
             if i > self.admin.flushed {
                 return Some(Box::new(flushed_indexes));
             }
         }
         None
+    }
+
+    /// Get the flushed indexes of all data CF that is needed when recoverying
+    /// logs. It does not check the admin cf.
+    pub fn flushed_indexes(&self) -> DataTrace {
+        let mut flushed_indexes = [0; DATA_CFS_LEN];
+        for (off, pr) in self.data_cfs.iter().enumerate() {
+            flushed_indexes[off] = pr.flushed;
+        }
+        flushed_indexes
     }
 
     pub fn restore_snapshot(&mut self, index: u64) {

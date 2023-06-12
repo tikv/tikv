@@ -34,6 +34,7 @@ use engine_traits::{
     EncryptionKeyManager, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
     ALL_CFS,
 };
+use fail::fail_point;
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, StateRole};
@@ -232,6 +233,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .set_last_applying_index(persisted_index);
         let snapshot_index = self.entry_storage().truncated_index();
         assert!(snapshot_index >= RAFT_INIT_LOG_INDEX, "{:?}", self.logger);
+        self.compact_log_context_mut()
+            .set_last_compacted_idx(snapshot_index + 1 /* first index */);
         // If leader sends a message append to the follower while it's applying
         // snapshot (via split init for example), the persisted_index may be larger
         // than the first index. But as long as first index is not larger, the
@@ -267,7 +270,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group_mut().advance_apply_to(snapshot_index);
             if self.proposal_control().is_merging() {
                 // After applying a snapshot, merge is rollbacked implicitly.
-                // TODO: self.rollback_merge(ctx);
+                self.rollback_merge(ctx);
             }
             let read_tablet = SharedReadTablet::new(tablet.clone());
             {
@@ -287,11 +290,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 !s.scheduled || snapshot_index != RAFT_INIT_LOG_INDEX
             }) {
                 info!(self.logger, "apply tablet snapshot completely");
+                // Tablet sent from region leader should have already be trimmed.
+                self.storage_mut().set_has_dirty_data(false);
                 SNAP_COUNTER.apply.success.inc();
+
+                fail_point!("apply_snapshot_complete");
             }
             if let Some(init) = split {
                 info!(self.logger, "init split with snapshot finished");
                 self.post_split_init(ctx, init);
+
+                fail_point!("post_split_init_complete");
             }
             self.schedule_apply_fsm(ctx);
             if self.remove_tombstone_tablets(snapshot_index) {
@@ -299,6 +308,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     .schedulers
                     .tablet
                     .schedule(tablet::Task::destroy(region_id, snapshot_index));
+            }
+            if let Some(msg) = self.split_pending_append_mut().take_append_message() {
+                let _ = ctx.router.send_raft_message(msg);
             }
         }
     }
@@ -561,7 +573,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         task: &mut WriteTask<EK, ER>,
         snap_mgr: &TabletSnapManager,
         reg: &TabletRegistry<EK>,
-        key_manager: Option<&Arc<DataKeyManager>>,
     ) -> Result<()> {
         let region_id = self.region().get_id();
         let peer_id = self.peer().get_id();
@@ -660,8 +671,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.
         let reg = reg.clone();
-        let key_manager = key_manager.cloned();
+        let key_manager = snap_mgr.key_manager().clone();
         let hook = move || {
+            fail::fail_point!("region_apply_snap");
             if !install_tablet(&reg, key_manager.as_deref(), &path, region_id, last_index) {
                 slog_panic!(
                     logger,
@@ -672,7 +684,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
             if clean_split {
                 let path = temp_split_path(&reg, region_id);
-                // TODO(tabokie)
+                if let Some(m) = key_manager {
+                    let _ = m.remove_dir(&path, None);
+                }
                 let _ = fs::remove_dir_all(path);
             }
         };

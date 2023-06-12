@@ -54,6 +54,16 @@ pub trait StatisticsReporter<T: ?Sized> {
     fn flush(&mut self);
 }
 
+#[derive(Default)]
+pub struct RangeStats {
+    // The number of entries
+    pub num_entries: u64,
+    // The number of MVCC versions of all rows (num_entries - tombstones).
+    pub num_versions: u64,
+    // The number of rows.
+    pub num_rows: u64,
+}
+
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     type StatisticsReporter: StatisticsReporter<Self>;
 
@@ -63,6 +73,12 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     fn flush_cfs(&self, cfs: &[&str], wait: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
+
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<()>;
 
     fn delete_ranges_cfs(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.cf_names() {
@@ -121,12 +137,13 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn get_num_keys(&self) -> Result<u64>;
 
-    fn get_range_entries_and_versions(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<(u64, u64)>>;
+    fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
+
+    /// Returns size and age of active memtable if there's one.
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>>;
 }

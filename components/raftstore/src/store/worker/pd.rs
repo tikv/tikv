@@ -1861,6 +1861,9 @@ where
             .pd_client
             .report_region_buckets(&delta, Duration::from_secs(interval_second));
         let f = async move {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &delta;
             if let Err(e) = resp.await {
                 debug!(
                     "failed to send buckets";
@@ -2241,17 +2244,17 @@ where
             Box::new(move |id, duration| {
                 let dur = duration.sum();
 
-                STORE_INSPECT_DURTION_HISTOGRAM
+                STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_process"])
                     .observe(tikv_util::time::duration_to_sec(
                         duration.store_process_duration.unwrap(),
                     ));
-                STORE_INSPECT_DURTION_HISTOGRAM
+                STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_wait"])
                     .observe(tikv_util::time::duration_to_sec(
                         duration.store_wait_duration.unwrap(),
                     ));
-                STORE_INSPECT_DURTION_HISTOGRAM
+                STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["all"])
                     .observe(tikv_util::time::duration_to_sec(dur));
                 if let Err(e) = scheduler.schedule(Task::UpdateSlowScore { id, duration }) {

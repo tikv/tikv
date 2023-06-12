@@ -3,7 +3,7 @@
 use std::{
     sync::{
         mpsc::{channel, sync_channel},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -13,11 +13,12 @@ use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{
-        self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
-        PrewriteRequestPessimisticAction::*,
+        self as pb, AssertionLevel, Context, GetRequest, Op, PessimisticLockRequest,
+        PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     tikvpb::TikvClient,
 };
+use raft::prelude::{ConfChangeType, MessageType};
 use raftstore::store::LocksStatus;
 use storage::{
     mvcc::{
@@ -26,7 +27,10 @@ use storage::{
     },
     txn::{self, commands},
 };
-use test_raftstore::new_server_cluster;
+use test_raftstore::{
+    configure_for_lease_read, new_learner_peer, new_server_cluster, try_kv_prewrite,
+    DropMessageFilter,
+};
 use tikv::storage::{
     self,
     kv::SnapshotExt,
@@ -37,7 +41,10 @@ use tikv::storage::{
     },
     Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
-use tikv_util::{store::new_peer, HandyRwLock};
+use tikv_util::{
+    store::{new_peer, peer::new_incoming_voter},
+    HandyRwLock,
+};
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
 
 #[test]
@@ -568,6 +575,7 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -608,4 +616,161 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         resp.get_errors()[0].get_locked(),
         &lock.into_lock().into_lock_info(b"key".to_vec())
     );
+}
+
+#[test]
+fn test_read_index_with_max_ts() {
+    let mut cluster = new_server_cluster(0, 3);
+    // Increase the election tick to make this test case running reliably.
+    // Use async apply prewrite to let tikv response before applying on the leader
+    // peer.
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
+    cluster.cfg.storage.enable_async_apply_prewrite = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let k0 = b"k0";
+    let v0 = b"v0";
+    let r1 = cluster.run_conf_change();
+    let p2 = new_peer(2, 2);
+    cluster.pd_client.must_add_peer(r1, p2.clone());
+    let p3 = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(r1, p3.clone());
+    cluster.must_put(k0, v0);
+    cluster.pd_client.must_none_pending_peer(p2.clone());
+    cluster.pd_client.must_none_pending_peer(p3.clone());
+
+    let region = cluster.get_region(k0);
+    cluster.must_transfer_leader(region.get_id(), p3.clone());
+
+    // Block all write cmd applying of Peer 3(leader), then start to write to it.
+    let k1 = b"k1";
+    let v1 = b"v1";
+    let mut ctx_p3 = Context::default();
+    ctx_p3.set_region_id(region.get_id());
+    ctx_p3.set_region_epoch(region.get_region_epoch().clone());
+    ctx_p3.set_peer(p3.clone());
+    let mut ctx_p2 = ctx_p3.clone();
+    ctx_p2.set_peer(p2.clone());
+
+    let start_ts = 10;
+    let mut mutation = pb::Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k1.to_vec();
+    mutation.value = v1.to_vec();
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx_p3);
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(start_ts);
+    req.try_one_pc = true;
+    req.set_primary_lock(k1.to_vec());
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env.clone()).connect(&cluster.sim.rl().get_addr(p3.get_store_id()));
+    let client_p3 = TikvClient::new(channel);
+    fail::cfg("on_apply_write_cmd", "sleep(2000)").unwrap();
+    client_p3.kv_prewrite(&req).unwrap();
+
+    // The apply is blocked on leader, so the read index request with max ts should
+    // see the memory lock as it would be dropped after finishing apply.
+    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(p2.get_store_id()));
+    let client_p2 = TikvClient::new(channel);
+    let mut req = GetRequest::new();
+    req.key = k1.to_vec();
+    req.version = u64::MAX;
+    ctx_p2.replica_read = true;
+    req.set_context(ctx_p2);
+    let resp = client_p2.kv_get(&req).unwrap();
+    assert!(resp.region_error.is_none());
+    assert_eq!(resp.error.unwrap().locked.unwrap().lock_version, start_ts);
+    fail::remove("on_apply_write_cmd");
+}
+
+// This test mocks the situation described in the PR#14863
+#[test]
+fn test_proposal_concurrent_with_conf_change_and_transfer_leader() {
+    let (mut cluster, _, mut ctx) = test_raftstore_v2::must_new_cluster_mul(4);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    pd_client.add_peer(1, new_learner_peer(4, 4));
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    pd_client.joint_confchange(
+        1,
+        vec![
+            (ConfChangeType::AddNode, new_peer(4, 4)),
+            (ConfChangeType::AddLearnerNode, new_learner_peer(1, 1)),
+        ],
+    );
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    let leader = cluster.leader_of_region(1).unwrap();
+    let epoch = cluster.get_region_epoch(1);
+    ctx.set_region_id(1);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(epoch);
+
+    let env = Arc::new(Environment::new(1));
+    let ch = ChannelBuilder::new(env)
+        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(ch);
+
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(DropMessageFilter::new(Arc::new(move |m| {
+            let msg_type = m.get_message().get_msg_type();
+            let to_store = m.get_to_peer().get_store_id();
+            !(msg_type == MessageType::MsgAppend && (to_store == 2 || to_store == 3))
+        }))),
+    );
+
+    cluster.add_send_filter_on_node(
+        4,
+        Box::new(DropMessageFilter::new(Arc::new(move |m| {
+            let msg_type = m.get_message().get_msg_type();
+            let to_store = m.get_to_peer().get_store_id();
+            !(msg_type == MessageType::MsgAppend && to_store == 1)
+        }))),
+    );
+
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    // ensure the cmd is proposed before transfer leader
+    fail::cfg_callback("after_propose_pending_writes", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    let handle = std::thread::spawn(move || {
+        let mut mutations = vec![];
+        for key in vec![b"key3".to_vec(), b"key4".to_vec()] {
+            let mut mutation = kvproto::kvrpcpb::Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(key);
+            mutations.push(mutation);
+        }
+        let _ = try_kv_prewrite(&client, ctx, mutations, b"key3".to_vec(), 10);
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(50)).unwrap();
+    pd_client.transfer_leader(1, new_peer(4, 4), vec![]);
+
+    pd_client.region_leader_must_be(1, new_incoming_voter(4, 4));
+    pd_client.must_leave_joint(1);
+
+    pd_client.must_joint_confchange(
+        1,
+        vec![(ConfChangeType::RemoveNode, new_learner_peer(1, 1))],
+    );
+    pd_client.must_leave_joint(1);
+
+    cluster.clear_send_filter_on_node(1);
+    cluster.clear_send_filter_on_node(4);
+
+    handle.join().unwrap();
 }

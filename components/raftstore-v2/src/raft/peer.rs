@@ -9,14 +9,14 @@ use std::{
 use collections::{HashMap, HashSet};
 use encryption_export::DataKeyManager;
 use engine_traits::{
-    CachedTablet, FlushState, KvEngine, RaftEngine, TabletContext, TabletRegistry,
+    CachedTablet, FlushState, KvEngine, RaftEngine, SstApplyState, TabletContext, TabletRegistry,
 };
 use kvproto::{
     metapb::{self, PeerRole},
     pdpb,
-    raft_serverpb::{RaftMessage, RegionLocalState},
+    raft_serverpb::RaftMessage,
 };
-use raft::{RawNode, StateRole};
+use raft::{eraftpb, RawNode, StateRole};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
@@ -35,8 +35,8 @@ use crate::{
     fsm::ApplyScheduler,
     operation::{
         AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
-        GcPeerContext, MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
-        TxnContext,
+        GcPeerContext, MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder,
+        SplitFlowControl, SplitPendingAppend, TxnContext,
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -76,7 +76,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     /// Sometimes there is no ready at all, but we need to trigger async write.
     has_extra_write: bool,
-    pause_for_recovery: bool,
+    replay_watch: Option<Arc<ReplayWatch>>,
     /// Writer for persisting side effects asynchronously.
     pub(crate) async_writer: AsyncWriter<EK, ER>,
 
@@ -100,6 +100,11 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     // Trace which peers have not finished split.
     split_trace: Vec<(u64, HashSet<u64>)>,
     split_flow_control: SplitFlowControl,
+    /// `MsgAppend` messages from newly split leader should be step after peer
+    /// steps snapshot from split, otherwise leader may send an unnecessary
+    /// snapshot. So the messages are recorded temporarily and will be handled
+    /// later.
+    split_pending_append: SplitPendingAppend,
 
     /// Apply related State changes that needs to be persisted to raft engine.
     ///
@@ -107,6 +112,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// advancing apply index.
     state_changes: Option<Box<ER::LogBatch>>,
     flush_state: Arc<FlushState>,
+    sst_apply_state: SstApplyState,
 
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     leader_transferee: u64,
@@ -147,6 +153,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
 
         let flush_state: Arc<FlushState> = Arc::new(FlushState::new(applied_index));
+        let sst_apply_state = SstApplyState::default();
         // We can't create tablet if tablet index is 0. It can introduce race when gc
         // old tablet and create new peer. We also can't get the correct range of the
         // region, which is required for kv data gc.
@@ -177,7 +184,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_scheduler: None,
             has_ready: false,
             has_extra_write: false,
-            pause_for_recovery: false,
+            replay_watch: None,
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
@@ -197,8 +204,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             proposal_control: ProposalControl::new(0),
             pending_ticks: Vec::new(),
             split_trace: vec![],
+            split_pending_append: SplitPendingAppend::default(),
             state_changes: None,
             flush_state,
+            sst_apply_state,
             split_flow_control: SplitFlowControl::default(),
             leader_transferee: raft::INVALID_ID,
             long_uncommitted_threshold: cmp::max(
@@ -261,11 +270,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.leader_lease.expire_remote_lease();
         }
 
-        let mut region_state = RegionLocalState::default();
-        region_state.set_region(region.clone());
-        region_state.set_tablet_index(tablet_index);
-        region_state.set_state(self.storage().region_state().get_state());
-        self.storage_mut().set_region_state(region_state);
+        self.storage_mut()
+            .region_state_mut()
+            .set_region(region.clone());
+        self.storage_mut()
+            .region_state_mut()
+            .set_tablet_index(tablet_index);
 
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a
@@ -281,7 +291,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Some(progress) = self
                 .leader_lease
                 .maybe_new_remote_lease(self.term())
-                .map(ReadProgress::leader_lease)
+                .map(ReadProgress::set_leader_lease)
             {
                 self.maybe_update_read_progress(reader, progress);
             }
@@ -429,6 +439,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
+        self.raft_group.snap()
+    }
+
+    #[inline]
     pub fn self_stat(&self) -> &PeerStat {
         &self.self_stat
     }
@@ -464,13 +479,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn set_pause_for_recovery(&mut self, pause: bool) {
-        self.pause_for_recovery = pause;
+    pub fn set_replay_watch(&mut self, watch: Option<Arc<ReplayWatch>>) {
+        self.replay_watch = watch;
     }
 
     #[inline]
-    pub fn pause_for_recovery(&self) -> bool {
-        self.pause_for_recovery
+    pub fn pause_for_replay(&self) -> bool {
+        self.replay_watch.is_some()
     }
 
     #[inline]
@@ -478,7 +493,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // between commit index and apply index. We should scheduling it when raft log
     // apply catches up.
     pub fn try_compelete_recovery(&mut self) {
-        if self.pause_for_recovery()
+        if self.pause_for_replay()
             && self.storage().entry_storage().commit_index()
                 <= self.storage().entry_storage().applied_index()
         {
@@ -487,7 +502,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "recovery completed";
                 "apply_index" =>  self.storage().entry_storage().applied_index()
             );
-            self.set_pause_for_recovery(false);
+            self.set_replay_watch(None);
             // Flush to avoid recover again and again.
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
@@ -787,9 +802,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self.split_trace
     }
 
+    pub fn split_pending_append_mut(&mut self) -> &mut SplitPendingAppend {
+        &mut self.split_pending_append
+    }
+
     #[inline]
     pub fn flush_state(&self) -> &Arc<FlushState> {
         &self.flush_state
+    }
+
+    #[inline]
+    pub fn sst_apply_state(&self) -> &SstApplyState {
+        &self.sst_apply_state
     }
 
     pub fn reset_flush_state(&mut self, index: u64) {

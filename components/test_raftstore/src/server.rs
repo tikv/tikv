@@ -8,7 +8,7 @@ use std::{
     usize,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{dispatch_api_version, ApiV1, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -53,6 +53,7 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
+        debug::DebuggerImpl,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
@@ -65,7 +66,8 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, LocalTablets, SnapContext},
+        kv::{FakeExtension, LocalTablets, MockEngine, SnapContext},
+        lock_manager::MockLockManager,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
@@ -487,19 +489,19 @@ impl ServerCluster {
                 .build()
                 .unwrap(),
         );
-        let debug_thread_handle = debug_thread_pool.handle().clone();
-        let debug_service = DebugService::new(
+
+        let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> = DebuggerImpl::new(
             engines.clone(),
+            ConfigController::new(cfg.tikv.clone()),
             None,
-            None,
-            debug_thread_handle,
-            extension,
-            ConfigController::default(),
         );
+        let debug_thread_handle = debug_thread_pool.handle().clone();
+        let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
 
         let apply_router = system.apply_router();
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
+        raft_store.optimize_for(false);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
@@ -791,6 +793,14 @@ impl Simulator for ServerCluster {
 
 impl Cluster<ServerCluster> {
     pub fn must_get_snapshot_of_region(&mut self, region_id: u64) -> RegionSnapshot<RocksSnapshot> {
+        self.must_get_snapshot_of_region_with_ctx(region_id, Default::default())
+    }
+
+    pub fn must_get_snapshot_of_region_with_ctx(
+        &mut self,
+        region_id: u64,
+        snap_ctx: SnapContext<'_>,
+    ) -> RegionSnapshot<RocksSnapshot> {
         let mut try_snapshot = || -> Option<RegionSnapshot<RocksSnapshot>> {
             let leader = self.leader_of_region(region_id)?;
             let store_id = leader.store_id;
@@ -803,7 +813,7 @@ impl Cluster<ServerCluster> {
             let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
-                ..Default::default()
+                ..snap_ctx.clone()
             };
             storage.snapshot(snap_ctx).ok()
         };
@@ -927,4 +937,42 @@ pub fn must_new_and_configure_cluster_and_kv_client(
     let client = TikvClient::new(channel);
 
     (cluster, client, ctx)
+}
+
+pub fn setup_cluster() -> (Cluster<ServerCluster>, TikvClient, String, Context) {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let region_id = 1;
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let region = cluster.get_region(b"k1");
+    let follower = region
+        .get_peers()
+        .iter()
+        .find(|p| **p != leader)
+        .unwrap()
+        .clone();
+    let follower_addr = cluster.sim.rl().get_addr(follower.get_store_id());
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(epoch);
+
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&follower_addr);
+    let client = TikvClient::new(channel);
+
+    // Verify not setting forwarding header will result in store not match.
+    let mut put_req = kvproto::kvrpcpb::RawPutRequest::default();
+    put_req.set_context(ctx.clone());
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(
+        put_resp.get_region_error().has_store_not_match(),
+        "{:?}",
+        put_resp
+    );
+    assert!(put_resp.error.is_empty(), "{:?}", put_resp);
+    (cluster, client, leader_addr, ctx)
 }

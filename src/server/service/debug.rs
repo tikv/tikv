@@ -1,9 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
-use engine_rocks::{RocksEngine, RocksStatistics};
-use engine_traits::{Engines, RaftEngine};
 use futures::{
     future::{Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -18,16 +14,15 @@ use tikv_kv::RaftExtension;
 use tikv_util::metrics;
 use tokio::runtime::Handle;
 
-use crate::{
-    config::ConfigController,
-    server::debug::{Debugger, Error, Result},
-};
+use crate::server::debug::{Debugger, Error, Result};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
         Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
         Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
         Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
+        Error::EngineTrait(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
+        Error::FlashbackFailed(msg) => (RpcStatusCode::UNKNOWN, msg),
     };
     RpcStatus::with_message(code, msg)
 }
@@ -45,26 +40,24 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<ER: RaftEngine, T: RaftExtension> {
+pub struct Service<T, D>
+where
+    T: RaftExtension,
+    D: Debugger,
+{
     pool: Handle,
-    debugger: Debugger<ER>,
+    debugger: D,
     raft_router: T,
 }
 
-impl<ER: RaftEngine, T: RaftExtension> Service<ER, T> {
-    /// Constructs a new `Service` with `Engines`, a `RaftExtension` and a
-    /// `GcWorker`.
-    pub fn new(
-        engines: Engines<RocksEngine, ER>,
-        kv_statistics: Option<Arc<RocksStatistics>>,
-        raft_statistics: Option<Arc<RocksStatistics>>,
-        pool: Handle,
-        raft_router: T,
-        cfg_controller: ConfigController,
-    ) -> Self {
-        let mut debugger = Debugger::new(engines, cfg_controller);
-        debugger.set_kv_statistics(kv_statistics);
-        debugger.set_raft_statistics(raft_statistics);
+impl<T, D> Service<T, D>
+where
+    T: RaftExtension,
+    D: Debugger,
+{
+    /// Constructs a new `Service` with `Engines`, a `RaftExtension`, a
+    /// `GcWorker` and a `RegionInfoAccessor`.
+    pub fn new(debugger: D, pool: Handle, raft_router: T) -> Self {
         Service {
             pool,
             debugger,
@@ -93,7 +86,11 @@ impl<ER: RaftEngine, T: RaftExtension> Service<ER, T> {
     }
 }
 
-impl<ER: RaftEngine, T: RaftExtension + 'static> debugpb::Debug for Service<ER, T> {
+impl<T, D> debugpb::Debug for Service<T, D>
+where
+    T: RaftExtension + 'static,
+    D: Debugger + Clone + Send + 'static,
+{
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -438,6 +435,35 @@ impl<ER: RaftEngine, T: RaftExtension + 'static> debugpb::Debug for Service<ER, 
         self.handle_response(ctx, sink, f, TAG);
     }
 
+    fn get_range_properties(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: GetRangePropertiesRequest,
+        sink: UnarySink<GetRangePropertiesResponse>,
+    ) {
+        const TAG: &str = "get_range_properties";
+        let debugger = self.debugger.clone();
+
+        let f =
+            self.pool
+                .spawn(async move {
+                    debugger.get_range_properties(req.get_start_key(), req.get_end_key())
+                })
+                .map(|res| res.unwrap())
+                .map_ok(|props| {
+                    let mut resp = GetRangePropertiesResponse::default();
+                    for (key, value) in props {
+                        let mut prop = GetRangePropertiesResponseRangeProperty::default();
+                        prop.set_key(key);
+                        prop.set_value(value);
+                        resp.mut_properties().push(prop)
+                    }
+                    resp
+                });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
     fn get_store_info(
         &mut self,
         ctx: RpcContext<'_>,
@@ -521,6 +547,34 @@ impl<ER: RaftEngine, T: RaftExtension + 'static> debugpb::Debug for Service<ER, 
     ) {
         self.debugger.reset_to_version(req.get_ts());
         sink.success(ResetToVersionResponse::default());
+    }
+
+    fn flashback_to_version(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: FlashbackToVersionRequest,
+        sink: UnarySink<FlashbackToVersionResponse>,
+    ) {
+        let debugger = self.debugger.clone();
+        let f = self
+            .pool
+            .spawn(async move {
+                let check = debugger.key_range_flashback_to_version(
+                    req.get_version(),
+                    req.get_region_id(),
+                    req.get_start_key(),
+                    req.get_end_key(),
+                    req.get_start_ts(),
+                    req.get_commit_ts(),
+                );
+                match check.await {
+                    Ok(_) => Ok(FlashbackToVersionResponse::default()),
+                    Err(err) => Err(err),
+                }
+            })
+            .map(|res| res.unwrap());
+
+        self.handle_response(ctx, sink, f, "debug_flashback_to_version");
     }
 }
 

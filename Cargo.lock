@@ -360,10 +360,12 @@ dependencies = [
  "async-trait",
  "azure_core",
  "azure_identity",
+ "azure_security_keyvault",
  "azure_storage",
  "azure_storage_blobs",
  "base64 0.13.0",
  "cloud",
+ "fail",
  "futures 0.3.15",
  "futures-util",
  "kvproto",
@@ -384,8 +386,8 @@ dependencies = [
 
 [[package]]
 name = "azure_core"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#e21e2ec6bae784a717ac7b3cf1123d3a9596f074"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "async-trait",
  "base64 0.21.0",
@@ -410,8 +412,8 @@ dependencies = [
 
 [[package]]
 name = "azure_identity"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#e21e2ec6bae784a717ac7b3cf1123d3a9596f074"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -429,9 +431,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "azure_security_keyvault"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "const_format",
+ "futures 0.3.15",
+ "serde",
+ "serde_json",
+ "time 0.3.20",
+ "url",
+]
+
+[[package]]
 name = "azure_storage"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#e21e2ec6bae784a717ac7b3cf1123d3a9596f074"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -452,8 +469,8 @@ dependencies = [
 
 [[package]]
 name = "azure_storage_blobs"
-version = "0.11.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#e21e2ec6bae784a717ac7b3cf1123d3a9596f074"
+version = "0.12.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -1113,6 +1130,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "const_format"
+version = "0.2.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7309d9b4d3d2c0641e018d449232f2e28f1b22933c137f157d3dbc14228b8c0e"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d897f47bf7270cf70d370f8f98c1abb6d2d4cf60a6845d30e05bfb90c6568650"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-xid",
+]
+
+[[package]]
 name = "coprocessor_plugin_api"
 version = "0.1.0"
 dependencies = [
@@ -1521,6 +1558,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
+ "cloud",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -1559,6 +1597,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "aws",
+ "azure",
  "cloud",
  "derive_more",
  "encryption",
@@ -3059,7 +3098,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9db52f6188f7052e87dae21f1f41772263aef3c6"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -3078,7 +3117,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9db52f6188f7052e87dae21f1f41772263aef3c6"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3232,6 +3271,15 @@ name = "memmap2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "057a3db23999c867821a7a59feb06a578fcb03685e983dff90daf9e7d24ac08f"
+dependencies = [
+ "libc 0.2.139",
+]
+
+[[package]]
+name = "memmap2"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d28bba84adfe6646737845bc5ebbfa2c08424eb1c37e94a1fd2a82adb56a872"
 dependencies = [
  "libc 0.2.139",
 ]
@@ -4430,7 +4478,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/tikv/raft-engine.git#773b89fb24276995e5fd26a7e28550796966d9cd"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4444,7 +4492,7 @@ dependencies = [
  "libc 0.2.139",
  "log",
  "lz4-sys",
- "memmap2",
+ "memmap2 0.6.2",
  "nix 0.26.2",
  "num-derive",
  "num-traits",
@@ -4621,6 +4669,7 @@ dependencies = [
  "time 0.1.42",
  "tracker",
  "txn_types",
+ "walkdir",
  "yatp",
 ]
 
@@ -5028,7 +5077,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9db52f6188f7052e87dae21f1f41772263aef3c6"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -5761,6 +5810,7 @@ dependencies = [
  "dashmap",
  "encryption",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -5775,6 +5825,7 @@ dependencies = [
  "online_config",
  "openssl",
  "prometheus",
+ "protobuf",
  "rand 0.8.5",
  "serde",
  "serde_derive",
@@ -5907,7 +5958,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac457d054f793cedfde6f32d21d692b8351cfec9084fefd0470c0373f6d799bc"
 dependencies = [
  "debugid",
- "memmap2",
+ "memmap2 0.5.3",
  "stable_deref_trait",
  "uuid 1.2.1",
 ]
@@ -6715,6 +6766,7 @@ dependencies = [
 name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "cc",
  "cdc",
@@ -6741,6 +6793,7 @@ dependencies = [
  "prometheus",
  "protobuf",
  "raft",
+ "raft-engine",
  "raft-engine-ctl",
  "raft_log_engine",
  "raftstore",
@@ -6801,9 +6854,16 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
+ "encryption_export",
+ "engine_traits",
+ "keys",
+ "kvproto",
+ "raft-engine",
+ "regex",
  "serde_json",
  "server",
  "tikv",
+ "tikv_util",
  "time 0.1.42",
  "toml",
 ]
@@ -7363,6 +7423,12 @@ name = "unicode-width"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7007dbd421b92cc6e28410fe7362e2e0a2503394908f417b68ec8d1c364c4e20"
+
+[[package]]
+name = "unicode-xid"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
 
 [[package]]
 name = "untrusted"

@@ -1438,6 +1438,7 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
             )
             .to_bytes();
             delegate
@@ -1506,6 +1507,7 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             // Only the key `a` is a normal write.
             if k != b'a' {

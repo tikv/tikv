@@ -1484,7 +1484,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         });
 
         fail_point!("storage_drop_message", |_| Ok(()));
-        cmd.incr_cmd_metric();
         self.sched.run_cmd(cmd, T::callback(callback));
 
         Ok(())
@@ -1497,7 +1496,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<T>,
     ) {
         let cmd: Command = cmd.into();
-        cmd.incr_cmd_metric();
         sched.run_cmd(cmd, T::callback(callback));
     }
 
@@ -2872,7 +2870,7 @@ pub async fn get_raw_key_guard(
         // get maximum resolved-ts from concurrency_manager.global_min_lock_ts
         let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
         let key_guard = concurrency_manager.lock_key(&encode_key).await;
-        let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
+        let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts, false);
         key_guard.with_lock(|l| *l = Some(lock));
         Ok(Some(key_guard))
     } else {
@@ -7445,6 +7443,7 @@ mod tests {
                     0.into(),
                     1,
                     20.into(),
+                    false,
                 ));
             });
             guard
@@ -7774,6 +7773,7 @@ mod tests {
                 0.into(),
                 0,
                 0.into(),
+                false,
             )
         };
 
@@ -7940,6 +7940,7 @@ mod tests {
                             0.into(),
                             3,
                             ts(10, 1),
+                            false,
                         )
                         .use_async_commit(vec![b"k1".to_vec(), b"k2".to_vec()]),
                         false,
@@ -9361,6 +9362,7 @@ mod tests {
                             0.into(),
                             0,
                             0.into(),
+                            false,
                         ),
                         false,
                     ),
@@ -9410,6 +9412,7 @@ mod tests {
                 0.into(),
                 1,
                 20.into(),
+                false,
             ));
         });
 
@@ -10103,6 +10106,7 @@ mod tests {
                                 10.into(),
                                 0,
                                 11.into(),
+                                false,
                             ),
                         ),
                         (
@@ -10116,6 +10120,7 @@ mod tests {
                                 10.into(),
                                 0,
                                 11.into(),
+                                false,
                             ),
                         ),
                     ],
@@ -10144,6 +10149,7 @@ mod tests {
                                 10.into(),
                                 0,
                                 11.into(),
+                                false,
                             ),
                         ),
                         (
@@ -10157,6 +10163,7 @@ mod tests {
                                 10.into(),
                                 0,
                                 11.into(),
+                                false,
                             ),
                         ),
                     ],
@@ -10187,6 +10194,7 @@ mod tests {
                                 10.into(),
                                 0,
                                 11.into(),
+                                false,
                             ),
                         ),
                         (
@@ -10200,6 +10208,7 @@ mod tests {
                                 10.into(),
                                 0,
                                 11.into(),
+                                false,
                             ),
                         ),
                     ],
@@ -10598,6 +10607,7 @@ mod tests {
                         min_commit_ts: 11.into(),
                         last_change_ts: TimeStamp::zero(),
                         versions_to_last_change: 1,
+                        is_locked_with_conflict: false,
                     },
                     false
                 )

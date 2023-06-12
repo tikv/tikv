@@ -1,7 +1,7 @@
 [package]
 name = "backup-stream"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
