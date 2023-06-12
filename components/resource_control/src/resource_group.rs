@@ -424,7 +424,7 @@ impl<'a> TaskMetadataRef<'a> {
 impl TaskPriorityProvider for ResourceController {
     fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
         let metadata = TaskMetadataRef::from_bytes(extras.metadata());
-        self.resource_group(&metadata.group_name()).get_priority(
+        self.resource_group(metadata.group_name()).get_priority(
             extras.current_level() as usize,
             if metadata.override_priority() == 0 {
                 None

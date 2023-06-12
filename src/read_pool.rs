@@ -814,18 +814,44 @@ mod tests {
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
+        handle
+            .spawn(
+                task1,
+                CommandPri::Normal,
+                1,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task2,
+                CommandPri::Normal,
+                2,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3, vec![]) {
+        match handle.spawn(
+            task3,
+            CommandPri::Normal,
+            3,
+            &ResourceControlContext::default(),
+        ) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
         tx1.send(()).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        handle.spawn(task4, CommandPri::Normal, 4, vec![]).unwrap();
+        handle
+            .spawn(
+                task4,
+                CommandPri::Normal,
+                4,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
     }
 
     #[test]
@@ -857,11 +883,30 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
+        handle
+            .spawn(
+                task1,
+                CommandPri::Normal,
+                1,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task2,
+                CommandPri::Normal,
+                2,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3, vec![]) {
+        match handle.spawn(
+            task3,
+            CommandPri::Normal,
+            3,
+            &ResourceControlContext::default(),
+        ) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -869,10 +914,22 @@ mod tests {
         handle.scale_pool_size(3);
         assert_eq!(handle.get_normal_pool_size(), 3);
 
-        handle.spawn(task4, CommandPri::Normal, 4, vec![]).unwrap();
+        handle
+            .spawn(
+                task4,
+                CommandPri::Normal,
+                4,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task5, CommandPri::Normal, 5, vec![]) {
+        match handle.spawn(
+            task5,
+            CommandPri::Normal,
+            5,
+            &ResourceControlContext::default(),
+        ) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -907,11 +964,30 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
-        handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
+        handle
+            .spawn(
+                task1,
+                CommandPri::Normal,
+                1,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
+        handle
+            .spawn(
+                task2,
+                CommandPri::Normal,
+                2,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task3, CommandPri::Normal, 3, vec![]) {
+        match handle.spawn(
+            task3,
+            CommandPri::Normal,
+            3,
+            &ResourceControlContext::default(),
+        ) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -923,10 +999,22 @@ mod tests {
         handle.scale_pool_size(1);
         assert_eq!(handle.get_normal_pool_size(), 1);
 
-        handle.spawn(task4, CommandPri::Normal, 4, vec![]).unwrap();
+        handle
+            .spawn(
+                task4,
+                CommandPri::Normal,
+                4,
+                &ResourceControlContext::default(),
+            )
+            .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(task5, CommandPri::Normal, 5, vec![]) {
+        match handle.spawn(
+            task5,
+            CommandPri::Normal,
+            5,
+            &ResourceControlContext::default(),
+        ) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -1026,8 +1114,22 @@ mod tests {
             let (task1, tx1) = gen_task();
             let (task2, tx2) = gen_task();
 
-            handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
-            handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
+            handle
+                .spawn(
+                    task1,
+                    CommandPri::Normal,
+                    1,
+                    &ResourceControlContext::default(),
+                )
+                .unwrap();
+            handle
+                .spawn(
+                    task2,
+                    CommandPri::Normal,
+                    2,
+                    &ResourceControlContext::default(),
+                )
+                .unwrap();
 
             tx1.send(()).unwrap();
             tx2.send(()).unwrap();

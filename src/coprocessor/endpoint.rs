@@ -14,7 +14,6 @@ use engine_traits::PerfLevel;
 use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
-use resource_control::TaskMetadata;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;

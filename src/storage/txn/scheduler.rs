@@ -864,7 +864,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.on_acquired_locks_finished(&resource_control_ctx, new_acquired_locks);
+        self.on_acquired_locks_finished(resource_control_ctx, new_acquired_locks);
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -995,7 +995,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         if !legacy_wake_up_list.is_empty() || !delay_wake_up_futures.is_empty() {
             self.wake_up_legacy_pessimistic_locks(
-                &resource_control_ctx,
+                resource_control_ctx,
                 legacy_wake_up_list,
                 delay_wake_up_futures,
             );
@@ -1022,7 +1022,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
             self.get_sched_pool()
-                .spawn(&resource_control_ctx, CommandPri::High, async move {
+                .spawn(resource_control_ctx, CommandPri::High, async move {
                     lock_wait_queues.update_lock_wait(new_acquired_locks);
                 })
                 .unwrap();
@@ -1040,7 +1040,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let self1 = self.clone();
         let resource_control_ctx1 = resource_control_ctx.clone();
         self.get_sched_pool()
-            .spawn(&resource_control_ctx, CommandPri::High, async move {
+            .spawn(resource_control_ctx, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
@@ -2185,9 +2185,11 @@ mod tests {
         // cannot run within 500ms.
         scheduler
             .get_sched_pool()
-            .spawn("", CommandPri::Normal, async {
-                thread::sleep(Duration::from_millis(500))
-            })
+            .spawn(
+                &ResourceControlContext::default(),
+                CommandPri::Normal,
+                async { thread::sleep(Duration::from_millis(500)) },
+            )
             .unwrap();
 
         let mut req = BatchRollbackRequest::default();

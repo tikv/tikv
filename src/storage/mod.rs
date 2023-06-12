@@ -1514,7 +1514,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         self.sched
             .get_sched_pool()
-            .spawn(&resource_control_ctx, pri, future)
+            .spawn(resource_control_ctx, pri, future)
             .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
