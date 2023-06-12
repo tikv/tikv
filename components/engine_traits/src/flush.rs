@@ -104,7 +104,7 @@ impl SstApplyState {
 pub struct FlushState {
     applied_index: AtomicU64,
 
-    // todo
+    // to add comment
     flushed_index: [AtomicU64; DATA_CFS_LEN],
 }
 
@@ -251,9 +251,10 @@ impl PersistenceListener {
                 }
             }
         };
-        self.state.flushed_index[offset].store(pr.apply_index, Ordering::SeqCst);
+        let apply_index = pr.apply_index;
         self.storage
             .persist_progress(self.region_id, self.tablet_index, pr);
+        self.state.flushed_index[offset].store(apply_index, Ordering::SeqCst);
     }
 }
 

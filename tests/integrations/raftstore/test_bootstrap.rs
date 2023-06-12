@@ -2,13 +2,12 @@
 use std::{
     path::Path,
     sync::{mpsc::sync_channel, Arc, Mutex},
-    time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_LOCK,
-    CF_RAFT, CF_WRITE, DATA_CFS,
+    Engines, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
 };
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
@@ -211,14 +210,13 @@ fn test_flush_before_stop() {
     let region = cluster.get_region(b"k60");
     cluster.must_split(&region, b"k070");
 
+    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+
     for i in 0..100 {
         let key = format!("k{:03}", i);
         cluster.must_put_cf(CF_WRITE, key.as_bytes(), b"val");
         cluster.must_put_cf(CF_LOCK, key.as_bytes(), b"val");
     }
-
-    cluster.must_delete_range_cf(CF_DEFAULT, b"k000", b"k020");
-    cluster.must_delete_range_cf(CF_DEFAULT, b"k020", b"k040");
 
     let router = cluster.get_router(1).clone().unwrap();
     let raft_engine = cluster.get_raft_engine(1);
@@ -226,6 +224,9 @@ fn test_flush_before_stop() {
     let mut rxs = vec![];
     raft_engine
         .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
+            let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT);
+            println!("region_id {}, index {:?}", id, admin_flush);
+
             let (tx, rx) = sync_channel(1);
             rxs.push(rx);
             let msg = PeerMsg::FlushBeforeClose { tx };
@@ -241,40 +242,9 @@ fn test_flush_before_stop() {
 
     raft_engine
         .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
-            let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT);
+            let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT).unwrap().unwrap();
             println!("region_id {}, index {:?}", id, admin_flush);
-            Ok(())
-        })
-        .unwrap();
-}
-
-#[test]
-fn test_flush_before_stop2() {
-    use test_raftstore_v2::*;
-
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
-
-    for i in 0..100 {
-        let key = format!("k{:03}", i);
-        cluster.must_put_cf(CF_WRITE, key.as_bytes(), b"val");
-        cluster.must_put_cf(CF_LOCK, key.as_bytes(), b"val");
-    }
-
-    cluster.must_delete_range_cf(CF_DEFAULT, b"k000", b"k020");
-    cluster.must_delete_range_cf(CF_DEFAULT, b"k020", b"k040");
-
-    let raft_engine = cluster.get_raft_engine(1);
-    let mut cache = cluster.engines[0].0.get(1).unwrap();
-    let tablet = cache.latest().unwrap();
-    tablet.flush_cfs(DATA_CFS, true).unwrap();
-
-    std::thread::sleep(Duration::from_secs(2));
-
-    raft_engine
-        .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
-            let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT);
-            println!("region_id {}, index {:?}", id, admin_flush);
+            assert!(admin_flush > 50);
             Ok(())
         })
         .unwrap();

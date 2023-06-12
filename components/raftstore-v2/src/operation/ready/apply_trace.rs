@@ -346,6 +346,18 @@ impl ApplyTrace {
     pub fn should_persist(&self) -> bool {
         self.try_persist
     }
+
+    pub fn estimate_replay_count(&self) -> u64 {
+        let persist_applied = self.persisted_applied;
+        // I think it should not be None
+        let max_flush_index = self
+            .data_cfs
+            .iter()
+            .map(|pr| u64::max(pr.flushed, pr.last_modified))
+            .max()
+            .unwrap_or(persist_applied);
+        max_flush_index - persist_applied
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
@@ -557,51 +569,74 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn flush_before_close<T>(&mut self, ctx: &StoreContext<EK, ER, T>, tx: SyncSender<()>) {
+        info!(
+            self.logger,
+            "flush_before_close";
+        );
         let region_id = self.region_id();
+
+        let flush_threshold: u64 = (|| {
+            fail_point!("flush_before_cluse_threshold", |t| {
+                t.unwrap().parse::<u64>().unwrap()
+            });
+            10000
+        })();
+
         if let Some(tablet) = self.tablet().cloned() {
-            tablet.flush_cfs(DATA_CFS, true).unwrap();
-
-            let flush_state = self.flush_state().clone();
-            let logger = self.logger.clone();
-            let mut apply_trace = self.storage_mut().apply_trace_mut();
-            let mut max_flush_index = 0;
-
-            let flushed_indexes = flush_state.as_ref().flushed_index();
-            for i in 0..flushed_indexes.len() {
-                let flush_index = flushed_indexes[i].load(Ordering::SeqCst);
-                let cf = offset_to_cf(i);
-                apply_trace.on_flush(cf, flush_index);
-                max_flush_index = u64::max(max_flush_index, flush_index);
-            }
-
-            let prev_admin = apply_trace.persisted_applied;
-            apply_trace.maybe_advance_admin_flushed(max_flush_index);
-            let (_, _, tablet_index) = ctx
-                .tablet_registry
-                .parse_tablet_name(Path::new(tablet.path()))
-                .unwrap();
-
-            let admin_flush = apply_trace.admin.flushed;
-            if admin_flush > prev_admin {
-                let mut lb = ctx.engine.log_batch(1);
-                lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
-                    .unwrap();
-                apply_trace.try_persist = false;
-                apply_trace.persisted_applied = admin_flush;
-                ctx.engine.consume(&mut lb, true).unwrap();
-
+            loop {
+                let replay_count = self.storage().estimate_replay_count();
+                if replay_count < flush_threshold {
+                    break;
+                }
                 info!(
                     self.logger,
-                    "persisting admin flushed before close";
-                    "tablet_index" => tablet_index,
-                    "flushed" => admin_flush
+                    "replay count exceeds threshold, pick the oldest cf to flush";
+                    "count" => replay_count,
                 );
-            } else {
-                info!(
-                    logger,
-                    "persisting admin flushed before close, not progress";
-                    "apply_trace" => ?apply_trace,
-                );
+                tablet.flush_oldest_cf(true, None).unwrap();
+
+                let flush_state = self.flush_state().clone();
+                let logger = self.logger.clone();
+                let mut apply_trace = self.storage_mut().apply_trace_mut();
+                let mut max_flush_index = 0;
+
+                let flushed_indexes = flush_state.as_ref().flushed_index();
+                for i in 0..flushed_indexes.len() {
+                    let flush_index = flushed_indexes[i].load(Ordering::SeqCst);
+                    let cf = offset_to_cf(i);
+                    apply_trace.on_flush(cf, flush_index);
+                    max_flush_index = u64::max(max_flush_index, flush_index);
+                }
+
+                let prev_admin = apply_trace.persisted_applied;
+                apply_trace.maybe_advance_admin_flushed(max_flush_index);
+
+                let admin_flush = apply_trace.admin.flushed;
+                if admin_flush > prev_admin {
+                    let (_, _, tablet_index) = ctx
+                        .tablet_registry
+                        .parse_tablet_name(Path::new(tablet.path()))
+                        .unwrap();
+                    let mut lb = ctx.engine.log_batch(1);
+                    lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
+                        .unwrap();
+                    apply_trace.try_persist = false;
+                    apply_trace.persisted_applied = admin_flush;
+                    ctx.engine.consume(&mut lb, true).unwrap();
+
+                    info!(
+                        self.logger,
+                        "persisting admin flushed before close";
+                        "tablet_index" => tablet_index,
+                        "flushed" => admin_flush
+                    );
+                } else {
+                    info!(
+                        logger,
+                        "persisting admin flushed before close, not progress";
+                        "apply_trace" => ?apply_trace,
+                    );
+                }
             }
         } else {
             info!(
@@ -610,6 +645,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
+        info!(
+            self.logger,
+            "flush_before_close done";
+        );
         let _ = tx.send(());
     }
 }
