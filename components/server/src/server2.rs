@@ -1237,14 +1237,13 @@ where
     }
 
     fn stop(mut self) {
-        tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
             .server
             .stop()
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
-        info!("flush begin");
+        info!("flush-before_close: flush begin");
         let engines = self.engines.take().unwrap();
         let router = self.router.unwrap();
         let mut rxs = vec![];
@@ -1252,23 +1251,35 @@ where
             .raft_engine
             .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
                 let (tx, rx) = sync_channel(1);
-                rxs.push(rx);
                 let flush_msg = PeerMsg::FlushBeforeClose { tx };
                 if let Err(e) = router.store_router().force_send(region_id, flush_msg) {
-                    panic!("panic during flush closing {:?}", e);
-                };
+                    warn!(
+                        "flush-before_close: force send error",
+                        "error" => ?e,
+                        "region_id" => region_id,
+                    );
+                } else {
+                    rxs.push(rx);
+                }
+
                 Ok(())
             })
             .unwrap();
 
         for rx in rxs {
-            rx.recv().unwrap();
+            if let Err(e) = rx.recv() {
+                warn!(
+                    "flush-before_close: receive error";
+                    "error" => ?e,
+                );
+            }
         }
 
         info!(
-            "flush_done";
+            "flush-before_close: flush done";
         );
 
+        tikv_util::thread_group::mark_shutdown();
         self.node.as_mut().unwrap().stop();
         self.region_info_accessor.as_mut().unwrap().stop();
 
