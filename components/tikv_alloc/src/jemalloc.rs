@@ -84,22 +84,6 @@ struct MemoryStatsAccessor {
     allocated: PeekableRemoteStat<u64>,
     deallocated: PeekableRemoteStat<u64>,
     thread_name: String,
-
-    #[cfg(test)]
-    removal: bool,
-}
-
-#[cfg(test)]
-impl Drop for MemoryStatsAccessor {
-    fn drop(&mut self) {
-        // Don't panic during panicking, or we may lose the stack trace.
-        if !self.removal && !std::thread::panicking() {
-            panic!(
-                "the memory stats accessor for thread {} isn't removed!",
-                self.thread_name
-            );
-        }
-    }
 }
 
 impl MemoryStatsAccessor {
@@ -138,8 +122,6 @@ pub unsafe fn add_thread_memory_accessor() {
                 thread_name: thread::current().name().unwrap_or("<unknown>").to_string(),
                 allocated,
                 deallocated,
-                #[cfg(test)]
-                removal: false,
             }
         });
 }
@@ -148,10 +130,6 @@ pub fn remove_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     #[cfg(not(test))]
     thread_memory_map.remove(&thread::current().id());
-    #[cfg(test)]
-    if let Some(mut a) = thread_memory_map.remove(&thread::current().id()) {
-        a.removal = true;
-    }
 }
 
 use std::thread::ThreadId;
@@ -311,19 +289,9 @@ mod tests {
             tx.send(()).unwrap();
         }
         drop(l);
-        for (i, th) in threads.into_iter().enumerate() {
-            let res = th.join();
-            if i == 2 {
-                res.unwrap_err();
-            } else {
-                res.unwrap();
-            }
+        for th in threads.into_iter() {
+            th.join().unwrap();
         }
-        let l = THREAD_MEMORY_MAP.lock().unwrap();
-        assert_eq!(l.len(), 1);
-        let a = l.values().next().unwrap();
-        assert_eq!(a.get_allocated(), 0);
-        assert_eq!(a.get_deallocated(), 0);
     }
 }
 

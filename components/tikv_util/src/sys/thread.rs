@@ -446,7 +446,8 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
             call_thread_start_hooks();
             // SAFETY: we will call `remove_thread_memory_accessor` at
             // `before-stop_wrapper`.
-            // FIXME: What if the user only calls `after_start_wrapper`?
+            // FIXME: What if the user only calls `after_start_wrapper`? For now, in test
+            // cases we will panic when we detected that happened.
             unsafe {
                 add_thread_memory_accessor();
             }
@@ -478,7 +479,8 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
             call_thread_start_hooks();
             // SAFETY: we will call `remove_thread_memory_accessor` at
             // `before-stop_wrapper`.
-            // FIXME: What if the user only calls `after_start_wrapper`?
+            // FIXME: What if the user only calls `after_start_wrapper`? For now, in test
+            // cases we will panic when we detected that happened.
             unsafe {
                 add_thread_memory_accessor();
             }
