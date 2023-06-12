@@ -74,7 +74,7 @@ pub mod tests {
 
     use lazy_static::lazy_static;
 
-    use super::*;
+    use super::{Backend, *};
     use crate::*;
 
     #[derive(Debug)]

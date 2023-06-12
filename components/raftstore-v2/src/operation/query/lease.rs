@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use raft::{
     eraftpb::{self, MessageType},
     Storage,
@@ -11,8 +11,9 @@ use raft::{
 use raftstore::{
     store::{
         can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        msg::ReadCallback, propose_read_index, should_renew_lease, util::LeaseState, ReadDelegate,
-        ReadIndexRequest, ReadProgress, Transport,
+        msg::ReadCallback, propose_read_index, should_renew_lease,
+        simple_write::SimpleWriteEncoder, util::LeaseState, ReadDelegate, ReadIndexRequest,
+        ReadProgress, Transport,
     },
     Error, Result,
 };
@@ -25,7 +26,7 @@ use crate::{
     batch::StoreContext,
     fsm::StoreMeta,
     raft::Peer,
-    router::{QueryResChannel, QueryResult, ReadResponse},
+    router::{CmdResChannel, QueryResChannel, QueryResult, ReadResponse},
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -146,26 +147,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "request_id" => ?id,
         );
 
-        self.set_has_ready();
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        // TODO:add following when propose is done
-        // if self.leader_lease.is_suspect() {
-        // let req = RaftCmdRequest::default();
-        // if let Ok(Either::Left(index)) = self.propose_normal(ctx, req) {
-        // let (callback, _) = CmdResChannel::pair();
-        // let p = Proposal {
-        // is_conf_change: false,
-        // index,
-        // term: self.term(),
-        // cb: callback,
-        // propose_time: Some(now),
-        // must_pass_epoch_check: false,
-        // };
-        //
-        // self.post_propose(ctx, p);
-        // }
-        // }
+        if self.leader_lease().is_suspect() {
+            self.propose_no_op(ctx);
+        }
+
+        self.set_has_ready();
+    }
+
+    fn propose_no_op<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        let mut header = Box::<RaftRequestHeader>::default();
+        header.set_region_id(self.region_id());
+        header.set_peer(self.peer().clone());
+        header.set_region_epoch(self.region().get_region_epoch().clone());
+        header.set_term(self.term());
+        let empty_data = SimpleWriteEncoder::with_capacity(0).encode();
+        let (ch, _) = CmdResChannel::pair();
+        self.on_simple_write(ctx, header, empty_data, ch);
     }
 
     /// response the read index request

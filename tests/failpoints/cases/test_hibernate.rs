@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::*, *},
+    sync::{atomic::*, mpsc::channel, *},
     thread,
     time::Duration,
 };
@@ -131,4 +131,50 @@ fn test_store_disconnect_with_hibernate() {
     thread::sleep(Duration::from_millis(base_tick_ms * 30));
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+}
+
+#[test]
+fn test_check_long_uncommitted_proposals_while_hibernate() {
+    let mut cluster = new_node_cluster(0, 3);
+    let base_tick_ms = 50;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 2;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+    // So the random election timeout will always be 10, which makes the case more
+    // stable.
+    cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.cfg.raft_store.check_long_uncommitted_interval = ReadableDuration::millis(200);
+    cluster.cfg.raft_store.long_uncommitted_base_threshold = ReadableDuration::millis(500);
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(1);
+
+    cluster.pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Wait until all peers of region 1 hibernate.
+    fail::cfg("on_check_long_uncommitted_tick_1", "return").unwrap();
+    thread::sleep(Duration::from_millis(base_tick_ms * 30));
+
+    // Must not tick CheckLongUncommitted after hibernate.
+    let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
+    fail::cfg_callback("on_check_long_uncommitted_proposals_1", move || {
+        let _ = tx.lock().unwrap().send(());
+    })
+    .unwrap();
+    rx.recv_timeout(2 * cluster.cfg.raft_store.long_uncommitted_base_threshold.0)
+        .unwrap_err();
+
+    // Must keep ticking CheckLongUncommitted if leader weak up.
+    fail::remove("on_check_long_uncommitted_tick_1");
+    cluster.must_put(b"k1", b"v1");
+    rx.recv_timeout(2 * cluster.cfg.raft_store.long_uncommitted_base_threshold.0)
+        .unwrap();
 }
