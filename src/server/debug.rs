@@ -1232,7 +1232,7 @@ pub fn dump_write_cf_properties(
     Ok(res)
 }
 
-fn recover_mvcc_for_range(
+pub fn recover_mvcc_for_range(
     db: &RocksEngine,
     start_key: &[u8],
     end_key: &[u8],
@@ -1285,7 +1285,7 @@ pub struct MvccChecker {
 }
 
 impl MvccChecker {
-    fn new(db: RocksEngine, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
+    pub fn new(db: RocksEngine, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_end_key(end_key);
         let gen_iter = |cf: &str| -> Result<_> {
