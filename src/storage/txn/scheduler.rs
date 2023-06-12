@@ -1970,7 +1970,7 @@ mod tests {
                 ResourceTagFactory::new_for_test(),
                 Arc::new(QuotaLimiter::default()),
                 latest_feature_gate(),
-                Some(Arc::new(ResourceController::new("test".to_owned(), true))),
+                Some(Arc::new(ResourceController::new_for_test("test".to_owned(), true))),
             ),
             engine,
         )
@@ -2322,7 +2322,7 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             feature_gate.clone(),
-            Some(Arc::new(ResourceController::new("test".to_owned(), true))),
+            Some(Arc::new(ResourceController::new_for_test("test".to_owned(), true))),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

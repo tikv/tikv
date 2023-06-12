@@ -11,15 +11,19 @@ use std::{
 };
 
 use collections::HashMap;
-use dashmap::{mapref::one::Ref, DashMap};
+#[cfg(test)]
+use dashmap::mapref::one::Ref;
+use dashmap::DashMap;
 use fail::fail_point;
 use kvproto::{
     kvrpcpb::{CommandPri, ResourceControlContext},
-    resource_manager::{GroupMode, ResourceGroup},
+    resource_manager::{GroupMode, ResourceGroup as PbResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{info, time::Instant};
 use yatp::queue::priority::TaskPriorityProvider;
+
+use crate::resource_limiter::ResourceLimiter;
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -51,14 +55,35 @@ pub enum ResourceConsumeType {
 }
 
 /// ResourceGroupManager manages the metadata of each resource group.
-#[derive(Default)]
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
     registry: RwLock<Vec<Arc<ResourceController>>>,
 }
 
 impl ResourceGroupManager {
-    fn get_ru_setting(rg: &ResourceGroup, is_read: bool) -> u64 {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        let manager = Self {
+            resource_groups: Default::default(),
+            registry: Default::default(),
+        };
+
+        // init the default resource group by default.
+        let mut default_group = PbResourceGroup::new();
+        default_group.name = DEFAULT_RESOURCE_GROUP_NAME.into();
+        default_group.priority = MEDIUM_PRIORITY;
+        default_group.mode = GroupMode::RuMode;
+        default_group
+            .mut_r_u_settings()
+            .mut_r_u()
+            .mut_settings()
+            .fill_rate = MAX_RU_QUOTA;
+        manager.add_resource_group(default_group);
+
+        manager
+    }
+
+    fn get_ru_setting(rg: &PbResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
             // RU mode, read and write use the same setting.
             (GroupMode::RuMode, _) => rg
@@ -83,14 +108,28 @@ impl ResourceGroupManager {
         }
     }
 
-    pub fn add_resource_group(&self, rg: ResourceGroup) {
+    pub fn add_resource_group(&self, rg: PbResourceGroup) {
         let group_name = rg.get_name().to_ascii_lowercase();
         self.registry.read().iter().for_each(|controller| {
             let ru_quota = Self::get_ru_setting(&rg, controller.is_read);
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
         info!("add resource group"; "name"=> &rg.name, "ru" => rg.get_r_u_settings().get_r_u().get_settings().get_fill_rate());
-        self.resource_groups.insert(group_name, rg);
+        let limiter = match self.resource_groups.get(&rg.name) {
+            Some(g) => g.limiter.clone(),
+            None => Self::build_resource_limiter(&rg),
+        };
+
+        self.resource_groups
+            .insert(group_name, ResourceGroup::new(rg, limiter));
+    }
+
+    fn build_resource_limiter(rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
+        // TODO: only the "default" resource group support background tasks currently.
+        if rg.name == DEFAULT_RESOURCE_GROUP_NAME {
+            return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
+        }
+        None
     }
 
     pub fn remove_resource_group(&self, name: &str) {
@@ -102,10 +141,10 @@ impl ResourceGroupManager {
         self.resource_groups.remove(&group_name);
     }
 
-    pub fn retain(&self, mut f: impl FnMut(&String, &ResourceGroup) -> bool) {
+    pub fn retain(&self, mut f: impl FnMut(&String, &PbResourceGroup) -> bool) {
         let mut removed_names = vec![];
         self.resource_groups.retain(|k, v| {
-            let ret = f(k, v);
+            let ret = f(k, &v.group);
             if !ret {
                 removed_names.push(k.clone());
             }
@@ -120,20 +159,24 @@ impl ResourceGroupManager {
         }
     }
 
-    pub fn get_resource_group(&self, name: &str) -> Option<Ref<'_, String, ResourceGroup>> {
+    #[cfg(test)]
+    pub(crate) fn get_resource_group(&self, name: &str) -> Option<Ref<'_, String, ResourceGroup>> {
         self.resource_groups.get(&name.to_ascii_lowercase())
     }
 
-    pub fn get_all_resource_groups(&self) -> Vec<ResourceGroup> {
-        self.resource_groups.iter().map(|g| g.clone()).collect()
+    pub fn get_all_resource_groups(&self) -> Vec<PbResourceGroup> {
+        self.resource_groups
+            .iter()
+            .map(|g| g.group.clone())
+            .collect()
     }
 
     pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
         let controller = Arc::new(ResourceController::new(name, is_read));
         self.registry.write().push(controller.clone());
         for g in &self.resource_groups {
-            let ru_quota = Self::get_ru_setting(g.value(), controller.is_read);
-            controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.priority);
+            let ru_quota = Self::get_ru_setting(&g.value().group, controller.is_read);
+            controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.group.priority);
         }
         controller
     }
@@ -161,6 +204,27 @@ impl ResourceGroupManager {
                 ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
             );
         }
+    }
+}
+
+pub(crate) struct ResourceGroup {
+    group: PbResourceGroup,
+    limiter: Option<Arc<ResourceLimiter>>,
+}
+
+impl ResourceGroup {
+    fn new(group: PbResourceGroup, limiter: Option<Arc<ResourceLimiter>>) -> Self {
+        Self { group, limiter }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_ru_quota(&self) -> u64 {
+        assert!(self.group.has_r_u_settings());
+        self.group
+            .get_r_u_settings()
+            .get_r_u()
+            .get_settings()
+            .get_fill_rate()
     }
 }
 
@@ -198,8 +262,8 @@ unsafe impl Send for ResourceController {}
 unsafe impl Sync for ResourceController {}
 
 impl ResourceController {
-    pub fn new(name: String, is_read: bool) -> Self {
-        let controller = Self {
+    fn new(name: String, is_read: bool) -> Self {
+        Self {
             name,
             is_read,
             resource_consumptions: RwLock::new(HashMap::default()),
@@ -207,8 +271,12 @@ impl ResourceController {
             max_ru_quota: Mutex::new(DEFAULT_MAX_RU_QUOTA),
             last_rest_vt_time: Cell::new(Instant::now_coarse()),
             customized: AtomicBool::new(false),
-        };
-        // add the "default" resource group
+        }
+    }
+
+    pub fn new_for_test(name: String, is_read: bool) -> Self {
+        let controller = Self::new(name, is_read);
+        // add the "default" resource group.
         controller.add_resource_group(
             DEFAULT_RESOURCE_GROUP_NAME.as_bytes().to_owned(),
             0,
@@ -244,7 +312,7 @@ impl ResourceController {
         let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
         // skip to adjust max ru if it is the "default" group and the ru config eq
         // MAX_RU_QUOTA
-        if ru_quota > *max_ru_quota && (name != "default".as_bytes() || ru_quota < MAX_RU_QUOTA) {
+        if ru_quota > *max_ru_quota && (name != b"default" || ru_quota < MAX_RU_QUOTA) {
             *max_ru_quota = ru_quota;
             // adjust all group weight because the current value is too small.
             self.adjust_all_resource_group_factors(ru_quota);
@@ -459,7 +527,7 @@ pub(crate) mod tests {
 
     use super::*;
 
-    pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> ResourceGroup {
+    pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> PbResourceGroup {
         new_resource_group(name, true, ru, ru, group_priority)
     }
 
@@ -469,10 +537,10 @@ pub(crate) mod tests {
         read_tokens: u64,
         write_tokens: u64,
         group_priority: u32,
-    ) -> ResourceGroup {
+    ) -> PbResourceGroup {
         use kvproto::resource_manager::{GroupRawResourceSettings, GroupRequestUnitSettings};
 
-        let mut group = ResourceGroup::new();
+        let mut group = PbResourceGroup::new();
         group.set_name(name);
         let mode = if is_ru_mode {
             GroupMode::RuMode
@@ -506,55 +574,40 @@ pub(crate) mod tests {
 
     #[test]
     fn test_resource_group() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
+        assert_eq!(resource_manager.resource_groups.len(), 1);
 
         let group1 = new_resource_group_ru("TEST".into(), 100, 0);
         resource_manager.add_resource_group(group1);
 
         assert!(resource_manager.get_resource_group("test1").is_none());
         let group = resource_manager.get_resource_group("test").unwrap();
-        assert_eq!(
-            group
-                .value()
-                .get_r_u_settings()
-                .get_r_u()
-                .get_settings()
-                .get_fill_rate(),
-            100
-        );
+        assert_eq!(group.get_ru_quota(), 100);
         drop(group);
-        assert_eq!(resource_manager.resource_groups.len(), 1);
+        assert_eq!(resource_manager.resource_groups.len(), 2);
 
         let group1 = new_resource_group_ru("Test".into(), 200, LOW_PRIORITY);
         resource_manager.add_resource_group(group1);
         let group = resource_manager.get_resource_group("test").unwrap();
-        assert_eq!(
-            group
-                .value()
-                .get_r_u_settings()
-                .get_r_u()
-                .get_settings()
-                .get_fill_rate(),
-            200
-        );
-        assert_eq!(group.value().get_priority(), 1);
+        assert_eq!(group.get_ru_quota(), 200);
+        assert_eq!(group.value().group.get_priority(), 1);
         drop(group);
-        assert_eq!(resource_manager.resource_groups.len(), 1);
+        assert_eq!(resource_manager.resource_groups.len(), 2);
 
         let group2 = new_resource_group_ru("test2".into(), 400, 0);
         resource_manager.add_resource_group(group2);
-        assert_eq!(resource_manager.resource_groups.len(), 2);
+        assert_eq!(resource_manager.resource_groups.len(), 3);
 
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         assert_eq!(resource_ctl.resource_consumptions.read().len(), 3);
 
-        let group1 = resource_ctl.resource_group("test".as_bytes());
-        let group2 = resource_ctl.resource_group("test2".as_bytes());
+        let group1 = resource_ctl.resource_group(b"test");
+        let group2 = resource_ctl.resource_group(b"test2");
         assert_eq!(group1.weight, group2.weight * 2);
         assert_eq!(group1.current_vt(), 0);
 
         let mut extras1 = Extras::single_level();
-        extras1.set_metadata("test".as_bytes().to_owned());
+        extras1.set_metadata(b"test".to_vec());
         assert_eq!(
             resource_ctl.priority_of(&extras1),
             concat_priority_vt(LOW_PRIORITY, group1.weight * 50)
@@ -562,7 +615,7 @@ pub(crate) mod tests {
         assert_eq!(group1.current_vt(), group1.weight * 50);
 
         let mut extras2 = Extras::single_level();
-        extras2.set_metadata("test2".as_bytes().to_owned());
+        extras2.set_metadata(b"test2".to_vec());
         assert_eq!(
             resource_ctl.priority_of(&extras2),
             concat_priority_vt(MEDIUM_PRIORITY, group2.weight * 50)
@@ -570,24 +623,19 @@ pub(crate) mod tests {
         assert_eq!(group2.current_vt(), group2.weight * 50);
 
         let mut extras3 = Extras::single_level();
-        extras3.set_metadata("unknown_group".as_bytes().to_owned());
+        extras3.set_metadata(b"unknown_group".to_vec());
         assert_eq!(
             resource_ctl.priority_of(&extras3),
             concat_priority_vt(MEDIUM_PRIORITY, 50)
         );
-        assert_eq!(
-            resource_ctl
-                .resource_group("default".as_bytes())
-                .current_vt(),
-            50
-        );
+        assert_eq!(resource_ctl.resource_group(b"default").current_vt(), 50);
 
         resource_ctl.consume(
-            "test".as_bytes(),
+            b"test",
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
         resource_ctl.consume(
-            "test2".as_bytes(),
+            b"test2",
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
 
@@ -600,12 +648,7 @@ pub(crate) mod tests {
         let group1_weight = group1.weight;
         assert_eq!(group1_vt, group1.weight * 10050);
         assert!(group2.current_vt() >= group1.current_vt() * 3 / 4);
-        assert!(
-            resource_ctl
-                .resource_group("default".as_bytes())
-                .current_vt()
-                >= group1.current_vt() / 2
-        );
+        assert!(resource_ctl.resource_group(b"default").current_vt() >= group1.current_vt() / 2);
 
         drop(group1);
         drop(group2);
@@ -618,11 +661,35 @@ pub(crate) mod tests {
         let group3 = resource_ctl.resource_group("new_group".as_bytes());
         assert!(group1_weight - 10 <= group3.weight * 3 && group3.weight * 3 <= group1_weight + 10);
         assert!(group3.current_vt() >= group1_vt / 2);
+        drop(group3);
+
+        // test resource gorup resource limiter.
+        let group1 = resource_manager.get_resource_group("test").unwrap();
+        assert!(group1.limiter.is_none());
+        let default_group = resource_manager.get_resource_group("default").unwrap();
+        let limiter = default_group.limiter.as_ref().unwrap().clone();
+        assert!(limiter.cpu_limiter.get_rate_limit().is_infinite());
+        assert!(limiter.io_limiter.get_rate_limit().is_infinite());
+        limiter.cpu_limiter.set_rate_limit(100.0);
+        limiter.io_limiter.set_rate_limit(200.0);
+        drop(group1);
+        drop(default_group);
+
+        let new_default = new_resource_group_ru("default".into(), 100, LOW_PRIORITY);
+        resource_manager.add_resource_group(new_default);
+
+        let default_group = resource_manager.get_resource_group("default").unwrap();
+        assert_eq!(default_group.get_ru_quota(), 100);
+        let new_limiter = default_group.limiter.as_ref().unwrap().clone();
+        // check rate_limiter is not changed.
+        assert_eq!(new_limiter.cpu_limiter.get_rate_limit(), 100.0);
+        assert_eq!(new_limiter.io_limiter.get_rate_limit(), 200.0);
+        assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
     }
 
     #[test]
     fn test_reset_resource_group_vt() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
 
         let group1 = new_resource_group_ru("g1".into(), i32::MAX as u64, 1);
@@ -630,12 +697,12 @@ pub(crate) mod tests {
         let group2 = new_resource_group_ru("g2".into(), 1, 16);
         resource_manager.add_resource_group(group2);
 
-        let g1 = resource_ctl.resource_group("g1".as_bytes());
-        let g2 = resource_ctl.resource_group("g2".as_bytes());
+        let g1 = resource_ctl.resource_group(b"g1");
+        let g2 = resource_ctl.resource_group(b"g2");
         let threshold = 1 << 59;
         let mut last_g2_vt = 0;
         for i in 0..8 {
-            resource_ctl.consume("g2".as_bytes(), ResourceConsumeType::IoBytes(1 << 25));
+            resource_ctl.consume(b"g2", ResourceConsumeType::IoBytes(1 << 25));
             resource_manager.advance_min_virtual_time();
             if i < 7 {
                 assert!(g2.current_vt() < threshold);
@@ -645,7 +712,7 @@ pub(crate) mod tests {
             last_g2_vt = g2.current_vt();
         }
 
-        resource_ctl.consume("g2".as_bytes(), ResourceConsumeType::IoBytes(1 << 25));
+        resource_ctl.consume(b"g2", ResourceConsumeType::IoBytes(1 << 25));
         resource_manager.advance_min_virtual_time();
         assert!(g1.current_vt() > threshold);
 
@@ -660,18 +727,15 @@ pub(crate) mod tests {
 
     #[test]
     fn test_adjust_resource_group_weight() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
         assert_eq!(resource_ctl.is_customized(), false);
         assert_eq!(resource_ctl_write.is_customized(), false);
         let group1 = new_resource_group_ru("test1".into(), 5000, 0);
         resource_manager.add_resource_group(group1);
-        assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 20);
-        assert_eq!(
-            resource_ctl_write.resource_group("test1".as_bytes()).weight,
-            20
-        );
+        assert_eq!(resource_ctl.resource_group(b"test1").weight, 20);
+        assert_eq!(resource_ctl_write.resource_group(b"test1").weight, 20);
         assert_eq!(resource_ctl.is_customized(), true);
         assert_eq!(resource_ctl_write.is_customized(), true);
 
@@ -679,52 +743,30 @@ pub(crate) mod tests {
         let group1 = new_resource_group_ru("test2".into(), 50000, 0);
         resource_manager.add_resource_group(group1);
         assert_eq!(*resource_ctl.max_ru_quota.lock().unwrap(), 50000);
-        assert_eq!(resource_ctl.resource_group("test1".as_bytes()).weight, 100);
-        assert_eq!(resource_ctl.resource_group("test2".as_bytes()).weight, 10);
+        assert_eq!(resource_ctl.resource_group(b"test1").weight, 100);
+        assert_eq!(resource_ctl.resource_group(b"test2").weight, 10);
         // resource_ctl_write should be unchanged.
         assert_eq!(*resource_ctl_write.max_ru_quota.lock().unwrap(), 50000);
-        assert_eq!(
-            resource_ctl_write.resource_group("test1".as_bytes()).weight,
-            100
-        );
-        assert_eq!(
-            resource_ctl_write.resource_group("test2".as_bytes()).weight,
-            10
-        );
+        assert_eq!(resource_ctl_write.resource_group(b"test1").weight, 100);
+        assert_eq!(resource_ctl_write.resource_group(b"test2").weight, 10);
 
         // add the default "default" group, the ru weight should not change.
         // add a resource group with big ru
         let group = new_resource_group_ru("default".into(), u32::MAX as u64, 0);
         resource_manager.add_resource_group(group);
-        assert_eq!(
-            resource_ctl_write.resource_group("test1".as_bytes()).weight,
-            100
-        );
-        assert_eq!(
-            resource_ctl_write
-                .resource_group("default".as_bytes())
-                .weight,
-            1
-        );
+        assert_eq!(resource_ctl_write.resource_group(b"test1").weight, 100);
+        assert_eq!(resource_ctl_write.resource_group(b"default").weight, 1);
 
         // change the default group to another value, it can impact the ru then.
         let group = new_resource_group_ru("default".into(), 100000, 0);
         resource_manager.add_resource_group(group);
-        assert_eq!(
-            resource_ctl_write.resource_group("test1".as_bytes()).weight,
-            200
-        );
-        assert_eq!(
-            resource_ctl_write
-                .resource_group("default".as_bytes())
-                .weight,
-            10
-        );
+        assert_eq!(resource_ctl_write.resource_group(b"test1").weight, 200);
+        assert_eq!(resource_ctl_write.resource_group(b"default").weight, 10);
     }
 
     #[test]
     fn test_reset_resource_group_vt_overflow() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
         let mut rng = thread_rng();
 
@@ -742,7 +784,7 @@ pub(crate) mod tests {
                 .increase_vt(RESET_VT_THRESHOLD + delta);
         }
         resource_ctl
-            .resource_group("default".as_bytes())
+            .resource_group(b"default")
             .increase_vt(RESET_VT_THRESHOLD + 1);
 
         let old_max_vt = resource_ctl
@@ -775,12 +817,17 @@ pub(crate) mod tests {
         // check all vt has decreased by RESET_VT_THRESHOLD.
         assert!(new_max_vt < max_delta * 2);
         // check fail-point takes effect, the `new_max_vt` has increased.
-        assert!(old_max_vt - RESET_VT_THRESHOLD < new_max_vt);
+        assert!(
+            old_max_vt - RESET_VT_THRESHOLD < new_max_vt,
+            "old: {}, new: {}",
+            old_max_vt,
+            new_max_vt
+        );
     }
 
     #[test]
     fn test_retain_resource_groups() {
-        let resource_manager = ResourceGroupManager::default();
+        let resource_manager = ResourceGroupManager::new();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 
@@ -798,8 +845,9 @@ pub(crate) mod tests {
         );
         resource_ctl_write.consume(b"default", ResourceConsumeType::IoBytes(10000));
 
-        assert_eq!(resource_manager.get_all_resource_groups().len(), 10);
-        assert_eq!(resource_ctl.resource_consumptions.read().len(), 11); // 10 + 1(default)
+        // 10 + 1(default)
+        assert_eq!(resource_manager.get_all_resource_groups().len(), 11);
+        assert_eq!(resource_ctl.resource_consumptions.read().len(), 11);
         assert_eq!(resource_ctl_write.resource_consumptions.read().len(), 11);
 
         resource_manager.retain(|k, _v| k.starts_with("test"));
@@ -808,18 +856,8 @@ pub(crate) mod tests {
         assert_eq!(resource_ctl_write.resource_consumptions.read().len(), 6);
         assert!(resource_manager.get_resource_group("group1").is_none());
         // should use the virtual time of default group for non-exist group
-        assert_ne!(
-            resource_ctl
-                .resource_group("group2".as_bytes())
-                .current_vt(),
-            0
-        );
-        assert_ne!(
-            resource_ctl_write
-                .resource_group("group2".as_bytes())
-                .current_vt(),
-            0
-        );
+        assert_ne!(resource_ctl.resource_group(b"group2").current_vt(), 0);
+        assert_ne!(resource_ctl_write.resource_group(b"group2").current_vt(), 0);
     }
 
     #[test]

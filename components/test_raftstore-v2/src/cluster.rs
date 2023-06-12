@@ -424,7 +424,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             engines: vec![],
             key_managers: vec![],
             io_rate_limiter: None,
-            resource_manager: Some(Arc::new(ResourceGroupManager::default())),
+            resource_manager: Some(Arc::new(ResourceGroupManager::new())),
             sim,
             pd_client,
             engine_creator,

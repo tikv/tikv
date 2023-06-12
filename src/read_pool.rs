@@ -978,7 +978,7 @@ mod tests {
         for control in [false, true] {
             let name = format!("test_yatp_task_poll_duration_metric_{}", control);
             let resource_manager = if control {
-                let resource_manager = ResourceGroupManager::default();
+                let resource_manager = ResourceGroupManager::new();
                 let resource_ctl = resource_manager.derive_controller(name.clone(), true);
                 Some(resource_ctl)
             } else {

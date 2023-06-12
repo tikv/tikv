@@ -341,7 +341,7 @@ fn test_scheduler_pool_auto_switch_for_resource_ctl() {
         .get(&1)
         .unwrap()
         .clone();
-    let resource_manager = ResourceGroupManager::default();
+    let resource_manager = ResourceGroupManager::new();
     let resource_ctl = resource_manager.derive_controller("test".to_string(), true);
 
     let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
