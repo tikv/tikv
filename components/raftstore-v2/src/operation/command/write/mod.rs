@@ -314,31 +314,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             // DeleteStrategy::DeleteBlobs));
         }
 
-        self.ensure_write_buffer();
-        // Delete range may not fill anything in memtable if the range is fit well with
-        // sst files or they are not overlapped. If no further write/delete is
-        // performaned for this cf, flushed index and modified index in apply
-        // trace will never matched, which makes admin flush index never
-        // progress. It severely impacts raft log gc and raft log replay.
-        // So artificially add a duplicate start_key delete here to make at least one
-        // element will be put in memtable.
-        let res = if cf.is_empty() || cf == CF_DEFAULT {
-            self.write_batch.as_mut().unwrap().delete(&start_key)
-        } else {
-            self.write_batch.as_mut().unwrap().delete_cf(cf, &start_key)
-        };
-        res.unwrap_or_else(|e| {
-            slog_panic!(
-                self.logger,
-                "failed to delete magic in delete range";
-                "cf" => cf,
-                "error" => ?e
-            );
-        });
-
-        if index != u64::MAX {
-            self.modifications_mut()[off] = index;
-        }
+        // delete range is an unsafe operation and it cannot be rollbacked to replay, so
+        // we don't update modification index for this operation.
 
         Ok(())
     }

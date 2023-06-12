@@ -6,6 +6,8 @@ use engine_traits::{
     MiscExt, RaftEngineReadOnly, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS,
 };
 
+// It tests that delete range for an empty cf does not block the progress of
+// persisted_applied. See the description of the PR #14905.
 #[test]
 fn test_flush_before_stop() {
     use test_raftstore_v2::*;
@@ -31,6 +33,5 @@ fn test_flush_before_stop() {
     std::thread::sleep(Duration::from_secs(5));
 
     let admin_flush = raft_engine.get_flushed_index(1, CF_RAFT).unwrap().unwrap();
-    println!("region_id {}, index {:?}", 1, admin_flush);
     assert!(admin_flush > 200);
 }
