@@ -1347,7 +1347,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         println!("all regions are healthy")
     }
 
-    fn drop_unapplied_raftlog(&self, _region_ids: Option<Vec<u64>>) {
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
         println!("removing unapplied raftlog on region {:?} ...", region_ids);
         self.drop_unapplied_raftlog(region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
