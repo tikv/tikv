@@ -126,9 +126,9 @@ pub struct Config {
     #[online_config(skip)]
     pub grpc_keepalive_timeout: ReadableDuration,
     /// How many snapshots can be sent concurrently.
-    pub concurrent_send_snap_limit: usize,
+    pub concurrent_send_snap_limit: Option<usize>,
     /// How many snapshots can be recv concurrently.
-    pub concurrent_recv_snap_limit: usize,
+    pub concurrent_recv_snap_limit: Option<usize>,
     #[online_config(skip)]
     pub end_point_recursion_limit: u32,
     #[online_config(skip)]
@@ -237,8 +237,8 @@ impl Default for Config {
             // than 10 senconds.
             grpc_keepalive_time: ReadableDuration::secs(10),
             grpc_keepalive_timeout: ReadableDuration::secs(3),
-            concurrent_send_snap_limit: 32,
-            concurrent_recv_snap_limit: 32,
+            concurrent_send_snap_limit: None,
+            concurrent_recv_snap_limit: None,
             end_point_concurrency: None, // deprecated
             end_point_max_tasks: None,   // deprecated
             end_point_stack_size: None,  // deprecated
@@ -276,6 +276,24 @@ impl Config {
         self.heavy_load_wait_duration
             .unwrap_or_else(|| ReadableDuration::micros(50))
             .0
+    }
+
+    pub fn concurrent_recv_snap_limit(&self) -> usize{
+        self.concurrent_recv_snap_limit.unwrap()
+    }
+
+    pub fn concurrent_send_snap_limit(&self) -> usize{
+        self.concurrent_send_snap_limit.unwrap()
+    }
+
+    pub fn optimize_for(&mut self, raft_kv_v2: bool) {
+        if raft_kv_v2 {
+            self.concurrent_recv_snap_limit = Some(8);
+            self.concurrent_send_snap_limit = Some(8);
+        }else{
+            self.concurrent_recv_snap_limit = Some(32);
+            self.concurrent_send_snap_limit = Some(32);
+        }
     }
 
     /// Validates the configuration and returns an error if it is misconfigured.
@@ -328,14 +346,15 @@ impl Config {
                 self.advertise_addr
             ));
         }
+
         let non_zero_entries = vec![
             (
                 "concurrent-send-snap-limit",
-                self.concurrent_send_snap_limit,
+                self.concurrent_send_snap_limit(),
             ),
             (
                 "concurrent-recv-snap-limit",
-                self.concurrent_recv_snap_limit,
+                self.concurrent_recv_snap_limit(),
             ),
             (
                 "grpc-memory-pool-quota",
