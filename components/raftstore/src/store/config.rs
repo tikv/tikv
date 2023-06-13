@@ -552,8 +552,10 @@ impl Config {
             }
         }
 
-        // when use raft kv v2, we can set raft log gc size limit to a smaller value to
-        // avoid too many entry logs in cache.
+        // When use raft kv v2, we can set raft log gc size limit to a smaller value to
+        // avoid too many entry logs in cache. 
+        // The snapshot support to increment snapshot sst, so the old snapshot files still 
+        // be useful even if needs to sent snapshot again.
         if self.raft_log_gc_size_limit.is_none() && raft_kv_v2 {
             self.raft_log_gc_size_limit = Some(ReadableSize::mb(200));
         }
