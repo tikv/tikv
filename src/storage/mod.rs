@@ -3303,7 +3303,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             None,
-            Some(Arc::new(ResourceController::new_for_test("test".to_owned(), false))),
+            Some(Arc::new(ResourceController::new_for_test(
+                "test".to_owned(),
+                false,
+            ))),
         )
     }
 
