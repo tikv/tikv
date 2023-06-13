@@ -1316,12 +1316,22 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         }
     }
 
-    fn recover_regions(&self, _regions: Vec<Region>, _read_only: bool) {
-        unimplemented!()
+    fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
+        let ret = self
+            .recover_regions(regions, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
     }
 
-    fn recover_all(&self, _threads: usize, _read_only: bool) {
-        unimplemented!()
+    fn recover_all(&self, threads: usize, read_only: bool) {
+        DebuggerImplV2::recover_all(self, threads, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover all", e));
     }
 
     fn print_bad_regions(&self) {
