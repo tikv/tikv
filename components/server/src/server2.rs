@@ -1243,7 +1243,7 @@ where
             .stop()
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
-        info!("flush-before_close: flush begin");
+        info!("flush-before-close: flush begin");
         let engines = self.engines.take().unwrap();
         let router = self.router.unwrap();
         let mut rxs = vec![];
@@ -1254,7 +1254,7 @@ where
                 let flush_msg = PeerMsg::FlushBeforeClose { tx };
                 if let Err(e) = router.store_router().force_send(region_id, flush_msg) {
                     warn!(
-                        "flush-before_close: force send error";
+                        "flush-before-close: force send error";
                         "error" => ?e,
                         "region_id" => region_id,
                     );
@@ -1269,14 +1269,14 @@ where
         for rx in rxs {
             if let Err(e) = rx.recv() {
                 warn!(
-                    "flush-before_close: receive error";
+                    "flush-before-close: receive error";
                     "error" => ?e,
                 );
             }
         }
 
         info!(
-            "flush-before_close: flush done";
+            "flush-before-close: flush done";
         );
 
         tikv_util::thread_group::mark_shutdown();

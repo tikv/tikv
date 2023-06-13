@@ -571,7 +571,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn flush_before_close<T>(&mut self, ctx: &StoreContext<EK, ER, T>, tx: SyncSender<()>) {
         info!(
             self.logger,
-            "flush-before_close for region";
+            "flush-before-close for region";
         );
         let region_id = self.region_id();
 
@@ -579,7 +579,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             fail_point!("flush_before_cluse_threshold", |t| {
                 t.unwrap().parse::<u64>().unwrap()
             });
-            1000
+            10000
         })();
 
         if let Some(tablet) = self.tablet().cloned() {
@@ -590,7 +590,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 info!(
                     self.logger,
-                    "flush-before_close: replay count exceeds threshold, pick the oldest cf to flush";
+                    "flush-before-close: replay count exceeds threshold, pick the oldest cf to flush";
                     "count" => replay_count,
                 );
                 tablet.flush_oldest_cf(true, None).unwrap();
@@ -626,14 +626,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
                     info!(
                         self.logger,
-                        "flush-before_close: persisting admin flushed before close";
+                        "flush-before-close: persisting admin flushed before close";
                         "tablet_index" => tablet_index,
                         "flushed" => admin_flush
                     );
                 } else {
                     info!(
                         logger,
-                        "flush-before_close: persisting admin flushed before close, not progress";
+                        "flush-before-close: persisting admin flushed before close, not progress";
                         "apply_trace" => ?apply_trace,
                     );
                 }
@@ -641,13 +641,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else {
             info!(
                 self.logger,
-                "flush-before_close: persisting admin flushed before close, no tablet";
+                "flush-before-close: persisting admin flushed before close, no tablet";
             );
         }
 
         info!(
             self.logger,
-            "flush-before_close: region done";
+            "flush-before-close: region done";
         );
         let _ = tx.send(());
     }
