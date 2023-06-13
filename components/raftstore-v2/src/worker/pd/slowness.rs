@@ -71,7 +71,11 @@ where
     /// Record slowness periodically.
     pub fn handle_update_slowness_stats(&mut self, _tick: u64, duration: RaftstoreDuration) {
         self.slowness_stats.last_tick_finished = true;
-        // Record IO latency on Disk.
+        // TODO: It's more appropriate to divide the factor into `Disk IO factor` and
+        // `Net IO factor`.
+        // Currently, to make the detection and judgement of Slowness of V2 compactible
+        // to V1, it summarizes all factors by `sum` simplily, approved valid to common
+        // cases when there exists IO jitters on Network or Disk.
         self.slowness_stats.slow_cause.record(
             tikv_util::time::duration_to_us(duration.sum()),
             Instant::now(),

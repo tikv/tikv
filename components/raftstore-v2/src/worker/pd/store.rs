@@ -19,7 +19,7 @@ use slog::{error, info, warn};
 use tikv_util::{
     metrics::RecordPairVec,
     store::QueryStats,
-    time::{Instant as TiInstant, UnixSecs},
+    time::{Duration, Instant as TiInstant, UnixSecs},
     topn::TopN,
 };
 
@@ -29,7 +29,7 @@ use crate::router::StoreMsg;
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
 /// Max limitation of delayed store_heartbeat.
-const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
+const STORE_HEARTBEAT_DELAY_LIMIT: u64 = Duration::from_secs(5 * 60).as_secs();
 
 fn hotspot_key_report_threshold() -> u64 {
     const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
