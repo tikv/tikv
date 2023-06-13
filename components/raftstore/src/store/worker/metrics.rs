@@ -134,6 +134,15 @@ lazy_static! {
     .unwrap();
     pub static ref SNAP_HISTOGRAM: SnapHistogram =
         auto_flush_from!(SNAP_HISTOGRAM_VEC, SnapHistogram);
+    pub static ref SNAP_WAIT_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_raftstore_snapshot_wait_duration_seconds",
+        "Bucketed histogram of raftstore snapshot wait",
+        &["type"],
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
+    pub static ref SNAP_WAIT_HISTOGRAM: SnapHistogram =
+        auto_flush_from!(SNAP_WAIT_HISTOGRAM_VEC, SnapHistogram);
     pub static ref CHECK_SPILT_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_check_split_duration_seconds",
         "Bucketed histogram of raftstore split check duration",
