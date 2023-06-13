@@ -135,6 +135,7 @@ pub struct TrackIoStateFuture<F> {
 }
 
 impl<F: Future> TrackIoStateFuture<F> {
+    #[allow(dead_code)]
     pub fn new(f: F) -> Self {
         Self { f }
     }
@@ -178,6 +179,7 @@ pub struct LimitedFuture<F: Future> {
 }
 
 impl<F: Future> LimitedFuture<F> {
+    #[allow(dead_code)]
     pub fn new(f: F, resource_limiter: Arc<ResourceLimiter>) -> Self {
         Self {
             f,
