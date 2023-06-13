@@ -828,7 +828,6 @@ where
                 let scheduled_time = Instant::now_coarse();
                 self.pool.spawn(async move {
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
-                        .generate
                         .observe(scheduled_time.saturating_elapsed_secs());
                     tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
