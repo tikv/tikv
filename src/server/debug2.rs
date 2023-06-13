@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, thread::JoinHandle};
 
 use engine_rocks::{
     raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator, RocksStatistics,
@@ -19,12 +19,17 @@ use kvproto::{
 };
 use nom::AsBytes;
 use raft::{prelude::Entry, RawNode};
-use raftstore::{coprocessor::get_region_approximate_middle, store::util::check_key_in_region};
+use raftstore::{
+    coprocessor::{get_region_approximate_middle, get_region_approximate_size},
+    store::util::check_key_in_region,
+};
 use raftstore_v2::Storage;
 use slog::o;
-use tikv_util::{config::ReadableSize, store::find_peer, worker::Worker};
+use tikv_util::{
+    config::ReadableSize, store::find_peer, sys::thread::StdThreadBuildWrapper, worker::Worker,
+};
 
-use super::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use super::debug::{recover_mvcc_for_range, BottommostLevelCompaction, Debugger, RegionInfo};
 use crate::{
     config::ConfigController,
     server::debug::{dump_default_cf_properties, dump_write_cf_properties, Error, Result},
@@ -213,6 +218,122 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             cfg_controller,
             kv_statistics: None,
             raft_statistics: None,
+        }
+    }
+
+    pub fn recover_regions(
+        &self,
+        regions: Vec<metapb::Region>,
+        read_only: bool,
+    ) -> Result<Vec<(u64, Error)>> {
+        let mut errors = Vec::with_capacity(regions.len());
+        for region in regions {
+            let region_id = region.get_id();
+            let region_state = box_try!(self.raft_engine.get_region_state(region_id, u64::MAX))
+                .ok_or_else(|| Error::NotFound(format!("Not found region {:?}", region_id)))?;
+            if region_state.get_state() != PeerState::Normal {
+                info!(
+                    "skip region";
+                    "region_id" => region_id,
+                    "peer_state" => ?region_state.get_state(),
+                );
+                continue;
+            }
+
+            let mut tablet_cache =
+                get_tablet_cache(&self.tablet_reg, region_id, Some(region_state))?;
+            let tablet = tablet_cache.latest().unwrap();
+
+            if let Err(e) = recover_mvcc_for_range(
+                tablet,
+                region.get_start_key(),
+                region.get_end_key(),
+                read_only,
+                0,
+            ) {
+                errors.push((region_id, e));
+            }
+        }
+
+        Ok(errors)
+    }
+
+    pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
+        info!("Calculating split keys...");
+
+        let region_groups =
+            deivde_regions_for_concurrency(&self.raft_engine, &self.tablet_reg, threads as u64)?;
+
+        let mut handles = Vec::new();
+        for (thread_index, region_group) in region_groups.into_iter().enumerate() {
+            let props = tikv_util::thread_group::current_properties();
+
+            let mut tablets = vec![];
+            for r in &region_group {
+                let mut cache = get_tablet_cache(&self.tablet_reg, r.get_id(), None).unwrap();
+                tablets.push(cache.latest().unwrap().clone());
+            }
+            let thread = std::thread::Builder::new()
+                .name(format!("mvcc-recover-thread-{}", thread_index))
+                .spawn_wrapper(move || {
+                    tikv_util::thread_group::set_properties(props);
+                    tikv_alloc::add_thread_memory_accessor();
+
+                    let mut results = vec![];
+                    for (region, tablet) in region_group.into_iter().zip(tablets) {
+                        info!(
+                            "mvcc recover";
+                            "thread_index" => thread_index,
+                            "region" => ?region,
+                        );
+                        results.push(recover_mvcc_for_range(
+                            &tablet,
+                            region.get_start_key(),
+                            region.get_end_key(),
+                            read_only,
+                            thread_index,
+                        ));
+                    }
+
+                    tikv_alloc::remove_thread_memory_accessor();
+                    results
+                })
+                .unwrap();
+
+            handles.push(thread);
+        }
+
+        let res = handles
+            .into_iter()
+            .map(|h: JoinHandle<Vec<Result<()>>>| h.join())
+            .map(|results| {
+                if let Err(e) = &results {
+                    error!("{:?}", e);
+                } else {
+                    for r in results.as_ref().unwrap() {
+                        if let Err(e) = r {
+                            error!("{:?}", e);
+                        }
+                    }
+                }
+                results
+            })
+            .all(|results| {
+                if results.is_err() {
+                    return false;
+                }
+                for r in &results.unwrap() {
+                    if !r.is_ok() {
+                        return false;
+                    }
+                }
+                true
+            });
+
+        if res {
+            Ok(())
+        } else {
+            Err(box_err!("Not all threads finished successfully."))
         }
     }
 
@@ -497,20 +618,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             ));
         }
 
-        let mut region_states = vec![];
-        self.raft_engine
-            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
-                let region_state = self
-                    .raft_engine
-                    .get_region_state(region_id, u64::MAX)
-                    .unwrap()
-                    .unwrap();
-                if region_state.state == PeerState::Normal {
-                    region_states.push(region_state);
-                }
-                Ok(())
-            })
-            .unwrap();
+        let mut region_states = get_all_region_states_with_normal_state(&self.raft_engine);
 
         region_states.sort_by(|r1, r2| {
             r1.get_region()
@@ -881,6 +989,88 @@ fn get_tablet_cache(
     }
 }
 
+fn get_all_region_states_with_normal_state<ER: RaftEngine>(
+    raft_engine: &ER,
+) -> Vec<RegionLocalState> {
+    let mut region_states = vec![];
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+            let region_state = raft_engine
+                .get_region_state(region_id, u64::MAX)
+                .unwrap()
+                .unwrap();
+            if region_state.state == PeerState::Normal {
+                region_states.push(region_state);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    region_states
+}
+
+// This method devide all regions into `threads` of groups where each group has
+// similar data volume (estimated by region size) so that we use `threads` of
+// threads to execute them concurrently.
+// Note: we cannot guarantee that we can divde them into exactly `threads` of
+// groups for some cases, ex: [0, 0, 0, 0, 0, 100], we can at most return two
+// groups for this.
+fn deivde_regions_for_concurrency<ER: RaftEngine>(
+    raft_engine: &ER,
+    registry: &TabletRegistry<RocksEngine>,
+    threads: u64,
+) -> Result<Vec<Vec<metapb::Region>>> {
+    let region_states = get_all_region_states_with_normal_state(raft_engine);
+
+    if threads == 1 {
+        return Ok(vec![
+            region_states
+                .into_iter()
+                .map(|mut r| r.take_region())
+                .collect(),
+        ]);
+    }
+
+    let mut regions_groups = vec![];
+    let mut region_sizes = vec![];
+    let mut total_size = 0;
+    for region_state in region_states {
+        let mut tablet_cache = get_tablet_cache(
+            registry,
+            region_state.get_region().get_id(),
+            Some(region_state.clone()),
+        )?;
+        let tablet = tablet_cache.latest().unwrap();
+        let region_size = box_try!(get_region_approximate_size(
+            tablet,
+            region_state.get_region(),
+            0
+        ));
+        region_sizes.push((region_size, region_state));
+        total_size += region_size;
+    }
+    region_sizes.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let group_size = (total_size + threads - 1) / threads;
+    let mut cur_group = vec![];
+    let mut cur_size = 0;
+    for (region_size, mut region_state) in region_sizes.into_iter() {
+        cur_group.push(region_state.take_region());
+        cur_size += region_size;
+        if cur_size >= group_size {
+            cur_size = 0;
+            regions_groups.push(cur_group);
+            cur_group = vec![];
+        }
+    }
+    if !cur_group.is_empty() {
+        regions_groups.push(cur_group);
+    }
+
+    assert!(regions_groups.len() <= threads as usize);
+    Ok(regions_groups)
+}
+
 // `key1` and `key2` should both be start_key or end_key.
 fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
     if end_key && key1.is_empty() {
@@ -913,8 +1103,10 @@ fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
 mod tests {
     use std::path::Path;
 
+    use collections::HashMap;
     use engine_traits::{
         RaftEngineReadOnly, RaftLogBatch, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
+        DATA_CFS,
     };
     use kvproto::{
         metapb::{self, Peer, PeerRole},
@@ -923,6 +1115,7 @@ mod tests {
     use raft::prelude::EntryType;
     use raft_log_engine::RaftLogEngine;
     use raftstore::store::RAFT_INIT_LOG_INDEX;
+    use tikv_util::store::new_peer;
 
     use super::*;
     use crate::{
@@ -1373,6 +1566,111 @@ mod tests {
                 range_in_region((range_start.as_bytes(), range_end.as_bytes()), &region).is_none()
             );
         }
+    }
+
+    #[test]
+    fn test_divide_regions_even() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+
+        let mut lb = debugger.raft_engine.log_batch(30);
+        for i in 0..20 {
+            let mut region = metapb::Region::default();
+            region.set_peers(vec![new_peer(1, i + 1)].into());
+            region.set_id(i + 1);
+            let ctx = TabletContext::new(&region, Some(5));
+            let mut cache = debugger.tablet_reg.load(ctx, true).unwrap();
+            let tablet = cache.latest().unwrap();
+            for j in 0..10 {
+                // (6 + 3) * 10
+                let k = format!("zk{:04}", i * 100 + j);
+                tablet.put(k.as_bytes(), b"val").unwrap();
+            }
+            tablet.flush_cfs(DATA_CFS, true).unwrap();
+
+            let mut region_state = RegionLocalState::default();
+            region_state.set_region(region);
+            region_state.set_tablet_index(5);
+            lb.put_region_state(i + 1, 5, &region_state).unwrap();
+        }
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 4).unwrap();
+        assert_eq!(groups.len(), 4);
+        for g in groups {
+            assert_eq!(g.len(), 5);
+        }
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 3).unwrap();
+        assert_eq!(groups[0].len(), 7);
+        assert_eq!(groups[1].len(), 7);
+        assert_eq!(groups[2].len(), 6);
+    }
+
+    #[test]
+    fn test_divide_regions_uneven() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+
+        let mut lb = debugger.raft_engine.log_batch(30);
+        let mut region_sizes = HashMap::default();
+        let mut total_size = 0;
+        let mut max_region_size = 0;
+        for i in 0..20 {
+            let mut region = metapb::Region::default();
+            region.set_peers(vec![new_peer(1, i + 1)].into());
+            region.set_id(i + 1);
+            let ctx = TabletContext::new(&region, Some(5));
+            let mut cache = debugger.tablet_reg.load(ctx, true).unwrap();
+            let tablet = cache.latest().unwrap();
+            for j in 0..=i {
+                let k = format!("zk{:04}", i * 100 + j);
+                tablet.put(k.as_bytes(), b"val").unwrap();
+            }
+
+            let group_size = (6 + 3) * (i + 1);
+            max_region_size = group_size;
+            total_size += group_size;
+            region_sizes.insert(i + 1, group_size);
+            tablet.flush_cfs(DATA_CFS, true).unwrap();
+
+            let mut region_state = RegionLocalState::default();
+            region_state.set_region(region);
+            region_state.set_tablet_index(5);
+            lb.put_region_state(i + 1, 5, &region_state).unwrap();
+        }
+        debugger.raft_engine.consume(&mut lb, true).unwrap();
+
+        let check_group = |groups: Vec<Vec<metapb::Region>>, group_size_threshold| {
+            let count = groups.iter().fold(0, |count, group| count + group.len());
+            assert_eq!(count, 20);
+            for (i, group) in groups.iter().enumerate() {
+                let mut current_group_size = 0;
+                for region in group {
+                    current_group_size += *region_sizes.get(&region.get_id()).unwrap();
+                }
+                // All groups should have total size > `group_size_threshold` except for the
+                // last region.
+                if i != groups.len() - 1 {
+                    assert!(
+                        current_group_size >= group_size_threshold
+                            && current_group_size < group_size_threshold + max_region_size
+                    );
+                }
+            }
+        };
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 4).unwrap();
+        let group_size_threshold = total_size / 4;
+        check_group(groups, group_size_threshold);
+
+        let groups =
+            deivde_regions_for_concurrency(&debugger.raft_engine, &debugger.tablet_reg, 7).unwrap();
+        let group_size_threshold = total_size / 7;
+        check_group(groups, group_size_threshold);
     }
 
     #[test]
