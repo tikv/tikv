@@ -496,7 +496,7 @@ mod tests {
         let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
         let logger = slog_global::borrow_global().new(o!());
-        let mut s = Storage::new(4, 6, raft_engine.clone(), sched.clone(), &logger.clone())
+        let s = Storage::new(4, 6, raft_engine.clone(), sched.clone(), &logger.clone())
             .unwrap()
             .unwrap();
         let (router, rx) = TestRouter::new();
@@ -533,7 +533,7 @@ mod tests {
         let snap = s.snapshot(0, to_peer_id);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        let gen_task = s.take_gen_snap_task().unwrap();
+        let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.on_snapshot_generated(res);
@@ -554,7 +554,7 @@ mod tests {
         // Test cancel snapshot
         let snap = s.snapshot(0, 7);
         assert_eq!(snap.unwrap_err(), unavailable);
-        let gen_task = s.take_gen_snap_task().unwrap();
+        let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let _res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None);
@@ -564,7 +564,7 @@ mod tests {
         // get snapshot a
         let snap = s.snapshot(0, 0);
         assert_eq!(snap.unwrap_err(), unavailable);
-        let gen_task_a = s.take_gen_snap_task().unwrap();
+        let gen_task_a = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.set_apply_progress(1, 5);
         apply.schedule_gen_snapshot(gen_task_a);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -572,7 +572,7 @@ mod tests {
         // cancel get snapshot a, try get snaphsot b
         let snap = s.snapshot(0, 0);
         assert_eq!(snap.unwrap_err(), unavailable);
-        let gen_task_b = s.take_gen_snap_task().unwrap();
+        let gen_task_b = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.set_apply_progress(10, 5);
         apply.schedule_gen_snapshot(gen_task_b);
         // on snapshot a and b
