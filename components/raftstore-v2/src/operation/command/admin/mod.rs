@@ -37,9 +37,9 @@ use slog::{error, info};
 use split::SplitResult;
 pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
-    SplitInit, SPLIT_PREFIX,
+    SplitInit, SplitPendingAppend, SPLIT_PREFIX,
 };
-use tikv_util::{box_err, log::SlogFormat};
+use tikv_util::{box_err, log::SlogFormat, slog_panic};
 use txn_types::WriteBatchFlags;
 
 use self::flashback::FlashbackResult;
@@ -99,6 +99,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        let is_transfer_leader = cmd_type == AdminCmdType::TransferLeader;
         let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
             && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
                 .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL);
@@ -119,7 +120,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
+        // Do not check conflict for transfer leader, otherwise we may not
+        // transfer leadership out of busy nodes in time.
+        if !is_transfer_leader && let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
             return;
         }
@@ -273,7 +276,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                     self.propose_flashback(ctx, req)
                 }
-                _ => unimplemented!("{:?}", req),
+                _ => slog_panic!(
+                    self.logger,
+                    "unimplemented";
+                    "admin_type" => ?cmd_type,
+                ),
             }
         };
         match &res {

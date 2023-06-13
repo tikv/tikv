@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::mem;
 
-use txn_types::{Key, LockType, TimeStamp};
+use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
@@ -69,7 +69,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                 .into()
             ));
             let released_lock: MvccResult<_> = if let Some(lock) = reader.load_lock(&key)? {
-                if lock.lock_type == LockType::Pessimistic
+                if lock.is_pessimistic_lock()
                     && lock.ts == self.start_ts
                     && lock.for_update_ts <= self.for_update_ts
                 {

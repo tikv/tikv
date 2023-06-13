@@ -190,10 +190,11 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        self.base_file_system.delete(path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
             manager.delete_file(path.as_ref().to_str().unwrap())?;
         }
-        self.base_file_system.delete(path)
+        Ok(())
     }
 
     fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
@@ -520,15 +521,6 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
-    fn get_all_entries_to(&self, raft_group_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
-        if let Some(first) = self.0.first_index(raft_group_id) {
-            let last = self.0.last_index(raft_group_id).unwrap();
-            buf.reserve((last - first + 1) as usize);
-            self.fetch_entries_to(raft_group_id, first, last + 1, None, buf)?;
-        }
-        Ok(())
-    }
-
     fn is_empty(&self) -> Result<bool> {
         self.get_store_ident().map(|i| i.is_none())
     }
@@ -628,12 +620,12 @@ impl RaftEngineReadOnly for RaftLogEngine {
 impl RaftEngineDebug for RaftLogEngine {
     fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
     where
-        F: FnMut(&Entry) -> Result<bool>,
+        F: FnMut(Entry) -> Result<bool>,
     {
         if let Some(first_index) = self.first_index(raft_group_id) {
             for idx in first_index..=self.last_index(raft_group_id).unwrap() {
                 if let Some(entry) = self.get_entry(raft_group_id, idx)? {
-                    if !f(&entry)? {
+                    if !f(entry)? {
                         break;
                     }
                 }
