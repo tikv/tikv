@@ -464,11 +464,7 @@ impl GroupPriorityTracker {
         } else {
             self.virtual_time.load(Ordering::Relaxed)
         }) + task_extra_priority;
-        let priority = if let Some(p) = override_priority {
-            p
-        } else {
-            self.group_priority
-        };
+        let priority = override_priority.unwrap_or(self.group_priority);
         concat_priority_vt(priority, vt)
     }
 
