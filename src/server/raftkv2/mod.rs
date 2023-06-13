@@ -232,6 +232,8 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         subscribed: u8,
         on_applied: Option<tikv_kv::OnAppliedCb>,
     ) -> Self::WriteRes {
+        fail_point!("raftkv_async_write");
+
         let region_id = ctx.region_id;
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
