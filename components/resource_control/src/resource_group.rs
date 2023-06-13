@@ -722,6 +722,7 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_reset_resource_group_vt_overflow() {
         let resource_manager = ResourceGroupManager::default();
