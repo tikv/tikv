@@ -401,12 +401,10 @@ pub fn regexp_replace<C: Collator>(
         for inst in replace_inst.as_ref() {
             match inst {
                 ReplaceInstruction::SubstitutionNum(num) => {
-                    let m = capture.get(*num).ok_or(
-                        Error::regexp_error(format!(
-                            "Substitution number is out of range: {}",
-                            *num
-                        ))
-                    )?;
+                    let m = capture.get(*num).ok_or(Error::regexp_error(format!(
+                        "Substitution number is out of range: {}",
+                        *num
+                    )))?;
                     res.extend(m.as_str().as_bytes());
                 }
                 ReplaceInstruction::Literal(lit) => {
@@ -443,7 +441,11 @@ pub fn regexp_replace<C: Collator>(
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{codec::batch::{LazyBatchColumnVec, LazyBatchColumn}, expr::EvalContext, FieldTypeTp, EvalType};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        expr::EvalContext,
+        EvalType, FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
@@ -1427,13 +1429,19 @@ mod tests {
 
                 let mut ctx = EvalContext::default();
 
-                let mut builder =
-                    ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpReplaceSig, FieldTypeTp::String);
+                let mut builder = ExprDefBuilder::scalar_func(
+                    ScalarFuncSig::RegexpReplaceSig,
+                    FieldTypeTp::String,
+                );
 
                 let mut schema = Vec::new();
                 let mut columns = LazyBatchColumnVec::empty();
                 if all_column {
-                    schema.extend_from_slice(&[FieldTypeTp::String.into(), FieldTypeTp::String.into(), FieldTypeTp::String.into()]);
+                    schema.extend_from_slice(&[
+                        FieldTypeTp::String.into(),
+                        FieldTypeTp::String.into(),
+                        FieldTypeTp::String.into(),
+                    ]);
                     builder = builder
                         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::String))
                         .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::String))
@@ -1444,41 +1452,49 @@ mod tests {
                     col_vec.push(col);
 
                     let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
-                    col.mut_decoded().push_bytes(Some(pattern.as_bytes().to_vec()));
+                    col.mut_decoded()
+                        .push_bytes(Some(pattern.as_bytes().to_vec()));
                     col_vec.push(col);
 
                     let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
-                    col.mut_decoded().push_bytes(Some(replace.as_bytes().to_vec()));
+                    col.mut_decoded()
+                        .push_bytes(Some(replace.as_bytes().to_vec()));
                     col_vec.push(col);
 
                     let mut count = 0;
                     if let Some(p) = pos {
                         count += 1;
                         schema.push(FieldTypeTp::Long.into());
-                        let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+                        let mut col =
+                            LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
                         col.mut_decoded().push_int(Some(p));
                         col_vec.push(col);
 
-                        builder = builder.push_child(ExprDefBuilder::column_ref(3, FieldTypeTp::Long));
+                        builder =
+                            builder.push_child(ExprDefBuilder::column_ref(3, FieldTypeTp::Long));
                     }
                     if let Some(o) = occur {
                         assert_eq!(count, 1);
                         count += 1;
                         schema.push(FieldTypeTp::Long.into());
-                        let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+                        let mut col =
+                            LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
                         col.mut_decoded().push_int(Some(o));
                         col_vec.push(col);
 
-                        builder = builder.push_child(ExprDefBuilder::column_ref(4, FieldTypeTp::Long));
+                        builder =
+                            builder.push_child(ExprDefBuilder::column_ref(4, FieldTypeTp::Long));
                     }
                     if let Some(m) = match_type {
                         assert_eq!(count, 2);
                         schema.push(FieldTypeTp::String.into());
-                        let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                        let mut col =
+                            LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
                         col.mut_decoded().push_bytes(Some(m.as_bytes().to_vec()));
                         col_vec.push(col);
 
-                        builder = builder.push_child(ExprDefBuilder::column_ref(5, FieldTypeTp::String));
+                        builder =
+                            builder.push_child(ExprDefBuilder::column_ref(5, FieldTypeTp::String));
                     }
 
                     columns = LazyBatchColumnVec::from(col_vec);
@@ -1499,15 +1515,17 @@ mod tests {
                     }
                     if let Some(m) = match_type {
                         assert_eq!(count, 2);
-                        builder = builder.push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
+                        builder = builder
+                            .push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
                     }
                 }
-                
+
                 let node = builder.build();
-                let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, schema.len()).unwrap();
-    
+                let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, schema.len())
+                    .unwrap();
+
                 let val = exp.eval(&mut ctx, &schema, &mut columns, &[0], 1);
-    
+
                 match val {
                     Ok(val) => {
                         assert!(val.is_vector());
