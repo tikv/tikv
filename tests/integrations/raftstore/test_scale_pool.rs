@@ -82,6 +82,51 @@ fn test_increase_pool() {
     fail::remove(fp1);
 }
 
+#[test]
+fn test_increase_pool_v2() {
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.pd_client.disable_default_operator();
+    let fp1 = "poll";
+
+    // Pause at the entrance of the rafstore-1-0 thread
+    fail::cfg(fp1, "1*pause").unwrap();
+    let _ = cluster.run_conf_change();
+
+    // Request cann't be handled as all pollers have been paused
+    put_with_timeout(&mut cluster, b"k1", b"k1", Duration::from_secs(1)).unwrap();
+    must_get_none(&cluster.get_engine(1), b"k1");
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller().unwrap();
+
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.store-pool-size".to_owned(), "2".to_owned());
+            change
+        };
+        // Update config, expand from 1 to 2
+        cfg_controller.update(change).unwrap();
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .raft_store
+                .apply_batch_system
+                .pool_size,
+            2
+        );
+    }
+
+    // Request can be handled as usual
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+
+    fail::remove(fp1);
+}
+
 fn get_poller_thread_ids() -> Vec<Pid> {
     let prefixs = ("raftstore", "apply-");
     let mut poller_tids = vec![];
