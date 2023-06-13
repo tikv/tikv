@@ -61,7 +61,7 @@ impl QuotaLimiter {
     }
 
     #[allow(dead_code)]
-    fn get_statistics(&self) -> GroupStatistics {
+    pub fn get_statistics(&self) -> GroupStatistics {
         GroupStatistics {
             total_consumed: self.limiter.total_bytes_consumed() as u64,
             total_wait_dur_us: self.total_wait_dur_us.load(Ordering::Relaxed),

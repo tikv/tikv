@@ -4974,6 +4974,7 @@ dependencies = [
  "crossbeam-skiplist",
  "dashmap",
  "fail",
+ "file_system",
  "futures 0.3.15",
  "kvproto",
  "lazy_static",
@@ -4990,6 +4991,7 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "tikv_util",
+ "tokio-timer",
  "yatp",
 ]
 
