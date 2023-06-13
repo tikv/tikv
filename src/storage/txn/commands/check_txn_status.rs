@@ -154,7 +154,7 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{self, Context, LockInfo, PrewriteRequestPessimisticAction::*};
     use tikv_util::deadline::Deadline;
-    use txn_types::{Key, WriteType};
+    use txn_types::{Key, LastChange, WriteType};
 
     use super::{TxnStatus::*, *};
     use crate::storage::{
@@ -1213,8 +1213,7 @@ pub mod tests {
         must_commit(&mut engine, k, 7, 8);
 
         let rollback = must_written(&mut engine, k, 10, 10, WriteType::Rollback);
-        assert!(rollback.last_change_ts.is_zero());
-        assert_eq!(rollback.versions_to_last_change, 0);
+        assert_eq!(rollback.last_change, LastChange::Unknown);
     }
 
     #[test]
