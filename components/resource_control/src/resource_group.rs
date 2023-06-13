@@ -144,6 +144,10 @@ impl ResourceGroupManager {
     pub fn retain(&self, mut f: impl FnMut(&String, &PbResourceGroup) -> bool) {
         let mut removed_names = vec![];
         self.resource_groups.retain(|k, v| {
+            // avoid remove default group.
+            if k == DEFAULT_RESOURCE_GROUP_NAME {
+                return true;
+            }
             let ret = f(k, &v.group);
             if !ret {
                 removed_names.push(k.clone());
@@ -851,7 +855,7 @@ pub(crate) mod tests {
         assert_eq!(resource_ctl_write.resource_consumptions.read().len(), 11);
 
         resource_manager.retain(|k, _v| k.starts_with("test"));
-        assert_eq!(resource_manager.get_all_resource_groups().len(), 5);
+        assert_eq!(resource_manager.get_all_resource_groups().len(), 6);
         assert_eq!(resource_ctl.resource_consumptions.read().len(), 6);
         assert_eq!(resource_ctl_write.resource_consumptions.read().len(), 6);
         assert!(resource_manager.get_resource_group("group1").is_none());
