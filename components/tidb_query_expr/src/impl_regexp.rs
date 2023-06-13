@@ -299,7 +299,7 @@ fn init_regexp_replace_data<C: Collator>(expr: &mut Expr) -> Result<ReplaceMetaD
         };
     }
 
-    return Ok(meta);
+    Ok(meta)
 }
 
 fn init_replace_instructions(replace_expr: &[u8]) -> Vec<ReplaceInstruction> {
@@ -401,10 +401,12 @@ pub fn regexp_replace<C: Collator>(
         for inst in replace_inst.as_ref() {
             match inst {
                 ReplaceInstruction::SubstitutionNum(num) => {
-                    let m = capture.get(*num).ok_or(Error::regexp_error(format!(
-                        "Substitution number is out of range: {}",
-                        *num
-                    )))?;
+                    let m = capture.get(*num).ok_or_else(|| {
+                        Error::regexp_error(format!(
+                            "Substitution number is out of range: {}",
+                            *num
+                        ))
+                    })?;
                     res.extend(m.as_str().as_bytes());
                 }
                 ReplaceInstruction::Literal(lit) => {
@@ -425,14 +427,12 @@ pub fn regexp_replace<C: Collator>(
             last_match = m.end();
             work(&capture, &mut result)?;
         }
-    } else {
-        if let Some(capture) = regex.captures_iter(trimmed).nth((occurrence - 1) as usize) {
-            // unwrap on 0 is OK because captures only reports matches
-            let m = capture.get(0).unwrap();
-            result.extend(trimmed[0..m.start()].as_bytes());
-            last_match = m.end();
-            work(&capture, &mut result)?;
-        }
+    } else if let Some(capture) = regex.captures_iter(trimmed).nth((occurrence - 1) as usize) {
+        // unwrap on 0 is OK because captures only reports matches
+        let m = capture.get(0).unwrap();
+        result.extend(trimmed[0..m.start()].as_bytes());
+        last_match = m.end();
+        work(&capture, &mut result)?;
     }
     result.extend(trimmed[last_match..].as_bytes());
 
