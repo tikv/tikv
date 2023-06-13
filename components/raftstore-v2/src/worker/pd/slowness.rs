@@ -15,7 +15,6 @@ pub struct SlownessStatistics {
     /// Reactor as an assistant detector to detect the QPS jitters.
     slow_result: Trend,
     slow_result_recorder: RequestPerSecRecorder,
-    last_tick_id: u64,
     last_tick_finished: bool,
 }
 
@@ -56,7 +55,6 @@ impl SlownessStatistics {
                 cfg.slow_trend_unsensitive_result,
             ),
             slow_result_recorder: RequestPerSecRecorder::new(),
-            last_tick_id: 0,
             last_tick_finished: true,
         }
     }
@@ -83,20 +81,23 @@ where
     }
 
     pub fn handle_slowness_stats_tick(&mut self) {
-        // Record a fairly great value when tick
+        // The following code records a periodic "white noise", which helps
+        // mitigate any minor fluctuations in disk I/O or network I/O latency.
+        // After conducting extensive e2e testing, "100ms" has been determined
+        // to be the most suitable choice for it.
         self.slowness_stats
             .slow_cause
             .record(100_000, Instant::now()); // 100ms
-
+        // Handle timeout if last tick is not finished as expected.
         if !self.slowness_stats.last_tick_finished && self.is_store_heartbeat_delayed() {
             // If the last slowness tick already reached abnormal state and was delayed for
-            // reporting by `store-heartbeat` to PD, we should report it here manually as
-            // a FAKE `store-heartbeat`.
-            // It's an assurance that the heartbeat to PD is not lost. Normally, this case
-            // rarely happens in raftstore-v2.
+            // reporting by `store-heartbeat` to PD, we should report it here manually as a
+            // FAKE `store-heartbeat`. It's an assurance that the heartbeat to
+            // PD is not lost. Normally, this case rarely happens in
+            // raftstore-v2.
             self.handle_fake_store_heartbeat();
         }
-        self.slowness_stats.last_tick_id += 1;
+        // Move to next tick.
         self.slowness_stats.last_tick_finished = false;
     }
 
