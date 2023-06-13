@@ -647,13 +647,8 @@ impl Default for DefaultCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-<<<<<<< HEAD:src/config.rs
             enable_compaction_guard: true,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
-=======
-            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(1),
->>>>>>> 81aeb584e4 (RocksDB: change compaction-guard-min-output-file-size to 1MB (#14889)):src/config/mod.rs
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
@@ -768,13 +763,8 @@ impl Default for WriteCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-<<<<<<< HEAD:src/config.rs
             enable_compaction_guard: true,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
-=======
-            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(1),
->>>>>>> 81aeb584e4 (RocksDB: change compaction-guard-min-output-file-size to 1MB (#14889)):src/config/mod.rs
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
@@ -871,13 +861,8 @@ impl Default for LockCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-<<<<<<< HEAD:src/config.rs
             enable_compaction_guard: false,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
-=======
-            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(1),
->>>>>>> 81aeb584e4 (RocksDB: change compaction-guard-min-output-file-size to 1MB (#14889)):src/config/mod.rs
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -952,13 +937,8 @@ impl Default for RaftCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-<<<<<<< HEAD:src/config.rs
             enable_compaction_guard: false,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
-=======
-            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(1),
->>>>>>> 81aeb584e4 (RocksDB: change compaction-guard-min-output-file-size to 1MB (#14889)):src/config/mod.rs
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -1333,13 +1313,8 @@ impl Default for RaftDefaultCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-<<<<<<< HEAD:src/config.rs
             enable_compaction_guard: false,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
-=======
-            enable_compaction_guard: None,
             compaction_guard_min_output_file_size: ReadableSize::mb(1),
->>>>>>> 81aeb584e4 (RocksDB: change compaction-guard-min-output-file-size to 1MB (#14889)):src/config/mod.rs
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
