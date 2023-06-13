@@ -618,7 +618,6 @@ recovery-mode = "tolerate-tail-corruption"
 recovery-read-block-size = "1KB"
 recovery-threads = 2
 memory-limit = "1GB"
-enable-log-recycle = true # enable by default
 
 [security]
 ca-path = "invalid path"
