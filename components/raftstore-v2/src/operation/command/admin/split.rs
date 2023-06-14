@@ -905,10 +905,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{
-        mpsc::{channel, Receiver, Sender},
-        Arc,
-    };
+    use std::sync::Arc;
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -938,30 +935,9 @@ mod test {
 
     use super::*;
     use crate::{
-        fsm::ApplyResReporter,
-        operation::{test_util::create_tmp_importer, CatchUpLogs},
+        operation::test_util::{create_tmp_importer, MockReporter},
         raft::Apply,
-        router::ApplyRes,
     };
-
-    struct MockReporter {
-        sender: Sender<ApplyRes>,
-    }
-
-    impl MockReporter {
-        fn new() -> (Self, Receiver<ApplyRes>) {
-            let (tx, rx) = channel();
-            (MockReporter { sender: tx }, rx)
-        }
-    }
-
-    impl ApplyResReporter for MockReporter {
-        fn report(&self, apply_res: ApplyRes) {
-            let _ = self.sender.send(apply_res);
-        }
-
-        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
-    }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {
         let mut req = SplitRequest::default();

@@ -444,16 +444,11 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    fn delete_range(
-        &self,
-        region_id: u64,
-        tablet: EK,
-        cf: CfName,
-        start_key: Box<[u8]>,
-        end_key: Box<[u8]>,
-        use_delete_range: bool,
-        cb: Box<dyn FnOnce() + Send>,
-    ) {
+    fn delete_range(&self, delete_range: Task<EK>) {
+        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, use_delete_range, cb } = delete_range else {
+            slog_panic!(self.logger, "unexpected task"; "task" => format!("{}", delete_range))
+        };
+
         let range = vec![Range::new(&start_key, &end_key)];
         let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
             slog_panic!(
@@ -517,23 +512,7 @@ where
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
             Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
-            Task::DeleteRange {
-                region_id,
-                tablet,
-                cf,
-                start_key,
-                end_key,
-                use_delete_range,
-                cb,
-            } => self.delete_range(
-                region_id,
-                tablet,
-                cf,
-                start_key,
-                end_key,
-                use_delete_range,
-                cb,
-            ),
+            delete_range @ Task::DeleteRange { .. } => self.delete_range(delete_range),
         }
     }
 }
