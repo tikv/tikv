@@ -8,12 +8,15 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
+use engine_traits::{
+    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS,
+};
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
+    slog_panic,
     time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
@@ -51,6 +54,15 @@ pub enum Task<EK> {
     Flush {
         region_id: u64,
         cb: Option<Box<dyn FnOnce() + Send>>,
+    },
+    DeleteRange {
+        region_id: u64,
+        tablet: EK,
+        cf: CfName,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
+        use_delete_range: bool,
+        cb: Box<dyn FnOnce() + Send>,
     },
 }
 
@@ -97,6 +109,22 @@ impl<EK> Display for Task<EK> {
                     "flush tablet for region_id {}, is leader {}",
                     region_id,
                     on_flush_finish.is_some()
+                )
+            }
+            Task::DeleteRange {
+                region_id,
+                cf,
+                start_key,
+                end_key,
+                ..
+            } => {
+                write!(
+                    f,
+                    "delete range cf {} [{}, {}) for region_id {}",
+                    cf,
+                    log_wrappers::Value::key(start_key),
+                    log_wrappers::Value::key(end_key),
+                    region_id,
                 )
             }
         }
@@ -168,6 +196,26 @@ impl<EK> Task<EK> {
     pub fn direct_destroy_path(path: PathBuf) -> Self {
         Task::DirectDestroy {
             tablet: Either::Right(path),
+        }
+    }
+
+    pub fn delete_range(
+        region_id: u64,
+        tablet: EK,
+        cf: CfName,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
+        use_delete_range: bool,
+        cb: Box<dyn FnOnce() + Send>,
+    ) -> Self {
+        Task::DeleteRange {
+            region_id,
+            tablet,
+            cf,
+            start_key,
+            end_key,
+            use_delete_range,
+            cb,
         }
     }
 }
@@ -395,6 +443,51 @@ impl<EK: KvEngine> Runner<EK> {
             tablet.flush_cfs(DATA_CFS, false).unwrap();
         }
     }
+
+    fn delete_range(
+        &self,
+        region_id: u64,
+        tablet: EK,
+        cf: CfName,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
+        use_delete_range: bool,
+        cb: Box<dyn FnOnce() + Send>,
+    ) {
+        let range = vec![Range::new(&start_key, &end_key)];
+        let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
+            slog_panic!(
+                self.logger,
+                "failed to delete";
+                "region_id" => region_id,
+                "strategy" => ?strategy,
+                "range_start" => log_wrappers::Value::key(&start_key),
+                "range_end" => log_wrappers::Value::key(&end_key),
+                "error" => ?e,
+            )
+        };
+        tablet
+            .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+            .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
+
+        let strategy = if use_delete_range {
+            DeleteStrategy::DeleteByRange
+        } else {
+            DeleteStrategy::DeleteByKey
+        };
+        // Delete all remaining keys.
+        tablet
+            .delete_ranges_cf(cf, strategy.clone(), &range)
+            .unwrap_or_else(move |e| fail_f(e, strategy));
+
+        // TODO: support titan?
+        // tablet
+        //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+        //     .unwrap_or_else(move |e| fail_f(e,
+        // DeleteStrategy::DeleteBlobs));
+
+        cb();
+    }
 }
 
 impl<EK> Runnable for Runner<EK>
@@ -424,6 +517,23 @@ where
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
             Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
+            Task::DeleteRange {
+                region_id,
+                tablet,
+                cf,
+                start_key,
+                end_key,
+                use_delete_range,
+                cb,
+            } => self.delete_range(
+                region_id,
+                tablet,
+                cf,
+                start_key,
+                end_key,
+                use_delete_range,
+                cb,
+            ),
         }
     }
 }

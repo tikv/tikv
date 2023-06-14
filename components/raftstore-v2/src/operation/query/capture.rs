@@ -317,7 +317,8 @@ mod test {
         host.registry
             .register_cmd_observer(0, BoxCmdObserver::new(ob));
 
-        let (dummy_scheduler, _) = dummy_scheduler();
+        let (dummy_scheduler1, _) = dummy_scheduler();
+        let (dummy_scheduler2, _) = dummy_scheduler();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -337,7 +338,8 @@ mod test {
             None,
             importer,
             host,
-            dummy_scheduler,
+            dummy_scheduler1,
+            dummy_scheduler2,
             logger.clone(),
         );
 

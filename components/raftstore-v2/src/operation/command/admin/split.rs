@@ -1086,6 +1086,7 @@ mod test {
         );
         defer!(checkpoint_worker.stop());
 
+        let (tablet_scheduler, _) = dummy_scheduler();
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let (_tmp_dir, importer) = create_tmp_importer();
@@ -1110,6 +1111,7 @@ mod test {
             importer,
             host,
             checkpoint_scheduler,
+            tablet_scheduler,
             logger.clone(),
         );
 

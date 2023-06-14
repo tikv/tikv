@@ -1,10 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    data_cf_offset, DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange, ALL_CFS,
-    CF_DEFAULT,
+    data_cf_offset, name_to_cf, KvEngine, Mutable, RaftEngine, ALL_CFS, CF_DEFAULT,
 };
 use fail::fail_point;
+use futures::channel::oneshot;
 use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
@@ -16,8 +16,8 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::info;
-use tikv_util::{box_err, slog_panic};
+use slog::{error, info};
+use tikv_util::{box_err, slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -25,6 +25,7 @@ use crate::{
     operation::SimpleWriteReqEncoder,
     raft::{Apply, Peer},
     router::{ApplyTask, CmdResChannel},
+    TabletTask,
 };
 
 mod ingest;
@@ -227,7 +228,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn apply_delete_range(
+    pub async fn apply_delete_range(
         &mut self,
         mut cf: &str,
         index: u64,
@@ -269,6 +270,34 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let start_key = keys::data_key(start_key);
 
+        let start = Instant::now_coarse();
+        // Use delete_files_in_range to drop as many sst files as possible, this
+        // is a way to reclaim disk space quickly after drop a table/index.
+        if !notify_only {
+            let (notify, wait) = oneshot::channel();
+            let delete_range = TabletTask::delete_range(
+                self.region_id(),
+                self.tablet().clone(),
+                name_to_cf(cf).unwrap(),
+                start_key.clone().into(),
+                end_key.clone().into(),
+                use_delete_range,
+                Box::new(move || {
+                    notify.send(()).unwrap();
+                }),
+            );
+            if let Err(e) = self.tablet_scheduler().schedule_force(delete_range) {
+                error!(self.logger, "fail to delete range";
+                    "range_start" => log_wrappers::Value::key(&start_key),
+                    "range_end" => log_wrappers::Value::key(&end_key),
+                    "notify_only" => notify_only,
+                    "error" => ?e,
+                );
+            }
+
+            let _ = wait.await;
+        }
+
         info!(
             self.logger,
             "execute delete range";
@@ -276,43 +305,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "range_end" => log_wrappers::Value::key(&end_key),
             "notify_only" => notify_only,
             "use_delete_range" => use_delete_range,
+            "duration" => ?start.saturating_elapsed(),
         );
-
-        // Use delete_files_in_range to drop as many sst files as possible, this
-        // is a way to reclaim disk space quickly after drop a table/index.
-        if !notify_only {
-            let range = vec![EngineRange::new(&start_key, &end_key)];
-            let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
-                slog_panic!(
-                    self.logger,
-                    "failed to delete";
-                    "strategy" => ?strategy,
-                    "range_start" => log_wrappers::Value::key(&start_key),
-                    "range_end" => log_wrappers::Value::key(&end_key),
-                    "error" => ?e,
-                )
-            };
-            let tablet = self.tablet();
-            tablet
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
-                .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
-
-            let strategy = if use_delete_range {
-                DeleteStrategy::DeleteByRange
-            } else {
-                DeleteStrategy::DeleteByKey
-            };
-            // Delete all remaining keys.
-            tablet
-                .delete_ranges_cf(cf, strategy.clone(), &range)
-                .unwrap_or_else(move |e| fail_f(e, strategy));
-
-            // to do: support titan?
-            // tablet
-            //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
-            //     .unwrap_or_else(move |e| fail_f(e,
-            // DeleteStrategy::DeleteBlobs));
-        }
 
         // delete range is an unsafe operation and it cannot be rollbacked to replay, so
         // we don't update modification index for this operation.
