@@ -108,14 +108,23 @@ fn test_increase_pool_v2() {
 }
 
 fn get_poller_thread_ids() -> Vec<Pid> {
-    let prefixs = ("raftstore", "apply-");
+    get_poller_thread_ids_by_prefix(vec!["raftstore", "apply-"])
+}
+
+fn get_raft_poller_thread_ids() -> Vec<Pid> {
+    get_poller_thread_ids_by_prefix(vec!["rs-"])
+}
+
+fn get_poller_thread_ids_by_prefix(prefixs: Vec<&str>) -> Vec<Pid> {
     let mut poller_tids = vec![];
     let pid = thread::process_id();
     let all_tids: Vec<_> = thread::thread_ids(pid).unwrap();
     for tid in all_tids {
         if let Ok(stat) = thread::full_thread_stat(pid, tid) {
-            if stat.command.starts_with(prefixs.0) || stat.command.starts_with(prefixs.1) {
-                poller_tids.push(tid);
+            for &prefix in &prefixs {
+                if stat.command.starts_with(prefix) {
+                    poller_tids.push(tid);
+                }
             }
         }
     }
@@ -173,6 +182,58 @@ fn test_decrease_pool() {
     let current_poller_tids = get_poller_thread_ids();
     // Compared with before shrinking, the thread num should be reduced by two
     assert_eq!(current_poller_tids.len(), original_poller_tids.len() - 2);
+    // After shrinking, all the left tids must be there before
+    for tid in current_poller_tids {
+        assert!(original_poller_tids.contains(&tid));
+    }
+
+    // Request can be handled as usual
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+}
+
+#[test]
+fn test_decrease_pool_v2() {
+    use test_raftstore_v2::*;
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    let _ = cluster.run_conf_change();
+
+    // Save current poller tids before shrinking
+    let original_poller_tids = get_raft_poller_thread_ids();
+
+    // Request can be handled as usual
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.store_pool_size".to_owned(), "1".to_owned());
+            change
+        };
+
+        // Update config, shrink from 2 to 1
+        cfg_controller.update(change).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .raft_store
+                .store_batch_system
+                .pool_size,
+            1
+        );
+    }
+
+    // Save current poller tids after scaling down
+    let current_poller_tids = get_raft_poller_thread_ids();
+    // Compared with before shrinking, the thread num should be reduced by one
+    assert_eq!(current_poller_tids.len(), original_poller_tids.len() - 1);
     // After shrinking, all the left tids must be there before
     for tid in current_poller_tids {
         assert!(original_poller_tids.contains(&tid));
