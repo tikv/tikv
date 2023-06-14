@@ -686,7 +686,7 @@ fn test_resource_group() {
     let region_1 = 1;
     let region_2 = 2;
 
-    let resource_manager = Arc::new(ResourceGroupManager::new());
+    let resource_manager = Arc::new(ResourceGroupManager::default());
     let get_group = |name: &str, read_tokens: u64, write_tokens: u64| -> ResourceGroup {
         let mut group = ResourceGroup::new();
         group.set_name(name.to_string());

@@ -60,9 +60,8 @@ pub struct ResourceGroupManager {
     registry: RwLock<Vec<Arc<ResourceController>>>,
 }
 
-impl ResourceGroupManager {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+impl Default for ResourceGroupManager {
+    fn default() -> Self {
         let manager = Self {
             resource_groups: Default::default(),
             registry: Default::default(),
@@ -82,7 +81,9 @@ impl ResourceGroupManager {
 
         manager
     }
+}
 
+impl ResourceGroupManager {
     fn get_ru_setting(rg: &PbResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
             // RU mode, read and write use the same setting.
@@ -578,7 +579,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_resource_group() {
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
         assert_eq!(resource_manager.resource_groups.len(), 1);
 
         let group1 = new_resource_group_ru("TEST".into(), 100, 0);
@@ -693,7 +694,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_reset_resource_group_vt() {
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
 
         let group1 = new_resource_group_ru("g1".into(), i32::MAX as u64, 1);
@@ -731,7 +732,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_adjust_resource_group_weight() {
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
         assert_eq!(resource_ctl.is_customized(), false);
@@ -770,7 +771,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_reset_resource_group_vt_overflow() {
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
         let mut rng = thread_rng();
 
@@ -831,7 +832,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_retain_resource_groups() {
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_read".into(), true);
         let resource_ctl_write = resource_manager.derive_controller("test_write".into(), false);
 

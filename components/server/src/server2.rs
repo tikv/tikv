@@ -277,7 +277,7 @@ where
         ));
 
         let resource_manager = if config.resource_control.enabled {
-            let mgr = Arc::new(ResourceGroupManager::new());
+            let mgr = Arc::new(ResourceGroupManager::default());
             let mut resource_mgr_service =
                 ResourceManagerService::new(mgr.clone(), pd_client.clone());
             // spawn a task to periodically update the minimal virtual time of all resource
