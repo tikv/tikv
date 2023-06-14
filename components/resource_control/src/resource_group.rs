@@ -481,7 +481,7 @@ impl<'a, 'b> TaskMetadata<'a> {
 
     pub fn from_ctx(ctx: &ResourceControlContext) -> Self {
         let mut mask = 0;
-        let mut buf = Vec::with_capacity(4 + ctx.resource_group_name.len());
+        let mut buf = vec![];
         if ctx.override_priority != 0 {
             mask |= OVERRIDE_PRIORITY_MASK;
         }
@@ -491,14 +491,14 @@ impl<'a, 'b> TaskMetadata<'a> {
             mask |= RESOURCE_GROUP_NAME_MASK;
         }
         if mask == 0 {
-            // no need to write anything to save copy cost
+            // if all are default value, no need to write anything to save copy cost
             return Self {
-                metadata: Cow::Owned(vec![]),
+                metadata: Cow::Owned(buf),
             };
         }
         buf.push(mask);
         if mask & OVERRIDE_PRIORITY_MASK != 0 {
-            buf.extend_from_slice(&ctx.override_priority.to_ne_bytes());
+            buf.extend_from_slice(&(ctx.override_priority as u32).to_ne_bytes());
         }
         if mask & RESOURCE_GROUP_NAME_MASK != 0 {
             buf.extend_from_slice(ctx.resource_group_name.as_bytes());
@@ -1036,6 +1036,8 @@ pub(crate) mod tests {
             ("test", 15u32),
         ];
 
+        let metadata = TaskMetadata::from_ctx(&ResourceControlContext::default());
+        assert_eq!(metadata.group_name(), b"default");
         for (group_name, priority) in cases {
             let metadata = TaskMetadata::from_ctx(&ResourceControlContext {
                 resource_group_name: group_name.to_string(),
