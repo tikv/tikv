@@ -2,31 +2,11 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use engine_traits::CF_DEFAULT;
-use kvproto::raft_cmdpb::RaftCmdResponse;
-use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::{
     sys::thread::{self, Pid},
     HandyRwLock,
 };
-
-fn put_with_timeout<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    key: &[u8],
-    value: &[u8],
-    timeout: Duration,
-) -> Result<RaftCmdResponse> {
-    let mut region = cluster.get_region(key);
-    let region_id = region.get_id();
-    let req = new_request(
-        region_id,
-        region.take_region_epoch(),
-        vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
-        false,
-    );
-    cluster.call_command_on_node(0, req, timeout)
-}
 
 #[test]
 fn test_increase_pool() {
@@ -41,7 +21,7 @@ fn test_increase_pool() {
     let _ = cluster.run_conf_change();
 
     // Request cann't be handled as all pollers have been paused
-    put_with_timeout(&mut cluster, b"k1", b"k1", Duration::from_secs(1)).unwrap();
+    put_with_timeout(&mut cluster, 1, b"k1", b"k1", Duration::from_secs(1)).unwrap_err();
     must_get_none(&cluster.get_engine(1), b"k1");
 
     {
@@ -96,7 +76,7 @@ fn test_increase_pool_v2() {
     let _ = cluster.run_conf_change();
 
     // Request cann't be handled as all pollers have been paused
-    put_with_timeout(&mut cluster, b"k1", b"k1", Duration::from_secs(1)).unwrap();
+    put_with_timeout(&mut cluster, 1, b"k1", b"k1", Duration::from_secs(1)).unwrap_err();
     must_get_none(&cluster.get_engine(1), b"k1");
 
     {
@@ -114,7 +94,7 @@ fn test_increase_pool_v2() {
             cfg_controller
                 .get_current()
                 .raft_store
-                .apply_batch_system
+                .store_batch_system
                 .pool_size,
             2
         );

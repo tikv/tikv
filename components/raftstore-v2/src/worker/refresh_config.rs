@@ -1,14 +1,11 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    fmt::{self, Display, Formatter},
-    sync::Arc,
-    thread,
-};
+use std::{sync::Arc, thread};
 
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
 use file_system::{set_io_type, IoType};
-use slog::{error, info, Logger};
+use raftstore::store::{BatchComponent, RefreshConfigTask};
+use slog::{error, info, warn, Logger};
 use tikv_util::{sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable};
 
 use crate::fsm::{PeerFsm, StoreFsm};
@@ -79,21 +76,6 @@ where
     }
 }
 
-#[derive(Debug)]
-pub enum Task {
-    ScalePool(usize),
-}
-
-impl Display for Task {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match &self {
-            Task::ScalePool(size) => {
-                write!(f, "Scale pool ajusts: {} ", size)
-            }
-        }
-    }
-}
-
 pub struct Runner<EK, ER, H>
 where
     EK: engine_traits::KvEngine,
@@ -143,12 +125,25 @@ where
     ER: engine_traits::RaftEngine,
     H: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm> + std::marker::Send,
 {
-    type Task = Task;
+    type Task = RefreshConfigTask;
 
-    fn run(&mut self, task: Task) {
+    fn run(&mut self, task: Self::Task) {
         match task {
-            Task::ScalePool(size) => {
+            RefreshConfigTask::ScalePool(component, size) => {
+                match component {
+                    BatchComponent::Store => {}
+                    BatchComponent::Apply => {
+                        unreachable!("v2 does not have apply batch system")
+                    }
+                };
                 self.resize_raft_pool(size);
+            }
+            _ => {
+                warn!(
+                    self.logger,
+                    "not supported now";
+                    "config_change" => ?task,
+                );
             }
         }
     }

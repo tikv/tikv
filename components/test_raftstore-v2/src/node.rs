@@ -22,8 +22,8 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
     store::{
-        AutoSplitController, GlobalReplicationState, RegionSnapshot, SplitConfigManager,
-        TabletSnapKey, TabletSnapManager, Transport,
+        config::RaftstoreConfigManager, AutoSplitController, GlobalReplicationState,
+        RegionSnapshot, SplitConfigManager, TabletSnapKey, TabletSnapManager, Transport,
     },
     Result,
 };

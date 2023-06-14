@@ -32,8 +32,8 @@ use raftstore::{
             GlobalStoreStat, LocalStoreStat,
         },
         local_metrics::RaftMetrics,
-        AutoSplitController, Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
-        StoreWriters, TabletSnapManager, Transport, WriteSenders,
+        AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
+        SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteSenders,
     },
 };
 use resource_metering::CollectorRegHandle;
@@ -540,7 +540,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     purge: Option<Worker>,
     cleanup_worker: Worker,
 
-    refresh_config_worker: LazyWorker<refresh_config::Task>,
+    refresh_config_worker: LazyWorker<RefreshConfigTask>,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
@@ -568,6 +568,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         self.pd.stop();
         self.tablet.stop();
         self.checkpoint.stop();
+        self.refresh_config_worker.stop();
         if let Some(w) = self.purge {
             w.stop();
         }
@@ -802,7 +803,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         Ok(())
     }
 
-    pub fn refresh_config_scheduler(&mut self) -> Scheduler<refresh_config::Task> {
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
         assert!(self.workers.is_some());
         self.workers
             .as_ref()

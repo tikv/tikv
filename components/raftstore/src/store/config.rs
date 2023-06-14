@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::min, collections::HashMap, fmt::Display, sync::Arc, time::Duration, u64};
+use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration, u64};
 
 use batch_system::Config as BatchSystemConfig;
 use engine_traits::{perf_level_serde, PerfLevel};
@@ -1085,16 +1085,16 @@ impl Config {
     }
 }
 
-pub struct RaftstoreConfigManager<T: Display + Send> {
-    scheduler: Scheduler<T>,
+pub struct RaftstoreConfigManager {
+    scheduler: Scheduler<RefreshConfigTask>,
     config: Arc<VersionTrack<Config>>,
 }
 
-impl<T: Display + Send> RaftstoreConfigManager<T> {
+impl RaftstoreConfigManager {
     pub fn new(
-        scheduler: Scheduler<T>,
+        scheduler: Scheduler<RefreshConfigTask>,
         config: Arc<VersionTrack<Config>>,
-    ) -> RaftstoreConfigManager<T> {
+    ) -> RaftstoreConfigManager {
         RaftstoreConfigManager { scheduler, config }
     }
 
@@ -1118,7 +1118,7 @@ impl<T: Display + Send> RaftstoreConfigManager<T> {
     }
 }
 
-impl<T: Display + Send> ConfigManager for RaftstoreConfigManager<T> {
+impl ConfigManager for RaftstoreConfigManager {
     fn dispatch(
         &mut self,
         change: ConfigChange,

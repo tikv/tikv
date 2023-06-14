@@ -409,6 +409,7 @@ pub fn must_error_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
 
 pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
     cluster: &mut Cluster<T, EK>,
+    node_id: u64,
     key: &[u8],
     value: &[u8],
     timeout: Duration,
@@ -421,5 +422,5 @@ pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
         vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
         false,
     );
-    cluster.call_command_on_node(0, req, timeout)
+    cluster.call_command_on_node(node_id, req, timeout)
 }
