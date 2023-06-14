@@ -218,7 +218,7 @@ fn test_flush_before_stop() {
         cluster.must_put_cf(CF_LOCK, key.as_bytes(), b"val");
     }
 
-    let router = cluster.get_router(1).clone().unwrap();
+    let router = cluster.get_router(1).unwrap();
     let raft_engine = cluster.get_raft_engine(1);
 
     let mut rxs = vec![];

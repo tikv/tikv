@@ -70,8 +70,8 @@ dev-assert = true
 hibernate-regions = true
 store-io-pool-size = 2
 
-apply-pool-size = 2
-store-pool-size = 1
+apply-pool-size = 1
+store-pool-size = 2
 [coprocessor]
 
 [rocksdb]

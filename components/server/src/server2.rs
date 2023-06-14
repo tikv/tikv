@@ -1223,7 +1223,7 @@ where
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.core.config.server.status_thread_pool_size,
-                self.cfg_controller.take().unwrap(),
+                self.cfg_controller.clone().unwrap(),
                 Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.core.store_path.clone(),
@@ -1250,6 +1250,23 @@ where
             .server
             .stop()
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
+
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.store_pool_size".to_owned(), "10".to_owned());
+            change
+        };
+        if let Err(e) = self
+            .cfg_controller
+            .as_mut()
+            .unwrap()
+            .update_without_persist(change)
+        {
+            warn!(
+                "config change failed";
+                "error" => ?e,
+            );
+        }
 
         info!("flush-before-close: flush begin");
         let engines = self.engines.take().unwrap();
