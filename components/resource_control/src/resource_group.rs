@@ -822,12 +822,7 @@ pub(crate) mod tests {
         // check all vt has decreased by RESET_VT_THRESHOLD.
         assert!(new_max_vt < max_delta * 2);
         // check fail-point takes effect, the `new_max_vt` has increased.
-        assert!(
-            old_max_vt - RESET_VT_THRESHOLD < new_max_vt,
-            "old: {}, new: {}",
-            old_max_vt,
-            new_max_vt
-        );
+        assert!(old_max_vt - RESET_VT_THRESHOLD < new_max_vt);
     }
 
     #[test]
