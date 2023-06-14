@@ -466,7 +466,7 @@ const RESOURCE_GROUP_NAME_MASK: u8 = 0b0100_0000;
 
 #[derive(Clone, Default)]
 pub struct TaskMetadata<'a> {
-    // The first byte is a bit map,
+    // The first byte is a bit map to indicate which field exists,
     // then append override priority if nonzero,
     // then append resource group name if not default
     metadata: Cow<'a, [u8]>,
