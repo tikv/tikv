@@ -322,31 +322,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             );
         }
 
-        self.ensure_write_buffer();
-        let res = if cf.is_empty() || cf == CF_DEFAULT {
-            // TODO: use write_vector
-            self.write_batch
-                .as_mut()
-                .unwrap()
-                .delete(MAGIC_KEY.as_bytes())
-        } else {
-            self.write_batch
-                .as_mut()
-                .unwrap()
-                .delete_cf(cf, MAGIC_KEY.as_bytes())
-        };
-        res.unwrap_or_else(|e| {
-            slog_panic!(
-                self.logger,
-                "failed to delete magic in delete range";
-                "cf" => cf,
-                "error" => ?e
-            );
-        });
-
-        if index != u64::MAX {
-            self.modifications_mut()[off] = index;
-        }
+        // delete range is an unsafe operation and it cannot be rollbacked to replay, so
+        // we don't update modification index for this operation.
 
         Ok(())
     }

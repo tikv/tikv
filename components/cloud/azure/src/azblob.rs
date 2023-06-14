@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     env, io,
+    ops::Deref,
     str::FromStr,
     sync::{Arc, RwLock},
 };
@@ -24,9 +25,7 @@ use futures_util::{
     TryStreamExt,
 };
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, Bucket as InputBucket, CloudDynamic};
-use lazy_static::lazy_static;
 use oauth2::{ClientId, ClientSecret};
-use regex::Regex;
 use tikv_util::{
     debug,
     stream::{retry, RetryError},
@@ -60,9 +59,11 @@ pub struct Config {
 
     account_name: Option<StringNonEmpty>,
     shared_key: Option<StringNonEmpty>,
+    sas_token: Option<StringNonEmpty>,
     credential_info: Option<CredentialInfo>,
     env_account_name: Option<StringNonEmpty>,
     env_shared_key: Option<StringNonEmpty>,
+    encryption_scope: Option<StringNonEmpty>,
 }
 
 impl std::fmt::Debug for Config {
@@ -71,9 +72,11 @@ impl std::fmt::Debug for Config {
             .field("bucket", &self.bucket)
             .field("account_name", &self.account_name)
             .field("shared_key", &"?")
+            .field("sas_token", &"?")
             .field("credential_info", &self.credential_info)
             .field("env_account_name", &self.env_account_name)
             .field("env_shared_key", &"?")
+            .field("encryption_scope", &self.encryption_scope)
             .finish()
     }
 }
@@ -85,9 +88,11 @@ impl Config {
             bucket,
             account_name: None,
             shared_key: None,
+            sas_token: None,
             credential_info: Self::load_credential_info(),
             env_account_name: Self::load_env_account_name(),
             env_shared_key: Self::load_env_shared_key(),
+            encryption_scope: None,
         }
     }
 
@@ -129,9 +134,13 @@ impl Config {
             bucket,
             account_name: StringNonEmpty::opt(attrs.get("account_name").unwrap_or(def).clone()),
             shared_key: StringNonEmpty::opt(attrs.get("shared_key").unwrap_or(def).clone()),
+            sas_token: StringNonEmpty::opt(attrs.get("sas_token").unwrap_or(def).clone()),
             credential_info: Self::load_credential_info(),
             env_account_name: Self::load_env_account_name(),
             env_shared_key: Self::load_env_shared_key(),
+            encryption_scope: StringNonEmpty::opt(
+                attrs.get("encryption_scope").unwrap_or(def).clone(),
+            ),
         })
     }
 
@@ -148,9 +157,11 @@ impl Config {
             bucket,
             account_name: StringNonEmpty::opt(input.account_name),
             shared_key: StringNonEmpty::opt(input.shared_key),
+            sas_token: StringNonEmpty::opt(input.access_sig),
             credential_info: Self::load_credential_info(),
             env_account_name: Self::load_env_account_name(),
             env_shared_key: Self::load_env_shared_key(),
+            encryption_scope: StringNonEmpty::opt(input.encryption_scope),
         })
     }
 
@@ -225,7 +236,6 @@ impl BlobConfig for Config {
 
 enum RequestError {
     InvalidInput(Box<dyn std::error::Error + Send + Sync>, String),
-    InternalError(String),
     TimeOut(String),
 }
 
@@ -233,9 +243,8 @@ impl From<RequestError> for io::Error {
     fn from(err: RequestError) -> Self {
         match err {
             RequestError::InvalidInput(e, tag) => {
-                Self::new(io::ErrorKind::InvalidInput, format!("{}: {}", tag, &e))
+                Self::new(io::ErrorKind::InvalidInput, format!("{}: {:?}", tag, &e))
             }
-            RequestError::InternalError(msg) => Self::new(io::ErrorKind::Other, msg),
             RequestError::TimeOut(msg) => Self::new(io::ErrorKind::TimedOut, msg),
         }
     }
@@ -243,19 +252,8 @@ impl From<RequestError> for io::Error {
 
 impl RetryError for RequestError {
     fn is_retryable(&self) -> bool {
-        matches!(self, Self::TimeOut(_) | Self::InternalError(_))
+        matches!(self, Self::TimeOut(_))
     }
-}
-
-fn err_is_retryable(err_info: &str) -> bool {
-    // HTTP Code 503: The server is busy
-    // HTTP Code 500: Operation could not be completed within the specified time.
-    // More details seen in https://learn.microsoft.com/en-us/rest/api/storageservices/blob-service-error-codes
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"status: 5[0-9][0-9],").unwrap();
-    }
-
-    RE.is_match(err_info)
 }
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -265,7 +263,8 @@ struct AzureUploader {
     client_builder: Arc<dyn ContainerBuilder>,
     name: String,
 
-    storage_class: AccessTier,
+    storage_class: Option<AccessTier>,
+    encryption_scope: Option<StringNonEmpty>,
 }
 
 impl AzureUploader {
@@ -279,11 +278,12 @@ impl AzureUploader {
             storage_class: Self::parse_storage_class(none_to_empty(
                 config.bucket.storage_class.clone(),
             )),
+            encryption_scope: config.encryption_scope.clone(),
         }
     }
 
-    fn parse_storage_class(storage_class: String) -> AccessTier {
-        AccessTier::from_str(storage_class.as_str()).unwrap_or(AccessTier::Hot)
+    fn parse_storage_class(storage_class: String) -> Option<AccessTier> {
+        AccessTier::from_str(storage_class.as_str()).ok()
     }
 
     /// Executes the upload process.
@@ -305,34 +305,33 @@ impl AzureUploader {
     /// relatively cheap to retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RequestError> {
         match timeout(Self::get_timeout(), async {
-            self.client_builder
+            let builder = self
+                .client_builder
                 .get_client()
                 .await
                 .map_err(|e| e.to_string())?
                 .blob_client(&self.name)
-                .put_block_blob(data.to_vec())
-                .access_tier(self.storage_class)
-                .await?;
+                .put_block_blob(data.to_vec());
+
+            // the encryption scope and the access tier can not be both in the HTTP headers
+            let builder = if let Some(scope) = &self.encryption_scope {
+                builder.encryption_scope(scope.deref().clone())
+            } else if let Some(tier) = self.storage_class {
+                builder.access_tier(tier)
+            } else {
+                builder
+            };
+            builder.await?;
             Ok(())
         })
         .await
         {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
-                Err(err) => {
-                    let err_info = ToString::to_string(&err);
-                    if err_is_retryable(&err_info) {
-                        Err(RequestError::InternalError(format!(
-                            "internal error: {}, retry later",
-                            err_info
-                        )))
-                    } else {
-                        Err(RequestError::InvalidInput(
-                            err,
-                            "upload block failed".to_owned(),
-                        ))
-                    }
-                }
+                Err(err) => Err(RequestError::InvalidInput(
+                    err,
+                    "upload block failed".to_owned(),
+                )),
             },
             Err(_) => Err(RequestError::TimeOut(
                 "timeout after 15mins for complete in azure storage".to_owned(),
@@ -516,10 +515,28 @@ impl AzureStorage {
     }
 
     pub fn new(config: Config) -> io::Result<AzureStorage> {
+        let account_name = config.get_account_name()?;
         let bucket = (*config.bucket.bucket).to_owned();
-        // priority: explicit shared key > env Azure AD > env shared key
-        if let Some(connection_string) = config.parse_plaintext_account_url() {
-            let account_name = config.get_account_name()?;
+        // priority:
+        //   explicit sas token > explicit shared key > env Azure AD > env shared key
+        if let Some(sas_token) = config.sas_token.as_ref() {
+            let token = sas_token.deref();
+            let storage_credentials = StorageCredentials::sas_token(token).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid configurations for SAS token, err: {}", e),
+                )
+            })?;
+            let container_client = Arc::new(
+                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+            );
+
+            let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
+            Ok(AzureStorage {
+                config,
+                client_builder,
+            })
+        } else if let Some(connection_string) = config.parse_plaintext_account_url() {
             let storage_credentials = ConnectionString::new(&connection_string)
                 .map_err(|e| {
                     io::Error::new(
@@ -544,7 +561,6 @@ impl AzureStorage {
                 client_builder,
             })
         } else if let Some(credential_info) = config.credential_info.as_ref() {
-            let account_name = config.get_account_name()?;
             let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
             let cred = ClientSecretCredential::new(
                 new_http_client(),
@@ -566,7 +582,6 @@ impl AzureStorage {
                 client_builder,
             })
         } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
-            let account_name = config.get_account_name()?;
             let storage_credentials = ConnectionString::new(&connection_string)
                 .map_err(|e| {
                     io::Error::new(
@@ -820,25 +835,5 @@ mod tests {
         cd.set_attrs(attrs);
         cd.set_bucket(bucket);
         cd
-    }
-
-    #[tokio::test]
-    async fn test_error_retryable() {
-        let err_info = "HTTP error status (status: 503,... The server is busy.";
-        assert!(err_is_retryable(err_info));
-        let err_info = "HTTP error status (status: 500,... Operation could not be completed within the specified time.";
-        assert!(err_is_retryable(err_info));
-        let err_info =
-            "HTTP error status (status: 409,... The blob type is invalid for this operation.";
-        assert!(!err_is_retryable(err_info));
-        let err_info = "HTTP error status (status: 50,... ";
-        assert!(!err_is_retryable(err_info));
-        let err = "NaN".parse::<u32>().unwrap_err();
-        let err1 = RequestError::InvalidInput(Box::new(err), "invalid-input".to_owned());
-        let err2 = RequestError::InternalError("internal-error".to_owned());
-        let err3 = RequestError::TimeOut("time-out".to_owned());
-        assert!(!err1.is_retryable());
-        assert!(err2.is_retryable());
-        assert!(err3.is_retryable());
     }
 }
