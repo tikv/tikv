@@ -730,7 +730,12 @@ fn test_read_index_after_write() {
     );
 }
 
+<<<<<<< HEAD
 #[test]
+=======
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+>>>>>>> 8ccb0042a9 (raftstore-v2: support check leader lease tick (#14936))
 fn test_infinite_lease() {
     let mut cluster = new_node_cluster(0, 3);
     // Avoid triggering the log compaction in this test case.
