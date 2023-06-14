@@ -120,7 +120,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
     ) -> Result<(), ReadPoolError>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -196,7 +196,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
     ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
         F: Future<Output = T> + Send + 'static,

@@ -106,7 +106,7 @@ struct PriorityQueue {
 impl PriorityQueue {
     fn spawn(
         &self,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
@@ -207,7 +207,7 @@ impl SchedPool {
 
     pub fn spawn(
         &self,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {

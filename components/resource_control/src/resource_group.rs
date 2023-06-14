@@ -412,7 +412,7 @@ impl<'a, 'b> TaskMetadata<'a> {
         if ctx.override_priority != 0 {
             mask |= OVERRIDE_PRIORITY_MASK;
         }
-        if ctx.resource_group_name.len() > 0
+        if !ctx.resource_group_name.is_empty()
             && ctx.resource_group_name != DEFAULT_RESOURCE_GROUP_NAME
         {
             mask |= RESOURCE_GROUP_NAME_MASK;
@@ -446,7 +446,7 @@ impl<'a, 'b> TaskMetadata<'a> {
     }
 
     fn override_priority(&self) -> u32 {
-        if self.metadata.len() == 0 {
+        if self.metadata.is_empty() {
             return 0;
         }
         if self.metadata[0] & OVERRIDE_PRIORITY_MASK == 0 {
@@ -456,7 +456,7 @@ impl<'a, 'b> TaskMetadata<'a> {
     }
 
     pub fn group_name(&self) -> &[u8] {
-        if self.metadata.len() == 0 {
+        if self.metadata.is_empty() {
             return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
         }
         if self.metadata[0] & RESOURCE_GROUP_NAME_MASK == 0 {

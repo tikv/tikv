@@ -1501,7 +1501,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     // TODO: separate the txn and raw commands if needed in the future.
     fn sched_raw_command<T>(
         &self,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
         pri: CommandPri,
         tag: CommandKind,
         future: T,
@@ -2830,7 +2830,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         future: Fut,
         priority: CommandPri,
         task_id: u64,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
     ) -> impl Future<Output = Result<T>>
     where
         Fut: Future<Output = Result<T>> + Send + 'static,

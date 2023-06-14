@@ -380,7 +380,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
     fn acquire_lock_on_wakeup(
         &self,
         cid: u64,
-    ) -> Result<Option<Task>, (TaskMetadata, CommandPri, StorageError)> {
+    ) -> Result<Option<Task>, (TaskMetadata<'_>, CommandPri, StorageError)> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests
@@ -808,7 +808,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         async_apply_prewrite: bool,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
         tag: CommandKind,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
         sched_details: &SchedulerDetails,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
@@ -959,7 +959,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_release_locks(
         &self,
-        metadata: &TaskMetadata,
+        metadata: &TaskMetadata<'_>,
         released_locks: ReleasedLocks,
     ) -> SVec<Box<LockWaitEntry>> {
         // This function is always called when holding the latch of the involved keys.
@@ -1014,7 +1014,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_acquired_locks_finished(
         &self,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
     ) {
         if new_acquired_locks.is_empty() || self.inner.lock_wait_queues.is_empty() {
@@ -1039,7 +1039,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn wake_up_legacy_pessimistic_locks(
         &self,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<'_>,
         legacy_wake_up_list: impl IntoIterator<Item = (Box<LockWaitEntry>, ReleasedLock)>
         + Send
         + 'static,
