@@ -4,6 +4,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    marker::PhantomData,
     path::Path,
     sync::Arc,
     time::Duration,
@@ -22,6 +23,7 @@ use backup_stream::{
     utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
     RegionSet, Service, Task,
 };
+use engine_rocks::RocksEngine;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
@@ -36,7 +38,7 @@ use protobuf::parse_from_bytes;
 use raftstore::router::CdcRaftRouter;
 use resolved_ts::LeadershipResolver;
 use tempdir::TempDir;
-use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateStoreTransport};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
@@ -101,10 +103,17 @@ struct ErrorStore<S> {
     error_provider: Arc<dyn Fn(&str) -> Result<()> + Send + Sync>,
 }
 
+type ResolverType = BackupStreamResolver<CdcRaftRouter<SimulateStoreTransport>, RocksEngine>;
+
 pub struct SuiteBuilder {
     name: String,
     nodes: usize,
     metastore_error: Box<dyn Fn(&str) -> Result<()> + Send + Sync>,
+    resolver_fn: Box<
+        dyn Fn(LeadershipResolver, CdcRaftRouter<SimulateStoreTransport>) -> ResolverType
+            + Send
+            + Sync,
+    >,
     cfg: Box<dyn FnOnce(&mut BackupStreamConfig)>,
 }
 
@@ -114,10 +123,26 @@ impl SuiteBuilder {
             name: s.to_owned(),
             nodes: 4,
             metastore_error: Box::new(|_| Ok(())),
+            // default is BackupStreamResolver V1
+            resolver_fn: Box::new(|l, _| BackupStreamResolver::V1(l)),
             cfg: Box::new(|cfg| {
                 cfg.enable = true;
             }),
         }
+    }
+
+    pub fn with_resolver_v1(mut self) -> Self {
+        let resolver_fn = Box::new(|l, _| BackupStreamResolver::V1(l));
+        let _ = std::mem::replace(&mut self.resolver_fn, resolver_fn);
+
+        self
+    }
+
+    pub fn with_resolver_v2(mut self) -> Self {
+        let resolver_fn = Box::new(|_, rt| BackupStreamResolver::V2(rt, PhantomData));
+        let _ = std::mem::replace(&mut self.resolver_fn, resolver_fn);
+
+        self
     }
 
     pub fn nodes(mut self, n: usize) -> Self {
@@ -148,6 +173,7 @@ impl SuiteBuilder {
             nodes: n,
             metastore_error,
             cfg: cfg_f,
+            resolver_fn,
         } = self;
 
         info!("start test"; "case" => %case, "nodes" => %n);
@@ -178,7 +204,7 @@ impl SuiteBuilder {
         let mut cfg = BackupStreamConfig::default();
         cfg_f(&mut cfg);
         for id in 1..=(n as u64) {
-            suite.start_endpoint(id, cfg.clone());
+            suite.start_endpoint(id, cfg.clone(), &resolver_fn);
             let cli = suite.start_log_backup_client_on(id);
             suite.log_backup_cli.insert(id, cli);
         }
@@ -333,7 +359,16 @@ impl Suite {
         client
     }
 
-    fn start_endpoint(&mut self, id: u64, mut cfg: BackupStreamConfig) {
+    fn start_endpoint(
+        &mut self,
+        id: u64,
+        mut cfg: BackupStreamConfig,
+        resolver_fn: &(
+             dyn Fn(LeadershipResolver, CdcRaftRouter<SimulateStoreTransport>) -> ResolverType
+                 + Send
+                 + Sync
+         ),
+    ) {
         let cluster = &mut self.cluster;
         let worker = self.endpoints.get_mut(&id).unwrap();
         let sim = cluster.sim.wl();
@@ -363,10 +398,10 @@ impl Suite {
             worker.scheduler(),
             ob,
             regions,
-            raft_router,
+            raft_router.clone(),
             cluster.pd_client.clone(),
             cm,
-            BackupStreamResolver::V1(resolver),
+            resolver_fn(resolver, raft_router),
         );
         worker.start(endpoint);
     }
@@ -839,6 +874,7 @@ mod test {
     };
     use futures::{executor::block_on, Stream, StreamExt};
     use pd_client::PdClient;
+    use test_backup_macro::test_case;
     use test_raftstore::IsolationFilterFactory;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
@@ -848,7 +884,8 @@ mod test {
         make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
     };
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn basic() {
         let mut suite = super::SuiteBuilder::new_named("basic").build();
         fail::cfg("try_start_observe", "1*return").unwrap();
@@ -871,7 +908,8 @@ mod test {
         suite.cluster.shutdown();
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn with_split() {
         let mut suite = super::SuiteBuilder::new_named("with_split").build();
         run_async_test(async {
@@ -906,7 +944,8 @@ mod test {
     ///   scanning.
     /// - The remaining mutations are committed before the instant when initial
     ///   scanning get the snapshot.
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn with_split_txn() {
         let mut suite = super::SuiteBuilder::new_named("split_txn").build();
         run_async_test(async {
@@ -945,7 +984,8 @@ mod test {
         suite.cluster.shutdown();
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn frequent_initial_scan() {
         let mut suite = super::SuiteBuilder::new_named("frequent_initial_scan")
             .cfg(|c| c.num_threads = 1)
@@ -983,7 +1023,8 @@ mod test {
         assert!(c > commit_ts.into_inner(), "{} vs {}", c, commit_ts);
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     /// This case tests whether the backup can continue when the leader failes.
     fn leader_down() {
         let mut suite = super::SuiteBuilder::new_named("leader_down").build();
@@ -1002,7 +1043,8 @@ mod test {
         suite.cluster.shutdown();
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     /// This case tests whether the checkpoint ts (next backup ts) can be
     /// advanced correctly when async commit is enabled.
     fn async_commit() {
@@ -1027,7 +1069,8 @@ mod test {
         suite.cluster.shutdown();
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn fatal_error() {
         let mut suite = super::SuiteBuilder::new_named("fatal_error")
             .nodes(3)
@@ -1075,7 +1118,8 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn region_checkpoint_info() {
         let mut suite = super::SuiteBuilder::new_named("checkpoint_info")
             .nodes(1)
@@ -1107,7 +1151,8 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn region_failure() {
         defer! {{
             fail::remove("try_start_observe");
@@ -1126,7 +1171,8 @@ mod test {
         ));
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn initial_scan_failure() {
         defer! {{
             fail::remove("scan_and_async_send");
@@ -1151,7 +1197,8 @@ mod test {
         ));
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn upload_checkpoint_exits_in_time() {
         defer! {{
             std::env::remove_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN");
@@ -1183,7 +1230,8 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn failed_during_refresh_region() {
         defer! {
             fail::remove("get_last_checkpoint_of")
@@ -1231,7 +1279,8 @@ mod test {
     }
 
     /// This test case tests whether we correctly handle the pessimistic locks.
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn pessimistic_lock() {
         let mut suite = SuiteBuilder::new_named("pessimistic_lock").nodes(3).build();
         suite.must_kv_pessimistic_lock(
@@ -1290,7 +1339,8 @@ mod test {
         r
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn subscribe_flushing() {
         let mut suite = super::SuiteBuilder::new_named("sub_flush").build();
         let stream = suite.flush_stream(true);
@@ -1335,7 +1385,8 @@ mod test {
         ));
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn failure_and_split() {
         let mut suite = super::SuiteBuilder::new_named("failure_and_split")
             .nodes(1)
@@ -1365,7 +1416,8 @@ mod test {
         suite.cluster.shutdown();
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn resolved_follower() {
         let mut suite = super::SuiteBuilder::new_named("r").build();
         let round1 = run_async_test(suite.write_records(0, 128, 1));
@@ -1400,7 +1452,8 @@ mod test {
         ));
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn network_partition() {
         let mut suite = super::SuiteBuilder::new_named("network_partition")
             .nodes(3)
@@ -1445,7 +1498,8 @@ mod test {
         ))
     }
 
-    #[test]
+    #[test_case(with_resolver_v1)]
+    #[test_case(with_resolver_v2)]
     fn test_retry_abort() {
         let mut suite = super::SuiteBuilder::new_named("retry_abort")
             .nodes(1)
