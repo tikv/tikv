@@ -730,9 +730,7 @@ fn test_read_index_after_write() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
-// TODO: Renew leader lease periodically is not supported in raftstore v2
-// currently.       https://github.com/tikv/tikv/issues/14876
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_infinite_lease() {
     let mut cluster = new_cluster(0, 3);
     // Avoid triggering the log compaction in this test case.
