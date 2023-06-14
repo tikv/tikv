@@ -224,7 +224,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
         }
     }
 
-    fn back(&self) -> Option<&Proposal<C>> {
+    pub fn back(&self) -> Option<&Proposal<C>> {
         self.queue.back()
     }
 }
