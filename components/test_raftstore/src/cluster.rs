@@ -211,7 +211,7 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
-            resource_manager: Some(Arc::new(ResourceGroupManager::new())),
+            resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
         }

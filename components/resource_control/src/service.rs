@@ -196,7 +196,7 @@ pub mod tests {
     #[test]
     fn crud_config_test() {
         let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         assert_eq!(s.manager.get_all_resource_groups().len(), 1);
@@ -217,7 +217,7 @@ pub mod tests {
     #[test]
     fn watch_config_test() {
         let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         block_on(s.reload_all_resource_groups());
@@ -270,7 +270,7 @@ pub mod tests {
     #[test]
     fn reboot_watch_server_test() {
         let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
-        let resource_manager = ResourceGroupManager::new();
+        let resource_manager = ResourceGroupManager::default();
 
         let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         let background_worker = Builder::new("background").thread_count(1).create();

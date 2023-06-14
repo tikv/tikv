@@ -107,7 +107,7 @@ fn test_priority() {
 #[test]
 fn test_resource_group() {
     let (control_tx, control_fsm) = Runner::new(10);
-    let resource_manager = ResourceGroupManager::new();
+    let resource_manager = ResourceGroupManager::default();
 
     let get_group = |name: &str, read_tokens: u64, write_tokens: u64| -> ResourceGroup {
         let mut group = ResourceGroup::new();
