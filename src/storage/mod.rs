@@ -3752,7 +3752,7 @@ mod tests {
     use parking_lot::Mutex;
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
-    use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
+    use txn_types::{LastChange, Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::{
         config::EngineType,
@@ -10679,8 +10679,7 @@ mod tests {
                         ttl: 3000,
                         for_update_ts: 10.into(),
                         min_commit_ts: 11.into(),
-                        last_change_ts: TimeStamp::zero(),
-                        versions_to_last_change: 1,
+                        last_change: LastChange::NotExist,
                         is_locked_with_conflict: false,
                     },
                     false
