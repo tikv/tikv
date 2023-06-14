@@ -397,7 +397,7 @@ pub fn regexp_replace<C: Collator>(
         }
     };
 
-    let work = |capture: &regex::Captures, res: &mut Vec<u8>| -> Result<()> {
+    let replace_work = |capture: &regex::Captures, res: &mut Vec<u8>| -> Result<()> {
         for inst in replace_inst.as_ref() {
             match inst {
                 ReplaceInstruction::SubstitutionNum(num) => {
@@ -416,6 +416,7 @@ pub fn regexp_replace<C: Collator>(
         }
         Ok(())
     };
+
     let mut result = Vec::new();
     result.extend(before_trimmed.as_bytes());
     let mut last_match = 0;
@@ -425,14 +426,14 @@ pub fn regexp_replace<C: Collator>(
             let m = capture.get(0).unwrap();
             result.extend(trimmed[last_match..m.start()].as_bytes());
             last_match = m.end();
-            work(&capture, &mut result)?;
+            replace_work(&capture, &mut result)?;
         }
     } else if let Some(capture) = regex.captures_iter(trimmed).nth((occurrence - 1) as usize) {
         // unwrap on 0 is OK because captures only reports matches
         let m = capture.get(0).unwrap();
         result.extend(trimmed[0..m.start()].as_bytes());
         last_match = m.end();
-        work(&capture, &mut result)?;
+        replace_work(&capture, &mut result)?;
     }
     result.extend(trimmed[last_match..].as_bytes());
 
@@ -1320,6 +1321,16 @@ mod tests {
                 Some("的的的的的的的的"),
                 false,
             ),
+            (
+                r"abc",
+                r"\d*",
+                r"d",
+                None,
+                None,
+                None,
+                Some(r"dadbdcd"),
+                false,
+            ),
             // Test capture group
             (
                 r"seafood fool",
@@ -1400,6 +1411,27 @@ mod tests {
                 None,
                 Some(r"\i\h-g\f-e\d-c\b-a\ \I\H-G\F-E\D-C\B-A\"),
                 false,
+            ),
+            (
+                r"fool food foo",
+                r"foo(.?)",
+                r"\0+\1",
+                None,
+                None,
+                None,
+                Some(r"fool+l food+d foo+"),
+                false,
+            ),
+            // \2 is out of capture group's range.
+            (
+                r"fool food foo",
+                r"foo(.?)",
+                r"\0+\2",
+                None,
+                None,
+                None,
+                None,
+                true,
             ),
             (
                 r"https://go.mail/folder-1/online/ru-en/#lingvo/#1О 50000&price_ashka/rav4/page=/check.xml",
