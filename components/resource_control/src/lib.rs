@@ -22,6 +22,8 @@ pub use service::ResourceManagerService;
 pub mod channel;
 pub use channel::ResourceMetered;
 
+mod resource_limiter;
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
