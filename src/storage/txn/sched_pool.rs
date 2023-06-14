@@ -8,10 +8,7 @@ use std::{
 
 use collections::HashMap;
 use file_system::{set_io_type, IoType};
-use kvproto::{
-    kvrpcpb::{CommandPri, ResourceControlContext},
-    pdpb::QueryKind,
-};
+use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
 use raftstore::store::WriteStats;
@@ -109,7 +106,7 @@ struct PriorityQueue {
 impl PriorityQueue {
     fn spawn(
         &self,
-        resource_control_ctx: &ResourceControlContext,
+        metadata: TaskMetadata,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
@@ -120,11 +117,8 @@ impl PriorityQueue {
         };
         // TODO: maybe use a better way to generate task_id
         let task_id = rand::random::<u64>();
+        let group_name = metadata.group_name().to_owned();
         let mut extras = Extras::new_multilevel(task_id, fixed_level);
-        let metadata = TaskMetadata {
-            group_name: resource_control_ctx.get_resource_group_name().to_owned(),
-            override_priority: resource_control_ctx.get_override_priority() as u32,
-        };
         extras.set_metadata(metadata.to_vec());
         self.worker_pool.spawn_with_extras(
             ControlledFuture::new(
@@ -132,10 +126,7 @@ impl PriorityQueue {
                     f.await;
                 },
                 self.resource_ctl.clone(),
-                resource_control_ctx
-                    .get_resource_group_name()
-                    .as_bytes()
-                    .to_vec(),
+                group_name,
             ),
             extras,
         )
@@ -216,7 +207,7 @@ impl SchedPool {
 
     pub fn spawn(
         &self,
-        resource_control_ctx: &ResourceControlContext,
+        metadata: TaskMetadata,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
@@ -228,7 +219,7 @@ impl SchedPool {
                     self.priority
                         .as_ref()
                         .unwrap()
-                        .spawn(resource_control_ctx, priority_level, f)
+                        .spawn(metadata, priority_level, f)
                 } else {
                     fail_point!("single_queue_pool_task");
                     self.vanilla.spawn(priority_level, f)

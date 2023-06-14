@@ -41,13 +41,13 @@ use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{
-    kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp, ResourceControlContext},
+    kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp},
     pdpb::QueryKind,
 };
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
-use resource_control::ResourceController;
+use resource_control::{ResourceController, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
@@ -380,7 +380,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
     fn acquire_lock_on_wakeup(
         &self,
         cid: u64,
-    ) -> Result<Option<Task>, (ResourceControlContext, CommandPri, StorageError)> {
+    ) -> Result<Option<Task>, (TaskMetadata, CommandPri, StorageError)> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests
@@ -393,7 +393,11 @@ impl<L: LockManager> TxnSchedulerInner<L> {
             // acquired count is one more than the `owned_count` recorded in the
             // lock, so we increase one to make `release` work.
             tctx.lock.owned_count += 1;
-            return Err((cmd.resource_control_ctx().clone(), cmd.priority(), e.into()));
+            return Err((
+                TaskMetadata::from_ctx(cmd.resource_control_ctx()),
+                cmd.priority(),
+                e.into(),
+            ));
         }
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
@@ -569,47 +573,51 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let deadline = cmd.deadline();
         let sched = self.clone();
         self.get_sched_pool()
-            .spawn(cmd.resource_control_ctx(), cmd.priority(), async move {
-                match unsafe {
-                    with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx))
-                } {
-                    // Precheck failed, try to return err early.
-                    Err(e) => {
-                        let cb = sched.inner.try_own_and_take_cb(cid);
-                        // The task is not processing or finished currently. It's safe
-                        // to response early here. In the future, the task will be waked up
-                        // and it will finished with DeadlineExceeded error.
-                        // As the cb is taken here, it will not be executed anymore.
-                        if let Some(cb) = cb {
-                            let pr = ProcessResult::Failed {
-                                err: StorageError::from(e),
-                            };
-                            Self::early_response(
-                                cid,
-                                cb,
-                                pr,
-                                tag,
-                                CommandStageKind::precheck_write_err,
-                            );
+            .spawn(
+                TaskMetadata::from_ctx(cmd.resource_control_ctx()),
+                cmd.priority(),
+                async move {
+                    match unsafe {
+                        with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx))
+                    } {
+                        // Precheck failed, try to return err early.
+                        Err(e) => {
+                            let cb = sched.inner.try_own_and_take_cb(cid);
+                            // The task is not processing or finished currently. It's safe
+                            // to response early here. In the future, the task will be waked up
+                            // and it will finished with DeadlineExceeded error.
+                            // As the cb is taken here, it will not be executed anymore.
+                            if let Some(cb) = cb {
+                                let pr = ProcessResult::Failed {
+                                    err: StorageError::from(e),
+                                };
+                                Self::early_response(
+                                    cid,
+                                    cb,
+                                    pr,
+                                    tag,
+                                    CommandStageKind::precheck_write_err,
+                                );
+                            }
+                        }
+                        Ok(()) => {
+                            SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
+                            // Check deadline in background.
+                            GLOBAL_TIMER_HANDLE
+                                .delay(deadline.to_std_instant())
+                                .compat()
+                                .await
+                                .unwrap();
+                            let cb = sched.inner.try_own_and_take_cb(cid);
+                            if let Some(cb) = cb {
+                                cb.execute(ProcessResult::Failed {
+                                    err: StorageErrorInner::DeadlineExceeded.into(),
+                                })
+                            }
                         }
                     }
-                    Ok(()) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
-                        // Check deadline in background.
-                        GLOBAL_TIMER_HANDLE
-                            .delay(deadline.to_std_instant())
-                            .compat()
-                            .await
-                            .unwrap();
-                        let cb = sched.inner.try_own_and_take_cb(cid);
-                        if let Some(cb) = cb {
-                            cb.execute(ProcessResult::Failed {
-                                err: StorageErrorInner::DeadlineExceeded.into(),
-                            })
-                        }
-                    }
-                }
-            })
+                },
+            )
             .unwrap();
     }
 
@@ -623,12 +631,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.execute(task);
             }
             Ok(None) => {}
-            Err((resource_control_ctx, pri, err)) => {
+            Err((metadata, pri, err)) => {
                 // Spawn the finish task to the pool to avoid stack overflow
                 // when many queuing tasks fail successively.
                 let this = self.clone();
                 self.get_sched_pool()
-                    .spawn(&resource_control_ctx, pri, async move {
+                    .spawn(metadata, pri, async move {
                         this.finish_with_err(cid, err, None);
                     })
                     .unwrap();
@@ -667,10 +675,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     fn execute(&self, mut task: Task) {
         set_tls_tracker_token(task.tracker);
         let sched = self.clone();
-        let resource_control_ctx = task.cmd.resource_control_ctx().clone();
+        let metadata = TaskMetadata::from_ctx(task.cmd.resource_control_ctx());
 
         self.get_sched_pool()
-            .spawn(&resource_control_ctx, task.cmd.priority(), async move {
+            .spawn(metadata, task.cmd.priority(), async move {
                 fail_point!("scheduler_start_execute");
                 if sched.check_task_deadline_exceeded(&task, None) {
                     return;
@@ -800,7 +808,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         async_apply_prewrite: bool,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
         tag: CommandKind,
-        resource_control_ctx: &ResourceControlContext,
+        metadata: TaskMetadata,
         sched_details: &SchedulerDetails,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
@@ -864,7 +872,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.on_acquired_locks_finished(resource_control_ctx, new_acquired_locks);
+        self.on_acquired_locks_finished(metadata, new_acquired_locks);
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -951,7 +959,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_release_locks(
         &self,
-        resource_control_ctx: &ResourceControlContext,
+        metadata: &TaskMetadata,
         released_locks: ReleasedLocks,
     ) -> SVec<Box<LockWaitEntry>> {
         // This function is always called when holding the latch of the involved keys.
@@ -995,7 +1003,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         if !legacy_wake_up_list.is_empty() || !delay_wake_up_futures.is_empty() {
             self.wake_up_legacy_pessimistic_locks(
-                resource_control_ctx,
+                metadata.clone(),
                 legacy_wake_up_list,
                 delay_wake_up_futures,
             );
@@ -1006,7 +1014,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_acquired_locks_finished(
         &self,
-        resource_control_ctx: &ResourceControlContext,
+        metadata: TaskMetadata,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
     ) {
         if new_acquired_locks.is_empty() || self.inner.lock_wait_queues.is_empty() {
@@ -1022,7 +1030,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
             self.get_sched_pool()
-                .spawn(resource_control_ctx, CommandPri::High, async move {
+                .spawn(metadata, CommandPri::High, async move {
                     lock_wait_queues.update_lock_wait(new_acquired_locks);
                 })
                 .unwrap();
@@ -1031,16 +1039,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn wake_up_legacy_pessimistic_locks(
         &self,
-        resource_control_ctx: &ResourceControlContext,
+        metadata: TaskMetadata,
         legacy_wake_up_list: impl IntoIterator<Item = (Box<LockWaitEntry>, ReleasedLock)>
         + Send
         + 'static,
         delayed_wake_up_futures: impl IntoIterator<Item = DelayedNotifyAllFuture> + Send + 'static,
     ) {
         let self1 = self.clone();
-        let resource_control_ctx1 = resource_control_ctx.clone();
+        let metadata1 = metadata.deep_clone();
         self.get_sched_pool()
-            .spawn(resource_control_ctx, CommandPri::High, async move {
+            .spawn(metadata, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
@@ -1058,9 +1066,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
                 for f in delayed_wake_up_futures {
                     let self2 = self1.clone();
+                    let metadata2 = metadata1.clone();
                     self1
                         .get_sched_pool()
-                        .spawn(&resource_control_ctx1, CommandPri::High, async move {
+                        .spawn(metadata2, CommandPri::High, async move {
                             let res = f.await;
                             if let Some(resumable_lock_wait_entry) = res {
                                 self2.schedule_awakened_pessimistic_locks(
@@ -1192,7 +1201,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
-        let resource_control_ctx = task.cmd.resource_control_ctx().clone();
+        let metadata = TaskMetadata::from_ctx(task.cmd.resource_control_ctx());
         let tracker = task.tracker;
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
@@ -1343,7 +1352,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
 
         let woken_up_resumable_entries = if !released_locks.is_empty() {
-            scheduler.on_release_locks(&resource_control_ctx, released_locks)
+            scheduler.on_release_locks(&metadata, released_locks)
         } else {
             smallvec![]
         };
@@ -1364,7 +1373,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 new_acquired_locks,
                 tag,
-                &resource_control_ctx,
+                metadata,
                 sched_details,
             );
             return;
@@ -1399,7 +1408,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 new_acquired_locks,
                 tag,
-                &resource_control_ctx,
+                metadata,
                 sched_details,
             );
             return;
@@ -1594,7 +1603,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         is_async_apply_prewrite,
                         new_acquired_locks,
                         tag,
-                        &resource_control_ctx,
+                        metadata,
                         sched_details,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
@@ -2185,11 +2194,9 @@ mod tests {
         // cannot run within 500ms.
         scheduler
             .get_sched_pool()
-            .spawn(
-                &ResourceControlContext::default(),
-                CommandPri::Normal,
-                async { thread::sleep(Duration::from_millis(500)) },
-            )
+            .spawn(TaskMetadata::default(), CommandPri::Normal, async {
+                thread::sleep(Duration::from_millis(500))
+            })
             .unwrap();
 
         let mut req = BatchRollbackRequest::default();

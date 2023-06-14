@@ -13,10 +13,7 @@ use std::{
 
 use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
-use kvproto::{
-    errorpb,
-    kvrpcpb::{CommandPri, ResourceControlContext},
-};
+use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
 use resource_control::{ControlledFuture, ResourceController, TaskMetadata};
@@ -123,7 +120,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        resource_control_ctx: &ResourceControlContext,
+        metadata: TaskMetadata,
     ) -> Result<(), ReadPoolError>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -164,11 +161,8 @@ impl ReadPoolHandle {
                     CommandPri::Normal => None,
                     CommandPri::Low => Some(2),
                 };
+                let group_name = metadata.group_name().to_owned();
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
-                let metadata = TaskMetadata {
-                    group_name: resource_control_ctx.get_resource_group_name().to_owned(),
-                    override_priority: resource_control_ctx.get_override_priority() as u32,
-                };
                 extras.set_metadata(metadata.to_vec());
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
                     TaskCell::new(
@@ -178,10 +172,7 @@ impl ReadPoolHandle {
                                 running_tasks.dec();
                             },
                             resource_ctl.clone(),
-                            resource_control_ctx
-                                .get_resource_group_name()
-                                .as_bytes()
-                                .to_owned(),
+                            group_name,
                         )),
                         extras,
                     )
@@ -205,7 +196,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        resource_control_ctx: &ResourceControlContext,
+        metadata: TaskMetadata,
     ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
         F: Future<Output = T> + Send + 'static,
@@ -219,7 +210,7 @@ impl ReadPoolHandle {
             },
             priority,
             task_id,
-            resource_control_ctx,
+            metadata,
         );
         async move {
             res?;
@@ -815,29 +806,14 @@ mod tests {
         let (task4, _tx4) = gen_task();
 
         handle
-            .spawn(
-                task1,
-                CommandPri::Normal,
-                1,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default())
             .unwrap();
         handle
-            .spawn(
-                task2,
-                CommandPri::Normal,
-                2,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default())
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(
-            task3,
-            CommandPri::Normal,
-            3,
-            &ResourceControlContext::default(),
-        ) {
+        match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default()) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -845,12 +821,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         handle
-            .spawn(
-                task4,
-                CommandPri::Normal,
-                4,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default())
             .unwrap();
     }
 
@@ -884,29 +855,14 @@ mod tests {
         let (task5, _tx5) = gen_task();
 
         handle
-            .spawn(
-                task1,
-                CommandPri::Normal,
-                1,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default())
             .unwrap();
         handle
-            .spawn(
-                task2,
-                CommandPri::Normal,
-                2,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default())
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(
-            task3,
-            CommandPri::Normal,
-            3,
-            &ResourceControlContext::default(),
-        ) {
+        match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default()) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -915,21 +871,11 @@ mod tests {
         assert_eq!(handle.get_normal_pool_size(), 3);
 
         handle
-            .spawn(
-                task4,
-                CommandPri::Normal,
-                4,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default())
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(
-            task5,
-            CommandPri::Normal,
-            5,
-            &ResourceControlContext::default(),
-        ) {
+        match handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default()) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -965,29 +911,14 @@ mod tests {
         let (task5, _tx5) = gen_task();
 
         handle
-            .spawn(
-                task1,
-                CommandPri::Normal,
-                1,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default())
             .unwrap();
         handle
-            .spawn(
-                task2,
-                CommandPri::Normal,
-                2,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default())
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(
-            task3,
-            CommandPri::Normal,
-            3,
-            &ResourceControlContext::default(),
-        ) {
+        match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default()) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -1000,21 +931,11 @@ mod tests {
         assert_eq!(handle.get_normal_pool_size(), 1);
 
         handle
-            .spawn(
-                task4,
-                CommandPri::Normal,
-                4,
-                &ResourceControlContext::default(),
-            )
+            .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default())
             .unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        match handle.spawn(
-            task5,
-            CommandPri::Normal,
-            5,
-            &ResourceControlContext::default(),
-        ) {
+        match handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default()) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
@@ -1115,20 +1036,10 @@ mod tests {
             let (task2, tx2) = gen_task();
 
             handle
-                .spawn(
-                    task1,
-                    CommandPri::Normal,
-                    1,
-                    &ResourceControlContext::default(),
-                )
+                .spawn(task1, CommandPri::Normal, 1, TaskMetadata::default())
                 .unwrap();
             handle
-                .spawn(
-                    task2,
-                    CommandPri::Normal,
-                    2,
-                    &ResourceControlContext::default(),
-                )
+                .spawn(task2, CommandPri::Normal, 2, TaskMetadata::default())
                 .unwrap();
 
             tx1.send(()).unwrap();

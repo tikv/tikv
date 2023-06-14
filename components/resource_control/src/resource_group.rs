@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    borrow::Cow,
     cell::Cell,
     cmp::{max, min},
     sync::{
@@ -387,43 +388,92 @@ impl ResourceController {
     }
 }
 
-pub struct TaskMetadata {
-    // the resource group name of this task.
-    pub group_name: String,
-    // the override priority of this task neglecting the original resource group priority.
-    pub override_priority: u32,
+const OVERRIDE_PRIORITY_MASK: u8 = 0b1000_0000;
+const RESOURCE_GROUP_NAME_MASK: u8 = 0b0100_0000;
+
+#[derive(Clone, Default)]
+pub struct TaskMetadata<'a> {
+    // The first byte is a bit map,
+    // then append override priority if nonzero,
+    // then append resource group name if not default
+    metadata: Cow<'a, [u8]>,
 }
 
-impl TaskMetadata {
-    pub fn to_vec(self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(4 + self.group_name.len());
-        buf.extend_from_slice(&self.override_priority.to_ne_bytes());
-        buf.extend_from_slice(self.group_name.as_bytes());
-        buf
+impl<'a, 'b> TaskMetadata<'a> {
+    pub fn deep_clone(&self) -> TaskMetadata<'b> {
+        TaskMetadata {
+            metadata: Cow::Owned(self.metadata.to_vec()),
+        }
     }
-}
 
-struct TaskMetadataRef<'a> {
-    metadata: &'a [u8],
-}
+    pub fn from_ctx(ctx: &ResourceControlContext) -> Self {
+        let mut mask = 0;
+        let mut buf = Vec::with_capacity(4 + ctx.resource_group_name.len());
+        if ctx.override_priority != 0 {
+            mask |= OVERRIDE_PRIORITY_MASK;
+        }
+        if ctx.resource_group_name.len() > 0
+            && ctx.resource_group_name != DEFAULT_RESOURCE_GROUP_NAME
+        {
+            mask |= RESOURCE_GROUP_NAME_MASK;
+        }
+        if mask == 0 {
+            // no need to write anything to save copy cost
+            return Self {
+                metadata: Cow::Owned(vec![]),
+            };
+        }
+        buf.push(mask);
+        if mask & OVERRIDE_PRIORITY_MASK != 0 {
+            buf.extend_from_slice(&ctx.override_priority.to_ne_bytes());
+        }
+        if mask & RESOURCE_GROUP_NAME_MASK != 0 {
+            buf.extend_from_slice(ctx.resource_group_name.as_bytes());
+        }
+        Self {
+            metadata: Cow::Owned(buf),
+        }
+    }
 
-impl<'a> TaskMetadataRef<'a> {
     fn from_bytes(bytes: &'a [u8]) -> Self {
-        Self { metadata: bytes }
+        Self {
+            metadata: Cow::Borrowed(bytes),
+        }
+    }
+
+    pub fn to_vec(self) -> Vec<u8> {
+        self.metadata.into_owned()
     }
 
     fn override_priority(&self) -> u32 {
-        u32::from_ne_bytes(self.metadata[0..4].try_into().unwrap())
+        if self.metadata.len() == 0 {
+            return 0;
+        }
+        if self.metadata[0] & OVERRIDE_PRIORITY_MASK == 0 {
+            return 0;
+        }
+        u32::from_ne_bytes(self.metadata[1..5].try_into().unwrap())
     }
 
-    fn group_name(&self) -> &[u8] {
-        &self.metadata[4..]
+    pub fn group_name(&self) -> &[u8] {
+        if self.metadata.len() == 0 {
+            return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
+        }
+        if self.metadata[0] & RESOURCE_GROUP_NAME_MASK == 0 {
+            return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
+        }
+        let start = if self.metadata[0] & OVERRIDE_PRIORITY_MASK != 0 {
+            5
+        } else {
+            1
+        };
+        &self.metadata[start..]
     }
 }
 
 impl TaskPriorityProvider for ResourceController {
     fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
-        let metadata = TaskMetadataRef::from_bytes(extras.metadata());
+        let metadata = TaskMetadata::from_bytes(extras.metadata());
         self.resource_group(metadata.group_name()).get_priority(
             extras.current_level() as usize,
             if metadata.override_priority() == 0 {
@@ -651,10 +701,11 @@ pub(crate) mod tests {
 
         let mut extras1 = Extras::single_level();
         extras1.set_metadata(
-            TaskMetadata {
-                group_name: "test1".to_string(),
+            TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: "test1".to_string(),
                 override_priority: 0,
-            }
+                ..Default::default()
+            })
             .to_vec(),
         );
         assert_eq!(
@@ -665,10 +716,11 @@ pub(crate) mod tests {
 
         let mut extras2 = Extras::single_level();
         extras2.set_metadata(
-            TaskMetadata {
-                group_name: "test2".to_string(),
+            TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: "test2".to_string(),
                 override_priority: 0,
-            }
+                ..Default::default()
+            })
             .to_vec(),
         );
         assert_eq!(
@@ -680,10 +732,11 @@ pub(crate) mod tests {
         // test override priority
         let mut extras2_override = Extras::single_level();
         extras2_override.set_metadata(
-            TaskMetadata {
-                group_name: "test2".to_string(),
-                override_priority: LOW_PRIORITY,
-            }
+            TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: "test2".to_string(),
+                override_priority: 0,
+                ..Default::default()
+            })
             .to_vec(),
         );
         assert_eq!(
@@ -694,10 +747,11 @@ pub(crate) mod tests {
 
         let mut extras3 = Extras::single_level();
         extras3.set_metadata(
-            TaskMetadata {
-                group_name: "unknown_group".to_string(),
+            TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: "unknown_group".to_string(),
                 override_priority: 0,
-            }
+                ..Default::default()
+            })
             .to_vec(),
         );
         assert_eq!(
@@ -928,5 +982,29 @@ pub(crate) mod tests {
 
         let v5 = concat_priority_vt(HIGH_PRIORITY, 10);
         assert!(v5 < v1);
+    }
+
+    #[test]
+    fn test_task_metadata() {
+        let cases = [
+            ("default", 0u32),
+            ("default", 6u32),
+            ("test", 0u32),
+            ("test", 15u32),
+        ];
+
+        for (group_name, priority) in cases {
+            let metadata = TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: group_name.to_string(),
+                override_priority: priority as u64,
+                ..Default::default()
+            });
+            assert_eq!(metadata.override_priority(), priority);
+            assert_eq!(metadata.group_name(), group_name.as_bytes());
+            let vec = metadata.to_vec();
+            let metadata1 = TaskMetadata::from_bytes(&vec);
+            assert_eq!(metadata1.override_priority(), priority);
+            assert_eq!(metadata1.group_name(), group_name.as_bytes());
+        }
     }
 }
