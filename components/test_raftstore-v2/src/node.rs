@@ -22,8 +22,8 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
     store::{
-        AutoSplitController, GlobalReplicationState, RegionSnapshot, SplitConfigManager,
-        TabletSnapKey, TabletSnapManager, Transport,
+        config::RaftstoreConfigManager, AutoSplitController, GlobalReplicationState,
+        RegionSnapshot, SplitConfigManager, TabletSnapKey, TabletSnapManager, Transport,
     },
     Result,
 };
@@ -151,6 +151,7 @@ pub struct NodeCluster<EK: KvEngine> {
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
+    cfg_controller: Option<ConfigController>,
 }
 
 impl<EK: KvEngine> NodeCluster<EK> {
@@ -162,11 +163,16 @@ impl<EK: KvEngine> NodeCluster<EK> {
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             snap_mgrs: HashMap::default(),
+            cfg_controller: None,
         }
     }
 
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
+
+    pub fn get_cfg_controller(&self) -> Option<&ConfigController> {
+        self.cfg_controller.as_ref()
     }
 }
 
@@ -329,14 +335,14 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             .validate(region_split_size, enable_region_bucket, region_bucket_size)
             .unwrap();
 
-        // let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
-        // cfg_controller.register(
-        //     Module::Raftstore,
-        //     Box::new(RaftstoreConfigManager::new(
-        //         node.refresh_config_scheduler(),
-        //         raft_store,
-        //     )),
-        // );
+        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
+        cfg_controller.register(
+            Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                node.refresh_config_scheduler(),
+                raft_store,
+            )),
+        );
 
         if let Some(tmp) = snap_mgs_path {
             self.trans
@@ -356,6 +362,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
+        self.cfg_controller = Some(cfg_controller);
         Ok(node_id)
     }
 
