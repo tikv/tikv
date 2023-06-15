@@ -1467,6 +1467,9 @@ where
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::SlowScore(reset) => {
+                self.report_slow_score(reset);
+            }
         }
     }
 
@@ -1940,6 +1943,19 @@ where
             "status" => ?status,
         );
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
+    }
+
+    fn report_slow_score(&mut self, reset: bool) {
+        if let Err(e) = self
+        .ctx
+        .pd_scheduler
+        .schedule(PdTask::ForceUpdateSlowScore{reset})
+        {
+            error!(
+                "failed to ForceUpdateSlowScore";
+                "err" => ?e,
+            );
+        }
     }
 
     fn on_leader_callback(&mut self, cb: Callback<EK::Snapshot>) {

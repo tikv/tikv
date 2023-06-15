@@ -438,6 +438,26 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
+    async fn slow_score( router: R) -> hyper::Result<Response<Body>> {
+        router.slow_score(false);
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("Content-Length", 2)
+            .body("Ok".into())
+            .unwrap();
+        Ok(response)
+    }
+
+    async fn reset_slow_score( router: R) -> hyper::Result<Response<Body>> {
+        router.slow_score(true);
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("Content-Length", 2)
+            .body("Ok".into())
+            .unwrap();
+        Ok(response)
+    }
+
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -621,6 +641,12 @@ where
                             }
                             (Method::GET, "/engine_type") => {
                                 Self::get_engine_type(&cfg_controller).await
+                            }
+                            (Method::PUT, "/slow_score") => {
+                                Self::slow_score(router).await
+                            }
+                            (Method::PUT, "/reset_slow_score") => {
+                                Self::reset_slow_score(router).await
                             }
                             // This interface is used for configuration file hosting scenarios,
                             // TiKV will not update configuration files, and this interface will

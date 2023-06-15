@@ -531,6 +531,7 @@ where
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
+    SlowScore(bool),
 }
 
 /// Message that will be sent to a peer.
@@ -868,6 +869,7 @@ where
     AwakenRegions {
         abnormal_stores: Vec<u64>,
     },
+    SlowScore(bool),
 }
 
 impl<EK: KvEngine> ResourceMetered for StoreMsg<EK> {}
@@ -904,6 +906,7 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            StoreMsg::SlowScore { .. } => write!(fmt, "SlowScore"),
         }
     }
 }
