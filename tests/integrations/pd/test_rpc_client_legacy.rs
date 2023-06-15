@@ -402,7 +402,11 @@ fn restart_leader(mgr: SecurityManager) {
         MockServer::<Service>::with_configuration(&mgr, vec![("127.0.0.1".to_owned(), 0); 3], None);
     let eps = server.bind_addrs();
 
-    let client = new_client(eps.clone(), Some(Arc::clone(&mgr)));
+    let client = new_client_with_retry_interval(
+        eps.clone(),
+        Some(Arc::clone(&mgr)),
+        ReadableDuration::millis(100),
+    );
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::default();
@@ -427,8 +431,8 @@ fn restart_leader(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // The default retry interval is 1s so sleeps 2s here.
-    thread::sleep(Duration::from_secs(2));
+    // The default retry interval is 100ms so sleeps 200ms here.
+    thread::sleep(Duration::from_millis(200));
 
     let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
@@ -497,7 +501,7 @@ fn test_pd_client_heartbeat_send_failed() {
     let server = MockServer::with_case(1, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
 
-    let client = new_client(eps, None);
+    let client = new_client_with_retry_interval(eps, None, ReadableDuration::millis(100));
     let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
         .worker_threads(1)
@@ -641,7 +645,7 @@ fn test_cluster_version() {
     let feature_b = Feature::require(5, 0, 0);
     let feature_c = Feature::require(5, 0, 1);
 
-    let client = new_client(eps, None);
+    let client = new_client_with_retry_interval(eps, None, ReadableDuration::millis(100));
     let feature_gate = client.feature_gate();
     assert!(!feature_gate.can_enable(feature_a));
 
@@ -678,8 +682,8 @@ fn test_cluster_version() {
     assert!(!feature_gate.can_enable(feature_c));
 
     // After reconnect the version should be still accessible.
-    // The default retry interval is 1s so sleeps 2s here.
-    thread::sleep(Duration::from_secs(2));
+    // The default retry interval is 100ms so sleeps 200ms here.
+    thread::sleep(Duration::from_millis(200));
     client.reconnect().unwrap();
     assert!(feature_gate.can_enable(feature_b));
     assert!(!feature_gate.can_enable(feature_c));

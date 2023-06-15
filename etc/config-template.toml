@@ -344,9 +344,9 @@
 ## PD endpoints.
 # endpoints = ["127.0.0.1:2379"]
 
-## The interval at which to retry a PD connection initialization.
-## Default is 300ms.
-# retry-interval = "300ms"
+## The interval at which to retry a PD connection.
+## Default is 1s.
+# retry-interval = "1s"
 
 ## If the client observes an error, it can can skip reporting it except every `n` times.
 ## Set to 1 to disable this feature.
