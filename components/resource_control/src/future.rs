@@ -420,13 +420,16 @@ mod tests {
         );
         check_eq(stats, CachedIoBytes::new(LocalIoState::Fresh, 200, 100));
 
-        fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
-        let stats = spawn_and_wait(
-            &pool,
-            TestFuture(Duration::from_millis(1)),
-            Some(resource_limiter.clone()),
-        );
-        check_eq(stats, CachedIoBytes::new(LocalIoState::Outdated, 200, 100));
-        fail::remove("failed_to_get_thread_io_bytes_stats");
+        #[cfg(feature = "failpoints")]
+        {
+            fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
+            let stats = spawn_and_wait(
+                &pool,
+                TestFuture(Duration::from_millis(1)),
+                Some(resource_limiter.clone()),
+            );
+            check_eq(stats, CachedIoBytes::new(LocalIoState::Outdated, 200, 100));
+            fail::remove("failed_to_get_thread_io_bytes_stats");
+        }
     }
 }
