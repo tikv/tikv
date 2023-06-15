@@ -11,8 +11,8 @@ use engine_rocks::{
     TabletLogger,
 };
 use engine_traits::{
-    CompactionJobInfo, MiscExt, PersistenceListener, Result, StateStorage, TabletContext,
-    TabletFactory, CF_DEFAULT, CF_WRITE,
+    CompactionJobInfo, MiscExt, MutableDbResources, PersistenceListener, Result, StateStorage,
+    TabletContext, TabletFactory, CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
@@ -248,6 +248,10 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
             listener.clone_with(ctx.id).on_destroyed();
         }
         Ok(())
+    }
+
+    fn db_resources(&self) -> Box<dyn MutableDbResources> {
+        Box::new(self.inner.db_resources.clone())
     }
 
     fn exists(&self, path: &Path) -> bool {

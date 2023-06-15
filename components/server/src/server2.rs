@@ -1267,6 +1267,11 @@ where
                 "error" => ?e,
             );
         }
+        let tablet_registry = self.tablet_registry.as_ref().unwrap();
+        tablet_registry
+            .tablet_factory()
+            .db_resources()
+            .set_high_priority_background_threads(1);
 
         info!("flush-before-close: flush begin");
         let engines = self.engines.take().unwrap();
