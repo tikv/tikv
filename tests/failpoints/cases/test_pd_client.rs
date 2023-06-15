@@ -119,8 +119,8 @@ fn test_slow_periodical_update() {
 
     fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
-    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
-    thread::sleep(Duration::from_millis(200));
+    // The default retry interval is 1s so sleeps 2s here.
+    thread::sleep(Duration::from_secs(2));
 
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
