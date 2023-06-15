@@ -309,23 +309,22 @@ fn init_replace_instructions(replace_expr: &[u8]) -> Vec<ReplaceInstruction> {
     let mut i = 0;
     while i < len {
         if replace_expr[i] == b'\\' {
-            if i + 1 < len {
-                if replace_expr[i + 1].is_ascii_digit() {
-                    if !literal.is_empty() {
-                        instructions.push(ReplaceInstruction::Literal(literal));
-                        literal = Vec::new();
-                    }
-                    instructions.push(ReplaceInstruction::SubstitutionNum(
-                        (replace_expr[i + 1] - b'0').into(),
-                    ));
-                } else {
-                    literal.push(replace_expr[i + 1]);
-                }
-                i += 2;
-            } else {
+            if i + 1 >= len {
                 // This slash is in the end. Ignore it and break the loop.
                 break;
             }
+            if replace_expr[i + 1].is_ascii_digit() {
+                if !literal.is_empty() {
+                    instructions.push(ReplaceInstruction::Literal(literal));
+                    literal = Vec::new();
+                }
+                instructions.push(ReplaceInstruction::SubstitutionNum(
+                    (replace_expr[i + 1] - b'0').into(),
+                ));
+            } else {
+                literal.push(replace_expr[i + 1]);
+            }
+            i += 2;
         } else {
             literal.push(replace_expr[i]);
             i += 1;
@@ -422,14 +421,14 @@ pub fn regexp_replace<C: Collator>(
     let mut last_match = 0;
     if occurrence == 0 {
         for capture in regex.captures_iter(trimmed) {
-            // unwrap on 0 is OK because captures only reports matches
+            // unwrap on 0 is OK because captures only reports matches.
             let m = capture.get(0).unwrap();
             result.extend(trimmed[last_match..m.start()].as_bytes());
             last_match = m.end();
             replace_work(&capture, &mut result)?;
         }
     } else if let Some(capture) = regex.captures_iter(trimmed).nth((occurrence - 1) as usize) {
-        // unwrap on 0 is OK because captures only reports matches
+        // unwrap on 0 is OK because captures only reports matches.
         let m = capture.get(0).unwrap();
         result.extend(trimmed[0..m.start()].as_bytes());
         last_match = m.end();
@@ -1457,7 +1456,7 @@ mod tests {
 
         for (expr, pattern, replace, pos, occur, match_type, expected, error) in cases {
             for i in 0..2 {
-                let all_column = i == 1;
+                let use_column_ref = i == 1;
 
                 let mut ctx = EvalContext::default();
 
@@ -1468,7 +1467,7 @@ mod tests {
 
                 let mut schema = Vec::new();
                 let mut columns = LazyBatchColumnVec::empty();
-                if all_column {
+                if use_column_ref {
                     schema.extend_from_slice(&[
                         FieldTypeTp::String.into(),
                         FieldTypeTp::String.into(),
