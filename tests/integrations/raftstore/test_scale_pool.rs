@@ -6,9 +6,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{MiscExt, Peekable, CF_DEFAULT};
-use kvproto::raft_cmdpb::RaftCmdResponse;
-use raftstore::Result;
+use engine_traits::{MiscExt, Peekable};
 use test_raftstore::*;
 use tikv_util::{
     sys::thread::{self, Pid},
