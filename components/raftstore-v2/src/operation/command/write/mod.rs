@@ -313,9 +313,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             //     .unwrap_or_else(move |e| fail_f(e,
             // DeleteStrategy::DeleteBlobs));
         }
-        if index != u64::MAX {
-            self.modifications_mut()[off] = index;
-        }
+
+        // delete range is an unsafe operation and it cannot be rollbacked to replay, so
+        // we don't update modification index for this operation.
 
         Ok(())
     }
