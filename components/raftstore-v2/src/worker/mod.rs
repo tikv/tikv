@@ -3,4 +3,5 @@
 pub mod checkpoint;
 pub mod cleanup;
 pub mod pd;
+pub mod refresh_config;
 pub mod tablet;
