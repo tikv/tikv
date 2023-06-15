@@ -3089,7 +3089,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2096b9a161f93e437f7adee49e68cd1570aea42f"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb?branch=get-bg-threads#fde2188f06d8d3c17b80b4cca53e29cf51760518"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3108,7 +3108,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2096b9a161f93e437f7adee49e68cd1570aea42f"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb?branch=get-bg-threads#fde2188f06d8d3c17b80b4cca53e29cf51760518"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5078,7 +5078,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2096b9a161f93e437f7adee49e68cd1570aea42f"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb?branch=get-bg-threads#fde2188f06d8d3c17b80b4cca53e29cf51760518"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

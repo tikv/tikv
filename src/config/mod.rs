@@ -43,8 +43,8 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CfOptions as _, DbOptions as _, MiscExt, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
+    CfOptions as _, DbOptions as _, MiscExt, SharedResources, TitanCfOptions as _, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
@@ -1273,6 +1273,16 @@ pub struct DbConfig {
     pub raftcf: RaftCfConfig,
     #[online_config(skip)]
     pub titan: TitanDbConfig,
+}
+
+impl SharedResources for DbResources {
+    fn set_high_priority_background_threads(&self, n: i32) {
+        self.env.set_high_priority_background_threads(n);
+    }
+
+    fn get_high_priority_background_threads(&self) -> i32 {
+        self.env.get_high_priority_background_threads()
+    }
 }
 
 #[derive(Clone)]

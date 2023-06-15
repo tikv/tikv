@@ -136,12 +136,23 @@ impl TabletContext {
     }
 }
 
+pub trait SharedResources {
+    fn set_high_priority_background_threads(&self, _n: i32) {}
+    fn get_high_priority_background_threads(&self) -> i32 {
+        unimplemented!()
+    }
+}
 /// A factory trait to create new tablet for multi-rocksdb architecture.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK>: Send + Sync {
     /// Open the tablet in `path`.
     fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<EK>;
+
+    /// Get the shared db resources
+    fn shared_resources(&self) -> Box<dyn SharedResources> {
+        unimplemented!()
+    }
 
     /// Destroy the tablet and its data
     fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()>;
