@@ -920,6 +920,7 @@ pub(crate) mod tests {
         assert_eq!(resource_ctl_write.resource_group(b"default").weight, 10);
     }
 
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_reset_resource_group_vt_overflow() {
         let resource_manager = ResourceGroupManager::default();
