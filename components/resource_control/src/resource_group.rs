@@ -767,7 +767,7 @@ pub(crate) mod tests {
         resource_manager.add_resource_group(group1);
         let group2 = new_resource_group_ru("test2".into(), 400, 0);
         resource_manager.add_resource_group(group2);
-        assert_eq!(resource_manager.resource_groups.len(), 2);
+        assert_eq!(resource_manager.resource_groups.len(), 3);
 
         let resource_ctl = resource_manager.derive_controller("test".into(), true);
 
@@ -811,7 +811,7 @@ pub(crate) mod tests {
         extras2_override.set_metadata(
             TaskMetadata::from_ctx(&ResourceControlContext {
                 resource_group_name: "test2".to_string(),
-                override_priority: 0,
+                override_priority: LOW_PRIORITY as u64,
                 ..Default::default()
             })
             .to_vec(),
