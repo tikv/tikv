@@ -307,3 +307,72 @@ pub fn test_delete_range<T: Simulator<EK>, EK: KvEngine>(cluster: &mut Cluster<T
         assert!(cluster.get_cf(cf, k).is_none());
     }
 }
+<<<<<<< HEAD
+=======
+
+pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
+    if resp.get_header().has_error() {
+        panic!("failed to read {:?}", resp);
+    }
+    assert_eq!(resp.get_responses().len(), 1);
+    assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
+    assert!(resp.get_responses()[0].has_get());
+    resp.get_responses()[0].get_get().get_value().to_vec()
+}
+
+pub fn must_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    value: &[u8],
+) {
+    let timeout = Duration::from_secs(5);
+    match read_on_peer(cluster, peer, region, key, false, timeout) {
+        Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
+        other => panic!(
+            "read key {}, expect value {:?}, got {:?}",
+            log_wrappers::hex_encode_upper(key),
+            value,
+            other
+        ),
+    }
+}
+
+pub fn must_error_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    timeout: Duration,
+) {
+    if let Ok(mut resp) = read_on_peer(cluster, peer, region, key, false, timeout) {
+        if !resp.get_header().has_error() {
+            let value = resp.mut_responses()[0].mut_get().take_value();
+            panic!(
+                "key {}, expect error but got {}",
+                log_wrappers::hex_encode_upper(key),
+                escape(&value)
+            );
+        }
+    }
+}
+
+pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    node_id: u64,
+    key: &[u8],
+    value: &[u8],
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let req = new_request(
+        region_id,
+        region.take_region_epoch(),
+        vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
+        false,
+    );
+    cluster.call_command_on_node(node_id, req, timeout)
+}
+>>>>>>> aa85fa37c6 (raftstore-v2: dynamic change store pool size (#14945))
