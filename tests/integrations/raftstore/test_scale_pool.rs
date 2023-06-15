@@ -382,6 +382,7 @@ fn test_adjust_hight_priority_background_threads() {
 
     let tablet2 = tablet.clone();
     let h = std::thread::spawn(move || {
+        // it will block at on_memtable_flush
         tablet2.flush_cf("default", true).unwrap();
     });
 
