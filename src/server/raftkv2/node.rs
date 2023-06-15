@@ -11,8 +11,8 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
-        AutoSplitController, GlobalReplicationState, TabletSnapManager, Transport,
-        RAFT_INIT_LOG_INDEX,
+        AutoSplitController, GlobalReplicationState, RefreshConfigTask, TabletSnapManager,
+        Transport, RAFT_INIT_LOG_INDEX,
     },
 };
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
@@ -21,7 +21,7 @@ use slog::{info, o, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
     config::VersionTrack,
-    worker::{LazyWorker, Worker},
+    worker::{LazyWorker, Scheduler, Worker},
 };
 
 use crate::server::{node::init_store, Result};
@@ -244,6 +244,12 @@ where
             key_manager,
         )?;
         Ok(())
+    }
+
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after
+    /// start.
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
+        self.system.as_mut().unwrap().1.refresh_config_scheduler()
     }
 
     /// Stops the Node.
