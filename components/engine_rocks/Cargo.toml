@@ -58,7 +58,7 @@ txn_types = { workspace = true }
 
 [dependencies.rocksdb]
 git = "https://github.com/SpadeA-Tang/rust-rocksdb"
-branch = "get-bg-threads"
+branch = "get-threads"
 package = "rocksdb"
 features = ["encryption"]
 
