@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    borrow::Cow,
     cell::Cell,
     cmp::{max, min},
     sync::{
@@ -456,14 +457,104 @@ impl ResourceController {
             CommandPri::Normal => 1,
             CommandPri::High => 0,
         };
-        self.resource_group(name).get_priority(level)
+        self.resource_group(name).get_priority(level, None)
+    }
+}
+
+const OVERRIDE_PRIORITY_MASK: u8 = 0b1000_0000;
+const RESOURCE_GROUP_NAME_MASK: u8 = 0b0100_0000;
+
+#[derive(Clone, Default)]
+pub struct TaskMetadata<'a> {
+    // The first byte is a bit map to indicate which field exists,
+    // then append override priority if nonzero,
+    // then append resource group name if not default
+    metadata: Cow<'a, [u8]>,
+}
+
+impl<'a> TaskMetadata<'a> {
+    pub fn deep_clone(&self) -> TaskMetadata<'static> {
+        TaskMetadata {
+            metadata: Cow::Owned(self.metadata.to_vec()),
+        }
+    }
+
+    pub fn from_ctx(ctx: &ResourceControlContext) -> Self {
+        let mut mask = 0;
+        let mut buf = vec![];
+        if ctx.override_priority != 0 {
+            mask |= OVERRIDE_PRIORITY_MASK;
+        }
+        if !ctx.resource_group_name.is_empty()
+            && ctx.resource_group_name != DEFAULT_RESOURCE_GROUP_NAME
+        {
+            mask |= RESOURCE_GROUP_NAME_MASK;
+        }
+        if mask == 0 {
+            // if all are default value, no need to write anything to save copy cost
+            return Self {
+                metadata: Cow::Owned(buf),
+            };
+        }
+        buf.push(mask);
+        if mask & OVERRIDE_PRIORITY_MASK != 0 {
+            buf.extend_from_slice(&(ctx.override_priority as u32).to_ne_bytes());
+        }
+        if mask & RESOURCE_GROUP_NAME_MASK != 0 {
+            buf.extend_from_slice(ctx.resource_group_name.as_bytes());
+        }
+        Self {
+            metadata: Cow::Owned(buf),
+        }
+    }
+
+    fn from_bytes(bytes: &'a [u8]) -> Self {
+        Self {
+            metadata: Cow::Borrowed(bytes),
+        }
+    }
+
+    pub fn to_vec(self) -> Vec<u8> {
+        self.metadata.into_owned()
+    }
+
+    fn override_priority(&self) -> u32 {
+        if self.metadata.is_empty() {
+            return 0;
+        }
+        if self.metadata[0] & OVERRIDE_PRIORITY_MASK == 0 {
+            return 0;
+        }
+        u32::from_ne_bytes(self.metadata[1..5].try_into().unwrap())
+    }
+
+    pub fn group_name(&self) -> &[u8] {
+        if self.metadata.is_empty() {
+            return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
+        }
+        if self.metadata[0] & RESOURCE_GROUP_NAME_MASK == 0 {
+            return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
+        }
+        let start = if self.metadata[0] & OVERRIDE_PRIORITY_MASK != 0 {
+            5
+        } else {
+            1
+        };
+        &self.metadata[start..]
     }
 }
 
 impl TaskPriorityProvider for ResourceController {
     fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
-        self.resource_group(extras.metadata())
-            .get_priority(extras.current_level() as usize)
+        let metadata = TaskMetadata::from_bytes(extras.metadata());
+        self.resource_group(metadata.group_name()).get_priority(
+            extras.current_level() as usize,
+            if metadata.override_priority() == 0 {
+                None
+            } else {
+                Some(metadata.override_priority())
+            },
+        )
     }
 }
 
@@ -487,7 +578,7 @@ struct GroupPriorityTracker {
 }
 
 impl GroupPriorityTracker {
-    fn get_priority(&self, level: usize) -> u64 {
+    fn get_priority(&self, level: usize, override_priority: Option<u32>) -> u64 {
         let task_extra_priority = TASK_EXTRA_FACTOR_BY_LEVEL[level] * 1000 * self.weight;
         let vt = (if self.vt_delta_for_get > 0 {
             self.virtual_time
@@ -496,7 +587,8 @@ impl GroupPriorityTracker {
         } else {
             self.virtual_time.load(Ordering::Relaxed)
         }) + task_extra_priority;
-        concat_priority_vt(self.group_priority, vt)
+        let priority = override_priority.unwrap_or(self.group_priority);
+        concat_priority_vt(priority, vt)
     }
 
     #[inline]
@@ -611,30 +703,6 @@ pub(crate) mod tests {
         assert_eq!(group1.weight, group2.weight * 2);
         assert_eq!(group1.current_vt(), 0);
 
-        let mut extras1 = Extras::single_level();
-        extras1.set_metadata(b"test".to_vec());
-        assert_eq!(
-            resource_ctl.priority_of(&extras1),
-            concat_priority_vt(LOW_PRIORITY, group1.weight * 50)
-        );
-        assert_eq!(group1.current_vt(), group1.weight * 50);
-
-        let mut extras2 = Extras::single_level();
-        extras2.set_metadata(b"test2".to_vec());
-        assert_eq!(
-            resource_ctl.priority_of(&extras2),
-            concat_priority_vt(MEDIUM_PRIORITY, group2.weight * 50)
-        );
-        assert_eq!(group2.current_vt(), group2.weight * 50);
-
-        let mut extras3 = Extras::single_level();
-        extras3.set_metadata(b"unknown_group".to_vec());
-        assert_eq!(
-            resource_ctl.priority_of(&extras3),
-            concat_priority_vt(MEDIUM_PRIORITY, 50)
-        );
-        assert_eq!(resource_ctl.resource_group(b"default").current_vt(), 50);
-
         resource_ctl.consume(
             b"test",
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
@@ -644,14 +712,14 @@ pub(crate) mod tests {
             ResourceConsumeType::CpuTime(Duration::from_micros(10000)),
         );
 
-        assert_eq!(group1.current_vt(), group1.weight * 10050);
+        assert_eq!(group1.current_vt(), group1.weight * 10000);
         assert_eq!(group1.current_vt(), group2.current_vt() * 2);
 
         // test update all group vts
         resource_manager.advance_min_virtual_time();
         let group1_vt = group1.current_vt();
         let group1_weight = group1.weight;
-        assert_eq!(group1_vt, group1.weight * 10050);
+        assert_eq!(group1_vt, group1.weight * 10000);
         assert!(group2.current_vt() >= group1.current_vt() * 3 / 4);
         assert!(resource_ctl.resource_group(b"default").current_vt() >= group1.current_vt() / 2);
 
@@ -690,6 +758,89 @@ pub(crate) mod tests {
         assert_eq!(new_limiter.cpu_limiter.get_rate_limit(), 100.0);
         assert_eq!(new_limiter.io_limiter.get_rate_limit(), 200.0);
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
+    }
+
+    #[test]
+    fn test_resource_group_priority() {
+        let resource_manager = ResourceGroupManager::default();
+        let group1 = new_resource_group_ru("test1".into(), 200, LOW_PRIORITY);
+        resource_manager.add_resource_group(group1);
+        let group2 = new_resource_group_ru("test2".into(), 400, 0);
+        resource_manager.add_resource_group(group2);
+        assert_eq!(resource_manager.resource_groups.len(), 3);
+
+        let resource_ctl = resource_manager.derive_controller("test".into(), true);
+
+        let group1 = resource_ctl.resource_group("test1".as_bytes());
+        let group2 = resource_ctl.resource_group("test2".as_bytes());
+        assert_eq!(group1.weight, group2.weight * 2);
+        assert_eq!(group1.current_vt(), 0);
+
+        let mut extras1 = Extras::single_level();
+        extras1.set_metadata(
+            TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: "test1".to_string(),
+                override_priority: 0,
+                ..Default::default()
+            })
+            .to_vec(),
+        );
+        assert_eq!(
+            resource_ctl.priority_of(&extras1),
+            concat_priority_vt(LOW_PRIORITY, group1.weight * 50)
+        );
+        assert_eq!(group1.current_vt(), group1.weight * 50);
+
+        let mut extras2 = Extras::single_level();
+        extras2.set_metadata(
+            TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: "test2".to_string(),
+                override_priority: 0,
+                ..Default::default()
+            })
+            .to_vec(),
+        );
+        assert_eq!(
+            resource_ctl.priority_of(&extras2),
+            concat_priority_vt(MEDIUM_PRIORITY, group2.weight * 50)
+        );
+        assert_eq!(group2.current_vt(), group2.weight * 50);
+
+        // test override priority
+        let mut extras2_override = Extras::single_level();
+        extras2_override.set_metadata(
+            TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: "test2".to_string(),
+                override_priority: LOW_PRIORITY as u64,
+                ..Default::default()
+            })
+            .to_vec(),
+        );
+        assert_eq!(
+            resource_ctl.priority_of(&extras2_override),
+            concat_priority_vt(LOW_PRIORITY, group2.weight * 100)
+        );
+        assert_eq!(group2.current_vt(), group2.weight * 100);
+
+        let mut extras3 = Extras::single_level();
+        extras3.set_metadata(
+            TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: "unknown_group".to_string(),
+                override_priority: 0,
+                ..Default::default()
+            })
+            .to_vec(),
+        );
+        assert_eq!(
+            resource_ctl.priority_of(&extras3),
+            concat_priority_vt(MEDIUM_PRIORITY, 50)
+        );
+        assert_eq!(
+            resource_ctl
+                .resource_group("default".as_bytes())
+                .current_vt(),
+            50
+        );
     }
 
     #[test]
@@ -875,5 +1026,31 @@ pub(crate) mod tests {
 
         let v5 = concat_priority_vt(HIGH_PRIORITY, 10);
         assert!(v5 < v1);
+    }
+
+    #[test]
+    fn test_task_metadata() {
+        let cases = [
+            ("default", 0u32),
+            ("default", 6u32),
+            ("test", 0u32),
+            ("test", 15u32),
+        ];
+
+        let metadata = TaskMetadata::from_ctx(&ResourceControlContext::default());
+        assert_eq!(metadata.group_name(), b"default");
+        for (group_name, priority) in cases {
+            let metadata = TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: group_name.to_string(),
+                override_priority: priority as u64,
+                ..Default::default()
+            });
+            assert_eq!(metadata.override_priority(), priority);
+            assert_eq!(metadata.group_name(), group_name.as_bytes());
+            let vec = metadata.to_vec();
+            let metadata1 = TaskMetadata::from_bytes(&vec);
+            assert_eq!(metadata1.override_priority(), priority);
+            assert_eq!(metadata1.group_name(), group_name.as_bytes());
+        }
     }
 }
