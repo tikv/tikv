@@ -419,13 +419,13 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_wf_commit_log_duration_seconds",
             "Bucketed histogram of proposals' commit and persist duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
     pub static ref STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
             "Bucketed histogram of proposals' commit but not persist duration",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
 
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -457,7 +457,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
             "Bucketed histogram of peer commits logs duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
 
     pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
