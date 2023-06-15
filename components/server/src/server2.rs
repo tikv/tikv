@@ -1271,7 +1271,7 @@ where
         tablet_registry
             .tablet_factory()
             .db_resources()
-            .set_high_priority_background_threads(1);
+            .set_high_priority_background_threads(10);
 
         info!("flush-before-close: flush begin");
         let engines = self.engines.take().unwrap();
