@@ -17,6 +17,9 @@ pub trait ConfigurableDb {
     fn set_flush_size(&self, f: usize) -> ConfigRes;
     fn set_flush_oldest_first(&self, f: bool) -> ConfigRes;
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes;
+
+    fn set_high_priority_background_threads(&self, _n: i32);
+    fn get_high_priority_background_threads(&self) -> Option<i32>;
 }
 
 impl ConfigurableDb for RocksEngine {
@@ -65,6 +68,28 @@ impl ConfigurableDb for RocksEngine {
         let opt = self.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
         opt.set_block_cache_capacity(capacity as u64)
             .map_err(Box::from)
+    }
+
+    fn set_high_priority_background_threads(&self, n: i32) {
+        assert!(n > 0);
+        if let Some(env) = self.as_inner().as_ref().env() {
+            env.set_high_priority_background_threads(n);
+        } else {
+            warn!(
+                "set high priority background threads failed as env is not set";
+            );
+        }
+    }
+
+    fn get_high_priority_background_threads(&self) -> Option<i32> {
+        if let Some(env) = self.as_inner().as_ref().env() {
+            Some(env.get_high_priority_background_threads())
+        } else {
+            warn!(
+                "cannot get high priority background threads as env is not set";
+            );
+            None
+        }
     }
 }
 
@@ -175,5 +200,20 @@ impl ConfigurableDb for TabletRegistry<RocksEngine> {
                 Ok(true)
             }
         })
+    }
+
+    fn set_high_priority_background_threads(&self, n: i32) {
+        assert!(n > 0);
+        self.tablet_factory()
+            .shared_resources()
+            .set_high_priority_background_threads(n);
+    }
+
+    fn get_high_priority_background_threads(&self) -> Option<i32> {
+        Some(
+            self.tablet_factory()
+                .shared_resources()
+                .get_high_priority_background_threads(),
+        )
     }
 }

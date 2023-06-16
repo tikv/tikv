@@ -8,6 +8,7 @@ use std::{
 
 use engine_traits::{MiscExt, Peekable};
 use test_raftstore::*;
+use tikv::config::ConfigurableDb;
 use tikv_util::{
     sys::thread::{self, Pid},
     HandyRwLock,
@@ -452,17 +453,8 @@ fn test_adjust_hight_priority_background_threads() {
     let registry = &cluster.engines[0].0;
     // set high priority background thread (flush thread) to 1 so that puase one
     // thread will make flush unable to proceed
-    registry
-        .tablet_factory()
-        .shared_resources()
-        .set_high_priority_background_threads(1);
-    assert_eq!(
-        registry
-            .tablet_factory()
-            .shared_resources()
-            .get_high_priority_background_threads(),
-        1
-    );
+    registry.set_high_priority_background_threads(1);
+    assert_eq!(registry.get_high_priority_background_threads().unwrap(), 1);
 
     let mut cache = registry.get(1).unwrap();
     let tablet = cache.latest().unwrap().clone();
@@ -485,10 +477,7 @@ fn test_adjust_hight_priority_background_threads() {
     rx.recv_timeout(Duration::from_secs(2)).unwrap_err();
 
     let registry = &cluster.engines[0].0;
-    registry
-        .tablet_factory()
-        .shared_resources()
-        .set_high_priority_background_threads(2);
+    registry.set_high_priority_background_threads(2);
 
     fail::remove("on_flush_completed");
     h.join().unwrap();
