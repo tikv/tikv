@@ -928,7 +928,7 @@ mod tests {
         let (key, val1) = (b"foo", b"bar1");
 
         if deep_write_seek {
-            for i in 0..SEEK_BOUND {
+            for i in 1..SEEK_BOUND {
                 must_prewrite_put(&mut engine, key, val1, key, i);
                 must_commit(&mut engine, key, i, i);
             }
