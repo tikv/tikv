@@ -472,6 +472,7 @@ where
                 None => return,
             };
             if msg.get_message().has_snapshot() {
+                info!("fill_msg,send snapshot");
                 let mut snapshot = RaftSnapshotData::default();
                 snapshot
                     .merge_from_bytes(msg.get_message().get_snapshot().get_data())
@@ -501,6 +502,7 @@ where
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<grpcio::Result<()>> {
         let s = &mut *self;
         loop {
+            info!("AsyncRaftSender poll");
             s.fill_msg(ctx);
             if !s.buffer.empty() {
                 // Then it's the first time visit this block since last flush.

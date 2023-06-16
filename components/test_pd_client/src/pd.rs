@@ -1039,7 +1039,7 @@ impl TestPdClient {
     }
 
     pub fn must_none_pending_peer(&self, peer: metapb::Peer) {
-        for _ in 1..500 {
+        for _ in 1..5 {
             sleep_ms(10);
             if self.cluster.rl().pending_peers.contains_key(&peer.get_id()) {
                 continue;
