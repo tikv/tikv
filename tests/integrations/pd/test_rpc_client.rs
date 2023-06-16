@@ -341,11 +341,7 @@ fn restart_leader(mgr: SecurityManager) {
         MockServer::<Service>::with_configuration(&mgr, vec![("127.0.0.1".to_owned(), 0); 3], None);
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2_with_retry_interval(
-        eps.clone(),
-        Some(Arc::clone(&mgr)),
-        ReadableDuration::millis(200),
-    );
+    let mut client = new_client_v2(eps.clone(), Some(Arc::clone(&mgr)));
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::default();
@@ -370,8 +366,8 @@ fn restart_leader(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // The default retry interval is 100ms so sleeps 200ms here.
-    thread::sleep(Duration::from_millis(200));
+    // The default retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
 
     let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
@@ -571,7 +567,7 @@ fn test_cluster_version() {
     let feature_b = Feature::require(5, 0, 0);
     let feature_c = Feature::require(5, 0, 1);
 
-    let mut client = new_client_v2_with_retry_interval(eps, None, ReadableDuration::millis(100));
+    let mut client = new_client_v2(eps, None);
     let feature_gate = client.feature_gate().clone();
     assert!(!feature_gate.can_enable(feature_a));
 
@@ -609,8 +605,8 @@ fn test_cluster_version() {
     assert!(!feature_gate.can_enable(feature_c));
 
     // After reconnect the version should be still accessible.
-    // The default retry interval is 100ms so sleeps 200ms here.
-    thread::sleep(Duration::from_millis(200));
+    // The default retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
     client.reconnect().unwrap();
     assert!(feature_gate.can_enable(feature_b));
     assert!(!feature_gate.can_enable(feature_c));

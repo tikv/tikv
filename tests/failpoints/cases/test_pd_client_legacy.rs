@@ -216,13 +216,12 @@ fn test_slow_periodical_update() {
 
     // client2 never updates leader in the test.
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
-    cfg.retry_interval = ReadableDuration(Duration::from_millis(100));
     let client2 = RpcClient::new(&cfg, Some(env), mgr).unwrap();
 
     fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
-    // The retry interval is 100ms so sleeps 200ms here.
-    thread::sleep(Duration::from_millis(200));
+    // The retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
 
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
@@ -246,8 +245,8 @@ fn test_reconnect_limit() {
     let pd_client_reconnect_fp = "pd_client_reconnect";
     let (_server, client) = new_test_server_and_client(ReadableDuration::secs(100));
 
-    // The default retry interval is 1s so sleeps 2s here.
-    thread::sleep(Duration::from_secs(2));
+    // The default retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
 
     // The first reconnection will succeed, and the last_update will not be updated.
     fail::cfg(pd_client_reconnect_fp, "return").unwrap();

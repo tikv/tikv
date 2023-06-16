@@ -111,18 +111,16 @@ fn test_slow_periodical_update() {
 
     // client1 updates leader frequently (100ms).
     cfg.update_interval = ReadableDuration(Duration::from_millis(100));
-    cfg.retry_interval = ReadableDuration(Duration::from_millis(100));
     let _client1 = RpcClientV2::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
 
     // client2 never updates leader in the test.
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
-    cfg.retry_interval = ReadableDuration(Duration::from_millis(100));
     let mut client2 = RpcClientV2::new(&cfg, Some(env), mgr).unwrap();
 
     fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
-    // The retry interval is 100ms so sleeps 200ms here.
-    thread::sleep(Duration::from_millis(200));
+    // The retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
 
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
