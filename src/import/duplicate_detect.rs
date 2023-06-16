@@ -107,8 +107,8 @@ impl<S: Snapshot> DuplicateDetector<S> {
                 WriteType::Put => {
                     if commit_ts <= self.min_commit_ts
                         && !current_write
-                        .as_ref()
-                        .check_gc_fence_as_latest_version(self.min_commit_ts)
+                            .as_ref()
+                            .check_gc_fence_as_latest_version(self.min_commit_ts)
                     {
                         self.skip_all_version(&start_key)?;
                         return Ok(());
@@ -133,7 +133,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
                     self.skip_all_version(&start_key)?;
                     return Ok(());
                 }
-                _ => {},
+                _ => {}
             }
             if commit_ts <= self.min_commit_ts {
                 self.skip_all_version(&start_key)?;
