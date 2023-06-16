@@ -12,7 +12,7 @@ use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
 use raftstore::store::WriteStats;
-use resource_control::{ControlledFuture, ResourceController};
+use resource_control::{ControlledFuture, ResourceController, TaskMetadata};
 use tikv_util::{
     sys::SysQuota,
     yatp_pool::{Full, FuturePool, PoolTicker, YatpPoolBuilder},
@@ -106,7 +106,7 @@ struct PriorityQueue {
 impl PriorityQueue {
     fn spawn(
         &self,
-        group_name: &str,
+        metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
@@ -117,15 +117,16 @@ impl PriorityQueue {
         };
         // TODO: maybe use a better way to generate task_id
         let task_id = rand::random::<u64>();
+        let group_name = metadata.group_name().to_owned();
         let mut extras = Extras::new_multilevel(task_id, fixed_level);
-        extras.set_metadata(group_name.as_bytes().to_owned());
+        extras.set_metadata(metadata.to_vec());
         self.worker_pool.spawn_with_extras(
             ControlledFuture::new(
                 async move {
                     f.await;
                 },
                 self.resource_ctl.clone(),
-                group_name.as_bytes().to_owned(),
+                group_name,
             ),
             extras,
         )
@@ -206,7 +207,7 @@ impl SchedPool {
 
     pub fn spawn(
         &self,
-        group_name: &str,
+        metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
@@ -218,7 +219,7 @@ impl SchedPool {
                     self.priority
                         .as_ref()
                         .unwrap()
-                        .spawn(group_name, priority_level, f)
+                        .spawn(metadata, priority_level, f)
                 } else {
                     fail_point!("single_queue_pool_task");
                     self.vanilla.spawn(priority_level, f)
