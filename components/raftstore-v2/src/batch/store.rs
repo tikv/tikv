@@ -713,6 +713,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet::Runner::new(
                 tablet_registry.clone(),
                 sst_importer.clone(),
+                snap_mgr.clone(),
                 self.logger.clone(),
             ),
         );

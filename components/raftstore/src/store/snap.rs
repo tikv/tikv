@@ -2054,6 +2054,16 @@ impl TabletSnapKey {
         let term = snap.get_metadata().get_term();
         TabletSnapKey::new(region_id, to_peer, term, index)
     }
+
+    pub fn from_path(path: &PathBuf) -> TabletSnapKey {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let numbers: Vec<u64> = name
+            .split('_')
+            .skip(1)
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        TabletSnapKey::new(numbers[0], numbers[1], numbers[2], numbers[3])
+    }
 }
 
 impl Display for TabletSnapKey {
@@ -2185,6 +2195,26 @@ impl TabletSnapManager {
             }
         }
         true
+    }
+
+    pub fn list_snapshot(&self) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        for entry in file_system::read_dir(&self.base)? {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+
+            let path = entry.path();
+            if path.file_name().and_then(|n| n.to_str()).map_or(true, |n| {
+                !n.starts_with(SNAP_GEN_PREFIX) || n.ends_with(TMP_FILE_SUFFIX)
+            }) {
+                continue;
+            }
+            paths.push(path);
+        }
+        Ok(paths)
     }
 
     pub fn total_snap_size(&self) -> Result<u64> {
@@ -3362,5 +3392,13 @@ pub mod tests {
         let snap_mgr = builder.build(path.to_str().unwrap());
         snap_mgr.init().unwrap();
         assert!(path.exists());
+    }
+
+    #[test]
+    fn test_from_path() {
+        let snap_dir = Builder::new().prefix("test_from_path").tempdir().unwrap();
+        let path = snap_dir.path().join("gen_1_2_3_4");
+        let key = TabletSnapKey::from_path(&path);
+        assert_eq!(1, key.region_id);
     }
 }
