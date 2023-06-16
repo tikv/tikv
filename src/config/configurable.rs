@@ -77,9 +77,9 @@ impl ConfigurableDb for RocksEngine {
             }
             Ok(())
         } else {
-            Err(Box::from(format!(
-                "set high priority background threads failed as env is not set"
-            )))
+            Err(Box::from(
+                "set high priority background threads failed as env is not set".to_string(),
+            ))
         }
     }
 }
