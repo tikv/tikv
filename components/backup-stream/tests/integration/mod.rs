@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(custom_test_frameworks)]
-#![test_runner(test_util::run_failpoint_tests)]
+#![test_runner(test_util::run_tests)]
 
 #[path = "../suite.rs"]
 mod suite;
