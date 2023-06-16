@@ -60,7 +60,7 @@ use crate::{
 
 #[derive(Debug)]
 pub enum SnapState {
-    Relax,
+    Relax(Option<Snapshot>),
     Generating {
         canceled: Arc<AtomicBool>,
         index: Arc<AtomicU64>,
@@ -71,9 +71,9 @@ pub enum SnapState {
 impl PartialEq for SnapState {
     fn eq(&self, other: &SnapState) -> bool {
         match (self, other) {
-            (SnapState::Relax, SnapState::Relax)
-            | (SnapState::Generating { .. }, SnapState::Generating { .. }) => true,
+            (SnapState::Generating { .. }, SnapState::Generating { .. }) => true,
             (SnapState::Generated(snap1), SnapState::Generated(snap2)) => *snap1 == *snap2,
+            (SnapState::Relax(snap1), SnapState::Relax(snap2)) => *snap1 == *snap2,
             _ => false,
         }
     }
@@ -190,6 +190,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .unwrap()
                 .send(ApplyTask::Snapshot(gen_task));
         }
+    }
+
+    pub fn on_snap_gc<T>(&self, ctx: &mut StoreContext<EK, ER, T>, keys: Box<[TabletSnapKey]>) {
+        let mut stale_keys = Vec::from(keys);
+        if self.is_leader() {
+            stale_keys.retain(
+                |key| match self.storage().snap_states.borrow().get(&key.to_peer) {
+                    Some(SnapState::Relax(None)) => true,
+                    _ => !self.has_peer(key.to_peer),
+                },
+            )
+        }
+        if stale_keys.is_empty() {
+            return;
+        }
+        let _ = ctx
+            .schedulers
+            .tablet
+            .schedule(tablet::Task::SnapGc(stale_keys.into()));
     }
 
     pub fn on_snapshot_generated(&mut self, snapshot: GenSnapRes) {
@@ -389,10 +408,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 }
                 SnapState::Generated(ref s) => {
                     let snap = *s.clone();
-                    *state = SnapState::Relax;
                     if self.validate_snap(&snap, request_index) {
+                        *state = SnapState::Relax(Some(*s.clone()));
                         return Ok(snap);
                     }
+                    *state = SnapState::Relax(None);
+                }
+                SnapState::Relax(Some(s)) => {
+                    if self.validate_snap(s, request_index) {
+                        return Ok(s.clone());
+                    }
+                    *state = SnapState::Relax(None);
                 }
                 _ => {}
             };
