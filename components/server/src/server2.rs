@@ -181,7 +181,9 @@ pub fn run_tikv(config: TikvConfig) {
         } else {
             run_impl::<RaftLogEngine, API>(config)
         }
-    })
+    });
+
+    info!("server stopped");
 }
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
