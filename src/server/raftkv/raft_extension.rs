@@ -177,6 +177,6 @@ where
 
     /// report slow score
     fn slow_score(&self, reset: bool) {
-        self.router.send_store_msg(StoreMsg::SlowScore(reset)); 
+        self.router.send_store_msg(StoreMsg::SlowScore(reset)).unwrap(); 
     }
 }

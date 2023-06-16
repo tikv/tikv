@@ -91,6 +91,7 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
+        service_event::ServiceEvent,
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
@@ -129,7 +130,8 @@ use crate::{
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let mut tikv = TikvServer::<CER, F>::init(config);
+    let (service_event_tx, service_event_rx) = mpsc::channel();
+    let mut tikv = TikvServer::<CER, F>::init(config, service_event_tx.clone());
 
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
@@ -152,11 +154,32 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.run_status_server();
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-    signal_handler::wait_for_signal(
-        Some(tikv.engines.take().unwrap().engines),
-        tikv.kv_statistics.clone(),
-        tikv.raft_statistics.clone(),
-    );
+    let engines = tikv.engines.take().unwrap().engines;
+    let kv_statistics = tikv.kv_statistics.clone();
+    let raft_statistics = tikv.raft_statistics.clone();
+    std::thread::spawn(move || {
+        signal_handler::wait_for_signal(
+            Some(engines),
+            kv_statistics,
+            raft_statistics,
+            Some(service_event_tx),
+        )
+    });
+    loop {
+        if let Ok(service_event) = service_event_rx.recv() {
+            match service_event {
+                ServiceEvent::PauseGrpc => {
+                    tikv.pause();
+                }
+                ServiceEvent::ResumeGrpc => {
+                    tikv.resume();
+                }
+                ServiceEvent::Exit => {
+                    break;
+                }
+            }
+        }
+    }
     tikv.stop();
 }
 
@@ -219,6 +242,7 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
+    tx: mpsc::Sender<ServiceEvent>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -247,7 +271,7 @@ where
     ER: RaftEngine,
     F: KvFormat,
 {
-    fn init(mut config: TikvConfig) -> TikvServer<ER, F> {
+    fn init(mut config: TikvConfig, tx: mpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -400,6 +424,7 @@ where
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
+            tx,
         }
     }
 
@@ -1386,6 +1411,7 @@ where
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.core.store_path.clone(),
                 self.resource_manager.clone(),
+                self.tx.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1420,6 +1446,16 @@ where
         }
 
         self.core.to_stop.into_iter().for_each(|s| s.stop());
+    }
+
+    fn pause(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        server.server.pause();
+    }
+
+    fn resume(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        server.server.resume();
     }
 }
 

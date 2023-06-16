@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     pin::Pin,
     str::{self, FromStr},
-    sync::Arc,
+    sync::{mpsc, Arc},
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -64,7 +64,7 @@ use tokio_openssl::SslStream;
 
 use crate::{
     config::{ConfigController, LogLevel},
-    server::Result,
+    server::{service_event::ServiceEvent, Result},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -93,6 +93,7 @@ pub struct StatusServer<R> {
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    service_event_tx: mpsc::Sender<ServiceEvent>,
 }
 
 impl<R> StatusServer<R>
@@ -106,6 +107,7 @@ where
         router: R,
         store_path: PathBuf,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        service_event_tx: mpsc::Sender<ServiceEvent>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -126,6 +128,7 @@ where
             security_config,
             store_path,
             resource_manager,
+            service_event_tx,
         })
     }
 
@@ -438,8 +441,12 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
-    async fn slow_score( router: R) -> hyper::Result<Response<Body>> {
+    async fn slow_score(
+        router: R,
+        tx: mpsc::Sender<ServiceEvent>,
+    ) -> hyper::Result<Response<Body>> {
         router.slow_score(false);
+        tx.send(ServiceEvent::PauseGrpc).unwrap();
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
             .header("Content-Length", 2)
@@ -448,8 +455,12 @@ where
         Ok(response)
     }
 
-    async fn reset_slow_score( router: R) -> hyper::Result<Response<Body>> {
+    async fn reset_slow_score(
+        router: R,
+        tx: mpsc::Sender<ServiceEvent>,
+    ) -> hyper::Result<Response<Body>> {
         router.slow_score(true);
+        tx.send(ServiceEvent::ResumeGrpc).unwrap();
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
             .header("Content-Length", 2)
@@ -571,6 +582,7 @@ where
         let router = self.router.clone();
         let store_path = self.store_path.clone();
         let resource_manager = self.resource_manager.clone();
+        let service_event_tx = self.service_event_tx.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -579,6 +591,7 @@ where
             let router = router.clone();
             let store_path = store_path.clone();
             let resource_manager = resource_manager.clone();
+            let service_event_tx = service_event_tx.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -588,6 +601,7 @@ where
                     let router = router.clone();
                     let store_path = store_path.clone();
                     let resource_manager = resource_manager.clone();
+                    let service_event_tx = service_event_tx.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -643,10 +657,10 @@ where
                                 Self::get_engine_type(&cfg_controller).await
                             }
                             (Method::PUT, "/slow_score") => {
-                                Self::slow_score(router).await
+                                Self::slow_score(router, service_event_tx).await
                             }
                             (Method::PUT, "/reset_slow_score") => {
-                                Self::reset_slow_score(router).await
+                                Self::reset_slow_score(router, service_event_tx).await
                             }
                             // This interface is used for configuration file hosting scenarios,
                             // TiKV will not update configuration files, and this interface will
