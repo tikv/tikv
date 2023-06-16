@@ -58,22 +58,29 @@ use crate::{
     Result, StoreContext,
 };
 
+/// Snapshot generating task state.
+/// snaposhot send success: Relax --> Generating --> Generated --> Sending --> Relax
+/// snapshot send failed: Relax --> Generating --> Generated --> Sending
+/// snapshot send again: Sending --> Relax
 #[derive(Debug)]
 pub enum SnapState {
-    Relax(Option<Snapshot>),
+    // Relax means there is no snapshot generating task.
+    Relax,
     Generating {
         canceled: Arc<AtomicBool>,
         index: Arc<AtomicU64>,
     },
     Generated(Box<Snapshot>),
+    Sending(Box<Snapshot>),
 }
 
 impl PartialEq for SnapState {
     fn eq(&self, other: &SnapState) -> bool {
         match (self, other) {
+            (SnapState::Relax, SnapState::Relax) => true,
             (SnapState::Generating { .. }, SnapState::Generating { .. }) => true,
             (SnapState::Generated(snap1), SnapState::Generated(snap2)) => *snap1 == *snap2,
-            (SnapState::Relax(snap1), SnapState::Relax(snap2)) => *snap1 == *snap2,
+            (SnapState::Sending(snap1), SnapState::Sending(snap2)) => *snap1 == *snap2,
             _ => false,
         }
     }
@@ -197,7 +204,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.is_leader() {
             stale_keys.retain(
                 |key| match self.storage().snap_states.borrow().get(&key.to_peer) {
-                    Some(SnapState::Relax(None)) => true,
+                    Some(SnapState::Relax) => true,
                     _ => !self.has_peer(key.to_peer),
                 },
             )
@@ -238,6 +245,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "to" => ?to_peer,
             "status" => ?status,
         );
+        self.storage().report_snapshot(to_peer_id, status);
         self.raft_group_mut().report_snapshot(to_peer_id, status);
     }
 
@@ -392,10 +400,23 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         false
     }
 
+    pub fn report_snapshot(&self, peer_id: u64, status: raft::SnapshotStatus) {
+        if status == raft::SnapshotStatus::Finish {
+            self.snap_states.borrow_mut().remove(&peer_id);
+        }
+    }
+
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         if let Some(state) = self.snap_states.borrow_mut().get_mut(&to) {
+            info!(
+                self.logger(),
+                "requesting snapshot";
+                "request_index" => request_index,
+                "request_peer" => to,
+                "state" => ?state,
+            );
             match state {
                 SnapState::Generating { ref canceled, .. } => {
                     if canceled.load(Ordering::SeqCst) {
@@ -409,16 +430,16 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 SnapState::Generated(ref s) => {
                     let snap = *s.clone();
                     if self.validate_snap(&snap, request_index) {
-                        *state = SnapState::Relax(Some(*s.clone()));
+                        *state = SnapState::Sending(s.clone());
                         return Ok(snap);
                     }
-                    *state = SnapState::Relax(None);
+                    *state = SnapState::Relax;
                 }
-                SnapState::Relax(Some(s)) => {
+                SnapState::Sending(ref s) => {
                     if self.validate_snap(s, request_index) {
-                        return Ok(s.clone());
+                        return Ok(*s.clone());
                     }
-                    *state = SnapState::Relax(None);
+                    *state = SnapState::Relax;
                 }
                 _ => {}
             };

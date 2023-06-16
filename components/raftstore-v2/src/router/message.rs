@@ -241,7 +241,7 @@ pub enum PeerMsg {
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
-    /// A message that used to check if a snapshot is happened.
+    /// A message that used to check if a snapshot gc is happened.
     SnapGc(Box<[TabletSnapKey]>),
 }
 

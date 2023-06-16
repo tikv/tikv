@@ -934,10 +934,12 @@ fn test_snapshot_complete_recover_raft_tick() {
 
 #[test]
 fn test_snapshot_send_failed() {
+    test_util::init_log_for_test();
     let mut cluster = test_raftstore_v2::new_server_cluster(1, 2);
     configure_for_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(10);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
@@ -957,7 +959,6 @@ fn test_snapshot_send_failed() {
                 }
             })),
     ));
-
     // peer2 will interrupt in receiving snapshot
     fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
@@ -977,7 +978,11 @@ fn test_snapshot_send_failed() {
     assert!(!mgr.list_snapshot().unwrap().is_empty());
 
     fail::remove("receiving_snapshot_net_error");
-    pd_client.must_remove_peer(r1, new_learner_peer(2, 2));
+    cluster.clear_send_filters();
+    cluster.must_put(b"k2", b"v");
     sleep_ms(100);
+    cluster.must_put(b"k2", b"v");
+    pd_client.must_none_pending_peer(new_learner_peer(2, 2));
+    let mgr = cluster.get_snap_mgr(1);
     assert!(mgr.list_snapshot().unwrap().is_empty());
 }
