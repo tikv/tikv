@@ -59,12 +59,11 @@ use crate::{
 };
 
 /// Snapshot generating task state.
-/// snaposhot send success: Relax --> Generating --> Generated --> Sending --> Relax
-/// snapshot send failed: Relax --> Generating --> Generated --> Sending
+/// snaposhot send success: Relax --> Generating --> Generated --> Sending -->
+/// Relax snapshot send failed: Relax --> Generating --> Generated --> Sending
 /// snapshot send again: Sending --> Relax
 #[derive(Debug)]
 pub enum SnapState {
-    // Relax means there is no snapshot generating task.
     Relax,
     Generating {
         canceled: Arc<AtomicBool>,
@@ -454,13 +453,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             return Err(raft::Error::Store(
                 raft::StorageError::SnapshotTemporarilyUnavailable,
             ));
-        } else {
-            info!(
-                self.logger(),
-                "requesting snapshot";
-                "request_index" => request_index,
-                "request_peer" => to,
-            );
         }
         let canceled = Arc::new(AtomicBool::new(false));
         let index = Arc::new(AtomicU64::new(0));

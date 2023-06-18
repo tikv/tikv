@@ -2184,6 +2184,7 @@ impl TabletSnapManager {
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
+        debug!("delete tablet snapshot file";"path" => %path.display());
         if path.exists() {
             if let Err(e) = encryption::trash_dir_all(&path, self.key_manager.as_deref()) {
                 error!(
