@@ -223,7 +223,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::CheckMerge => self.fsm.peer_mut().on_check_merge(self.store_ctx),
             PeerTick::CheckPeerStaleState => unimplemented!(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
-            PeerTick::CheckLeaderLease => unimplemented!(),
+            PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => {
                 self.fsm.peer.on_reactivate_memory_lock_tick(self.store_ctx)
             }

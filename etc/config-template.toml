@@ -344,7 +344,7 @@
 ## PD endpoints.
 # endpoints = ["127.0.0.1:2379"]
 
-## The interval at which to retry a PD connection initialization.
+## The interval at which to retry a PD connection.
 ## Default is 300ms.
 # retry-interval = "300ms"
 

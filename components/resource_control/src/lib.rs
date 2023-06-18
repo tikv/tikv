@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 mod resource_group;
 pub use resource_group::{
-    ResourceConsumeType, ResourceController, ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL,
+    ResourceConsumeType, ResourceController, ResourceGroupManager, TaskMetadata,
+    MIN_PRIORITY_UPDATE_INTERVAL,
 };
 
 mod future;
@@ -20,6 +21,8 @@ pub use service::ResourceManagerService;
 
 pub mod channel;
 pub use channel::ResourceMetered;
+
+mod resource_limiter;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
