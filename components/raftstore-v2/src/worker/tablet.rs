@@ -494,7 +494,7 @@ mod tests {
         let logger = slog_global::borrow_global().new(slog::o!());
         let (_dir, importer) = create_tmp_importer();
         let snap_dir = dir.path().join("snap");
-        let snap_mgr = TabletSnapManager::new(snap_dir, None);
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
         let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
 
         let mut region = Region::default();

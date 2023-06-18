@@ -2055,8 +2055,8 @@ impl TabletSnapKey {
         TabletSnapKey::new(region_id, to_peer, term, index)
     }
 
-    pub fn from_path(path: &PathBuf) -> TabletSnapKey {
-        let name = path.file_name().unwrap().to_str().unwrap();
+    pub fn from_path<T: Into<PathBuf>>(path: T) -> TabletSnapKey {
+        let name = path.into().file_name().unwrap().to_str().unwrap();
         let numbers: Vec<u64> = name
             .split('_')
             .skip(1)
