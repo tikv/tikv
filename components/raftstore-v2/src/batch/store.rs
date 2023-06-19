@@ -33,8 +33,9 @@ use raftstore::{
         },
         local_metrics::RaftMetrics,
         util::LatencyInspector,
-        AutoSplitController, Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
-        StoreWriters, TabletSnapManager, Transport, WriteRouterContext, WriteSenders,
+        AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
+        SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteRouterContext,
+        WriteSenders,
     },
 };
 use resource_metering::CollectorRegHandle;
@@ -60,7 +61,7 @@ use crate::{
     },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{checkpoint, cleanup, pd, tablet},
+    worker::{checkpoint, cleanup, pd, refresh_config, tablet},
     Error, Result,
 };
 
@@ -317,6 +318,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
     }
 }
 
+#[derive(Clone)]
 struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
@@ -565,6 +567,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     purge: Option<Worker>,
     cleanup_worker: Worker,
 
+    refresh_config_worker: LazyWorker<RefreshConfigTask>,
+
     // Following is not maintained by raftstore itself.
     background: Worker,
 }
@@ -581,6 +585,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             purge,
             cleanup_worker: Worker::new("cleanup-worker"),
             background,
+            refresh_config_worker: LazyWorker::new("refreash-config-worker"),
         }
     }
 
@@ -590,6 +595,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         self.pd.stop();
         self.tablet.stop();
         self.checkpoint.stop();
+        self.refresh_config_worker.stop();
         if let Some(w) = self.purge {
             w.stop();
         }
@@ -775,13 +781,21 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             sst_importer,
             key_manager,
         );
-        self.workers = Some(workers);
+
         self.schedulers = Some(schedulers);
         let peers = builder.init()?;
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
         let tag = format!("rs-{}", store_id);
-        self.system.spawn(tag, builder);
+        self.system.spawn(tag, builder.clone());
+
+        let refresh_config_runner = refresh_config::Runner::new(
+            self.logger.clone(),
+            router.router().clone(),
+            self.system.build_pool_state(builder),
+        );
+        assert!(workers.refresh_config_worker.start(refresh_config_runner));
+        self.workers = Some(workers);
 
         let mut mailboxes = Vec::with_capacity(peers.len());
         let mut address = Vec::with_capacity(peers.len());
@@ -814,6 +828,15 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         router.send_control(StoreMsg::Start).unwrap();
         Ok(())
+    }
+
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
+        assert!(self.workers.is_some());
+        self.workers
+            .as_ref()
+            .unwrap()
+            .refresh_config_worker
+            .scheduler()
     }
 
     pub fn shutdown(&mut self) {
@@ -880,6 +903,10 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
             }
             _ => unreachable!(),
         }
+    }
+
+    pub fn router(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm> {
+        &self.router
     }
 }
 
