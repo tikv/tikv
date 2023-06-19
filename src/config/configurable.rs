@@ -197,9 +197,7 @@ impl ConfigurableDb for TabletRegistry<RocksEngine> {
         assert!(n > 0);
         loop_registry(self, |cache| {
             if let Some(latest) = cache.latest() {
-                if let Err(e) = latest.set_high_priority_background_threads(n, allow_reduce) {
-                    error!("{:?}", e);
-                }
+                latest.set_high_priority_background_threads(n, allow_reduce)?;
                 Ok(false)
             } else {
                 Ok(true)
