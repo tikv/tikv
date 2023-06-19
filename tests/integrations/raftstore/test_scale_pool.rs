@@ -1,8 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{mpsc::sync_channel, Mutex},
+    time::Duration,
+};
 
+use engine_traits::{MiscExt, Peekable};
 use test_raftstore::*;
+use tikv::config::ConfigurableDb;
 use tikv_util::{
     sys::thread::{self, Pid},
     HandyRwLock,
@@ -432,4 +438,51 @@ fn test_resize_async_ios_failed_2() {
     // Request can be handled as usual
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+}
+
+#[test]
+fn test_adjust_hight_priority_background_threads() {
+    use test_raftstore_v2::*;
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.rocksdb.max_background_flushes = 2;
+    // pause one flush thread
+    fail::cfg("on_flush_completed", "1*pause").unwrap();
+    cluster.run();
+
+    cluster.must_put(b"k1", b"val");
+    let registry = &cluster.engines[0].0;
+    // set high priority background thread (flush thread) to 1 so that puase one
+    // thread will make flush unable to proceed
+    registry
+        .set_high_priority_background_threads(1, true)
+        .unwrap();
+
+    let mut cache = registry.get(1).unwrap();
+    let tablet = cache.latest().unwrap().clone();
+    assert_eq!(tablet.get_value(b"zk1").unwrap().unwrap(), b"val");
+
+    let tablet2 = tablet.clone();
+    let h = std::thread::spawn(move || {
+        // it will block at on_memtable_flush
+        tablet2.flush_cf("default", true).unwrap();
+    });
+
+    cluster.must_put(b"k2", b"val");
+    let (tx, rx) = sync_channel(1);
+    let tx = Mutex::new(tx);
+    let h2 = std::thread::spawn(move || {
+        tablet.flush_cf("default", true).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
+    });
+
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_err();
+
+    let registry = &cluster.engines[0].0;
+    registry
+        .set_high_priority_background_threads(2, false)
+        .unwrap();
+
+    fail::remove("on_flush_completed");
+    h.join().unwrap();
+    h2.join().unwrap();
 }
