@@ -2056,7 +2056,8 @@ impl TabletSnapKey {
     }
 
     pub fn from_path<T: Into<PathBuf>>(path: T) -> TabletSnapKey {
-        let name = path.into().file_name().unwrap().to_str().unwrap();
+        let path = path.into();
+        let name = path.file_name().unwrap().to_str().unwrap();
         let numbers: Vec<u64> = name
             .split('_')
             .skip(1)
