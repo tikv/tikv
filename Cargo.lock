@@ -385,7 +385,7 @@ dependencies = [
 [[package]]
 name = "azure_core"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#be63d1eb8bcd8f760376fb4b71ad8a140261947f"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "async-trait",
  "base64 0.21.0",
@@ -397,7 +397,7 @@ dependencies = [
  "log",
  "paste",
  "pin-project",
- "quick-xml 0.29.0",
+ "quick-xml 0.28.2",
  "rand 0.8.5",
  "reqwest",
  "rustc_version 0.4.0",
@@ -411,7 +411,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#be63d1eb8bcd8f760376fb4b71ad8a140261947f"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -431,7 +431,7 @@ dependencies = [
 [[package]]
 name = "azure_security_keyvault"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#be63d1eb8bcd8f760376fb4b71ad8a140261947f"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -446,7 +446,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#be63d1eb8bcd8f760376fb4b71ad8a140261947f"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -468,7 +468,7 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#be63d1eb8bcd8f760376fb4b71ad8a140261947f"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#1fac7b8760f2610afd74269e3cc27e76eb33e6a9"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -476,6 +476,7 @@ dependencies = [
  "bytes",
  "futures 0.3.15",
  "log",
+ "md5",
  "serde",
  "serde_derive",
  "serde_json",
@@ -1121,18 +1122,18 @@ dependencies = [
 
 [[package]]
 name = "const_format"
-version = "0.2.31"
+version = "0.2.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c990efc7a285731f9a4378d81aff2f0e85a2c8781a05ef0f8baa8dac54d0ff48"
+checksum = "7309d9b4d3d2c0641e018d449232f2e28f1b22933c137f157d3dbc14228b8c0e"
 dependencies = [
  "const_format_proc_macros",
 ]
 
 [[package]]
 name = "const_format_proc_macros"
-version = "0.2.31"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e026b6ce194a874cb9cf32cd5772d1ef9767cc8fcb5765948d74f37a9d8b2bf6"
+checksum = "d897f47bf7270cf70d370f8f98c1abb6d2d4cf60a6845d30e05bfb90c6568650"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2959,7 +2960,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#961f64db1b7be036ebd3f1276fef5944a812755f"
+source = "git+https://github.com/pingcap/kvproto.git#b8e6dcdd1030c1705883c1e3d41970fce62f5e46"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3261,6 +3262,15 @@ name = "memmap2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "057a3db23999c867821a7a59feb06a578fcb03685e983dff90daf9e7d24ac08f"
+dependencies = [
+ "libc 0.2.139",
+]
+
+[[package]]
+name = "memmap2"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d28bba84adfe6646737845bc5ebbfa2c08424eb1c37e94a1fd2a82adb56a872"
 dependencies = [
  "libc 0.2.139",
 ]
@@ -4434,9 +4444,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.29.0"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81b9228215d82c7b61490fec1de287136b5de6f5700f6e58ea9ad61a7964ca51"
+checksum = "0ce5e73202a820a31f8a0ee32ada5e21029c81fd9e3ebf668a40832e4219d9d1"
 dependencies = [
  "memchr",
  "serde",
@@ -4469,7 +4479,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/tikv/raft-engine.git#773b89fb24276995e5fd26a7e28550796966d9cd"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4483,7 +4493,7 @@ dependencies = [
  "libc 0.2.139",
  "log",
  "lz4-sys",
- "memmap2",
+ "memmap2 0.6.2",
  "nix 0.26.2",
  "num-derive",
  "num-traits",
@@ -5949,7 +5959,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac457d054f793cedfde6f32d21d692b8351cfec9084fefd0470c0373f6d799bc"
 dependencies = [
  "debugid",
- "memmap2",
+ "memmap2 0.5.3",
  "stable_deref_trait",
  "uuid 1.2.1",
 ]
