@@ -33,6 +33,7 @@ use std::{
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
+use fail::fail_point;
 use kvproto::{
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessageType, RaftMessage},
@@ -128,6 +129,7 @@ impl ReplayWatch {
 
 impl Drop for ReplayWatch {
     fn drop(&mut self) {
+        fail_point!("replay_watch_drop");
         info!(
             self.logger,
             "The raft log replay completed";

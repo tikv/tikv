@@ -101,9 +101,9 @@ where
         Runner { logger, raft_pool }
     }
 
-    fn resize_raft_pool(&mut self, size: usize, tmp: bool) {
+    fn resize_raft_pool(&mut self, size: usize, temporary: bool) {
         if self.raft_pool.state.saved_pool_size.is_some() {
-            if tmp {
+            if temporary {
                 warn!(
                     self.logger,
                     "temporarily resize pool size rejected";
@@ -117,7 +117,7 @@ where
                 "resize_pool_size" => size,
             );
         }
-        if tmp {
+        if temporary {
             self.raft_pool.state.saved_pool_size = Some(self.raft_pool.state.expected_pool_size);
         }
 
@@ -137,7 +137,7 @@ where
         );
     }
 
-    fn reset_raft_pool(&mut self) {
+    fn restore_raft_pool(&mut self) {
         if let Some(saved_pool_size) = self.raft_pool.state.saved_pool_size {
             self.resize_raft_pool(saved_pool_size, false);
         }
@@ -165,7 +165,7 @@ where
             RefreshConfigTask::ScalePoolTemporary(component, size) => match component {
                 BatchComponent::Store => {
                     if size == 0 {
-                        self.reset_raft_pool();
+                        self.restore_raft_pool();
                     } else {
                         self.resize_raft_pool(size, true);
                     }
