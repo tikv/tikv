@@ -337,6 +337,7 @@ impl PdClient for RpcClient {
         end_key: &[u8],
         limit: i32,
     ) -> Result<Vec<pdpb::Region>> {
+        info!("begin to scan regions"; "start_key" =>  &log_wrappers::Value::key(start_key), "end_key" =>  &log_wrappers::Value::key(end_key), "limit" => limit);
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["scan_regions"])
             .start_coarse_timer();
@@ -359,6 +360,7 @@ impl PdClient for RpcClient {
         mut start_key: Vec<u8>,
         end_key: Vec<u8>,
     ) -> Vec<Vec<pdpb::Region>> {
+        info!("begin to batch load regions"; "start_key" => &log_wrappers::Value::key(&start_key), "end_key" => &log_wrappers::Value::key(&end_key));
         let mut res = Vec::new();
 
         loop {
