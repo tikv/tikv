@@ -648,7 +648,7 @@ where
                             (Method::GET, "/resource_groups") => {
                                 Self::handle_get_all_resource_groups(resource_manager.as_ref())
                             }
-                            (Method::POST, "/debug/switch-raft-disk") => {
+                            (Method::PUT, "/debug/switch-raft-disk") => {
                                 Self::handle_switch_raftstore_disk(router)
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
