@@ -224,7 +224,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
         }
     }
 
-    fn back(&self) -> Option<&Proposal<C>> {
+    pub fn back(&self) -> Option<&Proposal<C>> {
         self.queue.back()
     }
 }
@@ -5638,7 +5638,6 @@ pub trait RequestInspector {
         }
 
         // Local read should be performed, if and only if leader is in lease.
-        // None for now.
         match self.inspect_lease() {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {
