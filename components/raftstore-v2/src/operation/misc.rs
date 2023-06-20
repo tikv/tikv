@@ -132,7 +132,7 @@ impl Store {
         let paths = ctx.snap_mgr.list_snapshot()?;
         let mut region_keys: HashMap<u64, Vec<TabletSnapKey>> = HashMap::default();
         for path in paths {
-            let key = TabletSnapKey::from_path(&path);
+            let key = TabletSnapKey::from_path(path)?;
             region_keys.entry(key.region_id).or_default().push(key);
         }
         for (region_id, keys) in region_keys {
