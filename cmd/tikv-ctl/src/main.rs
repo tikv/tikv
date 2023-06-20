@@ -817,6 +817,7 @@ fn flashback_whole_cluster(
                 .clone()
                 .into_iter()
                 .for_each(|(store_id, leaders)| {
+                    println!("store_id: {}, leaders: {:?}", store_id, leaders.values());
                     let addr = pd_client.get_store(store_id).unwrap().address;
                     leaders
                         .into_iter()
@@ -963,6 +964,11 @@ fn load_leaders_to_each_store(
                 .entry(store_id)
                 .or_insert_with(HashMap::default);
             let mut cur_region = r.get_region().clone();
+            println!(
+                "region is {:?} store_id is {:?}",
+                cur_region.get_id(),
+                store_id
+            );
             regions.insert(
                 (cur_region.take_start_key(), cur_region.take_end_key()),
                 cur_region.get_id(),

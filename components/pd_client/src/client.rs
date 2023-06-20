@@ -368,6 +368,11 @@ impl PdClient for RpcClient {
             if regions.is_empty() {
                 break;
             }
+            for r in regions.clone() {
+                let store_id = r.get_leader().get_store_id();
+                info!("get region"; "region_id" => r.get_region().get_id(), "leader" =>r.get_leader().get_id(), "store_id" => store_id);
+            }
+
             res.push(regions.clone());
 
             let end_region = regions.last().unwrap().get_region();
