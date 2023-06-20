@@ -642,6 +642,7 @@ impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
             id_base,
+            saved_pool_size: None,
         }
     }
 }
@@ -658,6 +659,8 @@ pub struct PoolState<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
     pub id_base: usize,
+
+    pub saved_pool_size: Option<usize>,
 }
 
 pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>;

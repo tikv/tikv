@@ -27,6 +27,11 @@ where
 {
     let resp = handle_request(copr, req);
     assert!(!resp.get_data().is_empty(), "{:?}", resp);
+
+    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
+    println!("delete count {}", scan_detail.rocksdb_delete_skipped_count);
+    println!("skip count {}", scan_detail.rocksdb_key_skipped_count);
+
     let mut sel_resp = SelectResponse::default();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp

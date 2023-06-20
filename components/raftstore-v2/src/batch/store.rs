@@ -514,6 +514,7 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub checkpoint: Scheduler<checkpoint::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
     pub cleanup: Scheduler<cleanup::Task>,
+    pub refresh_config: Scheduler<RefreshConfigTask>,
 
     // Following is not maintained by raftstore itself.
     pub split_check: Scheduler<SplitCheckTask>,
@@ -728,6 +729,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             checkpoint::Runner::new(self.logger.clone(), tablet_registry.clone()),
         );
 
+        let refresh_config_scheduler = workers.refresh_config_worker.scheduler();
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
@@ -736,6 +738,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
             cleanup: cleanup_worker_scheduler,
+            refresh_config: refresh_config_scheduler.clone(),
         };
 
         let builder = StorePollerBuilder::new(
@@ -793,7 +796,10 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router.register_all(mailboxes);
 
         // Make sure Msg::Start is the first message each FSM received.
-        let watch = Arc::new(ReplayWatch::new(self.logger.clone()));
+        let watch = Arc::new(ReplayWatch::new(
+            self.logger.clone(),
+            refresh_config_scheduler,
+        ));
         for addr in address {
             router
                 .force_send(addr, PeerMsg::Start(Some(watch.clone())))

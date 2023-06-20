@@ -101,7 +101,25 @@ where
         Runner { logger, raft_pool }
     }
 
-    fn resize_raft_pool(&mut self, size: usize) {
+    fn resize_raft_pool(&mut self, size: usize, tmp: bool) {
+        if self.raft_pool.state.saved_pool_size.is_some() {
+            if tmp {
+                warn!(
+                    self.logger,
+                    "temporarily resize pool size rejected";
+                );
+                return;
+            }
+            info!(
+                self.logger,
+                "saved pool size is overwritten";
+                "saved_pool_size" => self.raft_pool.state.saved_pool_size.unwrap(),
+                "resize_pool_size" => size,
+            );
+        }
+        if tmp {
+            self.raft_pool.state.saved_pool_size = Some(self.raft_pool.state.expected_pool_size);
+        }
         let current_pool_size = self.raft_pool.state.expected_pool_size;
         self.raft_pool.state.expected_pool_size = size;
         match current_pool_size.cmp(&size) {
@@ -117,6 +135,12 @@ where
             "to" => self.raft_pool.state.expected_pool_size
         );
     }
+
+    fn reset_raft_pool(&mut self) {
+        if let Some(saved_pool_size) = self.raft_pool.state.saved_pool_size {
+            self.resize_raft_pool(saved_pool_size, false);
+        }
+    }
 }
 
 impl<EK, ER, H> Runnable for Runner<EK, ER, H>
@@ -131,12 +155,17 @@ where
         match task {
             RefreshConfigTask::ScalePool(component, size) => {
                 match component {
-                    BatchComponent::Store => {}
+                    BatchComponent::Store => self.resize_raft_pool(size, false),
+                    BatchComponent::StoreTemp => {
+                        self.resize_raft_pool(size, true);
+                    }
+                    BatchComponent::StoreReset => {
+                        self.reset_raft_pool();
+                    }
                     BatchComponent::Apply => {
                         unreachable!("v2 does not have apply batch system")
                     }
                 };
-                self.resize_raft_pool(size);
             }
             _ => {
                 warn!(

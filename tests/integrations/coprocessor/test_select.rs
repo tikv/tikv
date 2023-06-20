@@ -2,7 +2,7 @@
 
 use std::{cmp, thread, time::Duration};
 
-use engine_traits::CF_LOCK;
+use engine_traits::{CF_LOCK, DATA_CFS};
 use kvproto::{
     coprocessor::{Request, Response, StoreBatchTask, StoreBatchTaskResponse},
     kvrpcpb::{Context, IsolationLevel},
@@ -57,20 +57,34 @@ macro_rules! sort_by {
     };
 }
 
+use engine_traits::MiscExt;
+
 #[test]
 fn test_select() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:4"), 3),
-        (4, Some("name:3"), 1),
-        (5, Some("name:1"), 4),
-    ];
+    // let data = vec![
+    //     (1, Some("name:0"), 2),
+    //     (2, Some("name:4"), 3),
+    //     (4, Some("name:3"), 1),
+    //     (5, Some("name:1"), 4),
+    // ];
+
+    let mut strs = vec![];
+    let mut data = vec![];
+    for i in 0..1000 {
+        strs.push(format!("name:{}", i));
+    }
+    for i in 0..1000 {
+        let i = i as i64;
+        data.push((i, Some(strs[i as usize].as_str()), i + 10));
+    }
 
     let product = ProductTable::new();
-    let (_, endpoint, limiter) = init_with_data_ext(&product, &data);
+    let ((_, endpoint, limiter), rocksdb) = init_with_data_ext(&product, data.as_slice());
+
+    rocksdb.engines().kv.flush_cfs(DATA_CFS, true).unwrap();
     limiter.set_read_bandwidth_limit(ReadableSize::kb(1), true);
     // for dag selection
-    let req = DagSelect::from(&product).build();
+    let req = DagSelect::from(&product).limit(5).build();
     let mut resp = handle_select(&endpoint, req);
     let mut total_chunk_size = 0;
     for chunk in resp.get_chunks() {

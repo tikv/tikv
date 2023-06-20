@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{DbOptionsExt, MiscExt, Peekable};
+use engine_traits::{MiscExt, Peekable};
 use test_raftstore::*;
 use tikv_util::{
     sys::thread::{self, Pid},

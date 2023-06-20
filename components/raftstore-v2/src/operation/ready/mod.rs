@@ -46,7 +46,8 @@ use raftstore::{
         needs_evict_entry_cache,
         util::{self, is_first_append_entry, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
-        FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
+        BatchComponent, FetchedLogs, ReadProgress, RefreshConfigTask, Transport, WriteCallback,
+        WriteTask,
     },
 };
 use slog::{debug, error, info, warn, Logger};
@@ -55,6 +56,7 @@ use tikv_util::{
     slog_panic,
     store::find_peer,
     time::{duration_to_sec, monotonic_raw_now},
+    worker::Scheduler,
 };
 
 pub use self::{
@@ -78,6 +80,8 @@ pub struct ReplayWatch {
     paused_peers: AtomicUsize,
     logger: Logger,
     timer: Instant,
+
+    refresh_config_scheduler: Scheduler<RefreshConfigTask>,
 }
 
 impl Debug for ReplayWatch {
@@ -92,12 +96,22 @@ impl Debug for ReplayWatch {
 }
 
 impl ReplayWatch {
-    pub fn new(logger: Logger) -> Self {
+    pub fn new(logger: Logger, refresh_config_scheduler: Scheduler<RefreshConfigTask>) -> Self {
+        if let Err(e) = refresh_config_scheduler
+            .schedule(RefreshConfigTask::ScalePool(BatchComponent::StoreTemp, 10))
+        {
+            warn!(
+                logger,
+                "tmp resize failed";
+                "error" => ?e,
+            );
+        }
         Self {
             normal_peers: AtomicUsize::new(0),
             paused_peers: AtomicUsize::new(0),
             logger,
             timer: Instant::now(),
+            refresh_config_scheduler,
         }
     }
 
@@ -119,6 +133,9 @@ impl Drop for ReplayWatch {
             "paused_peers" => self.paused_peers.load(Ordering::Relaxed),
             "elapsed" => ?self.timer.elapsed()
         );
+        self.refresh_config_scheduler
+            .schedule(RefreshConfigTask::ScalePool(BatchComponent::StoreReset, 0))
+            .unwrap();
     }
 }
 

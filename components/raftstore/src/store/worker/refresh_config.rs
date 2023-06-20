@@ -150,6 +150,8 @@ where
 #[derive(Debug, Clone, Copy)]
 pub enum BatchComponent {
     Store,
+    StoreTemp,
+    StoreReset,
     Apply,
 }
 
@@ -161,6 +163,9 @@ impl Display for BatchComponent {
             }
             BatchComponent::Apply => {
                 write!(f, "apply")
+            }
+            _ => {
+                unimplemented!()
             }
         }
     }
@@ -309,6 +314,9 @@ where
             Task::ScalePool(component, size) => match component {
                 BatchComponent::Store => self.resize_raft_pool(size),
                 BatchComponent::Apply => self.resize_apply_pool(size),
+                _ => {
+                    unimplemented!()
+                }
             },
             Task::ScaleBatchSize(component, size) => match component {
                 BatchComponent::Store => {
@@ -316,6 +324,9 @@ where
                 }
                 BatchComponent::Apply => {
                     self.apply_pool.state.max_batch_size = size;
+                }
+                _ => {
+                    unimplemented!()
                 }
             },
             Task::ScaleWriters(size) => self.resize_store_writers(size),

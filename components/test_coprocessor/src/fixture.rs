@@ -189,6 +189,21 @@ pub fn init_data_with_commit(
     init_data_with_engine_and_commit(Context::default(), engine, tbl, vals, commit)
 }
 
+pub fn init_data_with_commit2(
+    tbl: &ProductTable,
+    vals: &[(i64, Option<&str>, i64)],
+    commit: bool,
+) -> (
+    (Store<RocksEngine>, Endpoint<RocksEngine>, Arc<QuotaLimiter>),
+    RocksEngine,
+) {
+    let engine = TestEngineBuilder::new().build().unwrap();
+    (
+        init_data_with_engine_and_commit(Context::default(), engine.clone(), tbl, vals, commit),
+        engine,
+    )
+}
+
 // This function will create a Product table and initialize with the specified
 // data.
 pub fn init_with_data(
@@ -203,8 +218,11 @@ pub fn init_with_data(
 pub fn init_with_data_ext(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
-) -> (Store<RocksEngine>, Endpoint<RocksEngine>, Arc<QuotaLimiter>) {
-    init_data_with_commit(tbl, vals, true)
+) -> (
+    (Store<RocksEngine>, Endpoint<RocksEngine>, Arc<QuotaLimiter>),
+    RocksEngine,
+) {
+    init_data_with_commit2(tbl, vals, true)
 }
 
 pub fn init_data_with_commit_v2_checksum(
