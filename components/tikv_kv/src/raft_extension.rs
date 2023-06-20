@@ -60,6 +60,11 @@ pub trait RaftExtension: Clone + Send {
     fn check_consistency(&self, _region_id: u64) -> BoxFuture<'static, Result<()>> {
         Box::pin(async move { Err(box_err!("consistency check is not supported")) })
     }
+
+    /// Ask the raftstore to execute switching disk.
+    fn switch_raftstore_disk(&self) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async move { Err(box_err!("switch disk is not supported")) })
+    }
 }
 
 /// An extension that does nothing or panic on all operations.

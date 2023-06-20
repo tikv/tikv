@@ -106,4 +106,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::RaftExtension for Extension<EK, ER> 
             }
         })
     }
+
+    fn switch_raftstore_disk(&self) -> futures::future::BoxFuture<'static, tikv_kv::Result<()>> {
+        // Send a StoreMsg::SwitchDisk
+        let router = self.router.clone();
+        Box::pin(async move { router.send_control(StoreMsg::SwitchRaftstoreDisk)? })
+    }
 }

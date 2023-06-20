@@ -789,6 +789,10 @@ impl RaftEngine for RaftLogEngine {
         }
         Ok(())
     }
+
+    fn switch_disk(&self) -> Result<()> {
+        self.0.switch_disk()
+    }
 }
 
 fn transfer_error(e: RaftEngineError) -> engine_traits::Error {

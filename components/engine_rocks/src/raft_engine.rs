@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::panic;
+
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
@@ -343,6 +345,10 @@ impl RaftEngine for RocksEngine {
             None => Ok(()),
             Some(e) => Err(e),
         }
+    }
+
+    fn switch_disk(&self) -> Result<()> {
+        unimplemented!("Unimplemented for Rocksdb Engine");
     }
 }
 

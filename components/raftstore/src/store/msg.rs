@@ -868,6 +868,8 @@ where
     AwakenRegions {
         abnormal_stores: Vec<u64>,
     },
+
+    SwitchRaftstoreDisk,
 }
 
 impl<EK: KvEngine> ResourceMetered for StoreMsg<EK> {}
@@ -904,6 +906,7 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            StoreMsg::SwitchRaftstoreDisk => write!(fmt, "SwitchRaftstoreDisk"),
         }
     }
 }

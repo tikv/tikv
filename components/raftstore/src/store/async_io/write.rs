@@ -277,6 +277,7 @@ where
     Shutdown,
     #[cfg(test)]
     Pause(std::sync::mpsc::Receiver<()>),
+    SwitchDisk,
 }
 
 impl<EK, ER> ResourceMetered for WriteMsg<EK, ER>
@@ -325,6 +326,7 @@ where
             WriteMsg::LatencyInspect { .. } => write!(fmt, "WriteMsg::LatencyInspect"),
             #[cfg(test)]
             WriteMsg::Pause(_) => write!(fmt, "WriteMsg::Pause"),
+            WriteMsg::SwitchDisk => write!(fmt, "WriteMsg::SwitchDisk"),
         }
     }
 }
@@ -687,6 +689,7 @@ where
             WriteMsg::Pause(rx) => {
                 let _ = rx.recv();
             }
+            WriteMsg::SwitchDisk => self.handle_switch_disk(),
         }
         false
     }
@@ -870,6 +873,14 @@ where
 
     pub fn is_empty(&self) -> bool {
         self.batch.is_empty()
+    }
+
+    pub fn handle_switch_disk(&self) {
+        match self.raft_engine.switch_disk() {
+            Ok(()) => info!("successfully switch disk"),
+            Err(e) => warn!("failed to switch disk";
+                                "error msg" => ?e),
+        }
     }
 
     fn clear_latency_inspect(&mut self) {

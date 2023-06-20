@@ -816,6 +816,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::AwakenRegions { abnormal_stores } => {
                     self.on_wake_up_regions(abnormal_stores);
                 }
+                StoreMsg::SwitchRaftstoreDisk => {
+                    self.on_switch_raftstore_disk();
+                }
             }
         }
         self.ctx
@@ -3072,6 +3075,24 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .router
             .force_send(region.get_id(), PeerMsg::Start)
             .unwrap();
+    }
+
+    fn on_switch_raftstore_disk(&self) {
+        if let Some(write_worker) = &mut self.ctx.sync_write_worker {
+            write_worker.handle_switch_disk();
+        } else {
+            // Use the valid size of async-ios for generating `writer_id` when the local
+            // senders haven't been updated by `poller.begin().
+            let writer_id = rand::random::<usize>()
+                % std::cmp::min(
+                    self.ctx.cfg.store_io_pool_size,
+                    self.ctx.write_senders.size(),
+                );
+            if let Err(err) = self.ctx.write_senders[writer_id].try_send(WriteMsg::SwitchDisk, None)
+            {
+                warn!("send switch disk to write workers failed"; "err" => ?err);
+            }
+        }
     }
 }
 

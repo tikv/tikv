@@ -336,6 +336,7 @@ pub enum StoreMsg {
         region_id: u64,
         ch: super::FlushChannel,
     },
+    SwitchRaftstoreDisk,
 }
 
 impl ResourceMetered for StoreMsg {}
