@@ -943,7 +943,7 @@ fn test_snapshot_send_failed() {
     // Disable default max peer number check.
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
-    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"zk1", b"v1");
     let (send_tx, send_rx) = mpsc::sync_channel(1);
     // only send one MessageType::MsgSnapshot message
     cluster.add_send_filter(CloneFilterFactory(
@@ -969,14 +969,25 @@ fn test_snapshot_send_failed() {
     // peer2 can't receive any snapshot, so it doesn't have any key valuse.
     // but the receiving_count should be zero if receiving snapshot is failed.
     let engine2 = cluster.get_engine(2);
-    must_get_none(&engine2, b"k1");
+    must_get_none(&engine2, b"zk1");
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
-
     let mgr = cluster.get_snap_mgr(1);
     assert!(!mgr.list_snapshot().unwrap().is_empty());
 
+    // clear fail point and wait snapshot finish.
     fail::remove("receiving_snapshot_net_error");
     cluster.clear_send_filters();
+    let (sender, receiver) = mpsc::channel();
+    let sync_sender = Mutex::new(sender);
+    fail::cfg_callback("receiving_snapshot_net_error", move || {
+        let sender = sync_sender.lock().unwrap();
+        sender.send(true).unwrap();
+    })
+    .unwrap();
+    receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    must_get_equal(&engine2, b"zk1", b"v1");
+
+    // remove peer and check snapshot should be deleted.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
     sleep_ms(100);
     assert!(mgr.list_snapshot().unwrap().is_empty());

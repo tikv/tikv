@@ -2055,7 +2055,7 @@ impl TabletSnapKey {
         TabletSnapKey::new(region_id, to_peer, term, index)
     }
 
-    pub fn from_path<T: Into<PathBuf>>(path: T) -> TabletSnapKey {
+    pub fn from_path<T: Into<PathBuf>>(path: T) -> Result<TabletSnapKey> {
         let path = path.into();
         let name = path.file_name().unwrap().to_str().unwrap();
         let numbers: Vec<u64> = name
@@ -2063,7 +2063,12 @@ impl TabletSnapKey {
             .skip(1)
             .filter_map(|s| s.parse().ok())
             .collect();
-        TabletSnapKey::new(numbers[0], numbers[1], numbers[2], numbers[3])
+        if numbers.len() < 4 {
+            return Err(box_err!("invalid tablet snapshot file name:{}", name));
+        }
+        Ok(TabletSnapKey::new(
+            numbers[0], numbers[1], numbers[2], numbers[3],
+        ))
     }
 }
 
@@ -3400,7 +3405,10 @@ pub mod tests {
     fn test_from_path() {
         let snap_dir = Builder::new().prefix("test_from_path").tempdir().unwrap();
         let path = snap_dir.path().join("gen_1_2_3_4");
-        let key = TabletSnapKey::from_path(&path);
-        assert_eq!(1, key.region_id);
+        let key = TabletSnapKey::from_path(path).unwrap();
+        let expect_key = TabletSnapKey::new(1, 2, 3, 4);
+        assert_eq!(expect_key, key);
+        let path = snap_dir.path().join("gen_1_2_3_4.tmp");
+        TabletSnapKey::from_path(path).unwrap_err();
     }
 }
