@@ -1249,13 +1249,7 @@ where
         }
     }
 
-    fn stop(mut self) {
-        let mut servers = self.servers.unwrap();
-        servers
-            .server
-            .stop()
-            .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
-
+    fn flush_before_stop(&mut self) {
         let change = {
             let mut change = HashMap::new();
             change.insert("raftstore.store_pool_size".to_owned(), "10".to_owned());
@@ -1289,8 +1283,8 @@ where
         }
 
         info!("flush-before-close: flush begin");
-        let engines = self.engines.take().unwrap();
-        let router = self.router.unwrap();
+        let engines = self.engines.as_mut().unwrap();
+        let router = self.router.as_ref().unwrap();
         let mut rxs = vec![];
         engines
             .raft_engine
@@ -1323,8 +1317,17 @@ where
         info!(
             "flush-before-close: flush done";
         );
+    }
+
+    fn stop(mut self) {
+        self.flush_before_stop();
 
         tikv_util::thread_group::mark_shutdown();
+        let mut servers = self.servers.unwrap();
+        servers
+            .server
+            .stop()
+            .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
         self.node.as_mut().unwrap().stop();
         self.region_info_accessor.as_mut().unwrap().stop();
 

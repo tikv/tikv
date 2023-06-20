@@ -206,15 +206,6 @@ impl PersistenceListener {
         let offset = data_cf_offset(cf);
         let pr = {
             let mut prs = self.progress.lock().unwrap();
-
-            info!(
-                "on_flush_completed";
-                "cf" => ?cf,
-                "flush_progress" => ?prs,
-                "largest_sequno" => largest_seqno,
-                "region_id" => self.region_id,
-            );
-
             let flushed = prs.last_flushed[offset];
             if flushed >= largest_seqno {
                 // According to facebook/rocksdb#11183, it's possible OnFlushCompleted can be
