@@ -120,6 +120,7 @@ where
         if tmp {
             self.raft_pool.state.saved_pool_size = Some(self.raft_pool.state.expected_pool_size);
         }
+
         let current_pool_size = self.raft_pool.state.expected_pool_size;
         self.raft_pool.state.expected_pool_size = size;
         match current_pool_size.cmp(&size) {
