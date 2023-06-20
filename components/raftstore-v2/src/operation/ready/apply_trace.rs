@@ -566,7 +566,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             fail_point!("flush_before_cluse_threshold", |t| {
                 t.unwrap().parse::<u64>().unwrap()
             });
-            128
+            50
         })();
 
         if let Some(tablet) = self.tablet().cloned() {
