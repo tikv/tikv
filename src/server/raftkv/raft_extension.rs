@@ -175,9 +175,12 @@ where
         })
     }
 
-    fn switch_raftstore_disk(&self) -> BoxFuture<'static, kv::Result<()>> {
+    #[inline]
+    fn switch_raftstore_disk(&self) -> kv::Result<()> {
         // Send a StoreMsg::SwitchDisk
-        let router = self.router.clone();
-        Box::pin(async move { router.send_control(StoreMsg::SwitchRaftstoreDisk)? })
+        match self.router.send_store_msg(StoreMsg::SwitchRaftstoreDisk) {
+            Ok(()) => Ok(()),
+            Err(err) => Err(box_err!("switch raftstore disk failed {}", err)),
+        }
     }
 }

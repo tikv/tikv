@@ -649,7 +649,7 @@ where
                                 Self::handle_get_all_resource_groups(resource_manager.as_ref())
                             }
                             (Method::POST, "/debug/switch-raft-disk") => {
-                                // TODO: switch disk
+                                Self::handle_switch_raftstore_disk(router)
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
@@ -722,12 +722,12 @@ where
     }
 
     pub fn handle_switch_raftstore_disk(router: R) -> hyper::Result<Response<Body>> {
-        let (status_code, body) = match router.switch_raftstore_disk().await {
-            Ok() => (
+        let (status_code, body) = match router.switch_raftstore_disk() {
+            Ok(()) => (
                 StatusCode::OK,
                 format!("successfully switch raftstore disk"),
             ),
-            Err(e) => (
+            Err(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("fails to switch raftstore disk: {}", err),
             ),

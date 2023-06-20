@@ -3078,7 +3078,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_switch_raftstore_disk(&self) {
-        if let Some(write_worker) = &mut self.ctx.sync_write_worker {
+        if let Some(write_worker) = &self.ctx.sync_write_worker {
             write_worker.handle_switch_disk();
         } else {
             // Use the valid size of async-ios for generating `writer_id` when the local

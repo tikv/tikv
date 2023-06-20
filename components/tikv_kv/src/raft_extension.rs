@@ -62,8 +62,8 @@ pub trait RaftExtension: Clone + Send {
     }
 
     /// Ask the raftstore to execute switching disk.
-    fn switch_raftstore_disk(&self) -> BoxFuture<'static, Result<()>> {
-        Box::pin(async move { Err(box_err!("switch disk is not supported")) })
+    fn switch_raftstore_disk(&self) -> Result<()> {
+        Err(box_err!("switch disk is not supported"))
     }
 }
 

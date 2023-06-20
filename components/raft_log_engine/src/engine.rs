@@ -791,7 +791,7 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn switch_disk(&self) -> Result<()> {
-        self.0.switch_disk()
+        self.0.switch_disk().map_err(transfer_error)
     }
 }
 
