@@ -7,6 +7,7 @@
 #![recursion_limit = "100"]
 #![feature(vec_into_raw_parts)]
 #![feature(slice_pattern)]
+#![feature(async_closure)]
 
 #[macro_use]
 extern crate slog_global;

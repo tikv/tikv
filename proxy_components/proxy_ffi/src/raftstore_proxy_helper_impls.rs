@@ -21,7 +21,8 @@ use super::{
     engine_store_helper_impls::*,
     interfaces_ffi::{
         BaseBuffView, CppStrVecView, KVGetStatus, RaftProxyStatus, RaftStoreProxyFFIHelper,
-        RaftStoreProxyPtr, RawCppPtr, RawCppStringPtr, RawRustPtr, RawVoidPtr, SSTReaderInterfaces,
+        RaftStoreProxyPtr, RaftstoreVer, RawCppPtr, RawCppStringPtr, RawRustPtr, RawVoidPtr,
+        SSTReaderInterfaces,
     },
     read_index_helper,
     snapshot_reader_impls::*,
@@ -83,8 +84,32 @@ impl RaftStoreProxyFFIHelper {
             fn_make_timer_task: Some(ffi_make_timer_task),
             fn_poll_timer_task: Some(ffi_poll_timer_task),
             fn_get_region_local_state: Some(ffi_get_region_local_state),
+            fn_get_cluster_raftstore_version: Some(ffi_get_cluster_raftstore_version),
         }
     }
+}
+
+unsafe extern "C" fn ffi_get_cluster_raftstore_version(
+    proxy_ptr: RaftStoreProxyPtr,
+    refresh_strategy: u8,
+    timeout_ms: i64,
+) -> RaftstoreVer {
+    if refresh_strategy == 1 {
+        // Force refresh
+        let mut proxy_ptr = proxy_ptr;
+        proxy_ptr
+            .as_mut()
+            .refresh_cluster_raftstore_version(timeout_ms);
+    } else if refresh_strategy == 2 {
+        // Refresh if uncertain
+        if proxy_ptr.as_ref().cluster_raftstore_version() == RaftstoreVer::Uncertain {
+            let mut proxy_ptr = proxy_ptr;
+            proxy_ptr
+                .as_mut()
+                .refresh_cluster_raftstore_version(timeout_ms);
+        }
+    }
+    proxy_ptr.as_ref().cluster_raftstore_version()
 }
 
 unsafe extern "C" fn ffi_get_region_local_state(

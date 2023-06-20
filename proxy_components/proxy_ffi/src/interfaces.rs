@@ -136,6 +136,13 @@ pub mod root {
             Stopping = 2,
             Terminated = 3,
         }
+        #[repr(u8)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum RaftstoreVer {
+            Uncertain = 0,
+            V1 = 1,
+            V2 = 2,
+        }
         pub type RawCppPtrType = u32;
         pub type RawRustPtrType = u32;
         #[repr(C)]
@@ -411,6 +418,13 @@ pub mod root {
                     error_msg: *mut root::DB::RawCppStringPtr,
                 ) -> root::DB::KVGetStatus,
             >,
+            pub fn_get_cluster_raftstore_version: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::RaftStoreProxyPtr,
+                    refresh_strategy: u8,
+                    timeout_ms: i64,
+                ) -> root::DB::RaftstoreVer,
+            >,
         }
         #[repr(C)]
         #[derive(Debug)]
@@ -620,7 +634,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 17823293661468169526;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 9421202721206258776;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

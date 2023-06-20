@@ -41,6 +41,7 @@ pub struct TestData {
     pub expected_self_safe_ts: u64,
 }
 
+#[allow(clippy::type_complexity)]
 #[derive(Default)]
 pub struct ClusterExt {
     // Helper to set ffi_helper_set.
@@ -49,12 +50,26 @@ pub struct ClusterExt {
     pub(crate) ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
     pub test_data: TestData,
     pub cluster_ptr: isize,
+    pub pre_run_node_callback: Option<Box<dyn FnMut(&mut crate::mock_cluster::MixedClusterConfig)>>,
 }
 
 impl ClusterExt {
+    pub fn pre_node_start(&mut self, cfg: &mut crate::mock_cluster::MixedClusterConfig) {
+        if let Some(c) = self.pre_run_node_callback.as_mut() {
+            c(cfg);
+        }
+    }
+
+    pub fn post_cluster_start(&mut self) {
+        self.iter_ffi_helpers(None, &mut |_, ffi: &mut FFIHelperSet| {
+            ffi.proxy.refresh_cluster_raftstore_version(-1);
+        });
+    }
+
     pub fn get_cluster_size(&self) -> usize {
         self.ffi_helper_set.lock().expect("poisoned").len()
     }
+
     pub fn make_ffi_helper_set_no_bind(
         id: u64,
         engines: Engines<TiFlashEngine, ProxyRaftEngine>,
@@ -64,6 +79,7 @@ impl ClusterExt {
         cluster_ptr: isize,
         cluster_ext_ptr: isize,
         mock_cfg: MockConfig,
+        pd_client: Option<Arc<dyn pd_client::PdClient>>,
     ) -> (FFIHelperSet, TikvConfig) {
         // We must allocate on heap to avoid move.
         let proxy = Box::new(engine_store_ffi::ffi::RaftStoreProxy::new(
@@ -79,6 +95,7 @@ impl ClusterExt {
                 None => None,
             },
             None,
+            pd_client,
         ));
 
         let proxy_ref = proxy.as_ref();
@@ -131,6 +148,7 @@ impl ClusterExt {
         engines: Engines<TiFlashEngine, ProxyRaftEngine>,
         key_manager: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<TiFlashEngine, ProxyRaftEngine>>,
+        pd_client: Option<Arc<dyn pd_client::PdClient>>,
     ) {
         init_global_ffi_helper_set();
         // We don't know `node_id` now.
@@ -144,6 +162,7 @@ impl ClusterExt {
             cluster_ptr,
             cluster_ext_ptr,
             mock_cfg,
+            pd_client,
         );
 
         // We can not use moved or cloned engines any more.

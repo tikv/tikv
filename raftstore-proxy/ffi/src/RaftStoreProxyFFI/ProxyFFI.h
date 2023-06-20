@@ -85,6 +85,12 @@ enum class EngineStoreServerStatus : uint8_t {
                // shutdown.
 };
 
+enum class RaftstoreVer : uint8_t {
+  Uncertain = 0,
+  V1,
+  V2,
+};
+
 using RawCppPtrType = uint32_t;
 using RawRustPtrType = uint32_t;
 
@@ -236,6 +242,9 @@ struct RaftStoreProxyFFIHelper {
   KVGetStatus (*fn_get_region_local_state)(RaftStoreProxyPtr,
                                            uint64_t region_id, RawVoidPtr data,
                                            RawCppStringPtr *error_msg);
+  RaftstoreVer (*fn_get_cluster_raftstore_version)(RaftStoreProxyPtr,
+                                                   uint8_t refresh_strategy,
+                                                   int64_t timeout_ms);
 };
 
 struct PageStorageInterfaces {

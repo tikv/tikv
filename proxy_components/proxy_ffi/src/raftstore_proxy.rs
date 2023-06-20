@@ -6,12 +6,15 @@ use std::sync::{
 };
 
 use encryption::DataKeyManager;
+use pd_client::PdClient;
+use tikv_util::error;
+use tokio::runtime::Runtime;
 
 use super::{
     get_engine_store_server_helper, interfaces_ffi,
     interfaces_ffi::{
-        ConstRawVoidPtr, KVGetStatus, RaftProxyStatus, RaftStoreProxyPtr, RawCppStringPtr,
-        RawVoidPtr,
+        ConstRawVoidPtr, KVGetStatus, RaftProxyStatus, RaftStoreProxyPtr, RaftstoreVer,
+        RawCppStringPtr, RawVoidPtr,
     },
     raftstore_proxy_helper_impls::*,
     read_index_helper,
@@ -24,6 +27,8 @@ pub struct RaftStoreProxy {
     key_manager: Option<Arc<DataKeyManager>>,
     read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
     raftstore_proxy_engine: RwLock<Option<Eng>>,
+    pd_client: Option<Arc<dyn PdClient>>,
+    cluster_raftstore_ver: RwLock<RaftstoreVer>,
 }
 
 impl RaftStoreProxy {
@@ -32,19 +37,140 @@ impl RaftStoreProxy {
         key_manager: Option<Arc<DataKeyManager>>,
         read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
         raftstore_proxy_engine: Option<Eng>,
+        pd_client: Option<Arc<dyn PdClient>>,
     ) -> Self {
         RaftStoreProxy {
             status,
             key_manager,
             read_index_client,
             raftstore_proxy_engine: RwLock::new(raftstore_proxy_engine),
+            pd_client,
+            cluster_raftstore_ver: RwLock::new(RaftstoreVer::Uncertain),
         }
     }
 }
 
 impl RaftStoreProxy {
-    pub fn raftstore_version(&self) -> u64 {
-        1
+    pub fn cluster_raftstore_version(&self) -> RaftstoreVer {
+        *self.cluster_raftstore_ver.read().unwrap()
+    }
+
+    /// Issue requests to all stores which is not marked as TiFlash.
+    /// Use the result of the first store which is not a Uncertain.
+    /// Or set the result to Uncertain if timeout.
+    pub fn refresh_cluster_raftstore_version(&mut self, timeout_ms: i64) -> bool {
+        let generate_request_with_timeout = |timeout_ms: i64| -> Option<reqwest::Client> {
+            let headers = reqwest::header::HeaderMap::new();
+            let mut builder = reqwest::Client::builder().default_headers(headers);
+            if timeout_ms >= 0 {
+                builder = builder.timeout(std::time::Duration::from_millis(timeout_ms as u64));
+            }
+            match builder.build() {
+                Ok(o) => Some(o),
+                Err(e) => {
+                    error!("generate_request_with_timeout error {:?}", e);
+                    None
+                }
+            }
+        };
+
+        let parse_response =
+            |rt: &Runtime, resp: Result<reqwest::Response, reqwest::Error>| -> RaftstoreVer {
+                match resp {
+                    Ok(resp) => {
+                        if resp.status() == 404 {
+                            // If the port is not implemented.
+                            return RaftstoreVer::V1;
+                        } else if resp.status() != 200 {
+                            return RaftstoreVer::Uncertain;
+                        }
+                        let resp = rt.block_on(async { resp.text().await }).unwrap();
+                        if resp.contains("partitioned") {
+                            RaftstoreVer::V2
+                        } else {
+                            RaftstoreVer::V1
+                        }
+                    }
+                    Err(e) => {
+                        error!("get_engine_type respond error {:?}", e);
+                        RaftstoreVer::Uncertain
+                    }
+                }
+            };
+
+        // We don't use information stored in `GlobalReplicationState` to decouple.
+        *self.cluster_raftstore_ver.write().unwrap() = RaftstoreVer::Uncertain;
+        let stores = match self.pd_client.as_ref().unwrap().get_all_stores(false) {
+            Ok(stores) => stores,
+            Err(e) => {
+                tikv_util::debug!("get_all_stores error {:?}", e);
+                return false;
+            }
+        };
+
+        let to_try_addrs = stores.iter().filter_map(|store| {
+            // There are some other labels such like tiflash_compute.
+            let shall_filter = store
+                .get_labels()
+                .iter()
+                .any(|label| label.get_key() == "engine" && label.get_value().contains("tiflash"));
+            if !shall_filter {
+                // TiKV's status server don't support https.
+                let u = format!("http://{}/{}", store.get_status_address(), "engine_type");
+                // A invalid url may lead to 404, which will enforce a V1 inference, which is
+                // error.
+                if let Ok(stuff) = url::Url::parse(&u) {
+                    if stuff.path() == "/engine_type" {
+                        Some(u)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+
+        let rt = Runtime::new().unwrap();
+
+        let mut pending = vec![];
+        for addr in to_try_addrs {
+            if let Some(c) = generate_request_with_timeout(timeout_ms) {
+                let _g = rt.enter();
+                let f = c.get(&addr).send();
+                pending.push(rt.spawn(f));
+            }
+        }
+
+        if pending.is_empty() {
+            tikv_util::error!("no valid tikv stores with status server");
+        }
+
+        loop {
+            if pending.is_empty() {
+                break;
+            }
+            let sel = futures::future::select_all(pending);
+            let (resp, _completed_idx, remaining) = rt.block_on(async { sel.await });
+
+            let res = parse_response(&rt, resp.unwrap());
+
+            if res != RaftstoreVer::Uncertain {
+                *self.cluster_raftstore_ver.write().unwrap() = res;
+                rt.shutdown_timeout(std::time::Duration::from_millis(1));
+                return true;
+            }
+
+            pending = remaining;
+        }
+        rt.shutdown_timeout(std::time::Duration::from_millis(1));
+        false
+    }
+
+    pub fn raftstore_version(&self) -> RaftstoreVer {
+        RaftstoreVer::V1
     }
 
     pub fn set_kv_engine(&mut self, kv_engine: Option<Eng>) {
@@ -80,7 +206,7 @@ impl RaftStoreProxy {
     ) -> KVGetStatus {
         let region_state_key = keys::region_state_key(region_id);
         let mut res = KVGetStatus::NotFound;
-        if self.raftstore_version() == 1 {
+        if self.raftstore_version() == RaftstoreVer::V1 {
             self.get_value_cf(engine_traits::CF_RAFT, &region_state_key, &mut |value| {
                 match value {
                     Ok(v) => {
@@ -111,7 +237,7 @@ impl RaftStoreProxy {
     }
 
     pub fn get_raft_apply_state(&self, _region_id: u64) -> interfaces_ffi::KVGetStatus {
-        if self.raftstore_version() == 1 {
+        if self.raftstore_version() == RaftstoreVer::V1 {
             panic!("wrong raftstore version");
         } else {
             unreachable!()
@@ -152,6 +278,9 @@ impl RaftStoreProxyFFI for RaftStoreProxy {
 impl RaftStoreProxyPtr {
     pub unsafe fn as_ref(&self) -> &RaftStoreProxy {
         &*(self.inner as *const RaftStoreProxy)
+    }
+    pub unsafe fn as_mut(&mut self) -> &mut RaftStoreProxy {
+        &mut *(self.inner as *mut RaftStoreProxy)
     }
     pub fn is_null(&self) -> bool {
         self.inner.is_null()

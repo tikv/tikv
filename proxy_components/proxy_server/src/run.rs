@@ -142,6 +142,14 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
             SysQuota::cpu_cores_quota() as usize * 2,
         ))),
         None,
+        Some(tikv.pd_client.clone()),
+    );
+    info!("start probing cluster's raftstore version");
+    // We wait for a maximum of 10 seconds for every store.
+    proxy.refresh_cluster_raftstore_version(10 * 1000);
+    info!(
+        "cluster's raftstore version is {:?}",
+        proxy.cluster_raftstore_version()
     );
 
     let proxy_ref = &proxy;
@@ -253,6 +261,7 @@ fn run_impl_only_for_decryption<CER: ConfiguredRaftEngine, F: KvFormat>(
         AtomicU8::new(RaftProxyStatus::Idle as u8),
         encryption_key_manager.clone(),
         Option::None,
+        None,
         None,
     );
 

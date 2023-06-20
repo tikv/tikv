@@ -49,6 +49,7 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --test proxy shared::store
     cargo test --package proxy_tests --test proxy shared::region
     cargo test --package proxy_tests --test proxy shared::flashback
+    cargo test --package proxy_tests --test proxy v2_compat::cluster_raftstore_ver
     cargo test --package proxy_tests --test proxy v2_compat::tablet_snapshot
     cargo test --package proxy_tests --test proxy v2_compat::simple_write
     cargo test --package proxy_tests --test proxy v1_specific::region_ext

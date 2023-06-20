@@ -281,8 +281,9 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             let key_manager = self.key_managers.last().unwrap().clone();
             let node_id = {
                 let mut sim = self.sim.wl();
-                let cfg = self.cfg.clone();
+                let mut cfg = self.cfg.clone();
                 // Like TiKVServer::init
+                self.cluster_ext.pre_node_start(&mut cfg);
                 sim.run_node(
                     0,
                     cfg,
@@ -303,6 +304,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         }
         assert_eq!(self.count, self.engines.len());
         assert_eq!(self.count, self.dbs.len());
+        self.cluster_ext.post_cluster_start();
         Ok(())
     }
 
@@ -337,6 +339,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
+        self.cluster_ext.pre_node_start(&mut cfg);
         let store_meta = match self.store_metas.entry(node_id) {
             MapEntry::Occupied(o) => {
                 let mut meta = o.get().lock().unwrap();

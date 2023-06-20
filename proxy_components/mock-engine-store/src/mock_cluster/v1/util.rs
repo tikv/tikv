@@ -37,6 +37,7 @@ pub fn create_tiflash_test_engine_with_cluster_ctx<T: Simulator<TiFlashEngine>>(
         engines,
         &key_manager,
         &router,
+        Some(cluster.pd_client.clone()),
     );
     let ffi_helper_set = cluster.cluster_ext.ffi_helper_lst.last_mut().unwrap();
     let engines = ffi_helper_set
