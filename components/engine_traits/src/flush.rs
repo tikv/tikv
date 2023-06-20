@@ -104,7 +104,9 @@ impl SstApplyState {
 pub struct FlushState {
     applied_index: AtomicU64,
 
-    // to add comment
+    // This is only used for flush before server stop.
+    // It provides a direct path for flush progress by letting raftstore directly know the current
+    // flush progress.
     flushed_index: [AtomicU64; DATA_CFS_LEN],
 }
 
@@ -266,11 +268,5 @@ impl<R: RaftEngine> StateStorage for R {
             .put_flushed_index(region_id, &pr.cf, tablet_index, pr.apply_index)
             .unwrap();
         self.consume(&mut batch, true).unwrap();
-        info!(
-            "persist flush index";
-            "region_id" => region_id,
-            "flush_index" => pr.apply_index,
-            "cf" => ?pr.cf,
-        );
     }
 }

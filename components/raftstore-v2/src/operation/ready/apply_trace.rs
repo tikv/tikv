@@ -562,7 +562,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "flush before close begin";
         );
         let region_id = self.region_id();
-
         let flush_threshold: u64 = (|| {
             fail_point!("flush_before_cluse_threshold", |t| {
                 t.unwrap().parse::<u64>().unwrap()
@@ -571,6 +570,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         })();
 
         if let Some(tablet) = self.tablet().cloned() {
+            // flush the oldest cf one by one until we are under the replay count threshold
             loop {
                 let replay_count = self.storage().estimate_replay_count();
                 if replay_count < flush_threshold {
@@ -595,11 +595,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     max_flush_index = u64::max(max_flush_index, flush_index);
                 }
 
-                let prev_admin = apply_trace.persisted_applied;
                 apply_trace.maybe_advance_admin_flushed(max_flush_index);
-
                 let admin_flush = apply_trace.admin.flushed;
-                if admin_flush > prev_admin {
+                apply_trace.persisted_applied = admin_flush;
+
+                if self.storage().estimate_replay_count() < flush_threshold {
                     let (_, _, tablet_index) = ctx
                         .tablet_registry
                         .parse_tablet_name(Path::new(tablet.path()))
@@ -607,9 +607,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let mut lb = ctx.engine.log_batch(1);
                     lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
                         .unwrap();
-                    apply_trace.try_persist = false;
-                    apply_trace.persisted_applied = admin_flush;
                     ctx.engine.consume(&mut lb, true).unwrap();
+                    info!(
+                        self.logger,
+                        "flush before close flush admin for region";
+                        "admin_flush" => admin_flush,
+                    );
                 }
             }
         }
