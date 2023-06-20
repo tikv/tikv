@@ -63,7 +63,7 @@ use crate::{
     Error, Result,
 };
 
-const MIN_MANUAL_FLUSH_RATE: f64 = 0.3;
+const MIN_MANUAL_FLUSH_RATE: f64 = 0.2;
 const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(60);
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
@@ -651,9 +651,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                                 .saturating_duration_since(last_flush_count.1)
                                 .as_secs_f64()
                             / 5.0;
-                        if dynamic_max_rate > max_rate {
-                            dynamic_max_rate = max_rate;
-                        }
+                        dynamic_max_rate = dynamic_max_rate.clamp(MIN_MANUAL_FLUSH_RATE, max_rate);
                         last_flush_count = (flush_count, now);
                         // Try to finish flush in 1m.
                         let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
