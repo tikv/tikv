@@ -632,7 +632,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             } else {
                 cfg.value().max_manual_flush_rate
             };
-            let mut last_flush_count = (
+            let mut last_flush = (
                 EK::get_accumulated_flush_count(None).unwrap(),
                 TiInstant::now_coarse(),
             );
@@ -646,18 +646,16 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                         warn!(logger, "flushing oldest cf of regions {regions:?}");
                         let flush_count = EK::get_accumulated_flush_count(None).unwrap();
                         let now = TiInstant::now_coarse();
-                        let mut dynamic_max_rate = (flush_count - last_flush_count.0) as f64
-                            / now
-                                .saturating_duration_since(last_flush_count.1)
-                                .as_secs_f64()
-                            / 5.0;
-                        dynamic_max_rate = dynamic_max_rate.clamp(MIN_MANUAL_FLUSH_RATE, max_rate);
-                        last_flush_count = (flush_count, now);
+                        let total_flush_rate = (flush_count - last_flush.0) as f64
+                            / now.saturating_duration_since(last_flush.1).as_secs_f64();
+                        let dynamic_max_rate = max_rate.clamp(total_flush_rate, f64::MAX);
+                        last_flush = (flush_count, now);
                         // Try to finish flush in 1m.
                         let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
                         slog::info!(
                             logger,
                             "debug_manual_flush";
+                            "flush_rate" => total_flush_rate,
                             "dynamic_max_rate" => dynamic_max_rate,
                             "rate" => rate
                         );
