@@ -86,8 +86,9 @@ impl<S: Snapshot> DuplicateDetector<S> {
         let mut write_info = match write.write_type {
             WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
                 return Err(Error::Engine(box_err!(
-                    "found a {:?} key with commits ts {} larger than min_commit_ts of importer {}",
+                    "found a {:?} key {} with commits ts {} larger than min_commit_ts of importer {}",
                     write.write_type,
+                    hex::encode_upper(self.iter.key()),
                     end_commit_ts,
                     self.min_commit_ts
                 )));
