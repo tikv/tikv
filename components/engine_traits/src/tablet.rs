@@ -136,20 +136,12 @@ impl TabletContext {
     }
 }
 
-pub trait MutableDbResources {
-    fn set_high_priority_background_threads(&self, _n: i32) {}
-}
-
 /// A factory trait to create new tablet for multi-rocksdb architecture.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK>: Send + Sync {
     /// Open the tablet in `path`.
     fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<EK>;
-
-    fn db_resources(&self) -> Box<dyn MutableDbResources> {
-        unimplemented!()
-    }
 
     /// Destroy the tablet and its data
     fn destroy_tablet(&self, ctx: TabletContext, path: &Path) -> Result<()>;

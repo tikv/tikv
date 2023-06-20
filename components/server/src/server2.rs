@@ -71,7 +71,10 @@ use resource_control::{
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
+    config::{
+        loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
+        TikvConfig,
+    },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -1270,10 +1273,20 @@ where
             );
         }
         let tablet_registry = self.tablet_registry.as_ref().unwrap();
-        tablet_registry
-            .tablet_factory()
-            .db_resources()
-            .set_high_priority_background_threads(10);
+        // It should not return error.
+        if let Err(e) = loop_registry(tablet_registry, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_high_priority_background_threads(10, false)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        }) {
+            warn!(
+                "increase high priority background threads failed during server stop (it will impact close speed)";
+                "error" => ?e,
+            );
+        }
 
         info!("flush-before-close: flush begin");
         let engines = self.engines.take().unwrap();

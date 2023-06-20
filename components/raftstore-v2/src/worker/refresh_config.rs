@@ -157,17 +157,23 @@ where
             RefreshConfigTask::ScalePool(component, size) => {
                 match component {
                     BatchComponent::Store => self.resize_raft_pool(size, false),
-                    BatchComponent::StoreTemp => {
-                        self.resize_raft_pool(size, true);
-                    }
-                    BatchComponent::StoreReset => {
-                        self.reset_raft_pool();
-                    }
                     BatchComponent::Apply => {
                         unreachable!("v2 does not have apply batch system")
                     }
                 };
             }
+            RefreshConfigTask::ScalePoolTemporary(component, size) => match component {
+                BatchComponent::Store => {
+                    if size == 0 {
+                        self.reset_raft_pool();
+                    } else {
+                        self.resize_raft_pool(size, true);
+                    }
+                }
+                BatchComponent::Apply => {
+                    unreachable!("v2 does not have apply batch system")
+                }
+            },
             _ => {
                 warn!(
                     self.logger,

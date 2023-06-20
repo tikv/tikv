@@ -97,9 +97,11 @@ impl Debug for ReplayWatch {
 
 impl ReplayWatch {
     pub fn new(logger: Logger, refresh_config_scheduler: Scheduler<RefreshConfigTask>) -> Self {
-        if let Err(e) = refresh_config_scheduler
-            .schedule(RefreshConfigTask::ScalePool(BatchComponent::StoreTemp, 10))
-        {
+        // Temporarily increase raftstore threads count to speed up recovering.
+        if let Err(e) = refresh_config_scheduler.schedule(RefreshConfigTask::ScalePoolTemporary(
+            BatchComponent::Store,
+            10,
+        )) {
             warn!(
                 logger,
                 "tmp resize failed";
@@ -134,7 +136,10 @@ impl Drop for ReplayWatch {
             "elapsed" => ?self.timer.elapsed()
         );
         self.refresh_config_scheduler
-            .schedule(RefreshConfigTask::ScalePool(BatchComponent::StoreReset, 0))
+            .schedule(RefreshConfigTask::ScalePoolTemporary(
+                BatchComponent::Store,
+                0,
+            ))
             .unwrap();
     }
 }

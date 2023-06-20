@@ -346,18 +346,6 @@ impl ApplyTrace {
     pub fn should_persist(&self) -> bool {
         self.try_persist
     }
-
-    pub fn estimate_replay_count(&self) -> u64 {
-        let persist_applied = self.persisted_applied;
-        // I think it should not be None
-        let max_flush_index = self
-            .data_cfs
-            .iter()
-            .map(|pr| u64::max(pr.flushed, pr.last_modified))
-            .max()
-            .unwrap_or(persist_applied);
-        max_flush_index - persist_applied
-    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
@@ -571,7 +559,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn flush_before_close<T>(&mut self, ctx: &StoreContext<EK, ER, T>, tx: SyncSender<()>) {
         info!(
             self.logger,
-            "flush-before-close for region";
+            "flush before close begin";
         );
         let region_id = self.region_id();
 
@@ -596,7 +584,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 tablet.flush_oldest_cf(true, None).unwrap();
 
                 let flush_state = self.flush_state().clone();
-                let logger = self.logger.clone();
                 let mut apply_trace = self.storage_mut().apply_trace_mut();
                 let mut max_flush_index = 0;
 
@@ -623,31 +610,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     apply_trace.try_persist = false;
                     apply_trace.persisted_applied = admin_flush;
                     ctx.engine.consume(&mut lb, true).unwrap();
-
-                    info!(
-                        self.logger,
-                        "flush-before-close: persisting admin flushed before close";
-                        "tablet_index" => tablet_index,
-                        "flushed" => admin_flush
-                    );
-                } else {
-                    info!(
-                        logger,
-                        "flush-before-close: persisting admin flushed before close, not progress";
-                        "apply_trace" => ?apply_trace,
-                    );
                 }
             }
-        } else {
-            info!(
-                self.logger,
-                "flush-before-close: persisting admin flushed before close, no tablet";
-            );
         }
 
         info!(
             self.logger,
-            "flush-before-close: region done";
+            "flush before close done";
         );
         let _ = tx.send(());
     }

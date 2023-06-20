@@ -276,10 +276,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "range_end" => log_wrappers::Value::key(&end_key),
             "notify_only" => notify_only,
             "use_delete_range" => use_delete_range,
-            "index" => index,
         );
 
-        let tablet = self.tablet();
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
@@ -294,6 +292,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     "error" => ?e,
                 )
             };
+            let tablet = self.tablet();
             tablet
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
@@ -313,11 +312,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
             //     .unwrap_or_else(move |e| fail_f(e,
             // DeleteStrategy::DeleteBlobs));
-        } else {
-            info!(
-                self.logger,
-                "execute delete range not notified";
-            );
         }
 
         // delete range is an unsafe operation and it cannot be rollbacked to replay, so

@@ -150,8 +150,6 @@ where
 #[derive(Debug, Clone, Copy)]
 pub enum BatchComponent {
     Store,
-    StoreTemp,
-    StoreReset,
     Apply,
 }
 
@@ -164,9 +162,6 @@ impl Display for BatchComponent {
             BatchComponent::Apply => {
                 write!(f, "apply")
             }
-            _ => {
-                unimplemented!()
-            }
         }
     }
 }
@@ -174,6 +169,9 @@ impl Display for BatchComponent {
 #[derive(Debug)]
 pub enum Task {
     ScalePool(BatchComponent, usize),
+    // Temporarily resize the pool size. If usize is 0, restore to the size before the last
+    // temporary change.
+    ScalePoolTemporary(BatchComponent, usize),
     ScaleBatchSize(BatchComponent, usize),
     ScaleWriters(usize),
 }
@@ -189,6 +187,9 @@ impl Display for Task {
             }
             Task::ScaleWriters(size) => {
                 write!(f, "Scale store_io_pool_size adjusts {} ", size)
+            }
+            Task::ScalePoolTemporary(pool, size) => {
+                write!(f, "Scale pool ajusts {}: {} ", pool, size)
             }
         }
     }
@@ -314,9 +315,6 @@ where
             Task::ScalePool(component, size) => match component {
                 BatchComponent::Store => self.resize_raft_pool(size),
                 BatchComponent::Apply => self.resize_apply_pool(size),
-                _ => {
-                    unimplemented!()
-                }
             },
             Task::ScaleBatchSize(component, size) => match component {
                 BatchComponent::Store => {
@@ -325,11 +323,11 @@ where
                 BatchComponent::Apply => {
                     self.apply_pool.state.max_batch_size = size;
                 }
-                _ => {
-                    unimplemented!()
-                }
             },
             Task::ScaleWriters(size) => self.resize_store_writers(size),
+            Task::ScalePoolTemporary(..) => {
+                unimplemented!("not supported");
+            }
         }
     }
 }
