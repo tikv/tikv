@@ -374,6 +374,16 @@ pub trait StdThreadBuildWrapper {
 }
 
 pub trait ThreadBuildWrapper {
+    /// Set the hook function after the thread starts.
+    ///
+    /// # Note
+    ///
+    /// Once this function is called, please also make sure
+    /// **`before_stop_wrapper` is called** (even with a no-op closure.).
+    ///
+    /// Or resources allocated by some system hooks may not be released
+    /// properly, that may lead to little use-after-free or resource
+    /// leakage.
     fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn() + Send + Sync + 'static;

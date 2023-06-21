@@ -37,7 +37,7 @@ struct PeekableRemoteStat<T>(Option<NonNull<T>>);
 // SAFETY: all constructors of `PeekableRemoteStat` returns pointer points to a
 // thread local variable. Once this be sent, a reasonable life time of this
 // variable should be as long as the thread holding the underlying thread local
-// variable. But it is impossible express such lifetime in current Rust.
+// variable. But it is impossible to express such lifetime in current Rust.
 // Then it is the user's responsibility to trace that lifetime.
 unsafe impl<T: Send> Send for PeekableRemoteStat<T> {}
 
@@ -88,14 +88,14 @@ struct MemoryStatsAccessor {
 
 impl MemoryStatsAccessor {
     fn get_allocated(&self) -> u64 {
-        // SAFETY: once the memory stats accessor has been added to the map,
-        // we registered the `StillAlive` structure for tracing the thread's lifetime.
+        // SAFETY: `add_thread_memory_accessor` is unsafe, and that is the only way for
+        // outer crates to create this.
         unsafe { self.allocated.peek().unwrap_or_default() }
     }
 
     fn get_deallocated(&self) -> u64 {
-        // SAFETY: once the memory stats accessor has been added to the map,
-        // we registered the `StillAlive` structure for tracing the thread's lifetime.
+        // SAFETY: `add_thread_memory_accessor` is unsafe, and that is the only way for
+        // outer crates to create this.
         unsafe { self.deallocated.peek().unwrap_or_default() }
     }
 }
