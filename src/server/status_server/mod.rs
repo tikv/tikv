@@ -725,7 +725,7 @@ where
         let (status_code, body) = match router.switch_raftstore_disk() {
             Ok(()) => (
                 StatusCode::OK,
-                format!("successfully switch raftstore disk"),
+                "successfully switch raftstore disk".to_string(),
             ),
             Err(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

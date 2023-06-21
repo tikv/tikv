@@ -305,7 +305,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     self.fsm.store.on_wait_flush(self.store_ctx, region_id, ch)
                 }
                 StoreMsg::SwitchRaftstoreDisk => {
-                    self.fsm.store.on_switch_raftstore_disk(&self.store_ctx)
+                    self.fsm.store.on_switch_raftstore_disk(self.store_ctx)
                 }
             }
         }
