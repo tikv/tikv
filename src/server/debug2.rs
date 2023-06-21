@@ -7,7 +7,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     CachedTablet, Iterable, MiscExt, Peekable, RaftEngine, RaftLogBatch, TabletContext,
-    TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    TabletRegistry, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use futures::future::Future;
 use keys::{data_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
@@ -627,9 +627,22 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     }
 
     fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
+        let persisted_applied = box_try!(self.raft_engine.get_flushed_index(region_id, CF_RAFT))
+            .ok_or_else(|| Error::NotFound(format!("info for region {}", region_id)))?;
         let raft_state = box_try!(self.raft_engine.get_raft_state(region_id));
-        let apply_state = box_try!(self.raft_engine.get_apply_state(region_id, u64::MAX));
-        let region_state = box_try!(self.raft_engine.get_region_state(region_id, u64::MAX));
+        let mut apply_state = box_try!(
+            self.raft_engine
+                .get_apply_state(region_id, persisted_applied)
+        );
+        if let Some(ref mut apply_state) = apply_state {
+            // the persisted_applied is the raft log replay start point, so it's the real
+            // persisted applied_index
+            apply_state.applied_index = persisted_applied;
+        }
+        let region_state = box_try!(
+            self.raft_engine
+                .get_region_state(region_id, persisted_applied)
+        );
 
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
@@ -1269,6 +1282,8 @@ mod tests {
         raft_state.set_last_index(last_index);
         lb.put_raft_state(region_id, &raft_state).unwrap();
 
+        lb.put_flushed_index(region_id, CF_RAFT, 5, applied_index)
+            .unwrap();
         raft_engine.consume(&mut lb, true).unwrap();
     }
 
@@ -1363,6 +1378,7 @@ mod tests {
         region_state.set_state(PeerState::Tombstone);
         RaftLogBatch::put_region_state(&mut wb, region_id, 42, &region_state).unwrap();
 
+        wb.put_flushed_index(region_id, CF_RAFT, 5, 42).unwrap();
         raft_engine.consume(&mut wb, true).unwrap();
 
         assert_eq!(
