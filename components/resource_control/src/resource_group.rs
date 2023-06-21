@@ -57,7 +57,7 @@ pub enum ResourceConsumeType {
 
 /// ResourceGroupManager manages the metadata of each resource group.
 pub struct ResourceGroupManager {
-    resource_groups: DashMap<String, ResourceGroup>,
+    pub(crate) resource_groups: DashMap<String, ResourceGroup>,
     registry: RwLock<Vec<Arc<ResourceController>>>,
 }
 
@@ -127,6 +127,12 @@ impl ResourceGroupManager {
     }
 
     fn build_resource_limiter(rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
+        #[cfg(test)]
+        {
+            if rg.name.contains("background") {
+                return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
+            }
+        }
         // TODO: only the "default" resource group support background tasks currently.
         if rg.name == DEFAULT_RESOURCE_GROUP_NAME {
             return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
@@ -211,11 +217,21 @@ impl ResourceGroupManager {
             );
         }
     }
+
+    pub fn get_resource_limiter(&self, rg: &str) -> Option<Arc<ResourceLimiter>> {
+        if let Some(g) = self.resource_groups.get(rg) {
+            return g.limiter.clone();
+        }
+
+        self.resource_groups
+            .get(DEFAULT_RESOURCE_GROUP_NAME)
+            .and_then(|g| g.limiter.clone())
+    }
 }
 
 pub(crate) struct ResourceGroup {
-    group: PbResourceGroup,
-    limiter: Option<Arc<ResourceLimiter>>,
+    pub group: PbResourceGroup,
+    pub limiter: Option<Arc<ResourceLimiter>>,
 }
 
 impl ResourceGroup {
@@ -223,7 +239,6 @@ impl ResourceGroup {
         Self { group, limiter }
     }
 
-    #[cfg(test)]
     pub(crate) fn get_ru_quota(&self) -> u64 {
         assert!(self.group.has_r_u_settings());
         self.group

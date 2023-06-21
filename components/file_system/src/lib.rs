@@ -34,7 +34,7 @@ use std::{
 };
 
 pub use file::{File, OpenOptions};
-pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
+pub use io_stats::{fetch_io_bytes, get_io_type, init as init_io_stats_collector, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 use online_config::ConfigValue;
 use openssl::{
@@ -115,8 +115,8 @@ impl Drop for WithIoType {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct IoBytes {
-    read: u64,
-    write: u64,
+    pub read: u64,
+    pub write: u64,
 }
 
 impl std::ops::Sub for IoBytes {
