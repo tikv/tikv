@@ -2058,8 +2058,8 @@ mod tests {
     }
 
     #[test]
-    // This tests that the latest apply state cannot be read due to less
-    // persisted_applied
+    // It tests that the latest apply state cannot be read as it is invisible
+    // on persisted_applied
     fn test_drop_unapplied_raftlog_2() {
         let dir = test_util::temp_dir("test-debugger", false);
         let debugger = new_debugger(dir.path());
