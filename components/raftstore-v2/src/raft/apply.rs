@@ -22,6 +22,7 @@ use crate::{
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::CmdResChannel,
     worker::checkpoint,
+    TabletTask,
 };
 
 pub(crate) struct Observe {
@@ -74,6 +75,7 @@ pub struct Apply<EK: KvEngine, R> {
     coprocessor_host: CoprocessorHost<EK>,
 
     checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+    tablet_scheduler: Scheduler<TabletTask<EK>>,
 
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
@@ -100,6 +102,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         sst_importer: Arc<SstImporter>,
         coprocessor_host: CoprocessorHost<EK>,
         checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+        tablet_scheduler: Scheduler<TabletTask<EK>>,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -134,6 +137,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             buckets,
             sst_importer,
             checkpoint_scheduler,
+            tablet_scheduler,
             use_delete_range: cfg.use_delete_range,
             observe: Observe {
                 info: CmdObserveInfo::default(),
@@ -335,6 +339,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
         &self.checkpoint_scheduler
+    }
+
+    #[inline]
+    pub fn tablet_scheduler(&self) -> &Scheduler<TabletTask<EK>> {
+        &self.tablet_scheduler
     }
 
     #[inline]
