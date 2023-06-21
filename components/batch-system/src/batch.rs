@@ -338,14 +338,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     /// Polls for readiness and forwards them to handler. Removes stale peers if
     /// necessary.
     pub fn poll(&mut self) {
-        let tid = tikv_util::sys::thread::thread_id();
-        let pid = tikv_util::sys::thread::process_id();
-        let stat = tikv_util::sys::thread::full_thread_stat(pid, tid).unwrap();
-        info!(
-            "Poller polls";
-            "thread_name" => ?stat.command,
-        );
-
         fail_point!("poll");
         let mut batch = Batch::with_capacity(self.max_batch_size);
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
@@ -474,11 +466,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
         }
         batch.clear();
-
-        info!(
-            "Poller exit";
-            "thread_name" => ?stat.command,
-        );
     }
 }
 
@@ -642,7 +629,6 @@ impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
             id_base,
-            saved_pool_size: None,
         }
     }
 }
@@ -659,8 +645,6 @@ pub struct PoolState<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
     pub id_base: usize,
-
-    pub saved_pool_size: Option<usize>,
 }
 
 pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>;

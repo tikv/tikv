@@ -184,9 +184,7 @@ pub fn run_tikv(config: TikvConfig) {
         } else {
             run_impl::<RaftLogEngine, API>(config)
         }
-    });
-
-    info!("server stopped");
+    })
 }
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
@@ -1282,7 +1280,7 @@ where
             );
         }
 
-        info!("flush-before-close: flush begin");
+        info!("server stop: flush begin");
         let engines = self.engines.as_mut().unwrap();
         let router = self.router.as_ref().unwrap();
         let mut rxs = vec![];
@@ -1315,13 +1313,12 @@ where
         }
 
         info!(
-            "flush-before-close: flush done";
+            "server stop: flush done";
         );
     }
 
     fn stop(mut self) {
         self.flush_before_stop();
-
         tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers

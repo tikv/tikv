@@ -738,7 +738,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
             cleanup: cleanup_worker_scheduler,
-            refresh_config: refresh_config_scheduler.clone(),
+            refresh_config: refresh_config_scheduler,
         };
 
         let builder = StorePollerBuilder::new(
@@ -796,10 +796,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router.register_all(mailboxes);
 
         // Make sure Msg::Start is the first message each FSM received.
-        let watch = Arc::new(ReplayWatch::new(
-            self.logger.clone(),
-            refresh_config_scheduler,
-        ));
+        let watch = Arc::new(ReplayWatch::new(self.logger.clone()));
         for addr in address {
             router
                 .force_send(addr, PeerMsg::Start(Some(watch.clone())))

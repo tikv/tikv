@@ -33,7 +33,6 @@ use std::{
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
-use fail::fail_point;
 use kvproto::{
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessageType, RaftMessage},
@@ -47,8 +46,7 @@ use raftstore::{
         needs_evict_entry_cache,
         util::{self, is_first_append_entry, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
-        BatchComponent, FetchedLogs, ReadProgress, RefreshConfigTask, Transport, WriteCallback,
-        WriteTask,
+        FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
 use slog::{debug, error, info, warn, Logger};
@@ -57,7 +55,6 @@ use tikv_util::{
     slog_panic,
     store::find_peer,
     time::{duration_to_sec, monotonic_raw_now},
-    worker::Scheduler,
 };
 
 pub use self::{
@@ -81,8 +78,6 @@ pub struct ReplayWatch {
     paused_peers: AtomicUsize,
     logger: Logger,
     timer: Instant,
-
-    refresh_config_scheduler: Scheduler<RefreshConfigTask>,
 }
 
 impl Debug for ReplayWatch {
@@ -97,24 +92,12 @@ impl Debug for ReplayWatch {
 }
 
 impl ReplayWatch {
-    pub fn new(logger: Logger, refresh_config_scheduler: Scheduler<RefreshConfigTask>) -> Self {
-        // Temporarily increase raftstore threads count to speed up recovering.
-        // if let Err(e) = refresh_config_scheduler.schedule(RefreshConfigTask::ScalePoolTemporary(
-        //     BatchComponent::Store,
-        //     10,
-        // )) {
-        //     warn!(
-        //         logger,
-        //         "tmp resize failed";
-        //         "error" => ?e,
-        //     );
-        // }
+    pub fn new(logger: Logger) -> Self {
         Self {
             normal_peers: AtomicUsize::new(0),
             paused_peers: AtomicUsize::new(0),
             logger,
             timer: Instant::now(),
-            refresh_config_scheduler,
         }
     }
 
@@ -129,7 +112,6 @@ impl ReplayWatch {
 
 impl Drop for ReplayWatch {
     fn drop(&mut self) {
-        fail_point!("replay_watch_drop");
         info!(
             self.logger,
             "The raft log replay completed";
@@ -137,12 +119,6 @@ impl Drop for ReplayWatch {
             "paused_peers" => self.paused_peers.load(Ordering::Relaxed),
             "elapsed" => ?self.timer.elapsed()
         );
-        // self.refresh_config_scheduler
-        //     .schedule(RefreshConfigTask::ScalePoolTemporary(
-        //         BatchComponent::Store,
-        //         0,
-        //     ))
-        //     .unwrap();
     }
 }
 

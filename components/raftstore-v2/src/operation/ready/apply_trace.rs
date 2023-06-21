@@ -559,7 +559,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn flush_before_close<T>(&mut self, ctx: &StoreContext<EK, ER, T>, tx: SyncSender<()>) {
         info!(
             self.logger,
-            "flush before close begin";
+            "region flush before close begin";
         );
         let region_id = self.region_id();
         let flush_threshold: u64 = (|| {
@@ -619,7 +619,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         info!(
             self.logger,
-            "flush before close done";
+            "region flush before close done";
         );
         let _ = tx.send(());
     }

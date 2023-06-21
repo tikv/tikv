@@ -113,27 +113,6 @@ fn test_increase_pool_v2() {
     fail::remove(fp1);
 }
 
-#[test]
-fn test_temporary_increase_pool_v2() {
-    use test_raftstore_v2::*;
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
-    fail::cfg("replay_watch_drop", "pause").unwrap();
-    let _ = cluster.run();
-
-    // sleep a while to wait threads resize
-    std::thread::sleep(Duration::from_secs(1));
-    let store_ids = get_raft_poller_thread_ids();
-    assert_eq!(store_ids.len(), 10);
-
-    fail::remove("replay_watch_drop");
-
-    // sleep a while to wait threads restore
-    std::thread::sleep(Duration::from_secs(1));
-    let store_ids = get_raft_poller_thread_ids();
-    assert_eq!(store_ids.len(), 1);
-}
-
 fn get_poller_thread_ids() -> Vec<Pid> {
     get_poller_thread_ids_by_prefix(vec!["raftstore", "apply-"])
 }
