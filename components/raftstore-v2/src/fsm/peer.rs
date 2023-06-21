@@ -333,6 +333,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_cleanup_import_sst(self.store_ctx, ssts),
+                PeerMsg::SnapGc(keys) => self.fsm.peer_mut().on_snap_gc(self.store_ctx, keys),
                 PeerMsg::AskCommitMerge(req) => {
                     self.fsm.peer_mut().on_ask_commit_merge(self.store_ctx, req)
                 }
