@@ -225,8 +225,6 @@ fn test_flush_before_stop() {
     raft_engine
         .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
             let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT);
-            println!("region_id {}, index {:?}", id, admin_flush);
-
             let (tx, rx) = sync_channel(1);
             rxs.push(rx);
             let msg = PeerMsg::FlushBeforeClose { tx };
@@ -243,7 +241,6 @@ fn test_flush_before_stop() {
     raft_engine
         .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
             let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT).unwrap().unwrap();
-            println!("region_id {}, index {:?}", id, admin_flush);
             assert!(admin_flush >= 40);
             Ok(())
         })
