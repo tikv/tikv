@@ -385,8 +385,8 @@ fn test_shutdown_when_snap_gc() {
 }
 
 // Test if a peer handle the old snapshot properly.
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_receive_old_snapshot() {
     let mut cluster = new_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);
