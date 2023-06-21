@@ -993,7 +993,7 @@ version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da95d038ede1a964ce99f49cbe27a7fb538d1da595e4b4f70b8c8f338d17bf16"
 dependencies = [
- "heck 0.4.0",
+ "heck 0.4.1",
  "proc-macro-error",
  "proc-macro2",
  "quote",
@@ -2418,9 +2418,9 @@ dependencies = [
 
 [[package]]
 name = "heck"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2540771e65fc8cb83cd6e8a237f70c319bd5c29f78ed1084ba5d50eeac86f7f9"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 
 [[package]]
 name = "hermit-abi"
@@ -4146,7 +4146,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d8b442418ea0822409d9e7d047cbf1e7e9e1760b172bf9982cf29d517c93511"
 dependencies = [
  "bytes",
- "heck 0.4.0",
+ "heck 0.4.1",
  "itertools",
  "lazy_static",
  "log",
@@ -4274,7 +4274,11 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+=======
+source = "git+https://github.com/tikv/raft-engine.git#de3ad04a2db9cdf795b1c82d7413b9b53bac92a8"
+>>>>>>> 92a77ac354 (*: update raft-engine (#14987))
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4301,14 +4305,18 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_repr",
- "strum 0.24.1",
+ "strum 0.25.0",
  "thiserror",
 ]
 
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+=======
+source = "git+https://github.com/tikv/raft-engine.git#de3ad04a2db9cdf795b1c82d7413b9b53bac92a8"
+>>>>>>> 92a77ac354 (*: update raft-engine (#14987))
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -5705,11 +5713,11 @@ dependencies = [
 
 [[package]]
 name = "strum"
-version = "0.24.1"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
+checksum = "290d54ea6f91c969195bdbcd7442c8c2a2ba87da8bf60a7ee86a235d4bc1e125"
 dependencies = [
- "strum_macros 0.24.2",
+ "strum_macros 0.25.0",
 ]
 
 [[package]]
@@ -5726,15 +5734,19 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.24.2"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4faebde00e8ff94316c01800f9054fd2ba77d30d9e922541913051d1d978918b"
+checksum = "fe9f3bd7d2e45dcc5e265fbb88d6513e4747d8ef9444cf01a533119bce28a157"
 dependencies = [
- "heck 0.4.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "rustversion",
+<<<<<<< HEAD
  "syn",
+=======
+ "syn 2.0.18",
+>>>>>>> 92a77ac354 (*: update raft-engine (#14987))
 ]
 
 [[package]]
