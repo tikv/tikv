@@ -58,15 +58,6 @@ pub enum Task<EK> {
         region_id: u64,
         cb: Option<Box<dyn FnOnce() + Send>>,
     },
-    DeleteRange {
-        region_id: u64,
-        tablet: EK,
-        cf: CfName,
-        start_key: Box<[u8]>,
-        end_key: Box<[u8]>,
-        use_delete_range: bool,
-        cb: Box<dyn FnOnce() + Send>,
-    },
     // Gc snapshot
     SnapGc(Box<[TabletSnapKey]>),
 }
@@ -116,23 +107,6 @@ impl<EK> Display for Task<EK> {
                     on_flush_finish.is_some()
                 )
             }
-            Task::DeleteRange {
-                region_id,
-                cf,
-                start_key,
-                end_key,
-                ..
-            } => {
-                write!(
-                    f,
-                    "delete range cf {} [{}, {}) for region_id {}",
-                    cf,
-                    log_wrappers::Value::key(start_key),
-                    log_wrappers::Value::key(end_key),
-                    region_id,
-                )
-            }
-
             Task::SnapGc(snap_keys) => {
                 write!(f, "gc snapshot {:?}", snap_keys)
             }
@@ -532,7 +506,6 @@ where
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
             Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
-            delete_range @ Task::DeleteRange { .. } => self.delete_range(delete_range),
             Task::SnapGc(keys) => self.snap_gc(keys),
         }
     }
