@@ -13,6 +13,7 @@ use engine_traits::{
 };
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
+use raftstore::store::{TabletSnapKey, TabletSnapManager};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -44,7 +45,9 @@ pub enum Task<EK> {
         persisted_index: u64,
     },
     /// Sometimes we know for sure a tablet can be destroyed directly.
-    DirectDestroy { tablet: Either<EK, PathBuf> },
+    DirectDestroy {
+        tablet: Either<EK, PathBuf>,
+    },
     /// Cleanup ssts.
     CleanupImportSst(Box<[SstMeta]>),
     /// Flush memtable before split
@@ -64,6 +67,8 @@ pub enum Task<EK> {
         use_delete_range: bool,
         cb: Box<dyn FnOnce() + Send>,
     },
+    // Gc snapshot
+    SnapGc(Box<[TabletSnapKey]>),
 }
 
 impl<EK> Display for Task<EK> {
@@ -126,6 +131,10 @@ impl<EK> Display for Task<EK> {
                     log_wrappers::Value::key(end_key),
                     region_id,
                 )
+            }
+
+            Task::SnapGc(snap_keys) => {
+                write!(f, "gc snapshot {:?}", snap_keys)
             }
         }
     }
@@ -223,6 +232,7 @@ impl<EK> Task<EK> {
 pub struct Runner<EK: KvEngine> {
     tablet_registry: TabletRegistry<EK>,
     sst_importer: Arc<SstImporter>,
+    snap_mgr: TabletSnapManager,
     logger: Logger,
 
     // region_id -> [(tablet_path, wait_for_persisted, callback)].
@@ -238,11 +248,13 @@ impl<EK: KvEngine> Runner<EK> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
         sst_importer: Arc<SstImporter>,
+        snap_mgr: TabletSnapManager,
         logger: Logger,
     ) -> Self {
         Self {
             tablet_registry,
             sst_importer,
+            snap_mgr,
             logger,
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
@@ -404,6 +416,14 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
+    fn snap_gc(&self, keys: Box<[TabletSnapKey]>) {
+        for key in Vec::from(keys) {
+            if !self.snap_mgr.delete_snapshot(&key) {
+                warn!(self.logger, "failed to gc snap"; "key" => ?key);
+            }
+        }
+    }
+
     fn flush_tablet(&self, region_id: u64, cb: Option<Box<dyn FnOnce() + Send>>) {
         let Some(Some(tablet)) = self
             .tablet_registry
@@ -513,6 +533,7 @@ where
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
             Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
             delete_range @ Task::DeleteRange { .. } => self.delete_range(delete_range),
+            Task::SnapGc(keys) => self.snap_gc(keys),
         }
     }
 }
@@ -561,7 +582,9 @@ mod tests {
         let registry = TabletRegistry::new(factory, dir.path()).unwrap();
         let logger = slog_global::borrow_global().new(slog::o!());
         let (_dir, importer) = create_tmp_importer();
-        let mut runner = Runner::new(registry.clone(), importer, logger);
+        let snap_dir = dir.path().join("snap");
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
+        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
 
         let mut region = Region::default();
         let rid = 1;
