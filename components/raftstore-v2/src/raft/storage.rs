@@ -552,8 +552,6 @@ mod tests {
         s.snapshot(0, to_peer_id).unwrap();
 
         // Test cancel snapshot
-        let snap = s.snapshot(0, 7);
-        assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let _res = rx.recv_timeout(Duration::from_secs(1)).unwrap();

@@ -661,8 +661,12 @@ pub fn send_snap(
     let deregister = {
         let (mgr, key) = (mgr.clone(), key.clone());
         DeferContext::new(move || {
+<<<<<<< HEAD
             mgr.finish_snapshot(key.clone(), timer);
             mgr.delete_snapshot(&key);
+=======
+            snap_mgr.finish_snapshot(key.clone(), timer);
+>>>>>>> 00121f1bf7 (raftstore-v2: reuse sending failed snapshot (#14957))
         })
     };
 
@@ -832,14 +836,8 @@ where
                 let region_id = msg.get_region_id();
                 let sending_count = self.snap_mgr.sending_count().clone();
                 if sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit {
-                    let key = TabletSnapKey::from_region_snap(
-                        msg.get_region_id(),
-                        msg.get_to_peer().get_id(),
-                        msg.get_message().get_snapshot(),
-                    );
-                    self.snap_mgr.delete_snapshot(&key);
                     warn!(
-                        "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
+                        "Too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg
                     );
                     cb(Err(Error::Other("Too many sending snapshot tasks".into())));
@@ -852,6 +850,7 @@ where
                 let security_mgr = Arc::clone(&self.security_mgr);
                 sending_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.limiter.clone();
+<<<<<<< HEAD
                 let send_task = send_snap(
                     env,
                     mgr,
@@ -866,8 +865,31 @@ where
                         Err(e) => Err(e),
                         Ok(f) => f.await,
                     };
+=======
+
+                let channel_builder = ChannelBuilder::new(self.env.clone())
+                    .stream_initial_window_size(self.cfg.grpc_stream_initial_window_size.0 as i32)
+                    .keepalive_time(self.cfg.grpc_keepalive_time.0)
+                    .keepalive_timeout(self.cfg.grpc_keepalive_timeout.0)
+                    .default_compression_algorithm(self.cfg.grpc_compression_algorithm())
+                    .default_gzip_compression_level(self.cfg.grpc_gzip_compression_level)
+                    .default_grpc_min_message_size_to_compress(
+                        self.cfg.grpc_min_message_size_to_compress,
+                    );
+                let channel = security_mgr.connect(channel_builder, &addr);
+                let client = TikvClient::new(channel);
+
+                self.pool.spawn(async move {
+                    let res = send_snap(
+                        client,
+                        snap_mgr.clone(),
+                        msg,
+                        limiter,
+                    ).await;
+>>>>>>> 00121f1bf7 (raftstore-v2: reuse sending failed snapshot (#14957))
                     match res {
                         Ok(stat) => {
+                            snap_mgr.delete_snapshot(&stat.key);
                             info!(
                                 "sent snapshot";
                                 "region_id" => region_id,
