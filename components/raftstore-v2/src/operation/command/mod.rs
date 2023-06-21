@@ -146,6 +146,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             store_ctx.tablet_registry.clone(),
             read_scheduler,
             store_ctx.schedulers.checkpoint.clone(),
+            store_ctx.schedulers.tablet.clone(),
             self.flush_state().clone(),
             sst_apply_state,
             self.storage().apply_trace().log_recovery(),
@@ -491,7 +492,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
+    pub async fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
         let decoder = match SimpleWriteReqDecoder::new(
             |buf, index, term| parse_at(&self.logger, buf, index, term),
             &self.logger,
@@ -511,14 +512,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
                 }
                 SimpleWrite::DeleteRange(dr) => {
-                    let _ = self.apply_delete_range(
-                        dr.cf,
-                        u64::MAX,
-                        dr.start_key,
-                        dr.end_key,
-                        dr.notify_only,
-                        self.use_delete_range(),
-                    );
+                    let use_delete_range = self.use_delete_range();
+                    let _ = self
+                        .apply_delete_range(
+                            dr.cf,
+                            u64::MAX,
+                            dr.start_key,
+                            dr.end_key,
+                            dr.notify_only,
+                            use_delete_range,
+                        )
+                        .await;
                 }
                 SimpleWrite::Ingest(_) => {
                     error!(
@@ -633,14 +637,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 self.apply_delete(delete.cf, log_index, delete.key)?;
                             }
                             SimpleWrite::DeleteRange(dr) => {
+                                let use_delete_range = self.use_delete_range();
                                 self.apply_delete_range(
                                     dr.cf,
                                     log_index,
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
-                                    self.use_delete_range(),
-                                )?;
+                                    use_delete_range,
+                                )
+                                .await?;
                             }
                             SimpleWrite::Ingest(ssts) => {
                                 self.apply_ingest(log_index, ssts)?;
@@ -731,6 +737,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         self.apply_delete(delete.get_cf(), log_index, delete.get_key())?;
                     }
                     CmdType::DeleteRange => {
+                        let use_delete_range = self.use_delete_range();
                         let dr = r.get_delete_range();
                         self.apply_delete_range(
                             dr.get_cf(),
@@ -738,8 +745,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
-                            self.use_delete_range(),
-                        )?;
+                            use_delete_range,
+                        )
+                        .await?;
                     }
                     _ => slog_panic!(
                         self.logger,
