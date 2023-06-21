@@ -331,7 +331,10 @@ mod test {
         metapb::Region,
         raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raftstore::{coprocessor::CoprocessorHost, store::Config};
+    use raftstore::{
+        coprocessor::CoprocessorHost,
+        store::{Config, TabletSnapManager},
+    };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
@@ -379,13 +382,14 @@ mod test {
 
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
-        let (_tmp_dir, importer) = create_tmp_importer();
+        let (tmp_dir, importer) = create_tmp_importer();
         let host = CoprocessorHost::<KvTestEngine>::default();
 
+        let snap_mgr = TabletSnapManager::new(tmp_dir.path(), None).unwrap();
         let tablet_worker = Worker::new("tablet-worker");
         let checkpoint_scheduler = tablet_worker.start(
             "tablet-worker",
-            tablet::Runner::new(reg.clone(), importer.clone(), logger.clone()),
+            tablet::Runner::new(reg.clone(), importer.clone(), snap_mgr, logger.clone()),
         );
         tikv_util::defer!(tablet_worker.stop());
 
