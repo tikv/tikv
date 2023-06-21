@@ -224,7 +224,6 @@ fn test_flush_before_stop() {
     let mut rxs = vec![];
     raft_engine
         .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
-            let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT);
             let (tx, rx) = sync_channel(1);
             rxs.push(rx);
             let msg = PeerMsg::FlushBeforeClose { tx };
