@@ -218,6 +218,7 @@ mod tests {
                 region: "ap-southeast-2".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
         };
 
         let dispatcher =
@@ -261,6 +262,7 @@ mod tests {
                 region: "ap-southeast-2".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
         };
 
         // IncorrectKeyException

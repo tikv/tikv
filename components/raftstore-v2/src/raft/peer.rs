@@ -575,6 +575,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.peer_heartbeats.remove(&peer_id);
     }
 
+    #[inline]
+    pub fn has_peer(&self, peer_id: u64) -> bool {
+        self.region()
+            .get_peers()
+            .iter()
+            .any(|p| p.get_id() == peer_id)
+    }
+
     /// Returns whether or not the peer sent heartbeat after the provided
     /// deadline time.
     #[inline]
