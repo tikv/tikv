@@ -453,6 +453,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             return Err(raft::Error::Store(
                 raft::StorageError::SnapshotTemporarilyUnavailable,
             ));
+        } else {
+            info!(
+                self.logger(),
+                "requesting new snapshot";
+                "request_index" => request_index,
+                "request_peer" => to,
+            );
         }
         let canceled = Arc::new(AtomicBool::new(false));
         let index = Arc::new(AtomicU64::new(0));
