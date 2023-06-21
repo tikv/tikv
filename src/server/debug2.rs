@@ -475,11 +475,9 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
 
     pub fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) -> Result<()> {
         let raft_engine = &self.raft_engine;
-
         let region_ids = region_ids.unwrap_or(self.get_all_regions_in_store()?);
         for region_id in region_ids {
             let region_state = self.region_info(region_id)?;
-
             // It's safe to unwrap region_local_state here, because
             // get_all_regions_in_store() guarantees that the region state
             // exists in kvdb.
@@ -630,15 +628,21 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         let persisted_applied = box_try!(self.raft_engine.get_flushed_index(region_id, CF_RAFT))
             .ok_or_else(|| Error::NotFound(format!("info for region {}", region_id)))?;
         let raft_state = box_try!(self.raft_engine.get_raft_state(region_id));
-        let mut apply_state = box_try!(
+
+        // We used persisted_applied to acquire the apply state. It may not be the
+        // lastest apply state but it's the real persisted one which means the tikv will
+        // acquire this one during start.
+        let apply_state = box_try!(
             self.raft_engine
                 .get_apply_state(region_id, persisted_applied)
-        );
-        if let Some(ref mut apply_state) = apply_state {
+        )
+        .map(|mut apply_state| {
             // the persisted_applied is the raft log replay start point, so it's the real
             // persisted applied_index
             apply_state.applied_index = persisted_applied;
-        }
+            apply_state
+        });
+
         let region_state = box_try!(
             self.raft_engine
                 .get_region_state(region_id, persisted_applied)
@@ -1270,6 +1274,7 @@ mod tests {
         last_index: u64,
         commit_index: u64,
         applied_index: u64,
+        admin_flush: Option<u64>,
     ) {
         let mut lb = raft_engine.log_batch(10);
         let mut apply_state = RaftApplyState::default();
@@ -1282,8 +1287,10 @@ mod tests {
         raft_state.set_last_index(last_index);
         lb.put_raft_state(region_id, &raft_state).unwrap();
 
-        lb.put_flushed_index(region_id, CF_RAFT, 5, applied_index)
-            .unwrap();
+        if let Some(admin_flush) = admin_flush {
+            lb.put_flushed_index(region_id, CF_RAFT, 5, admin_flush)
+                .unwrap();
+        }
         raft_engine.consume(&mut lb, true).unwrap();
     }
 
@@ -1379,6 +1386,12 @@ mod tests {
         RaftLogBatch::put_region_state(&mut wb, region_id, 42, &region_state).unwrap();
 
         wb.put_flushed_index(region_id, CF_RAFT, 5, 42).unwrap();
+
+        // This will not be read
+        let mut apply_state2 = RaftApplyState::default();
+        apply_state2.set_applied_index(100);
+        RaftLogBatch::put_apply_state(&mut wb, region_id, 100, &apply_state2).unwrap();
+
         raft_engine.consume(&mut wb, true).unwrap();
 
         assert_eq!(
@@ -2011,8 +2024,8 @@ mod tests {
 
         init_region_state(raft_engine, 1, &[100, 101], 1);
         init_region_state(raft_engine, 2, &[100, 103], 1);
-        init_raft_state(raft_engine, 1, 100, 90, 80);
-        init_raft_state(raft_engine, 2, 80, 80, 80);
+        init_raft_state(raft_engine, 1, 100, 90, 80, Some(80));
+        init_raft_state(raft_engine, 2, 80, 80, 80, Some(80));
 
         let region_info_2_before = debugger.region_info(2).unwrap();
 
@@ -2042,5 +2055,44 @@ mod tests {
             80
         );
         assert_eq!(region_info_2, region_info_2_before);
+    }
+
+    #[test]
+    // This tests that the latest apply state cannot be read due to less
+    // persisted_applied
+    fn test_drop_unapplied_raftlog_2() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+        let raft_engine = &debugger.raft_engine;
+
+        init_region_state(raft_engine, 1, &[100, 101], 1);
+        init_raft_state(raft_engine, 1, 100, 90, 80, Some(80));
+        // It will not be read due to less persisted_applied
+        init_raft_state(raft_engine, 1, 200, 190, 180, None);
+
+        // Drop raftlog on all regions
+        debugger.drop_unapplied_raftlog(None).unwrap();
+        let region_info_1 = debugger.region_info(1).unwrap();
+
+        assert_eq!(
+            region_info_1.raft_local_state.as_ref().unwrap().last_index,
+            80
+        );
+        assert_eq!(
+            region_info_1
+                .raft_apply_state
+                .as_ref()
+                .unwrap()
+                .applied_index,
+            80
+        );
+        assert_eq!(
+            region_info_1
+                .raft_apply_state
+                .as_ref()
+                .unwrap()
+                .commit_index,
+            80
+        );
     }
 }
