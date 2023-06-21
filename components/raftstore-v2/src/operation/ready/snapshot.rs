@@ -399,7 +399,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         false
     }
 
-    pub fn report_snapshot(&self, peer_id: u64, status: raft::SnapshotStatus) {
+    fn report_snapshot(&self, peer_id: u64, status: raft::SnapshotStatus) {
         if status == raft::SnapshotStatus::Finish {
             self.snap_states.borrow_mut().remove(&peer_id);
         }
