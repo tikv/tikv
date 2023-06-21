@@ -16,7 +16,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{
         region_meta::{RaftStateRole, RegionMeta},
-        CasualMessage,
+        CasualMessage, StoreMsg,
     },
 };
 use tikv_util::future::paired_future_callback;
@@ -173,5 +173,14 @@ where
             let f = super::exec_admin(&router, req);
             f.await
         })
+    }
+
+    #[inline]
+    fn switch_raftstore_disk(&self) -> kv::Result<()> {
+        // Send a StoreMsg::SwitchDisk
+        match self.router.send_store_msg(StoreMsg::SwitchRaftstoreDisk) {
+            Ok(()) => Ok(()),
+            Err(err) => Err(box_err!("switch raftstore disk failed {}", err)),
+        }
     }
 }

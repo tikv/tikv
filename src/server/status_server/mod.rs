@@ -648,7 +648,13 @@ where
                             (Method::GET, "/resource_groups") => {
                                 Self::handle_get_all_resource_groups(resource_manager.as_ref())
                             }
-                            _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
+                            (Method::POST, "/switch-raftstore-disk") => {
+                                Self::handle_switch_raftstore_disk(router)
+                            }
+                            _ => Ok(make_response(
+                                StatusCode::NOT_FOUND,
+                                format!("path {} not found", path),
+                            )),
                         }
                     }
                 }))
@@ -716,6 +722,20 @@ where
                 format!("fails to build response: {}", err),
             )),
         }
+    }
+
+    pub fn handle_switch_raftstore_disk(router: R) -> hyper::Result<Response<Body>> {
+        let (status_code, body) = match router.switch_raftstore_disk() {
+            Ok(()) => (
+                StatusCode::OK,
+                "successfully switch raftstore disk".to_string(),
+            ),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to switch raftstore disk: {}", err),
+            ),
+        };
+        Ok(make_response(status_code, body))
     }
 }
 
@@ -1621,6 +1641,45 @@ mod tests {
                 let body_bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
                 let engine_type = String::from_utf8(body_bytes.as_ref().to_owned()).unwrap();
                 assert_eq!(engine_type, resp_str);
+            });
+            block_on(handle).unwrap();
+            status_server.stop();
+        }
+    }
+
+    #[test]
+    fn test_switch_raftstore_disk() {
+        let mut multi_rocks_cfg = TikvConfig::default();
+        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
+        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
+        for cfg in IntoIterator::into_iter(cfgs) {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(cfg),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                temp_dir.path().to_path_buf(),
+                None,
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            let client = Client::new();
+            let uri = Uri::builder()
+                .scheme("http")
+                .authority(status_server.listening_addr().to_string().as_str())
+                .path_and_query("/switch-raftstore-disk")
+                .build()
+                .unwrap();
+
+            let mut switch_raftstore_disk_req = Request::default();
+            *switch_raftstore_disk_req.method_mut() = Method::POST;
+            *switch_raftstore_disk_req.uri_mut() = uri;
+            let handle = status_server.thread_pool.spawn(async move {
+                let res = client.request(switch_raftstore_disk_req).await.unwrap();
+                // MockRouter does not support `switch-raftstore-disk`.
+                assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
             });
             block_on(handle).unwrap();
             status_server.stop();

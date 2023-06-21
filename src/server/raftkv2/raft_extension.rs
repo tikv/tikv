@@ -106,4 +106,17 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::RaftExtension for Extension<EK, ER> 
             }
         })
     }
+
+    #[inline]
+    fn switch_raftstore_disk(&self) -> tikv_kv::Result<()> {
+        // Send a StoreMsg::SwitchDisk
+        match self
+            .router
+            .router()
+            .send_control(StoreMsg::SwitchRaftstoreDisk)
+        {
+            Ok(()) => Ok(()),
+            Err(err) => Err(box_err!("switch raftstore disk failed {}", err)),
+        }
+    }
 }

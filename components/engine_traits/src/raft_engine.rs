@@ -153,6 +153,9 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     where
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>;
+
+    /// Switch disk.
+    fn switch_disk(&self) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {

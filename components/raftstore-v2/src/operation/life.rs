@@ -43,7 +43,7 @@ use raftstore::store::{
         Proposal,
     },
     metrics::RAFT_PEER_PENDING_DURATION,
-    util, Transport, WriteTask,
+    util, Transport, WriteRouterContext, WriteTask,
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{
@@ -474,6 +474,24 @@ impl Store {
             // For now the peer only exists in memory. It will persist its states when
             // handling its first readiness.
             let _ = ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+        }
+    }
+
+    pub fn on_switch_raftstore_disk<EK, ER, T>(&self, ctx: &StoreContext<EK, ER, T>)
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+        T: Transport,
+    {
+        // Use the valid size of async-ios for generating `writer_id` when the local
+        // senders haven't been updated by `poller.begin().
+        let write_senders = ctx.write_senders();
+        let writer_id = rand::random::<usize>()
+            % std::cmp::min(ctx.cfg.store_io_pool_size, write_senders.size());
+        if let Err(err) =
+            write_senders[writer_id].try_send(raftstore::store::WriteMsg::SwitchDisk, None)
+        {
+            warn!(self.logger(), "send switch disk to write workers failed"; "err" => ?err);
         }
     }
 }

@@ -164,6 +164,10 @@ impl RaftEngine for PanicEngine {
     {
         panic!()
     }
+
+    fn switch_disk(&self) -> Result<()> {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
