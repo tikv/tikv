@@ -12,7 +12,7 @@ use kvproto::{
 };
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
-    util::LatencyInspector, FetchedLogs, GenSnapRes,
+    util::LatencyInspector, FetchedLogs, GenSnapRes, TabletSnapKey
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
@@ -241,6 +241,8 @@ pub enum PeerMsg {
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
+    /// A message that used to check if a snapshot gc is happened.
+    SnapGc(Box<[TabletSnapKey]>),
 }
 
 impl ResourceMetered for PeerMsg {}

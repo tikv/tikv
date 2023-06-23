@@ -28,6 +28,7 @@ use crate::{
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
     worker::checkpoint,
+    TabletTask,
 };
 
 /// A trait for reporting apply result.
@@ -79,6 +80,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
         checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+        tablet_scheduler: Scheduler<TabletTask<EK>>,
         flush_state: Arc<FlushState>,
         sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
@@ -104,6 +106,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             sst_importer,
             coprocessor_host,
             checkpoint_scheduler,
+            tablet_scheduler,
             logger,
         );
         (
@@ -142,7 +145,9 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
-                    ApplyTask::UnsafeWrite(raw_write) => self.apply.apply_unsafe_write(raw_write),
+                    ApplyTask::UnsafeWrite(raw_write) => {
+                        self.apply.apply_unsafe_write(raw_write).await
+                    }
                     ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
                     ApplyTask::RefreshBucketStat(bucket_meta) => {
                         self.apply.on_refresh_buckets(bucket_meta)
