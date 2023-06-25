@@ -4485,7 +4485,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/raft-engine.git?branch=switch-disk#e1532e262b7dae026de96f7d5089d247983967a8"
+source = "git+https://github.com/LykxSassinator/raft-engine.git?branch=switch-disk#8ca8090fa90bd229bde0b8057e071b576a52884f"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4519,7 +4519,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/raft-engine.git?branch=switch-disk#e1532e262b7dae026de96f7d5089d247983967a8"
+source = "git+https://github.com/LykxSassinator/raft-engine.git?branch=switch-disk#8ca8090fa90bd229bde0b8057e071b576a52884f"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
