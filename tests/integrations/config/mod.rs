@@ -383,6 +383,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -454,6 +456,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -525,6 +529,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -596,6 +602,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config.clone(),
     };
@@ -682,6 +690,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config,
     };
@@ -695,6 +705,7 @@ fn test_serde_custom_tikv_config() {
     raft_engine_config.recovery_read_block_size.0 = ReadableSize::kb(1).0;
     raft_engine_config.recovery_threads = 2;
     raft_engine_config.memory_limit = Some(RaftEngineReadableSize::gb(1));
+    raft_engine_config.enable_log_recycle = false;
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         engine: EngineType::RaftKv2,

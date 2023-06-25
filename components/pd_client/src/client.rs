@@ -103,6 +103,7 @@ impl RpcClient {
                             target,
                             tso.unwrap(),
                             cfg.enable_forwarding,
+                            cfg.retry_interval.0,
                         )),
                         monitor: monitor.clone(),
                     };

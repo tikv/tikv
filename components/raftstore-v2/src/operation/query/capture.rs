@@ -186,14 +186,10 @@ mod test {
     };
     use futures::executor::block_on;
     use kvproto::{
-        metapb::{Region, RegionEpoch},
-        raft_cmdpb::RaftRequestHeader,
+        metapb::Region,
         raft_serverpb::{PeerState, RegionLocalState},
     };
-    use raft::{
-        prelude::{Entry, EntryType},
-        StateRole,
-    };
+    use raft::StateRole;
     use raftstore::{
         coprocessor::{BoxCmdObserver, CmdObserver, CoprocessorHost},
         store::Config,
@@ -204,33 +200,13 @@ mod test {
 
     use super::*;
     use crate::{
-        fsm::ApplyResReporter,
         operation::{
-            test_util::create_tmp_importer, CatchUpLogs, CommittedEntries, SimpleWriteReqEncoder,
+            test_util::{create_tmp_importer, new_put_entry, MockReporter},
+            CommittedEntries,
         },
         raft::Apply,
-        router::{build_any_channel, ApplyRes},
-        SimpleWriteEncoder,
+        router::build_any_channel,
     };
-
-    struct MockReporter {
-        sender: Sender<ApplyRes>,
-    }
-
-    impl MockReporter {
-        fn new() -> (Self, Receiver<ApplyRes>) {
-            let (tx, rx) = channel();
-            (MockReporter { sender: tx }, rx)
-        }
-    }
-
-    impl ApplyResReporter for MockReporter {
-        fn report(&self, apply_res: ApplyRes) {
-            let _ = self.sender.send(apply_res);
-        }
-
-        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
-    }
 
     #[derive(Clone)]
     struct TestObserver {
@@ -256,29 +232,6 @@ mod test {
         }
 
         fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
-    }
-
-    fn new_put_entry(
-        region_id: u64,
-        region_epoch: RegionEpoch,
-        k: &[u8],
-        v: &[u8],
-        term: u64,
-        index: u64,
-    ) -> Entry {
-        let mut encoder = SimpleWriteEncoder::with_capacity(512);
-        encoder.put(CF_DEFAULT, k, v);
-        let mut header = Box::<RaftRequestHeader>::default();
-        header.set_region_id(region_id);
-        header.set_region_epoch(region_epoch);
-        let req_encoder = SimpleWriteReqEncoder::new(header, encoder.encode(), 512, false);
-        let (bin, _) = req_encoder.encode();
-        let mut e = Entry::default();
-        e.set_entry_type(EntryType::EntryNormal);
-        e.set_term(term);
-        e.set_index(index);
-        e.set_data(bin.into());
-        e
     }
 
     #[test]
@@ -317,7 +270,8 @@ mod test {
         host.registry
             .register_cmd_observer(0, BoxCmdObserver::new(ob));
 
-        let (dummy_scheduler, _) = dummy_scheduler();
+        let (dummy_scheduler1, _) = dummy_scheduler();
+        let (dummy_scheduler2, _) = dummy_scheduler();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -337,7 +291,8 @@ mod test {
             None,
             importer,
             host,
-            dummy_scheduler,
+            dummy_scheduler1,
+            dummy_scheduler2,
             logger.clone(),
         );
 

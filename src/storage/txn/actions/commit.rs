@@ -101,7 +101,7 @@ pub fn commit<S: Snapshot>(
         reader.start_ts,
         lock.short_value.take(),
     )
-    .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+    .set_last_change(lock.last_change.clone())
     .set_txn_source(lock.txn_source);
 
     for ts in &lock.rollback_ts {
@@ -121,7 +121,8 @@ pub mod tests {
     #[cfg(test)]
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use tikv_kv::SnapContext;
-    use txn_types::TimeStamp;
+    #[cfg(test)]
+    use txn_types::{LastChange, TimeStamp};
 
     use super::*;
     #[cfg(test)]
@@ -348,22 +349,18 @@ pub mod tests {
         // WriteType is Lock
         must_prewrite_lock(&mut engine, k, k, 15);
         let lock = must_locked(&mut engine, k, 15);
-        assert_eq!(lock.last_change_ts, 10.into());
-        assert_eq!(lock.versions_to_last_change, 1);
+        assert_eq!(lock.last_change, LastChange::make_exist(10.into(), 1));
         must_succeed(&mut engine, k, 15, 20);
         let write = must_written(&mut engine, k, 15, 20, WriteType::Lock);
-        assert_eq!(write.last_change_ts, 10.into());
-        assert_eq!(write.versions_to_last_change, 1);
+        assert_eq!(write.last_change, LastChange::make_exist(10.into(), 1));
 
         // WriteType is Put
         must_prewrite_put(&mut engine, k, b"v2", k, 25);
         let lock = must_locked(&mut engine, k, 25);
-        assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.last_change, LastChange::Unknown);
         must_succeed(&mut engine, k, 25, 30);
         let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
-        assert!(write.last_change_ts.is_zero());
-        assert_eq!(write.versions_to_last_change, 0);
+        assert_eq!(write.last_change, LastChange::Unknown);
     }
 
     #[test]

@@ -223,7 +223,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::CheckMerge => self.fsm.peer_mut().on_check_merge(self.store_ctx),
             PeerTick::CheckPeerStaleState => unimplemented!(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
-            PeerTick::CheckLeaderLease => unimplemented!(),
+            PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => {
                 self.fsm.peer.on_reactivate_memory_lock_tick(self.store_ctx)
             }
@@ -280,7 +280,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .peer_mut()
                     .on_persisted(self.store_ctx, peer_id, ready_number),
                 PeerMsg::LogsFetched(fetched_logs) => {
-                    self.fsm.peer_mut().on_logs_fetched(fetched_logs)
+                    self.fsm.peer_mut().on_raft_log_fetched(fetched_logs)
                 }
                 PeerMsg::SnapshotGenerated(snap_res) => {
                     self.fsm.peer_mut().on_snapshot_generated(snap_res)
@@ -333,6 +333,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_cleanup_import_sst(self.store_ctx, ssts),
+                PeerMsg::SnapGc(keys) => self.fsm.peer_mut().on_snap_gc(self.store_ctx, keys),
                 PeerMsg::AskCommitMerge(req) => {
                     self.fsm.peer_mut().on_ask_commit_merge(self.store_ctx, req)
                 }
