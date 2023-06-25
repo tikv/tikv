@@ -515,7 +515,8 @@ mod tests {
         let (_tmp_dir, importer) = create_tmp_importer();
         let host = CoprocessorHost::<KvTestEngine>::default();
 
-        let (dummy_scheduler, _) = dummy_scheduler();
+        let (dummy_scheduler1, _) = dummy_scheduler();
+        let (dummy_scheduler2, _) = dummy_scheduler();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -531,7 +532,8 @@ mod tests {
             None,
             importer,
             host,
-            dummy_scheduler,
+            dummy_scheduler1,
+            dummy_scheduler2,
             logger,
         );
 

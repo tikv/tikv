@@ -1151,6 +1151,7 @@ fn test_debug_region_info_v2() {
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     lb.put_region_state(region_id, 42, &region_state).unwrap();
 
+    lb.put_flushed_index(region_id, CF_RAFT, 5, 42).unwrap();
     raft_engine.consume(&mut lb, false).unwrap();
     assert_eq!(
         raft_engine.get_raft_state(region_id).unwrap().unwrap(),

@@ -1347,6 +1347,13 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         println!("all regions are healthy")
     }
 
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        println!("removing unapplied raftlog on region {:?} ...", region_ids);
+        self.drop_unapplied_raftlog(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
+    }
+
     fn remove_fail_stores(
         &self,
         _store_ids: Vec<u64>,
@@ -1355,8 +1362,6 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     ) {
         unimplemented!()
     }
-
-    fn drop_unapplied_raftlog(&self, _region_ids: Option<Vec<u64>>) {}
 
     fn recreate_region(&self, _mgr: Arc<SecurityManager>, _pd_cfg: &PdConfig, _region_id: u64) {
         unimplemented!()
