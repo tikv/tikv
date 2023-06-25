@@ -25,7 +25,7 @@ use raftstore::{
     store::{
         cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadIndexContext, ReadProgress, RequestPolicy, Transport,
+        ReadIndexContext, ReadProgress, RequestPolicy,
     },
     Error, Result,
 };
@@ -185,7 +185,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;
     // 3. There is already a read request proposed in the current lease;
-    fn read_index<T: Transport>(
+    fn read_index<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,

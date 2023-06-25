@@ -9,13 +9,15 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
+    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
+use raftstore::store::{TabletSnapKey, TabletSnapManager};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
+    slog_panic,
     time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
@@ -43,7 +45,9 @@ pub enum Task<EK> {
         persisted_index: u64,
     },
     /// Sometimes we know for sure a tablet can be destroyed directly.
-    DirectDestroy { tablet: Either<EK, PathBuf> },
+    DirectDestroy {
+        tablet: Either<EK, PathBuf>,
+    },
     /// Cleanup ssts.
     CleanupImportSst(Box<[SstMeta]>),
     /// Flush memtable before split
@@ -54,6 +58,17 @@ pub enum Task<EK> {
         region_id: u64,
         cb: Option<Box<dyn FnOnce() + Send>>,
     },
+    DeleteRange {
+        region_id: u64,
+        tablet: EK,
+        cf: CfName,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
+        use_delete_range: bool,
+        cb: Box<dyn FnOnce() + Send>,
+    },
+    // Gc snapshot
+    SnapGc(Box<[TabletSnapKey]>),
 }
 
 impl<EK> Display for Task<EK> {
@@ -100,6 +115,26 @@ impl<EK> Display for Task<EK> {
                     region_id,
                     on_flush_finish.is_some()
                 )
+            }
+            Task::DeleteRange {
+                region_id,
+                cf,
+                start_key,
+                end_key,
+                ..
+            } => {
+                write!(
+                    f,
+                    "delete range cf {} [{}, {}) for region_id {}",
+                    cf,
+                    log_wrappers::Value::key(start_key),
+                    log_wrappers::Value::key(end_key),
+                    region_id,
+                )
+            }
+
+            Task::SnapGc(snap_keys) => {
+                write!(f, "gc snapshot {:?}", snap_keys)
             }
         }
     }
@@ -172,11 +207,32 @@ impl<EK> Task<EK> {
             tablet: Either::Right(path),
         }
     }
+
+    pub fn delete_range(
+        region_id: u64,
+        tablet: EK,
+        cf: CfName,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
+        use_delete_range: bool,
+        cb: Box<dyn FnOnce() + Send>,
+    ) -> Self {
+        Task::DeleteRange {
+            region_id,
+            tablet,
+            cf,
+            start_key,
+            end_key,
+            use_delete_range,
+            cb,
+        }
+    }
 }
 
 pub struct Runner<EK: KvEngine> {
     tablet_registry: TabletRegistry<EK>,
     sst_importer: Arc<SstImporter>,
+    snap_mgr: TabletSnapManager,
     logger: Logger,
 
     // region_id -> [(tablet_path, wait_for_persisted, callback)].
@@ -192,11 +248,13 @@ impl<EK: KvEngine> Runner<EK> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
         sst_importer: Arc<SstImporter>,
+        snap_mgr: TabletSnapManager,
         logger: Logger,
     ) -> Self {
         Self {
             tablet_registry,
             sst_importer,
+            snap_mgr,
             logger,
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
@@ -362,6 +420,14 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
+    fn snap_gc(&self, keys: Box<[TabletSnapKey]>) {
+        for key in Vec::from(keys) {
+            if !self.snap_mgr.delete_snapshot(&key) {
+                warn!(self.logger, "failed to gc snap"; "key" => ?key);
+            }
+        }
+    }
+
     fn flush_tablet(&self, region_id: u64, cb: Option<Box<dyn FnOnce() + Send>>) {
         let Some(Some(tablet)) = self
             .tablet_registry
@@ -401,6 +467,48 @@ impl<EK: KvEngine> Runner<EK> {
             tablet.flush_cfs(DATA_CFS, false).unwrap();
         }
     }
+
+    fn delete_range(&self, delete_range: Task<EK>) {
+        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, use_delete_range, cb } = delete_range else {
+            slog_panic!(self.logger, "unexpected task"; "task" => format!("{}", delete_range))
+        };
+
+        let range = vec![Range::new(&start_key, &end_key)];
+        let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
+            slog_panic!(
+                self.logger,
+                "failed to delete";
+                "region_id" => region_id,
+                "strategy" => ?strategy,
+                "range_start" => log_wrappers::Value::key(&start_key),
+                "range_end" => log_wrappers::Value::key(&end_key),
+                "error" => ?e,
+            )
+        };
+        let mut wopts = WriteOptions::default();
+        wopts.set_disable_wal(true);
+        tablet
+            .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
+            .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
+
+        let strategy = if use_delete_range {
+            DeleteStrategy::DeleteByRange
+        } else {
+            DeleteStrategy::DeleteByKey
+        };
+        // Delete all remaining keys.
+        tablet
+            .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
+            .unwrap_or_else(move |e| fail_f(e, strategy));
+
+        // TODO: support titan?
+        // tablet
+        //     .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteBlobs, &range)
+        //     .unwrap_or_else(move |e| fail_f(e,
+        // DeleteStrategy::DeleteBlobs));
+
+        cb();
+    }
 }
 
 impl<EK> Runnable for Runner<EK>
@@ -430,6 +538,8 @@ where
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
             Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
+            delete_range @ Task::DeleteRange { .. } => self.delete_range(delete_range),
+            Task::SnapGc(keys) => self.snap_gc(keys),
         }
     }
 }
@@ -478,7 +588,9 @@ mod tests {
         let registry = TabletRegistry::new(factory, dir.path()).unwrap();
         let logger = slog_global::borrow_global().new(slog::o!());
         let (_dir, importer) = create_tmp_importer();
-        let mut runner = Runner::new(registry.clone(), importer, logger);
+        let snap_dir = dir.path().join("snap");
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
+        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
 
         let mut region = Region::default();
         let rid = 1;
@@ -531,7 +643,9 @@ mod tests {
         let registry = TabletRegistry::new(factory, dir.path()).unwrap();
         let logger = slog_global::borrow_global().new(slog::o!());
         let (_dir, importer) = create_tmp_importer();
-        let mut runner = Runner::new(registry.clone(), importer, logger);
+        let snap_dir = dir.path().join("snap");
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
+        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
 
         let mut region = Region::default();
         let r_1 = 1;

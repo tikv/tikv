@@ -507,7 +507,8 @@ mod tests {
         let (_tmp_dir, importer) = create_tmp_importer();
         let host = CoprocessorHost::<KvTestEngine>::default();
 
-        let (dummy_scheduler, _) = dummy_scheduler();
+        let (dummy_scheduler1, _) = dummy_scheduler();
+        let (dummy_scheduler2, _) = dummy_scheduler();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -523,7 +524,8 @@ mod tests {
             None,
             importer,
             host,
-            dummy_scheduler,
+            dummy_scheduler1,
+            dummy_scheduler2,
             logger,
         );
 
@@ -551,8 +553,6 @@ mod tests {
         s.snapshot(0, to_peer_id).unwrap();
 
         // Test cancel snapshot
-        let snap = s.snapshot(0, 7);
-        assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let _res = rx.recv_timeout(Duration::from_secs(1)).unwrap();

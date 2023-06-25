@@ -295,7 +295,7 @@ fn test_serde_custom_tikv_config() {
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
         wal_size_limit: ReadableSize::kb(1),
-        max_total_wal_size: ReadableSize::gb(1),
+        max_total_wal_size: Some(ReadableSize::gb(1)),
         max_background_jobs: 12,
         max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
@@ -705,6 +705,7 @@ fn test_serde_custom_tikv_config() {
     raft_engine_config.recovery_read_block_size.0 = ReadableSize::kb(1).0;
     raft_engine_config.recovery_threads = 2;
     raft_engine_config.memory_limit = Some(RaftEngineReadableSize::gb(1));
+    raft_engine_config.enable_log_recycle = false;
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         engine: EngineType::RaftKv2,

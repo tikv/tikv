@@ -53,8 +53,8 @@ use raftstore::{
         RawConsistencyCheckObserver,
     },
     store::{
-        memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE, AutoSplitController, CheckLeaderRunner,
-        SplitConfigManager, TabletSnapManager,
+        config::RaftstoreConfigManager, memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
+        AutoSplitController, CheckLeaderRunner, SplitConfigManager, TabletSnapManager,
     },
     RegionInfoAccessor,
 };
@@ -810,12 +810,20 @@ where
                 collector_reg_handle,
                 self.core.background_worker.clone(),
                 pd_worker,
-                raft_store,
+                raft_store.clone(),
                 &state,
                 importer.clone(),
                 self.core.encryption_key_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
+
+        cfg_controller.register(
+            tikv::config::Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                self.node.as_mut().unwrap().refresh_config_scheduler(),
+                raft_store,
+            )),
+        );
 
         // Start auto gc. Must after `Node::start` because `node_id` is initialized
         // there.

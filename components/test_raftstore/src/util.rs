@@ -1543,3 +1543,21 @@ pub fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
         assert!(cluster.get_cf(cf, k).is_none());
     }
 }
+
+pub fn put_with_timeout<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    node_id: u64,
+    key: &[u8],
+    value: &[u8],
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let req = new_request(
+        region_id,
+        region.take_region_epoch(),
+        vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
+        false,
+    );
+    cluster.call_command_on_node(node_id, req, timeout)
+}
