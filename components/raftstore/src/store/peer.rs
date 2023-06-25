@@ -1208,7 +1208,8 @@ where
         } else {
             self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
             self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
-            guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async && guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::SyncRecover
+            guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async
+                && guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::SyncRecover
         };
         if enable_group_commit {
             let ids = mem::replace(
@@ -5151,7 +5152,7 @@ where
         };
         let state = if !self.replication_sync {
             if self.dr_auto_sync_state != DrAutoSyncState::Async {
-                let res = self.raft_group.raft.check_group_commit_consistent();
+                let res = self.check_group_commit_consistent(5 as u64);
                 if Some(true) != res {
                     let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
                     if self.get_store().applied_term() >= self.term() {
@@ -5168,7 +5169,8 @@ where
                         "status" => ?res,
                         "region_id" => self.region_id,
                         "peer_id" => self.peer.id,
-                        "progress" => ?buffer
+                        "progress" => ?buffer,
+                        "dr_auto_sync_state" => ?self.dr_auto_sync_state,
                     );
                 } else {
                     self.replication_sync = true;
@@ -5186,6 +5188,27 @@ where
         };
         status.set_state(state);
         Some(status)
+    }
+
+    pub fn check_group_commit_consistent(&mut self, allow_gap: u64) -> Option<bool> {
+        if !self.is_leader() || !self.raft_group.raft.apply_to_current_term() {
+            return None;
+        }
+        let original = self.raft_group.raft.group_commit();
+        let res = {
+            // Hack: to check groups consistent we need to enable group commit first
+            // otherwise `maximal_committed_index` will return the committed index
+            // based on majorty instead of commit group
+            self.raft_group.raft.enable_group_commit(true);
+            let (index, mut group_consistent) =
+                self.raft_group.raft.mut_prs().maximal_committed_index();
+            if self.raft_group.raft.raft_log.committed > index {
+                group_consistent &= self.raft_group.raft.raft_log.committed - index <= allow_gap;
+            }
+            Some(group_consistent)
+        };
+        self.raft_group.raft.enable_group_commit(original);
+        res
     }
 
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
