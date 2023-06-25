@@ -12,7 +12,7 @@ use kvproto::{
 };
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
-    util::LatencyInspector, FetchedLogs, GenSnapRes, TabletSnapKey
+    util::LatencyInspector, FetchedLogs, GenSnapRes, TabletSnapKey,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
