@@ -381,7 +381,6 @@ impl<EK: KvEngine> Runner<EK> {
                 .spawn(async move {
                     // sync flush for leader to let the flush happend before later checkpoint.
                     if threshold.is_none() || tablet.has_old_active_memtable(threshold.unwrap()) {
-                        // tablet.flush_cfs(DATA_CFS, true).unwrap();
                         let r = tablet.flush_cfs(DATA_CFS, true);
                         let elapsed = now.saturating_elapsed();
                         if let Err(e) = r {
