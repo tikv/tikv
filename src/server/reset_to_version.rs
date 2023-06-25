@@ -132,6 +132,7 @@ impl ResetToVersionWorker {
             box_try!(wb.delete_cf(CF_DEFAULT, default_key.as_encoded()));
         }
         if !wb.is_empty() {
+            // TODO: v2 needs disable_wal=true.
             wb.write().unwrap();
             wb.clear();
         }
@@ -163,6 +164,7 @@ impl ResetToVersionWorker {
             }
         }
         if !wb.is_empty() {
+            // TODO: v2 needs disable_wal=true.
             wb.write().unwrap();
             wb.clear();
         }

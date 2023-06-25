@@ -6,7 +6,8 @@
 //! FIXME: Things here need to be moved elsewhere.
 
 use crate::{
-    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt, range::Range,
+    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt,
+    range::Range, WriteOptions,
 };
 
 #[derive(Clone, Debug)]
@@ -80,15 +81,21 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
         age_threshold: Option<std::time::SystemTime>,
     ) -> Result<()>;
 
-    fn delete_ranges_cfs(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
+    fn delete_ranges_cfs(
+        &self,
+        wopts: &WriteOptions,
+        strategy: DeleteStrategy,
+        ranges: &[Range<'_>],
+    ) -> Result<()> {
         for cf in self.cf_names() {
-            self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
+            self.delete_ranges_cf(wopts, cf, strategy.clone(), ranges)?;
         }
         Ok(())
     }
 
     fn delete_ranges_cf(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
