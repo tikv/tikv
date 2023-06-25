@@ -359,7 +359,7 @@ pub mod tests {
     use std::time::Duration;
 
     use api_version::RawValue;
-    use engine_traits::{DeleteStrategy, Peekable, Range, CF_DEFAULT};
+    use engine_traits::{DeleteStrategy, Peekable, Range, WriteOptions, CF_DEFAULT};
     use kvproto::kvrpcpb::{ApiVersion, Context};
     use tikv_kv::{Engine, Modify, WriteData};
     use txn_types::TimeStamp;
@@ -516,6 +516,7 @@ pub mod tests {
         );
         raw_engine
             .delete_ranges_cf(
+                &WriteOptions::default(),
                 CF_DEFAULT,
                 DeleteStrategy::DeleteByKey,
                 &[Range::new(

@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    data_cf_offset, DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange, ALL_CFS,
-    CF_DEFAULT,
+    data_cf_offset, DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange,
+    WriteOptions, ALL_CFS, CF_DEFAULT,
 };
 use fail::fail_point;
 use kvproto::raft_cmdpb::RaftRequestHeader;
@@ -292,9 +292,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     "error" => ?e,
                 )
             };
+            let mut wopts = WriteOptions::default();
+            wopts.set_disable_wal(true);
             let tablet = self.tablet();
             tablet
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+                .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
             let strategy = if use_delete_range {
@@ -304,13 +306,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             };
             // Delete all remaining keys.
             tablet
-                .delete_ranges_cf(cf, strategy.clone(), &range)
+                .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
                 .unwrap_or_else(move |e| fail_f(e, strategy));
 
             // to do: support titan?
             // tablet
-            //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
-            //     .unwrap_or_else(move |e| fail_f(e,
+            //     .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteBlobs,
+            // &range)     .unwrap_or_else(move |e| fail_f(e,
             // DeleteStrategy::DeleteBlobs));
         }
         if index != u64::MAX {
