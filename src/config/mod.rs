@@ -1200,7 +1200,7 @@ pub struct DbConfig {
     pub wal_ttl_seconds: u64,
     #[online_config(skip)]
     pub wal_size_limit: ReadableSize,
-    pub max_total_wal_size: ReadableSize,
+    pub max_total_wal_size: Option<ReadableSize>,
     pub max_background_jobs: i32,
     pub max_background_flushes: i32,
     #[online_config(skip)]
@@ -1295,7 +1295,7 @@ impl Default for DbConfig {
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
-            max_total_wal_size: ReadableSize::gb(4),
+            max_total_wal_size: None,
             max_background_jobs: bg_job_limits.max_background_jobs as i32,
             max_background_flushes: bg_job_limits.max_background_flushes as i32,
             max_manifest_file_size: ReadableSize::mb(128),
@@ -1341,6 +1341,7 @@ impl DbConfig {
         match engine {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
+                self.max_total_wal_size.get_or_insert(ReadableSize::gb(4));
                 self.defaultcf.enable_compaction_guard.get_or_insert(true);
                 self.writecf.enable_compaction_guard.get_or_insert(true);
                 self.defaultcf.format_version.get_or_insert(2);
@@ -1358,6 +1359,7 @@ impl DbConfig {
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                     WRITE_BUFFER_MEMORY_LIMIT_MAX,
                 )));
+                self.max_total_wal_size.get_or_insert(ReadableSize(1));
                 // In RaftKv2, every region uses its own rocksdb instance, it's actually the
                 // even stricter compaction guard, so use the same output file size base.
                 self.writecf
@@ -1420,7 +1422,7 @@ impl DbConfig {
         }
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
-        opts.set_max_total_wal_size(self.max_total_wal_size.0);
+        opts.set_max_total_wal_size(self.max_total_wal_size.unwrap_or(ReadableSize(0)).0);
         opts.set_max_background_jobs(self.max_background_jobs);
         // RocksDB will cap flush and compaction threads to at least one
         opts.set_max_background_flushes(self.max_background_flushes);
@@ -5917,6 +5919,7 @@ mod tests {
         cfg.raft_engine.mut_config().memory_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
         cfg.rocksdb.write_buffer_limit = None;
+        cfg.rocksdb.max_total_wal_size = None;
         //
         cfg.rocksdb.defaultcf.enable_compaction_guard = None;
         cfg.rocksdb.writecf.enable_compaction_guard = None;
