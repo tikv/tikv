@@ -97,7 +97,7 @@ impl CompactLogContext {
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     pub fn on_compact_log_tick(&mut self, force: bool) {
-        if !self.fsm.peer().is_leader() {
+        if !self.fsm.peer().is_leader() || !self.fsm.peer().serving() {
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
             // when the role becomes follower.

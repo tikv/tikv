@@ -52,14 +52,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     pub fn on_capture_change(&mut self, capture_change: CaptureChange) {
         fail_point!("raft_on_capture_change");
 
-        let apply_router = self.fsm.peer().apply_scheduler().unwrap().clone();
+        let apply_scheduler = self.fsm.peer().apply_scheduler().cloned();
         let (ch, _) = QueryResChannel::with_callback(Box::new(move |res| {
             if let QueryResult::Response(resp) = res && resp.get_header().has_error() {
                 // Return error
                 capture_change.snap_cb.report_error(resp.clone());
                 return;
             }
-            apply_router.send(ApplyTask::CaptureApply(capture_change))
+            if let Some(scheduler) = apply_scheduler {
+                scheduler.send(ApplyTask::CaptureApply(capture_change))
+            }
         }));
         self.on_leader_callback(ch);
     }

@@ -17,7 +17,9 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
+use engine_traits::{
+    DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
+};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -583,7 +585,11 @@ where
             })
             .collect();
         self.engine
-            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &df_ranges)
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteFiles,
+                &df_ranges,
+            )
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
@@ -647,7 +653,11 @@ where
             .collect();
 
         self.engine
-            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges)
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteFiles,
+                &ranges,
+            )
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
@@ -656,7 +666,11 @@ where
             return;
         }
         self.engine
-            .delete_ranges_cfs(DeleteStrategy::DeleteBlobs, &ranges)
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteBlobs,
+                &ranges,
+            )
             .unwrap_or_else(|e| {
                 error!("failed to delete blobs in range"; "err" => %e);
             });
@@ -686,6 +700,7 @@ where
     }
 
     fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
+        let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
@@ -697,7 +712,7 @@ where
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
+            box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
         }
 
         Ok(())

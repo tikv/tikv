@@ -1453,13 +1453,18 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
         self.raft_statistics = raft_statistics;
 
         // Create kv engine.
-        let builder = KvEngineFactoryBuilder::new(env, &self.core.config, block_cache)
-            .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
-                router: Mutex::new(self.router.clone()),
-            }))
-            .region_info_accessor(self.region_info_accessor.clone())
-            .sst_recovery_sender(self.init_sst_recovery_sender())
-            .flow_listener(flow_listener);
+        let builder = KvEngineFactoryBuilder::new(
+            env,
+            &self.core.config,
+            block_cache,
+            self.core.encryption_key_manager.clone(),
+        )
+        .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
+            router: Mutex::new(self.router.clone()),
+        }))
+        .region_info_accessor(self.region_info_accessor.clone())
+        .sst_recovery_sender(self.init_sst_recovery_sender())
+        .flow_listener(flow_listener);
         let factory = Box::new(builder.build());
         let kv_engine = factory
             .create_shared_db(&self.core.store_path)
@@ -1550,7 +1555,7 @@ mod test {
             .block_cache
             .build_shared_cache(config.storage.engine);
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
+        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {

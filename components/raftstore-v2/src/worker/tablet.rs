@@ -9,7 +9,7 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS,
+    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
@@ -277,7 +277,11 @@ impl<EK: KvEngine> Runner<EK> {
         let end_key = keys::data_end_key(&end);
         let range1 = Range::new(&[], &start_key);
         let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
-        if let Err(e) = tablet.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2]) {
+        let mut wopts = WriteOptions::default();
+        wopts.set_disable_wal(true);
+        if let Err(e) =
+            tablet.delete_ranges_cfs(&wopts, DeleteStrategy::DeleteFiles, &[range1, range2])
+        {
             error!(
                 self.logger,
                 "failed to trim tablet";
@@ -518,8 +522,10 @@ impl<EK: KvEngine> Runner<EK> {
                 "error" => ?e,
             )
         };
+        let mut wopts = WriteOptions::default();
+        wopts.set_disable_wal(true);
         tablet
-            .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+            .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
             .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
         let strategy = if use_delete_range {
@@ -529,12 +535,12 @@ impl<EK: KvEngine> Runner<EK> {
         };
         // Delete all remaining keys.
         tablet
-            .delete_ranges_cf(cf, strategy.clone(), &range)
+            .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
             .unwrap_or_else(move |e| fail_f(e, strategy));
 
         // TODO: support titan?
         // tablet
-        //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+        //     .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteBlobs, &range)
         //     .unwrap_or_else(move |e| fail_f(e,
         // DeleteStrategy::DeleteBlobs));
 
@@ -590,7 +596,7 @@ where
             if r && let Some(cb) = cb.take() {
                 cb();
             }
-            r
+            !r
         });
     }
 
@@ -664,5 +670,64 @@ mod tests {
         rx.recv().unwrap();
         runner.on_timeout();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_destroy_locked_tablet() {
+        let dir = Builder::new()
+            .prefix("test_destroy_locked_tablet")
+            .tempdir()
+            .unwrap();
+        let factory = Box::new(TestTabletFactory::new(
+            DbOptions::default(),
+            vec![("default", CfOptions::default())],
+        ));
+        let registry = TabletRegistry::new(factory, dir.path()).unwrap();
+        let logger = slog_global::borrow_global().new(slog::o!());
+        let (_dir, importer) = create_tmp_importer();
+        let snap_dir = dir.path().join("snap");
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
+        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
+
+        let mut region = Region::default();
+        let r_1 = 1;
+        region.set_id(r_1);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"b".to_vec());
+        let tablet1 = registry
+            .load(TabletContext::new(&region, Some(1)), true)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+        let path1 = PathBuf::from(tablet1.path());
+        let r_2 = 2;
+        region.set_id(r_2);
+        region.set_start_key(b"c".to_vec());
+        region.set_end_key(b"d".to_vec());
+        let tablet2 = registry
+            .load(TabletContext::new(&region, Some(1)), true)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+        let path2 = PathBuf::from(tablet2.path());
+
+        // both tablets are locked.
+        runner.run(Task::prepare_destroy(tablet1, r_1, 10));
+        runner.run(Task::prepare_destroy(tablet2, r_2, 10));
+        runner.run(Task::destroy(r_1, 100));
+        runner.run(Task::destroy(r_2, 100));
+        assert!(path1.exists());
+        assert!(path2.exists());
+
+        registry.remove(r_1);
+        runner.on_timeout();
+        assert!(!path1.exists());
+        assert!(path2.exists());
+
+        registry.remove(r_2);
+        runner.on_timeout();
+        assert!(!path2.exists());
     }
 }
