@@ -1208,7 +1208,7 @@ where
         } else {
             self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
             self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
-            guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async
+            guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async && guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::SyncRecover
         };
         if enable_group_commit {
             let ids = mem::replace(
@@ -1227,7 +1227,7 @@ where
         self.raft_group
             .raft
             .enable_group_commit(enable_group_commit);
-        info!("switch replication mode"; "version" => self.replication_mode_version, "region_id" => self.region_id, "peer_id" => self.peer.id);
+        info!("switch replication mode"; "version" => self.replication_mode_version, "region_id" => self.region_id, "peer_id" => self.peer.id, "mode" => ?self.dr_auto_sync_state, "enable_group_commit" => enable_group_commit);
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
