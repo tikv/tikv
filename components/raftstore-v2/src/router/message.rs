@@ -12,7 +12,7 @@ use kvproto::{
 };
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
-    FetchedLogs, GenSnapRes, TabletSnapKey,
+    util::LatencyInspector, FetchedLogs, GenSnapRes, TabletSnapKey,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
@@ -337,6 +337,11 @@ pub enum StoreMsg {
     WaitFlush {
         region_id: u64,
         ch: super::FlushChannel,
+    },
+    /// Inspect the latency of raftstore.
+    LatencyInspect {
+        send_time: Instant,
+        inspector: LatencyInspector,
     },
 }
 
