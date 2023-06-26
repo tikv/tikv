@@ -652,7 +652,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 {
                     let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
-                    let buckets = snapshot.ext().get_buckets();
                     let mut statistics = Statistics::default();
                     let result = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
@@ -680,7 +679,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         Some(key.as_encoded()),
                         Some(key.as_encoded()),
                         &statistics,
-                        buckets.as_ref(),
+                        None,
                     );
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -996,7 +995,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
-                    let buckets = snapshot.ext().get_buckets();
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
                         let snap_store = SnapshotStore::new(
@@ -1023,7 +1021,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             Some(k.as_encoded()),
                                             Some(k.as_encoded()),
                                             &statistics[i],
-                                            buckets.as_ref(),
+                                            None,
                                         );
                                         stats.add(&statistics[i]);
                                         !(v.is_ok() && v.as_ref().unwrap().is_none())
