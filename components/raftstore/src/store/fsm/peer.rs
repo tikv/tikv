@@ -898,8 +898,20 @@ where
             // For regions that lose quorum (or regions have force leader), whatever has
             // been proposed will be committed. Based on that fact, we simply use "last
             // index" here to avoid implementing another "wait commit" process.
+            info!(
+                "Unsafe recovery, wait apply on force leader";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => self.fsm.peer.raft_group.raft.raft_log.last_index(),
+            );
             self.fsm.peer.raft_group.raft.raft_log.last_index()
         } else {
+            info!(
+                "Unsafe recovery, wait apply on regular peer";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => self.fsm.peer.raft_group.raft.raft_log.committed,
+            );
             self.fsm.peer.raft_group.raft.raft_log.committed
         };
 
