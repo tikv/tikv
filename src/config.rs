@@ -2613,6 +2613,10 @@ pub struct QuotaConfig {
     pub foreground_write_bandwidth: ReadableSize,
     pub foreground_read_bandwidth: ReadableSize,
     pub max_delay_duration: ReadableDuration,
+    pub background_cpu_time: usize,
+    pub background_write_bandwidth: ReadableSize,
+    pub background_read_bandwidth: ReadableSize,
+    pub enable_auto_tune: bool,
 }
 
 impl Default for QuotaConfig {
@@ -2622,6 +2626,10 @@ impl Default for QuotaConfig {
             foreground_write_bandwidth: ReadableSize(0),
             foreground_read_bandwidth: ReadableSize(0),
             max_delay_duration: ReadableDuration::millis(500),
+            background_cpu_time: 0,
+            background_write_bandwidth: ReadableSize(0),
+            background_read_bandwidth: ReadableSize(0),
+            enable_auto_tune: false,
         }
     }
 }
@@ -4569,6 +4577,9 @@ mod tests {
         cfg.quota.foreground_cpu_time = 1000;
         cfg.quota.foreground_write_bandwidth = ReadableSize::mb(128);
         cfg.quota.foreground_read_bandwidth = ReadableSize::mb(256);
+        cfg.quota.background_cpu_time = 1000;
+        cfg.quota.background_write_bandwidth = ReadableSize::mb(128);
+        cfg.quota.background_read_bandwidth = ReadableSize::mb(256);
         cfg.quota.max_delay_duration = ReadableDuration::secs(1);
         cfg.validate().unwrap();
 
@@ -4576,7 +4587,11 @@ mod tests {
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,
             cfg.quota.foreground_read_bandwidth,
+            cfg.quota.background_cpu_time,
+            cfg.quota.background_write_bandwidth,
+            cfg.quota.background_read_bandwidth,
             cfg.quota.max_delay_duration,
+            false,
         ));
 
         let cfg_controller = ConfigController::new(cfg.clone());
@@ -4606,9 +4621,9 @@ mod tests {
         cfg.quota.foreground_write_bandwidth = ReadableSize::mb(256);
         assert_eq!(cfg_controller.get_current(), cfg);
 
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(125));
 
         cfg_controller
@@ -4616,20 +4631,59 @@ mod tests {
             .unwrap();
         cfg.quota.foreground_read_bandwidth = ReadableSize::mb(512);
         assert_eq!(cfg_controller.get_current(), cfg);
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(250));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
+        assert_eq!(should_delay, Duration::from_millis(500));
+
+        cfg_controller
+            .update_config("quota.background-cpu-time", "2000")
+            .unwrap();
+        cfg.quota.background_cpu_time = 2000;
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        cfg_controller
+            .update_config("quota.background-write-bandwidth", "256MB")
+            .unwrap();
+        cfg.quota.background_write_bandwidth = ReadableSize::mb(256);
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        let mut sample = quota_limiter.new_sample(false);
+        sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        assert_eq!(should_delay, Duration::from_millis(125));
+
+        cfg_controller
+            .update_config("quota.background-read-bandwidth", "512MB")
+            .unwrap();
+        cfg.quota.background_read_bandwidth = ReadableSize::mb(512);
+        assert_eq!(cfg_controller.get_current(), cfg);
+        let mut sample = quota_limiter.new_sample(false);
+        sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        assert_eq!(should_delay, Duration::from_millis(500));
 
         cfg_controller
             .update_config("quota.max-delay-duration", "50ms")
             .unwrap();
         cfg.quota.max_delay_duration = ReadableDuration::millis(50);
         assert_eq!(cfg_controller.get_current(), cfg);
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(50));
+
+        let mut sample = quota_limiter.new_sample(false);
+        sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        assert_eq!(should_delay, Duration::from_millis(50));
+
+        assert_eq!(cfg.quota.enable_auto_tune, false);
+        cfg_controller
+            .update_config("quota.enable-auto-tune", "true")
+            .unwrap();
+        cfg.quota.enable_auto_tune = true;
+        assert_eq!(cfg_controller.get_current(), cfg);
     }
 
     #[test]
