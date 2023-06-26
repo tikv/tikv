@@ -437,7 +437,15 @@ impl<EK: KvEngine> Runner<EK> {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
-            .map(|mut cache| cache.latest().cloned()) else { return };
+            .map(|mut cache| cache.latest().cloned()) else {
+            warn!(
+                self.logger,
+                "flush memtable failed to acquire tablet";
+                "region_id" => region_id,
+                "reason" => reason,
+            );
+            return
+        };
         let threshold = threshold.map(|t| std::time::SystemTime::now() - t);
         // The callback `cb` being some means it's the task sent from
         // leader, we should sync flush memtables and call it after the flush complete
@@ -469,6 +477,13 @@ impl<EK: KvEngine> Runner<EK> {
                                 "duration" => %ReadableDuration(elapsed),
                             );
                         }
+                    } else {
+                        info!(
+                            logger,
+                            "skipped flush memtable for leader";
+                            "region_id" => region_id,
+                            "reason" => reason,
+                        );
                     }
                     drop(tablet);
                     cb();

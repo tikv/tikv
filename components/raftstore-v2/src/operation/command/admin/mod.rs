@@ -274,7 +274,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Err(e) = ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
             region_id: target_id,
             reason,
-            threshold: Some(std::time::Duration::from_secs(30)),
+            threshold: Some(std::time::Duration::from_secs(10)),
             cb: Some(on_local_flushed),
         }) {
             error!(
