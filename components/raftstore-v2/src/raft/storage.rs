@@ -339,7 +339,10 @@ mod tests {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::{dummy_scheduler, Worker};
+    use tikv_util::{
+        worker::{dummy_scheduler, Worker},
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
+    };
 
     use super::*;
     use crate::{
@@ -508,7 +511,7 @@ mod tests {
         let host = CoprocessorHost::<KvTestEngine>::default();
 
         let (dummy_scheduler1, _) = dummy_scheduler();
-        let (dummy_scheduler2, _) = dummy_scheduler();
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -525,7 +528,7 @@ mod tests {
             importer,
             host,
             dummy_scheduler1,
-            dummy_scheduler2,
+            high_priority_pool,
             logger,
         );
 
