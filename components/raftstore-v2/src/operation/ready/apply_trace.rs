@@ -613,6 +613,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         "flush before close flush admin for region";
                         "admin_flush" => admin_flush,
                     );
+                    break;
                 }
             }
         }
