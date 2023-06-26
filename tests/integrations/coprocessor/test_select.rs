@@ -61,7 +61,7 @@ fn test_select() {
 
     let product = ProductTable::new();
     let (_, endpoint, limiter) = init_with_data_ext(&product, &data);
-    limiter.set_read_bandwidth_limit(ReadableSize::kb(1));
+    limiter.set_read_bandwidth_limit(ReadableSize::kb(1), true);
     // for dag selection
     let req = DAGSelect::from(&product).build();
     let mut resp = handle_select(&endpoint, req);
