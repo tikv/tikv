@@ -328,8 +328,8 @@ impl<E: Engine> Tracker<E> {
 
         let peer = self.req_ctx.context.get_peer();
         let region_id = self.req_ctx.context.get_region_id();
-        let start_key = &self.req_ctx.lower_bound;
-        let end_key = &self.req_ctx.upper_bound;
+        let start_key = Key::from_raw(&self.req_ctx.lower_bound);
+        let end_key = Key::from_raw(&self.req_ctx.upper_bound);
         let reverse_scan = if let Some(reverse_scan) = self.req_ctx.is_desc_scan {
             reverse_scan
         } else {
@@ -339,14 +339,14 @@ impl<E: Engine> Tracker<E> {
         tls_collect_query(
             region_id,
             peer,
-            Key::from_raw(start_key).as_encoded(),
-            Key::from_raw(end_key).as_encoded(),
+            start_key.as_encoded(),
+            end_key.as_encoded(),
             reverse_scan,
         );
         tls_collect_read_flow(
             self.req_ctx.context.get_region_id(),
-            Some(start_key),
-            Some(end_key),
+            Some(start_key.as_encoded()),
+            Some(end_key.as_encoded()),
             &total_storage_stats,
             self.buckets.as_ref(),
         );
