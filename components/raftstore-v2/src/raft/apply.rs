@@ -16,12 +16,16 @@ use raftstore::{
 };
 use slog::Logger;
 use sst_importer::SstImporter;
-use tikv_util::{log::SlogFormat, worker::Scheduler};
+use tikv_util::{log::SlogFormat, worker::Scheduler, yatp_pool::FuturePool};
 
 use crate::{
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::CmdResChannel,
+<<<<<<< HEAD
     worker::checkpoint,
+=======
+    TabletTask,
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
 };
 
 pub(crate) struct Observe {
@@ -73,7 +77,13 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
+<<<<<<< HEAD
     checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+=======
+    tablet_scheduler: Scheduler<TabletTask<EK>>,
+    high_priority_pool: FuturePool,
+
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 
@@ -98,7 +108,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
         coprocessor_host: CoprocessorHost<EK>,
+<<<<<<< HEAD
         checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+=======
+        tablet_scheduler: Scheduler<TabletTask<EK>>,
+        high_priority_pool: FuturePool,
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -132,7 +147,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
+<<<<<<< HEAD
             checkpoint_scheduler,
+=======
+            tablet_scheduler,
+            high_priority_pool,
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
             use_delete_range: cfg.use_delete_range,
             observe: Observe {
                 info: CmdObserveInfo::default(),
@@ -330,8 +350,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
-        &self.checkpoint_scheduler
+    pub fn high_priority_pool(&self) -> &FuturePool {
+        &self.high_priority_pool
     }
 
     pub fn use_delete_range(&self) -> bool {

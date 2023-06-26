@@ -145,7 +145,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             mailbox,
             store_ctx.tablet_registry.clone(),
             read_scheduler,
+<<<<<<< HEAD
             store_ctx.schedulers.checkpoint.clone(),
+=======
+            store_ctx.schedulers.tablet.clone(),
+            store_ctx.high_priority_pool.clone(),
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
             self.flush_state().clone(),
             sst_apply_state,
             self.storage().apply_trace().log_recovery(),
@@ -680,7 +685,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
                 AdminCmdType::Split => self.apply_split(admin_req, log_index).await?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index).await?,
-                AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
+                AdminCmdType::PrepareMerge => {
+                    self.apply_prepare_merge(admin_req, log_index).await?
+                }
                 AdminCmdType::CommitMerge => self.apply_commit_merge(admin_req, log_index).await?,
                 AdminCmdType::RollbackMerge => unimplemented!(),
                 AdminCmdType::TransferLeader => {

@@ -134,4 +134,26 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
+<<<<<<< HEAD
+=======
+
+    /// Returns size and creation time of active memtable if there's one.
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>>;
+
+    /// Whether there's active memtable with creation time older than
+    /// `threshold`.
+    fn has_old_active_memtable(&self, threshold: std::time::SystemTime) -> bool {
+        for cf in self.cf_names() {
+            if let Ok(Some((_, age))) = self.get_active_memtable_stats_cf(cf) {
+                if age < threshold {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
 }

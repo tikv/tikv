@@ -200,7 +200,11 @@ mod test {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::{store::new_peer, worker::dummy_scheduler};
+    use tikv_util::{
+        store::new_peer,
+        worker::dummy_scheduler,
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
+    };
 
     use super::*;
     use crate::{
@@ -317,7 +321,12 @@ mod test {
         host.registry
             .register_cmd_observer(0, BoxCmdObserver::new(ob));
 
+<<<<<<< HEAD
         let (dummy_scheduler, _) = dummy_scheduler();
+=======
+        let (dummy_scheduler1, _) = dummy_scheduler();
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -337,7 +346,12 @@ mod test {
             None,
             importer,
             host,
+<<<<<<< HEAD
             dummy_scheduler,
+=======
+            dummy_scheduler1,
+            high_priority_pool,
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
             logger.clone(),
         );
 

@@ -317,3 +317,155 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         Ok(())
     }
 }
+<<<<<<< HEAD
+=======
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+        kv::{KvTestEngine, TestTabletFactory},
+    };
+    use engine_traits::{
+        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
+    };
+    use futures::executor::block_on;
+    use kvproto::{
+        metapb::Region,
+        raft_serverpb::{PeerState, RegionLocalState},
+    };
+    use raftstore::{
+        coprocessor::CoprocessorHost,
+        store::{Config, TabletSnapManager},
+    };
+    use slog::o;
+    use tempfile::TempDir;
+    use tikv_util::{
+        store::new_peer,
+        worker::{dummy_scheduler, Worker},
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
+    };
+
+    use crate::{
+        operation::{
+            test_util::{create_tmp_importer, new_delete_range_entry, new_put_entry, MockReporter},
+            CommittedEntries,
+        },
+        raft::Apply,
+        worker::tablet,
+    };
+
+    #[test]
+    fn test_delete_range() {
+        let store_id = 2;
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_end_key(b"k20".to_vec());
+        region.mut_region_epoch().set_version(3);
+        let peers = vec![new_peer(2, 3)];
+        region.set_peers(peers.into());
+
+        let logger = slog_global::borrow_global().new(o!());
+        let path = TempDir::new().unwrap();
+        let cf_opts = DATA_CFS
+            .iter()
+            .copied()
+            .map(|cf| (cf, CfOptions::default()))
+            .collect();
+        let factory = Box::new(TestTabletFactory::new(DbOptions::default(), cf_opts));
+        let reg = TabletRegistry::new(factory, path.path()).unwrap();
+        let ctx = TabletContext::new(&region, Some(5));
+        reg.load(ctx, true).unwrap();
+        let tablet = reg.get(region.get_id()).unwrap().latest().unwrap().clone();
+
+        let mut region_state = RegionLocalState::default();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region.clone());
+        region_state.set_tablet_index(5);
+
+        let (read_scheduler, _rx) = dummy_scheduler();
+        let (reporter, _) = MockReporter::new();
+        let (tmp_dir, importer) = create_tmp_importer();
+        let host = CoprocessorHost::<KvTestEngine>::default();
+
+        let snap_mgr = TabletSnapManager::new(tmp_dir.path(), None).unwrap();
+        let tablet_worker = Worker::new("tablet-worker");
+        let tablet_scheduler = tablet_worker.start(
+            "tablet-worker",
+            tablet::Runner::new(reg.clone(), importer.clone(), snap_mgr, logger.clone()),
+        );
+        tikv_util::defer!(tablet_worker.stop());
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+
+        let mut apply = Apply::new(
+            &Config::default(),
+            region
+                .get_peers()
+                .iter()
+                .find(|p| p.store_id == store_id)
+                .unwrap()
+                .clone(),
+            region_state,
+            reporter,
+            reg,
+            read_scheduler,
+            Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
+            None,
+            5,
+            None,
+            importer,
+            host,
+            tablet_scheduler,
+            high_priority_pool,
+            logger.clone(),
+        );
+
+        // put (k1, v1);
+        let ce = CommittedEntries {
+            entry_and_proposals: vec![(
+                new_put_entry(
+                    region.id,
+                    region.get_region_epoch().clone(),
+                    b"k1",
+                    b"v1",
+                    5,
+                    6,
+                ),
+                vec![],
+            )],
+        };
+        block_on(async { apply.apply_committed_entries(ce).await });
+        apply.flush();
+
+        // must read (k1, v1) from tablet.
+        let v1 = tablet.get_value_cf(CF_DEFAULT, b"zk1").unwrap().unwrap();
+        assert_eq!(v1, b"v1");
+
+        // delete range
+        let ce = CommittedEntries {
+            entry_and_proposals: vec![(
+                new_delete_range_entry(
+                    region.id,
+                    region.get_region_epoch().clone(),
+                    5,
+                    7,
+                    CF_DEFAULT,
+                    region.get_start_key(),
+                    region.get_end_key(),
+                    false, // notify_only
+                ),
+                vec![],
+            )],
+        };
+        block_on(async { apply.apply_committed_entries(ce).await });
+
+        // must get none for k1.
+        let res = tablet.get_value_cf(CF_DEFAULT, b"zk1").unwrap();
+        assert!(res.is_none(), "{:?}", res);
+    }
+}
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))

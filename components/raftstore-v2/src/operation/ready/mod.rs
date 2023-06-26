@@ -229,6 +229,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .tablet
                         .schedule(crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
+                            reason: "unknown",
+                            threshold: Some(std::time::Duration::from_secs(10)),
                             cb: None,
                         });
                     return;

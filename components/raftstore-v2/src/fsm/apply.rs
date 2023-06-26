@@ -21,13 +21,18 @@ use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
+    yatp_pool::FuturePool,
 };
 
 use crate::{
     operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
+<<<<<<< HEAD
     worker::checkpoint,
+=======
+    TabletTask,
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
 };
 
 /// A trait for reporting apply result.
@@ -78,7 +83,12 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+<<<<<<< HEAD
         checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+=======
+        tablet_scheduler: Scheduler<TabletTask<EK>>,
+        high_priority_pool: FuturePool,
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
         flush_state: Arc<FlushState>,
         sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
@@ -103,7 +113,12 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             buckets,
             sst_importer,
             coprocessor_host,
+<<<<<<< HEAD
             checkpoint_scheduler,
+=======
+            tablet_scheduler,
+            high_priority_pool,
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
             logger,
         );
         (

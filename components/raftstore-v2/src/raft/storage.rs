@@ -339,7 +339,10 @@ mod tests {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::{dummy_scheduler, Worker};
+    use tikv_util::{
+        worker::{dummy_scheduler, Worker},
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
+    };
 
     use super::*;
     use crate::{
@@ -508,7 +511,12 @@ mod tests {
         let (_tmp_dir, importer) = create_tmp_importer();
         let host = CoprocessorHost::<KvTestEngine>::default();
 
+<<<<<<< HEAD
         let (dummy_scheduler, _) = dummy_scheduler();
+=======
+        let (dummy_scheduler1, _) = dummy_scheduler();
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -524,7 +532,12 @@ mod tests {
             None,
             importer,
             host,
+<<<<<<< HEAD
             dummy_scheduler,
+=======
+            dummy_scheduler1,
+            high_priority_pool,
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
             logger,
         );
 

@@ -57,7 +57,11 @@ use crate::{
     operation::{SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
+<<<<<<< HEAD
     worker::{checkpoint, cleanup, pd, tablet},
+=======
+    worker::{cleanup, pd, refresh_config, tablet},
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
     Error, Result,
 };
 
@@ -81,12 +85,13 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
     pub schedulers: Schedulers<EK, ER>,
-    /// store meta
     pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub shutdown: Arc<AtomicBool>,
     pub engine: ER,
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
+    /// A background pool used for high-priority works.
+    pub high_priority_pool: FuturePool,
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
@@ -297,6 +302,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     router: StoreRouter<EK, ER>,
     schedulers: Schedulers<EK, ER>,
     apply_pool: FuturePool,
+    high_priority_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
     shutdown: Arc<AtomicBool>,
@@ -333,6 +339,11 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             .after_start(move || set_io_type(IoType::ForegroundWrite))
             .name_prefix("apply")
             .build_future_pool();
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .thread_count(1, 1, 1)
+            .after_start(move || set_io_type(IoType::ForegroundWrite))
+            .name_prefix("store-bg")
+            .build_future_pool();
         let global_stat = GlobalStoreStat::default();
         StorePollerBuilder {
             cfg,
@@ -342,6 +353,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             trans,
             router,
             apply_pool,
+            high_priority_pool,
             logger,
             schedulers,
             store_meta,
@@ -487,6 +499,7 @@ where
             engine: self.engine.clone(),
             tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
+            high_priority_pool: self.high_priority_pool.clone(),
             self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
@@ -506,7 +519,6 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
     pub tablet: Scheduler<tablet::Task<EK>>,
-    pub checkpoint: Scheduler<checkpoint::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
     pub cleanup: Scheduler<cleanup::Task>,
 
@@ -686,16 +698,19 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             .cleanup_worker
             .start("cleanup-worker", cleanup::Runner::new(compact_runner));
 
+<<<<<<< HEAD
         let checkpoint_scheduler = workers.checkpoint.start(
             "checkpoint-worker",
             checkpoint::Runner::new(self.logger.clone(), tablet_registry.clone()),
         );
+=======
+        let refresh_config_scheduler = workers.refresh_config_worker.scheduler();
+>>>>>>> 66aa8257fa (raftstore-v2: optimize prepare and commit merge (#14892))
 
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
             tablet: tablet_scheduler,
-            checkpoint: checkpoint_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
             cleanup: cleanup_worker_scheduler,
