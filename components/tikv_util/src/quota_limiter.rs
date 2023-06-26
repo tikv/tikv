@@ -230,7 +230,9 @@ impl QuotaLimiter {
     }
 
     pub fn total_read_bytes_consumed(&self) -> usize {
-        self.read_bandwidth_limiter.total_bytes_consumed()
+        self.get_limiters(true)
+            .read_bandwidth_limiter
+            .total_bytes_consumed()
     }
 
     pub fn auto_tune_enabled(&self) -> bool {
