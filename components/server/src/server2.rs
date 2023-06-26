@@ -891,6 +891,7 @@ where
             engines.engine.clone(),
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             servers.importer.clone(),
+            Some(self.router.as_ref().unwrap().store_meta().clone()),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 

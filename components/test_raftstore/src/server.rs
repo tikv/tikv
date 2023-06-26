@@ -447,6 +447,7 @@ impl ServerCluster {
             engine,
             LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
+            None,
         );
 
         // Create deadlock service.

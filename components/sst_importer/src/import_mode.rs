@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::HashSet,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -25,6 +26,9 @@ struct ImportModeSwitcherInner {
     timeout: Duration,
     next_check: Instant,
     metrics_fn: RocksDbMetricsFn,
+
+    // Only used in v2. If not None, some regions are in import mode.
+    import_mode_regions: Option<HashSet<u64>>,
 }
 
 impl ImportModeSwitcherInner {
@@ -84,11 +88,12 @@ impl ImportModeSwitcher {
             timeout,
             next_check: Instant::now() + timeout,
             metrics_fn: mf,
+            import_mode_regions: None,
         }));
         ImportModeSwitcher { inner, is_import }
     }
 
-    pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
+    pub fn start<E: KvEngine>(&self, executor: &Handle, db: E, multi_rocks: bool) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -101,8 +106,12 @@ impl ImportModeSwitcher {
                     if now >= switcher.next_check {
                         if switcher.is_import.load(Ordering::Acquire) {
                             let mf = switcher.metrics_fn;
-                            if let Err(e) = switcher.enter_normal_mode(&db, mf) {
-                                error!(?e; "failed to put TiKV back into normal mode");
+                            if !multi_rocks {
+                                if let Err(e) = switcher.enter_normal_mode(&db, mf) {
+                                    error!(?e; "failed to put TiKV back into normal mode");
+                                }
+                            } else {
+                                switcher.import_mode_regions.take();
                             }
                         }
                         switcher.next_check = now + switcher.timeout
@@ -118,6 +127,29 @@ impl ImportModeSwitcher {
             }
         };
         executor.spawn(timer_loop);
+    }
+
+    // return whether some regions are in import mode
+    pub fn region_import_mode(&self) -> bool {
+        self.inner.lock().unwrap().import_mode_regions.is_some()
+    }
+
+    // set import mode for some regions
+    pub fn set_import_mode_regions(&self, import_mode_regions: HashSet<u64>) {
+        self.inner.lock().unwrap().import_mode_regions = Some(import_mode_regions);
+    }
+
+    pub fn clear_import_mode_regions(&self) {
+        self.inner.lock().unwrap().import_mode_regions.take();
+    }
+
+    // Should only be used in v2.
+    pub fn region_in_import_mode(&self, region_id: u64) -> bool {
+        if let Some(ref import_mode_regions) = self.inner.lock().unwrap().import_mode_regions {
+            return import_mode_regions.contains(&region_id);
+        }
+
+        false
     }
 
     pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
@@ -311,7 +343,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(threads.handle(), db.clone());
+        switcher.start(threads.handle(), db.clone(), false);
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -349,7 +381,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(threads.handle(), db.clone());
+        switcher.start(threads.handle(), db.clone(), false);
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);

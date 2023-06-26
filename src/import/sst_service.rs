@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     convert::identity,
     future::Future,
     path::PathBuf,
@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use collections::HashSet;
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
@@ -24,7 +23,10 @@ use kvproto::{
         SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
+    metapb::Region,
 };
+use nom::AsBytes;
+use raftstore_v2::StoreMeta;
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, ConfigManager,
     Error, Result, SstImporter,
@@ -116,6 +118,8 @@ pub struct ImportSstService<E: Engine> {
     raft_entry_max_size: ReadableSize,
 
     writer: raft_writer::ThrottledTlsEngineWriter,
+
+    store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
 }
 
 struct RequestCollector {
@@ -296,6 +300,7 @@ impl<E: Engine> ImportSstService<E> {
         engine: E,
         tablets: LocalTablets<E::Local>,
         importer: Arc<SstImporter>,
+        store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
         let eng = Mutex::new(engine.clone());
@@ -341,6 +346,7 @@ impl<E: Engine> ImportSstService<E> {
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
             writer,
+            store_meta,
         }
     }
 
@@ -401,7 +407,11 @@ impl<E: Engine> ImportSstService<E> {
                 return Some(errorpb);
             }
         };
-        if self.importer.get_mode() == SwitchMode::Normal
+
+        if self.importer.region_in_import_mode(region_id) {
+            // This region is in import mode, don't do flow control
+            return None;
+        } else if self.importer.get_mode() == SwitchMode::Normal
             && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
         {
             match tablet.get_sst_key_ranges(CF_WRITE, 0) {
@@ -423,6 +433,7 @@ impl<E: Engine> ImportSstService<E> {
             errorpb.set_server_is_busy(server_is_busy_err);
             return Some(errorpb);
         }
+
         None
     }
 
@@ -656,6 +667,11 @@ macro_rules! impl_write {
     };
 }
 
+fn region_in_range(range: &KeyRange, region: &Region) -> bool {
+    range.start.as_bytes() <= region.get_start_key()
+        && (range.end.is_empty() || (!region.end_key.is_empty() && region.end_key <= range.end))
+}
+
 impl<E: Engine> ImportSst for ImportSstService<E> {
     fn switch_mode(
         &mut self,
@@ -671,17 +687,40 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
             }
 
-            if let LocalTablets::Singleton(tablet) = &self.tablets {
-                match req.get_mode() {
+            match &self.tablets {
+                LocalTablets::Singleton(tablet) => match req.get_mode() {
                     SwitchMode::Normal => self.importer.enter_normal_mode(tablet.clone(), mf),
                     SwitchMode::Import => self.importer.enter_import_mode(tablet.clone(), mf),
+                },
+                LocalTablets::Registry(_) => {
+                    if req.get_mode() == SwitchMode::Import {
+                        if self.importer.region_import_mode() {
+                            let mut covered_regions = HashSet::new();
+                            if req.has_range() {
+                                let range = req.get_range();
+                                let store_meta = self.store_meta.as_ref().unwrap().lock().unwrap();
+                                for (region_id, (region, _)) in &store_meta.regions {
+                                    if region_in_range(range, region) {
+                                        covered_regions.insert(*region_id);
+                                    }
+                                }
+                                self.importer.set_import_mode_regions(covered_regions);
+                                Ok(true)
+                            } else {
+                                Err(sst_importer::Error::Engine(
+                                    "partitioned-raft-kv only support import mode with range set"
+                                        .into(),
+                                ))
+                            }
+                        } else {
+                            Ok(false)
+                        }
+                    } else {
+                        // case SwitchMode::Normal
+                        self.importer.clear_import_mode_regions();
+                        Ok(true)
+                    }
                 }
-            } else if req.get_mode() != SwitchMode::Normal {
-                Err(sst_importer::Error::Engine(
-                    "partitioned-raft-kv doesn't support import mode".into(),
-                ))
-            } else {
-                Ok(false)
             }
         };
         match res {

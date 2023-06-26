@@ -2,7 +2,7 @@
 
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{self, BufReader, Read},
     ops::Bound,
@@ -215,6 +215,24 @@ impl SstImporter {
         })
     }
 
+    // return whether some regions are in import mode
+    pub fn region_import_mode(&self) -> bool {
+        self.switcher.region_import_mode()
+    }
+
+    pub fn set_import_mode_regions(&self, import_mode_regions: HashSet<u64>) {
+        self.switcher.set_import_mode_regions(import_mode_regions);
+    }
+
+    pub fn clear_import_mode_regions(&self) {
+        self.switcher.clear_import_mode_regions()
+    }
+
+    // Should only be used in v2.
+    pub fn region_in_import_mode(&self, region_id: u64) -> bool {
+        self.switcher.region_in_import_mode(region_id)
+    }
+
     fn calcualte_usage_mem(mem_ratio: f64) -> u64 {
         ((SysQuota::memory_limit_in_bytes() as f64) * mem_ratio) as u64
     }
@@ -232,7 +250,11 @@ impl SstImporter {
     }
 
     pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &Handle, db: E) {
-        self.switcher.start(executor, db);
+        self.switcher.start(executor, db, false);
+    }
+
+    pub fn start_switch_mode_check_v2<E: KvEngine>(&self, executor: &Handle, db: E) {
+        self.switcher.start(executor, db, true);
     }
 
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
