@@ -54,14 +54,14 @@ pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 pub trait GrpcBuilderFactory {
-    fn create_builder(&self, env: Arc<Environment>, health_service: HealthService)
-    -> ServerBuilder;
+    fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder>;
 }
 
 struct BuilderFactory<S: Tikv + Send + Clone + 'static> {
     kv_service: S,
     cfg: Arc<VersionTrack<Config>>,
     security_mgr: Arc<SecurityManager>,
+    health_service: HealthService,
 }
 
 impl<S> BuilderFactory<S>
@@ -72,11 +72,13 @@ where
         kv_service: S,
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
+        health_service: HealthService,
     ) -> BuilderFactory<S> {
         BuilderFactory {
             kv_service,
             cfg,
             security_mgr,
+            health_service,
         }
     }
 }
@@ -85,12 +87,8 @@ impl<S> GrpcBuilderFactory for BuilderFactory<S>
 where
     S: Tikv + Send + Clone + 'static,
 {
-    fn create_builder(
-        &self,
-        env: Arc<Environment>,
-        health_service: HealthService,
-    ) -> ServerBuilder {
-        let addr = SocketAddr::from_str(&self.cfg.value().addr).unwrap();
+    fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder> {
+        let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
         let ip: String = format!("{}", addr.ip());
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
@@ -108,8 +106,8 @@ where
         let sb = ServerBuilder::new(Arc::clone(&env))
             .channel_args(channel_args)
             .register_service(create_tikv(self.kv_service.clone()))
-            .register_service(create_health(health_service.clone()));
-        self.security_mgr.bind(sb, &ip, addr.port())
+            .register_service(create_health(self.health_service.clone()));
+        Ok(self.security_mgr.bind(sb, &ip, addr.port()))
     }
 }
 /// The TiKV server
@@ -187,7 +185,7 @@ where
         let lazy_worker = snap_worker.lazy_build("snap-handler");
         let raft_ext = storage.get_engine().raft_extension();
 
-        let proxy: Proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
+        let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
             store_id,
             storage,
@@ -206,13 +204,13 @@ where
             kv_service.clone(),
             cfg.clone(),
             security_mgr.clone(),
+            health_service.clone(),
         ));
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
-
-        let builder =
-            Either::Left(builder_factory.create_builder(env.clone(), health_service.clone()));
+        let builder = builder_factory.create_builder(env.clone())?;
+        let builder = Either::Left(builder);
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
@@ -298,11 +296,10 @@ where
     }
 
     fn start_grpc(&mut self) {
-        let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);
+        let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         grpc_server.start();
         self.builder_or_server = Some(Either::Right(grpc_server));
-
         self.health_service
             .set_serving_status("", ServingStatus::Serving);
     }
@@ -387,10 +384,8 @@ where
     /// Stops the TiKV server.
     pub fn stop(&mut self) -> Result<()> {
         self.snap_worker.stop();
-        if self.builder_or_server.is_some() {
-            if let Some(Either::Right(mut server)) = self.builder_or_server.take() {
-                server.shutdown();
-            }
+        if let Some(Either::Right(mut server)) = self.builder_or_server.take() {
+            server.shutdown();
         }
         if let Some(pool) = self.stats_pool.take() {
             pool.shutdown_background();
@@ -400,24 +395,33 @@ where
         Ok(())
     }
 
-    pub fn pause(&mut self) {
+    pub fn pause(&mut self) -> Result<()> {
         info!("pausing the grpc server");
+
+        // Prepare the builder for resume grpc server
+        // If the builder cannot be created, then pause will be skipped;
+        let builder = self.builder_factory.create_builder(self.env.clone())?;
+        let builder = Either::Left(builder);
         if let Some(Either::Right(server)) = self.builder_or_server.take() {
             drop(server);
         }
         self.health_service
             .set_serving_status("", ServingStatus::NotServing);
-        let builder = Either::Left(
-            self.builder_factory
-                .create_builder(self.env.clone(), self.health_service.clone()),
-        );
         self.builder_or_server = Some(builder);
+        Ok(())
     }
 
-    pub fn resume(&mut self) {
+    pub fn resume(&mut self) -> Result<()> {
         info!("resuming the grpc server");
-        self.build_and_bind().unwrap();
-        self.start_grpc();
+        if let Some(builder) = self.builder_or_server.as_ref() {
+            assert!(builder.is_left());
+            self.build_and_bind()?;
+            self.start_grpc();
+            return Ok(());
+        }
+        Err(Error::Other(box_err!(
+            "resuming the grpc server is skipped."
+        )))
     }
 
     // Return listening address, this may only be used for outer test

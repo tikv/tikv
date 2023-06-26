@@ -890,7 +890,7 @@ fn must_new_and_configure_cluster_mul(
     let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::default();
+    let mut ctx: Context = Context::default();
     ctx.set_region_id(region_id);
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(epoch);

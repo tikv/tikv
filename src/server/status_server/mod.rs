@@ -93,7 +93,7 @@ pub struct StatusServer<R> {
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
     resource_manager: Option<Arc<ResourceGroupManager>>,
-    service_event_tx: mpsc::Sender<ServiceEvent>,
+    service_event_sender: mpsc::Sender<ServiceEvent>,
 }
 
 impl<R> StatusServer<R>
@@ -107,7 +107,7 @@ where
         router: R,
         store_path: PathBuf,
         resource_manager: Option<Arc<ResourceGroupManager>>,
-        service_event_tx: mpsc::Sender<ServiceEvent>,
+        service_event_sender: mpsc::Sender<ServiceEvent>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -128,7 +128,7 @@ where
             security_config,
             store_path,
             resource_manager,
-            service_event_tx,
+            service_event_sender,
         })
     }
 
@@ -582,7 +582,7 @@ where
         let router = self.router.clone();
         let store_path = self.store_path.clone();
         let resource_manager = self.resource_manager.clone();
-        let service_event_tx = self.service_event_tx.clone();
+        let service_event_sender = self.service_event_sender.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -591,7 +591,7 @@ where
             let router = router.clone();
             let store_path = store_path.clone();
             let resource_manager = resource_manager.clone();
-            let service_event_tx = service_event_tx.clone();
+            let service_event_sender = service_event_sender.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -601,7 +601,7 @@ where
                     let router = router.clone();
                     let store_path = store_path.clone();
                     let resource_manager = resource_manager.clone();
-                    let service_event_tx = service_event_tx.clone();
+                    let service_event_sender = service_event_sender.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -657,10 +657,10 @@ where
                                 Self::get_engine_type(&cfg_controller).await
                             }
                             (Method::PUT, "/slow_score") => {
-                                Self::slow_score(router, service_event_tx).await
+                                Self::slow_score(router, service_event_sender).await
                             }
                             (Method::PUT, "/reset_slow_score") => {
-                                Self::reset_slow_score(router, service_event_tx).await
+                                Self::reset_slow_score(router, service_event_sender).await
                             }
                             // This interface is used for configuration file hosting scenarios,
                             // TiKV will not update configuration files, and this interface will
@@ -1054,7 +1054,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{env, io::Read, path::PathBuf, sync::Arc};
+    use std::{
+        env,
+        io::Read,
+        path::PathBuf,
+        sync::{mpsc, Arc},
+    };
 
     use collections::HashSet;
     use flate2::read::GzDecoder;
@@ -1091,6 +1096,7 @@ mod tests {
 
     #[test]
     fn test_status_service() {
+        let (sender, _) = mpsc::channel();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
@@ -1099,6 +1105,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1141,6 +1148,7 @@ mod tests {
     #[test]
     fn test_config_endpoint() {
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel(); 
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1148,6 +1156,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1187,6 +1196,7 @@ mod tests {
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1194,6 +1204,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1304,6 +1315,7 @@ mod tests {
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1311,6 +1323,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1349,6 +1362,7 @@ mod tests {
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1356,6 +1370,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1386,6 +1401,7 @@ mod tests {
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1393,6 +1409,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1491,6 +1508,7 @@ mod tests {
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1498,6 +1516,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1525,6 +1544,7 @@ mod tests {
     fn test_metrics() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1532,6 +1552,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1581,6 +1602,7 @@ mod tests {
     #[test]
     fn test_change_log_level() {
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1588,6 +1610,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1634,6 +1657,7 @@ mod tests {
         multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
         let cfgs = [TikvConfig::default(), multi_rocks_cfg];
         let resp_strs = ["raft-kv", "partitioned-raft-kv"];
+        let (sender, _) = mpsc::channel();
         for (cfg, resp_str) in IntoIterator::into_iter(cfgs).zip(resp_strs) {
             let temp_dir = tempfile::TempDir::new().unwrap();
             let mut status_server = StatusServer::new(
@@ -1643,6 +1667,7 @@ mod tests {
                 MockRouter,
                 temp_dir.path().to_path_buf(),
                 None,
+                sender.clone(),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
