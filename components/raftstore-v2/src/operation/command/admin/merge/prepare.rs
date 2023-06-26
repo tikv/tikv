@@ -31,6 +31,7 @@ use std::{mem, time::Duration};
 
 use collections::HashMap;
 use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
+use futures::channel::oneshot;
 use kvproto::{
     metapb::RegionEpoch,
     raft_cmdpb::{
@@ -607,7 +608,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     // Match v1::exec_prepare_merge.
-    pub fn apply_prepare_merge(
+    pub async fn apply_prepare_merge(
         &mut self,
         req: &AdminRequest,
         log_index: u64,
@@ -646,26 +647,34 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
 
         let _ = self.flush();
-        let tablet = self.tablet().clone();
-        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
-            slog_panic!(
-                self.logger,
-                "fails to create checkpoint object";
-                "error" => ?e
-            )
-        });
         let reg = self.tablet_registry();
         let path = merge_source_path(reg, self.region_id(), log_index);
         // We might be replaying this command.
         if !path.exists() {
-            checkpointer.create_at(&path, None, 0).unwrap_or_else(|e| {
-                slog_panic!(
-                    self.logger,
-                    "fails to create checkpoint";
-                    "path" => %path.display(),
-                    "error" => ?e
-                )
-            });
+            let tablet = self.tablet().clone();
+            let logger = self.logger.clone();
+            let (tx, rx) = oneshot::channel();
+            self.high_priority_pool()
+                .spawn(async move {
+                    let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
+                        slog_panic!(
+                            logger,
+                            "fails to create checkpoint object";
+                            "error" => ?e
+                        )
+                    });
+                    checkpointer.create_at(&path, None, 0).unwrap_or_else(|e| {
+                        slog_panic!(
+                            logger,
+                            "fails to create checkpoint";
+                            "path" => %path.display(),
+                            "error" => ?e
+                        )
+                    });
+                    tx.send(()).unwrap();
+                })
+                .unwrap();
+            rx.await.unwrap();
         }
 
         // Notes on the lifetime of this checkpoint:
