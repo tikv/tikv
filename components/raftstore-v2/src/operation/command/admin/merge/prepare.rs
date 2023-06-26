@@ -408,7 +408,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     if let Err(e) = mailbox.try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch))) {
                         error!(
                             logger,
-                            "send split request fail after pre-flush finished";
+                            "send PrepareMerge request failed after pre-flush finished";
                             "err" => ?e,
                         );
                     }

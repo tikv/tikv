@@ -184,7 +184,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 {
                                     error!(
                                         logger,
-                                        "send split request fail after pre-flush finished";
+                                        "send BatchSplit request failed after pre-flush finished";
                                         "err" => ?e,
                                     );
                                 }
