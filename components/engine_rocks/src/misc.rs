@@ -266,6 +266,7 @@ impl MiscExt for RocksEngine {
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         if let Some(n) = util::get_cf_num_files_at_level(self.as_inner(), handle, 0) {
+            println!("level 0 files {}", n);
             let options = self.as_inner().get_options_cf(handle);
             let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
             let compaction_trigger = options.get_level_zero_file_num_compaction_trigger() as u64;
