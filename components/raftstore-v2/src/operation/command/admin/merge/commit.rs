@@ -284,8 +284,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // If target caught up by snapshot, the source checkpoint hasn't been used.
             let source_path =
                 merge_source_path(&store_ctx.tablet_registry, source_region.get_id(), index);
-            assert!(source_path.exists());
-            self.record_tombstone_tablet_path(store_ctx, source_path, r.get_index());
+            if source_path.exists() {
+                self.record_tombstone_tablet_path(store_ctx, source_path, r.get_index());
+            }
             let _ = store_ctx.router.force_send(
                 source_region.get_id(),
                 PeerMsg::AckCommitMerge {
@@ -422,7 +423,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
 
-        let (tx, rx) = oneshot::channel();
         let logger = self.logger.clone();
         let region_id = self.region_id();
         let target_tablet = self.tablet().clone();
@@ -431,6 +431,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let reg_clone = reg.clone();
         let source_path_clone = source_path.clone();
         let source_region_clone = source_region.clone();
+        let (tx, rx) = oneshot::channel();
         self.high_priority_pool()
             .spawn(async move {
                 let source_ctx = TabletContext::new(&source_region_clone, None);
@@ -493,12 +494,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 tx.send(tablet).unwrap();
             })
             .unwrap();
+        let tablet = rx.await.unwrap();
 
         fail::fail_point!("after_merge_source_checkpoint", |_| Err(
             tikv_util::box_err!("fp")
         ));
 
-        let tablet = rx.await.unwrap();
         self.set_tablet(tablet.clone());
 
         let state = self.region_state_mut();
