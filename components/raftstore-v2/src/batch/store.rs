@@ -32,8 +32,10 @@ use raftstore::{
             GlobalStoreStat, LocalStoreStat,
         },
         local_metrics::RaftMetrics,
+        util::LatencyInspector,
         AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
-        SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteSenders,
+        SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteRouterContext,
+        WriteSenders,
     },
 };
 use resource_metering::CollectorRegHandle;
@@ -101,6 +103,9 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub store_stat: LocalStoreStat,
     pub sst_importer: Arc<SstImporter>,
     pub key_manager: Option<Arc<DataKeyManager>>,
+
+    /// Inspector for latency inspecting
+    pub pending_latency_inspect: Vec<LatencyInspector>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -273,6 +278,27 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
 
     fn end(&mut self, _batch: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
         let dur = self.timer.saturating_elapsed();
+
+        let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
+        for inspector in &mut latency_inspect {
+            inspector.record_store_process(dur);
+        }
+        // Use the valid size of async-ios for generating `writer_id` when the local
+        // senders haven't been updated by `poller.begin().
+        let writer_id = rand::random::<usize>()
+            % std::cmp::min(
+                self.poll_ctx.cfg.store_io_pool_size,
+                self.poll_ctx.write_senders().size(),
+            );
+        if let Err(err) = self.poll_ctx.write_senders()[writer_id].try_send(
+            raftstore::store::WriteMsg::LatencyInspect {
+                send_time: TiInstant::now(),
+                inspector: latency_inspect,
+            },
+            None,
+        ) {
+            warn!(self.poll_ctx.logger, "send latency inspecting to write workers failed"; "err" => ?err);
+        }
         self.poll_ctx
             .raft_metrics
             .process_ready
@@ -499,6 +525,7 @@ where
             store_stat: self.global_stat.local(),
             sst_importer: self.sst_importer.clone(),
             key_manager: self.key_manager.clone(),
+            pending_latency_inspect: vec![],
         };
         poll_ctx.update_ticks_timeout();
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
