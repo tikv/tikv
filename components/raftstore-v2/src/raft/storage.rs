@@ -247,6 +247,14 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         }
     }
+
+    // call `estimate` as persisted_applied is not guaranteed to be persisted
+    #[inline]
+    pub fn estimate_replay_count(&self) -> u64 {
+        let apply_index = self.apply_state().get_applied_index();
+        let persisted_apply = self.apply_trace.persisted_apply_index();
+        apply_index.saturating_sub(persisted_apply)
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> raft::Storage for Storage<EK, ER> {
