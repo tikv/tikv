@@ -310,6 +310,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 StoreMsg::WaitFlush { region_id, ch } => {
                     self.fsm.store.on_wait_flush(self.store_ctx, region_id, ch)
                 }
+                StoreMsg::LatencyInspect {
+                    send_time,
+                    inspector,
+                } => self.fsm.store.on_update_latency_inspectors(
+                    self.store_ctx,
+                    send_time,
+                    inspector,
+                ),
             }
         }
     }
