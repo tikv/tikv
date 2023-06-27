@@ -336,17 +336,6 @@ impl Dicts {
         let duration = now.duration_since(UNIX_EPOCH).unwrap();
         let creation_time = duration.as_secs();
 
-<<<<<<< HEAD
-        let (key_id, key) = generate_data_key(method);
-        let data_key = DataKey {
-            key,
-            method: compat(method),
-            creation_time,
-            was_exposed: false,
-            ..Default::default()
-        };
-        self.rotate_key(key_id, data_key, master_key)
-=======
         // Generate new data key.
         let generate_limit = 10;
         for _ in 0..generate_limit {
@@ -371,7 +360,6 @@ impl Dicts {
             return Ok(());
         }
         Err(box_err!("key id collides {} times!", generate_limit))
->>>>>>> a4a287980c (encryption: fix key collision handling (#14586))
     }
 }
 
