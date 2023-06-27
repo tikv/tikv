@@ -119,120 +119,71 @@ fn test_ingest_sst() {
 }
 
 #[test]
-fn test_ingest_sstxxx() {
+fn test_switch_mode_v2() {
     let mut cfg = TikvConfig::default();
     cfg.server.grpc_concurrency = 1;
     cfg.rocksdb.writecf.disable_auto_compactions = true;
+    cfg.raft_store.right_derive_when_split = true;
     // cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(2);
-    let (_cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
+    let (mut cluster, mut ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, &[122, 50]);
+    let region = cluster.get_region(&[122, 50]);
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+
+    let mut switch_req = SwitchModeRequest::default();
+    switch_req.set_mode(SwitchMode::Import);
+    let mut key_range = KeyRange::default();
+    key_range.set_start([50].to_vec());
+    switch_req.set_range(key_range);
+    let _ = import.switch_mode(&switch_req).unwrap();
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
 
-    let sst_path = temp_dir.path().join("test.sst");
-    let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    meta.set_cf_name("write".to_string());
-    // Set region id and epoch.
-    meta.set_region_id(ctx.get_region_id());
-    meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
+    let upload_and_ingest =
+        |sst_range, import: &ImportSstClient, path_name, ctx: &Context| -> IngestResponse {
+            let sst_path = temp_dir.path().join(path_name);
+            let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+            meta.set_cf_name("write".to_string());
+            // Set region id and epoch.
+            meta.set_region_id(ctx.get_region_id());
+            meta.set_region_epoch(ctx.get_region_epoch().clone());
+            send_upload_sst(&import, &meta, &data).unwrap();
+            let mut ingest = IngestRequest::default();
+            ingest.set_context(ctx.clone());
+            ingest.set_sst(meta);
+            import.ingest(&ingest).unwrap()
+        };
 
-    let sst_path = temp_dir.path().join("test2.sst");
-    let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    meta.set_cf_name("write".to_string());
-    // Set region id and epoch.
-    meta.set_region_id(ctx.get_region_id());
-    meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
+    // The first one will be ingested at the bottom level. And as the following ssts
+    // are overlapped with the previous one, they will all be ingested at level 0.
+    for i in 0..10 {
+        let resp = upload_and_ingest((50, 100), &import, format!("test{}.sst", i), &ctx);
+        assert!(!resp.has_error());
+    }
 
-    let sst_path = temp_dir.path().join("test3.sst");
-    let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    meta.set_cf_name("write".to_string());
-    // Set region id and epoch.
-    meta.set_region_id(ctx.get_region_id());
-    meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
+    let region = cluster.get_region(&[20]);
+    let mut ctx2 = ctx.clone();
+    ctx2.set_region_id(region.get_id());
+    ctx2.set_region_epoch(region.get_region_epoch().clone());
+    ctx2.set_peer(region.get_peers()[0].clone());
+    for i in 0..6 {
+        let resp = upload_and_ingest((0, 49), &import, format!("test-{}.sst", i), &ctx2);
+        if i < 5 {
+            assert!(!resp.has_error());
+        } else {
+            assert!(resp.get_error().has_server_is_busy());
+        }
+    }
 
-    let sst_path = temp_dir.path().join("test4.sst");
-    let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    meta.set_cf_name("write".to_string());
-    // Set region id and epoch.
-    meta.set_region_id(ctx.get_region_id());
-    meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
+    // switch back to normal, so region 1 starts to reject
+    let mut switch_req = SwitchModeRequest::default();
+    switch_req.set_mode(SwitchMode::Normal);
+    let _ = import.switch_mode(&switch_req).unwrap();
 
-    let sst_path = temp_dir.path().join("test5.sst");
-    let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    meta.set_cf_name("write".to_string());
-    // Set region id and epoch.
-    meta.set_region_id(ctx.get_region_id());
-    meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-
-    let sst_path = temp_dir.path().join("test5.sst");
-    let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    meta.set_cf_name("write".to_string());
-    // Set region id and epoch.
-    meta.set_region_id(ctx.get_region_id());
-    meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-
-    let sst_path = temp_dir.path().join("test6.sst");
-    let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    meta.set_cf_name("write".to_string());
-    // Set region id and epoch.
-    meta.set_region_id(ctx.get_region_id());
-    meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-
-    let sst_path = temp_dir.path().join("test7.sst");
-    let sst_range = (0, 100);
-    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    meta.set_cf_name("write".to_string());
-    // Set region id and epoch.
-    meta.set_region_id(ctx.get_region_id());
-    meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-
-    println!("{:?}", resp);
+    let resp = upload_and_ingest((50, 100), &import, "test10".to_string(), &ctx);
+    assert!(resp.get_error().has_server_is_busy());
 }
 
 #[test]

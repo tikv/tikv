@@ -694,7 +694,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 },
                 LocalTablets::Registry(_) => {
                     if req.get_mode() == SwitchMode::Import {
-                        if self.importer.region_import_mode() {
+                        if !self.importer.region_import_mode() {
                             let mut covered_regions = HashSet::new();
                             if req.has_range() {
                                 let range = req.get_range();
