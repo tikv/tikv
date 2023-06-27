@@ -344,6 +344,7 @@ impl ApplyTrace {
 
     #[inline]
     pub fn should_persist(&self) -> bool {
+        fail_point!("should_persist_apply_trace", |_| true);
         self.try_persist
     }
 }

@@ -76,9 +76,6 @@ pub struct Apply<EK: KvEngine, R> {
     tablet_scheduler: Scheduler<TabletTask<EK>>,
     high_priority_pool: FuturePool,
 
-    // Whether to use the delete range API instead of deleting one by one.
-    use_delete_range: bool,
-
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
     pub(crate) buckets: Option<BucketStat>,
@@ -112,6 +109,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         assert_ne!(applied_index, 0, "{}", SlogFormat(&logger));
         let tablet = remote_tablet.latest().unwrap().clone();
         let perf_context = EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply);
+        assert!(
+            !cfg.use_delete_range,
+            "v2 doesn't support RocksDB delete range"
+        );
         Apply {
             peer,
             tablet,
@@ -137,7 +138,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             sst_importer,
             tablet_scheduler,
             high_priority_pool,
-            use_delete_range: cfg.use_delete_range,
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,
@@ -281,6 +281,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
     }
 
+    /// Caveats: This field must be consistent with the state of memtable. If
+    /// modified is advanced when memtable is empty, the admin flushed can never
+    /// be advanced. If modified is not advanced when memtable is written, the
+    /// corresponding Raft entry may be deleted before the change is fully
+    /// persisted (flushed).
     #[inline]
     pub fn modifications_mut(&mut self) -> &mut DataTrace {
         &mut self.modifications
@@ -343,10 +348,5 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn tablet_scheduler(&self) -> &Scheduler<TabletTask<EK>> {
         &self.tablet_scheduler
-    }
-
-    #[inline]
-    pub fn use_delete_range(&self) -> bool {
-        self.use_delete_range
     }
 }

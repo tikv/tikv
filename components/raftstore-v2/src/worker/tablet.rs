@@ -67,8 +67,7 @@ pub enum Task<EK> {
         cf: CfName,
         start_key: Box<[u8]>,
         end_key: Box<[u8]>,
-        use_delete_range: bool,
-        cb: Box<dyn FnOnce() + Send>,
+        cb: Box<dyn FnOnce(bool) + Send>,
     },
     // Gc snapshot
     SnapGc(Box<[TabletSnapKey]>),
@@ -217,8 +216,7 @@ impl<EK> Task<EK> {
         cf: CfName,
         start_key: Box<[u8]>,
         end_key: Box<[u8]>,
-        use_delete_range: bool,
-        cb: Box<dyn FnOnce() + Send>,
+        cb: Box<dyn FnOnce(bool) + Send>,
     ) -> Self {
         Task::DeleteRange {
             region_id,
@@ -226,7 +224,6 @@ impl<EK> Task<EK> {
             cf,
             start_key,
             end_key,
-            use_delete_range,
             cb,
         }
     }
@@ -521,12 +518,10 @@ impl<EK: KvEngine> Runner<EK> {
     }
 
     fn delete_range(&self, delete_range: Task<EK>) {
-        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, use_delete_range, cb } = delete_range else {
+        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, cb } = delete_range else {
             slog_panic!(self.logger, "unexpected task"; "task" => format!("{}", delete_range))
         };
 
-        let mut wopts = WriteOptions::default();
-        wopts.set_disable_wal(true);
         let range = vec![Range::new(&start_key, &end_key)];
         let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
             slog_panic!(
@@ -539,17 +534,15 @@ impl<EK: KvEngine> Runner<EK> {
                 "error" => ?e,
             )
         };
-        tablet
+        let mut wopts = WriteOptions::default();
+        wopts.set_disable_wal(true);
+        let mut written = tablet
             .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
             .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
-        let strategy = if use_delete_range {
-            DeleteStrategy::DeleteByRange
-        } else {
-            DeleteStrategy::DeleteByKey
-        };
+        let strategy = DeleteStrategy::DeleteByKey;
         // Delete all remaining keys.
-        tablet
+        written |= tablet
             .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
             .unwrap_or_else(move |e| fail_f(e, strategy));
 
@@ -559,7 +552,7 @@ impl<EK: KvEngine> Runner<EK> {
         //     .unwrap_or_else(move |e| fail_f(e,
         // DeleteStrategy::DeleteBlobs));
 
-        cb();
+        cb(written);
     }
 }
 

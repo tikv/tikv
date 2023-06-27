@@ -590,9 +590,10 @@ where
                 DeleteStrategy::DeleteFiles,
                 &df_ranges,
             )
-            .unwrap_or_else(|e| {
+            .map_err(|e| {
                 error!("failed to delete files in range"; "err" => %e);
-            });
+            })
+            .unwrap();
         (start_key, end_key)
     }
 
@@ -658,9 +659,10 @@ where
                 DeleteStrategy::DeleteFiles,
                 &ranges,
             )
-            .unwrap_or_else(|e| {
+            .map_err(|e| {
                 error!("failed to delete files in range"; "err" => %e);
-            });
+            })
+            .unwrap();
         if let Err(e) = self.delete_all_in_range(&ranges) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;
@@ -671,9 +673,10 @@ where
                 DeleteStrategy::DeleteBlobs,
                 &ranges,
             )
-            .unwrap_or_else(|e| {
+            .map_err(|e| {
                 error!("failed to delete blobs in range"; "err" => %e);
-            });
+            })
+            .unwrap();
 
         for (_, key, _) in region_ranges {
             assert!(
