@@ -115,7 +115,7 @@ pub struct ForWriteCore {
     core: Arc<BlockMutex<FileCore>>,
 
     rel_path: PathBuf,
-    ref_counter: Arc<AtomicU8>,
+    file_writer_count: Arc<AtomicU8>,
     done_result: Option<std::result::Result<(), String>>,
 }
 
@@ -125,7 +125,7 @@ pub struct ForRead {
 
     myfile: Option<OsFile>,
     read: usize,
-    ref_counter: Arc<AtomicU8>,
+    file_reader_count: Arc<AtomicU8>,
 }
 
 #[derive(Default)]
@@ -174,7 +174,7 @@ impl TempFilePool {
         }
         let fr = ForWriteCore {
             core: Arc::clone(&f.content),
-            ref_counter: Arc::clone(&f.writer_count),
+            file_writer_count: Arc::clone(&f.writer_count),
             rel_path: p.to_owned(),
             done_result: None,
         };
@@ -234,10 +234,11 @@ impl TempFilePool {
         } else {
             None
         };
+        f.reader_count.fetch_add(1, Ordering::SeqCst);
         Ok(ForRead {
             content: Arc::clone(&f.content),
             myfile,
-            ref_counter: Arc::clone(&f.reader_count),
+            file_reader_count: Arc::clone(&f.reader_count),
             read: 0,
         })
     }
@@ -356,7 +357,7 @@ impl ForWriteCore {
         // fails, and once it failed, it is possible to lose data, just store and always
         // return the error, so the task eventually fail.
         self.done_result = Some(res.as_ref().map_err(|err| err.to_string()).copied());
-        self.ref_counter.fetch_sub(1, Ordering::SeqCst);
+        self.file_writer_count.fetch_sub(1, Ordering::SeqCst);
         res
     }
 }
@@ -506,14 +507,14 @@ impl Drop for FileCore {
 impl Drop for ForWriteCore {
     fn drop(&mut self) {
         if self.done_result.is_none() {
-            self.ref_counter.fetch_sub(1, Ordering::SeqCst);
+            self.file_writer_count.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }
 
 impl Drop for ForRead {
     fn drop(&mut self) {
-        self.ref_counter.fetch_sub(1, Ordering::SeqCst);
+        self.file_reader_count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -916,6 +917,8 @@ mod test {
             assert_eq!(content_to_write.join(&b""[..]), buf.as_slice());
             buf.clear();
         }
+        pool.open_for_write(file_name.as_ref())
+            .expect("should be able to write again once all reader exits");
     }
 
     fn assert_dir_empty(p: &Path) {

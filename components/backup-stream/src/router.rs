@@ -35,6 +35,7 @@ use tikv_util::{
     codec::stream_event::EventEncoder,
     config::ReadableSize,
     error, info,
+    sys::SysQuota,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
@@ -453,12 +454,18 @@ impl RouterInner {
     }
 
     fn tempfile_config_for_task(&self, task: &StreamTask) -> tempfiles::Config {
+        let mem_quota = SysQuota::memory_limit_in_bytes();
+        // Don't use too many memory.
+        let temp_file_quota = mem_quota / 16;
+        // 2x of the max pending bytes. The extra buffer make us easier to keep all
+        // files in memory.
+        // Also note the scope of this config is per-task. That means, when there are
+        // multi tasks, we may need to share the pool over tasks. That is, we may need
+        // to move the compression options into the argument of `open_for_write`.
+        let preferred_cache_size = self.temp_file_size_limit.load(Ordering::SeqCst) as u64 * 2;
+        let cache_size = AtomicUsize::new(temp_file_quota.min(preferred_cache_size) as usize);
         tempfiles::Config {
-            // 2x of the max pending bytes. The extra buffer make us easier to keep all files in
-            // memory.
-            cache_size: AtomicUsize::new(
-                self.temp_file_size_limit.load(Ordering::Acquire) as usize * 2,
-            ),
+            cache_size,
             swap_files: self.prefix.join(task.info.get_name()),
             content_compression: task.info.get_compression_type(),
             minimal_swap_out_file_size: ReadableSize::mb(1).0 as _,
