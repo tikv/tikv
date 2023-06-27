@@ -1026,13 +1026,11 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .max_blocking_threads(thread_count * 8)
         .worker_threads(thread_count)
         .enable_io()
-        .enable_time()
-        .after_start_wrapper(|| {
-            tikv_alloc::add_thread_memory_accessor();
-        })
-        .before_stop_wrapper(|| {
-            tikv_alloc::remove_thread_memory_accessor();
-        })
+        .enable_time().with_sys_and_custom_hooks(|| {
+        tikv_alloc::add_thread_memory_accessor();
+    }, || {
+        tikv_alloc::remove_thread_memory_accessor();
+    })
         .build()
 }
 
