@@ -586,8 +586,7 @@ mod tests {
         block_on(
             tokio::runtime::Builder::new_multi_thread()
                 .thread_name(thread_name)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap()
                 .spawn(async move { get_name_fn() }),
