@@ -462,7 +462,7 @@ impl RouterInner {
         // Also note the scope of this config is per-task. That means, when there are
         // multi tasks, we may need to share the pool over tasks. That is, we may need
         // to move the compression options into the argument of `open_for_write`.
-        let preferred_cache_size = self.temp_file_size_limit.load(Ordering::SeqCst) as u64 * 2;
+        let preferred_cache_size = self.temp_file_size_limit.load(Ordering::SeqCst) * 2;
         let cache_size = AtomicUsize::new(temp_file_quota.min(preferred_cache_size) as usize);
         tempfiles::Config {
             cache_size,
