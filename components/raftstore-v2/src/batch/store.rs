@@ -627,11 +627,10 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let logger = self.logger.clone();
             let router = router.clone();
             let registry = tablet_registry.clone();
-            let max_rate = if cfg.value().max_manual_flush_rate < MIN_MANUAL_FLUSH_RATE {
-                MIN_MANUAL_FLUSH_RATE
-            } else {
-                cfg.value().max_manual_flush_rate
-            };
+            let base_max_rate = cfg
+                .value()
+                .max_manual_flush_rate
+                .clamp(MIN_MANUAL_FLUSH_RATE, f64::INFINITY);
             let mut last_flush = (
                 EK::get_accumulated_flush_count().unwrap(),
                 TiInstant::now_coarse(),
@@ -647,23 +646,19 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                         Ok(regions) => regions,
                     }
                 };
+                let mut max_rate = base_max_rate;
+                // Lift up max rate if the background flush rate is high.
                 let flush_count = EK::get_accumulated_flush_count().unwrap();
                 let now = TiInstant::now_coarse();
-                // If the background flush rate is high, we should speed up manual flush too.
-                let total_flush_rate = (flush_count - last_flush.0) as f64
-                    / now.saturating_duration_since(last_flush.1).as_secs_f64();
-                let dynamic_max_rate = max_rate.clamp(total_flush_rate, f64::MAX);
+                let duration = now.saturating_duration_since(last_flush.1).as_secs_f64();
+                if duration > 5.0 {
+                    let total_flush_rate = (flush_count - last_flush.0) as f64 / duration;
+                    max_rate = max_rate.clamp(total_flush_rate, f64::INFINITY);
+                }
                 last_flush = (flush_count, now);
                 // Try to finish flush just in time.
                 let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
-                slog::info!(
-                    logger,
-                    "debug_manual_flush";
-                    "flush_rate" => total_flush_rate,
-                    "dynamic_max_rate" => dynamic_max_rate,
-                    "rate" => rate
-                );
-                let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, dynamic_max_rate);
+                let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, max_rate);
                 // Return early if there're too many regions. Otherwise even if we manage to
                 // compact regions, the space can't be reclaimed in time.
                 let mut to_flush = (rate * MAX_MANUAL_FLUSH_PERIOD.as_secs_f64()) as usize;
