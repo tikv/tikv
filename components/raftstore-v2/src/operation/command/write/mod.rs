@@ -340,6 +340,7 @@ mod test {
     use tikv_util::{
         store::new_peer,
         worker::{dummy_scheduler, Worker},
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
 
     use crate::{
@@ -387,13 +388,13 @@ mod test {
 
         let snap_mgr = TabletSnapManager::new(tmp_dir.path(), None).unwrap();
         let tablet_worker = Worker::new("tablet-worker");
-        let checkpoint_scheduler = tablet_worker.start(
+        let tablet_scheduler = tablet_worker.start(
             "tablet-worker",
             tablet::Runner::new(reg.clone(), importer.clone(), snap_mgr, logger.clone()),
         );
         tikv_util::defer!(tablet_worker.stop());
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
 
-        let (dummy_scheduler, _) = dummy_scheduler();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -413,8 +414,8 @@ mod test {
             None,
             importer,
             host,
-            dummy_scheduler,
-            checkpoint_scheduler,
+            tablet_scheduler,
+            high_priority_pool,
             logger.clone(),
         );
 
