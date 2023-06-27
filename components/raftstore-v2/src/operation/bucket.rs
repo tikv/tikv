@@ -11,6 +11,12 @@ use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
 };
+
+use kvproto::{
+    metapb::PeerRole,
+    raft_cmdpb::{AdminCmdType, RaftCmdRequest},
+    raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
+};
 use slog::{error, warn};
 
 use crate::{
@@ -264,6 +270,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Some(apply_scheduler) = self.apply_scheduler() {
             apply_scheduler.send(ApplyTask::RefreshBucketStat(region_buckets.meta.clone()));
         }
+        let version= region_buckets.meta.version;
+         // Notify followers to flush their relevant memtables
+         let peers = self.region().get_peers().to_vec();
+         for p in peers {
+            if p == *self.peer()|| p.is_witness
+            {
+                continue;
+            }
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(region_id);
+            msg.set_from_peer(self.peer().clone());
+            msg.set_to_peer(p.clone());
+            msg.set_region_epoch(self.region().get_region_epoch().clone());
+            let extra_msg = msg.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
+            let mut refresh_buckets = RefreshBuckets::new();
+            refresh_buckets.set_version(version);
+            extra_msg.set_refresh_buckets(refresh_buckets);
+            self.send_raft_message(store_ctx, msg);
+         }
+
     }
 
     #[inline]
