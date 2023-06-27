@@ -229,6 +229,12 @@ impl QuotaLimiter {
         Duration::from_nanos(self.max_delay_duration.load(Ordering::Relaxed))
     }
 
+    pub fn total_read_bytes_consumed(&self) -> usize {
+        self.get_limiters(true)
+            .read_bandwidth_limiter
+            .total_bytes_consumed()
+    }
+
     pub fn auto_tune_enabled(&self) -> bool {
         self.enable_auto_tune.load(Ordering::Relaxed)
     }
