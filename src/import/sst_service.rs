@@ -624,7 +624,7 @@ fn check_local_region_stale(
             // we just keep it here for now.
 
             // when local region epoch is stale, client can retry write later
-            if is_epoch_stale(&local_region_epoch, &epoch) {
+            if is_epoch_stale(&local_region_epoch, epoch) {
                 return Err(Error::Engine(
                     format!("request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later",
                             region_id, local_region_epoch, epoch).into(),
@@ -632,7 +632,7 @@ fn check_local_region_stale(
             }
             // when local region epoch is ahead, client need to rescan region from PD to get
             // latest region later
-            if is_epoch_stale(&epoch, &local_region_epoch) {
+            if is_epoch_stale(epoch, &local_region_epoch) {
                 return Err(Error::Engine(
                     format!("request region {} is staler than local region, local epoch {:?}, request epoch {:?}, please rescan region later",
                             region_id, local_region_epoch, epoch).into(),
@@ -1596,7 +1596,7 @@ mod test {
                         .lock()
                         .unwrap()
                         .get(&region_id)
-                        .map(|region_ref| region_ref.clone().into()),
+                        .map(|region_ref| region_ref.clone()),
                 );
                 Ok(())
             }
@@ -1612,7 +1612,7 @@ mod test {
             ..Default::default()
         };
         // test for region not found
-        let result = check_local_region_stale(1, &req_epoch.clone(), mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
         assert!(result.is_err());
         // check error message contains "rescan region later", client will match this
         // string pattern
@@ -1638,8 +1638,8 @@ mod test {
             .unwrap()
             .insert(1, local_region_info.clone());
         // test the local region epoch is same as request
-        let result = check_local_region_stale(1, &req_epoch.clone(), mock_provider.clone());
-        assert!(result.is_ok());
+        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        result.unwrap();
 
         // test the local region epoch is ahead of request
         local_region_info
@@ -1653,7 +1653,7 @@ mod test {
             .lock()
             .unwrap()
             .insert(1, local_region_info.clone());
-        let result = check_local_region_stale(1, &req_epoch.clone(), mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
         assert!(result.is_err());
         // check error message contains "rescan region later", client will match this
         // string pattern
@@ -1665,12 +1665,12 @@ mod test {
         );
 
         req_epoch.conf_ver = 11;
-        let result = check_local_region_stale(1, &req_epoch.clone(), mock_provider.clone());
-        assert!(result.is_ok());
+        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        result.unwrap();
 
         // test the local region epoch is staler than request
         req_epoch.version = 12;
-        let result = check_local_region_stale(1, &req_epoch.clone(), mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, mock_provider);
         assert!(result.is_err());
         // check error message contains "retry write later", client will match this
         // string pattern

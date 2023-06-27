@@ -823,10 +823,6 @@ where
 {
     RaftMessage(InspectedRaftMessage),
 
-    ValidateSstResult {
-        invalid_ssts: Vec<SstMeta>,
-    },
-
     // Clear region size and keys for all regions in the range, so we can force them to
     // re-calculate their size later.
     ClearRegionSizeInRange {

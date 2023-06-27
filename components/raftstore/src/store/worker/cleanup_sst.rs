@@ -14,14 +14,12 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 pub enum Task {
     DeleteSst { ssts: Vec<SstMeta> },
-    ValidateSst { ssts: Vec<SstMeta> },
 }
 
 impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Task::DeleteSst { ref ssts } => write!(f, "Delete {} ssts", ssts.len()),
-            Task::ValidateSst { ref ssts } => write!(f, "Validate {} ssts", ssts.len()),
         }
     }
 }
@@ -92,43 +90,6 @@ where
             format!("failed to load full sst meta from disk for {:?} and there isn't extra information provided: {err}", sst.get_uuid()).into()
         )
     }
-
-    /// Validates whether the SST is stale or not.
-    fn handle_validate_sst(&self, ssts: Vec<SstMeta>) {
-        let store_id = self.store_id;
-        let mut invalid_ssts = Vec::new();
-        for sst in ssts {
-            match self.get_region_by_meta(&sst) {
-                Ok(r) => {
-                    // The region id may or may not be the same as the
-                    // SST file, but it doesn't matter, because the
-                    // epoch of a range will not decrease anyway.
-                    if is_epoch_stale(r.get_region_epoch(), sst.get_region_epoch()) {
-                        // Region has not been updated.
-                        continue;
-                    }
-                    if r.get_id() == sst.get_region_id()
-                        && r.get_peers().iter().any(|p| p.get_store_id() == store_id)
-                    {
-                        // The SST still belongs to this store.
-                        continue;
-                    }
-                    invalid_ssts.push(sst);
-                }
-                Err(e) => {
-                    error!("get region failed"; "err" => %e);
-                }
-            }
-        }
-
-        // We need to send back the result to check for the stale
-        // peer, which may ingest the stale SST before it is
-        // destroyed.
-        let msg = StoreMsg::ValidateSstResult { invalid_ssts };
-        if let Err(e) = self.store_router.send(msg) {
-            error!(%e; "send validate sst result failed");
-        }
-    }
 }
 
 impl<EK, C, S> Runnable for Runner<EK, C, S>
@@ -143,9 +104,6 @@ where
         match task {
             Task::DeleteSst { ssts } => {
                 self.handle_delete_sst(ssts);
-            }
-            Task::ValidateSst { ssts } => {
-                self.handle_validate_sst(ssts);
             }
         }
     }

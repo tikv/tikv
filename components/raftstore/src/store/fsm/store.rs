@@ -787,9 +787,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
-                StoreMsg::ValidateSstResult { invalid_ssts } => {
-                    self.on_validate_sst_result(invalid_ssts)
-                }
                 StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
@@ -2701,42 +2698,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
-    fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
-        if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
-            return;
-        }
-        // A stale peer can still ingest a stale Sst before it is
-        // destroyed. We need to make sure that no stale peer exists.
-        let mut delete_ssts = Vec::new();
-        {
-            let meta = self.ctx.store_meta.lock().unwrap();
-            for sst in ssts {
-                if !meta.regions.contains_key(&sst.get_region_id()) {
-                    delete_ssts.push(sst);
-                }
-            }
-        }
-        if delete_ssts.is_empty() {
-            return;
-        }
-
-        let task = CleanupSstTask::DeleteSst { ssts: delete_ssts };
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::CleanupSst(task))
-        {
-            error!(
-                "schedule to delete ssts failed";
-                "store_id" => self.fsm.store.id,
-                "err" => ?e,
-            );
-        }
-    }
-
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
-        let mut validate_ssts = Vec::new();
 
         let ssts = box_try!(self.ctx.importer.list_ssts());
         if ssts.is_empty() {
@@ -2752,8 +2715,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         delete_ssts.push(sst);
                     }
                 } else {
-                    // If the peer doesn't exist, we need to validate the SST through PD.
-                    validate_ssts.push(sst);
+                    // The write RPC of import sst service have make sure the region do exist at the
+                    // write time, and now the region is not found, sst can be
+                    // deleted because it won't be used by ingest in future.
+                    delete_ssts.push(sst);
                 }
             }
         }
@@ -2769,27 +2734,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     "schedule to delete ssts failed";
                     "store_id" => self.fsm.store.id,
                     "err" => ?e
-                );
-            }
-        }
-
-        // When there is an import job running, the region which this sst belongs may
-        // has not been split from the origin region because the apply thread is so busy
-        // that it can not apply SplitRequest as soon as possible. So we can not
-        // delete this sst file.
-        if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
-            let task = CleanupSstTask::ValidateSst {
-                ssts: validate_ssts,
-            };
-            if let Err(e) = self
-                .ctx
-                .cleanup_scheduler
-                .schedule(CleanupTask::CleanupSst(task))
-            {
-                error!(
-                   "schedule to validate ssts failed";
-                   "store_id" => self.fsm.store.id,
-                   "err" => ?e,
                 );
             }
         }
