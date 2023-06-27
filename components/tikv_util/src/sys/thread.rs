@@ -373,11 +373,14 @@ pub trait StdThreadBuildWrapper {
 }
 
 pub trait ThreadBuildWrapper {
-    fn with_sys_and_custom_hooks(&mut self, start: F1, end: F2) -> &mut Self
+    /// Register all system hooks along with a custom hook pair.
+    fn with_sys_and_custom_hooks<F1, F2>(&mut self, after_start: F1, before_end: F2) -> &mut Self
     where
         F1: Fn() + Send + Sync + 'static,
         F2: Fn() + Send + Sync + 'static;
 
+    /// Register some generic hooks like memory tracing or thread lifetime
+    /// tracing.
     fn with_sys_hooks(&mut self) -> &mut Self {
         self.with_sys_and_custom_hooks(|| {}, || {})
     }
@@ -433,37 +436,39 @@ impl StdThreadBuildWrapper for std::thread::Builder {
 }
 
 impl ThreadBuildWrapper for tokio::runtime::Builder {
-    fn with_sys_and_custom_hooks(&mut self, start: F1, end: F2) -> &mut Self
+    fn with_sys_and_custom_hooks<F1, F2>(&mut self, start: F1, end: F2) -> &mut Self
     where
         F1: Fn() + Send + Sync + 'static,
         F2: Fn() + Send + Sync + 'static,
     {
-        self.on_thread_start(|| {
+        #[allow(clippy::disallowed_methods)]
+        self.on_thread_start(move || {
             call_thread_start_hooks();
             add_thread_name_to_map();
             start();
         })
-        .on_thread_stop(|| {
-            remove_thread_name_from_map();
+        .on_thread_stop(move || {
             end();
+            remove_thread_name_from_map();
         })
     }
 }
 
 impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
-    fn with_sys_and_custom_hooks(&mut self, start: F1, end: F2) -> &mut Self
+    fn with_sys_and_custom_hooks<F1, F2>(&mut self, start: F1, end: F2) -> &mut Self
     where
         F1: Fn() + Send + Sync + 'static,
         F2: Fn() + Send + Sync + 'static,
     {
-        self.after_start(|| {
+        #[allow(clippy::disallowed_methods)]
+        self.after_start(move |_| {
             call_thread_start_hooks();
             add_thread_name_to_map();
             start();
         })
-        .before_stop(|| {
-            remove_thread_name_from_map();
+        .before_stop(move |_| {
             end();
+            remove_thread_name_from_map();
         })
     }
 }
