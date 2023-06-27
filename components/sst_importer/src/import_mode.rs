@@ -93,7 +93,9 @@ impl ImportModeSwitcher {
         ImportModeSwitcher { inner, is_import }
     }
 
-    pub fn start<E: KvEngine>(&self, executor: &Handle, db: E, multi_rocks: bool) {
+    // Periodically perform timeout check to change import mode back to normal mode.
+    // db is None iff the current cluster is multi-rocksdb.
+    pub fn start<E: KvEngine>(&self, executor: &Handle, db: Option<E>) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -104,15 +106,15 @@ impl ImportModeSwitcher {
                     let mut switcher = switcher.lock().unwrap();
                     let now = Instant::now();
                     if now >= switcher.next_check {
-                        if switcher.is_import.load(Ordering::Acquire) {
-                            let mf = switcher.metrics_fn;
-                            if !multi_rocks {
-                                if let Err(e) = switcher.enter_normal_mode(&db, mf) {
+                        if let Some(ref db) = db {
+                            if switcher.is_import.load(Ordering::Acquire) {
+                                let mf = switcher.metrics_fn;
+                                if let Err(e) = switcher.enter_normal_mode(db, mf) {
                                     error!(?e; "failed to put TiKV back into normal mode");
                                 }
-                            } else {
-                                switcher.import_mode_regions.take();
                             }
+                        } else {
+                            switcher.import_mode_regions.take();
                         }
                         switcher.next_check = now + switcher.timeout
                     }
@@ -274,6 +276,7 @@ impl ImportModeCfOptions {
 mod tests {
     use std::thread;
 
+    use engine_rocks::RocksEngine;
     use engine_traits::{KvEngine, CF_DEFAULT};
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
@@ -343,7 +346,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(threads.handle(), db.clone(), false);
+        switcher.start(threads.handle(), Some(db.clone()));
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -381,7 +384,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(threads.handle(), db.clone(), false);
+        switcher.start(threads.handle(), Some(db.clone()));
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -390,6 +393,35 @@ mod tests {
         threads.block_on(tokio::task::yield_now());
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
+    }
+
+    #[test]
+    fn test_import_mode_timeout_v2() {
+        let cfg = Config {
+            import_mode_timeout: ReadableDuration::millis(300),
+            ..Config::default()
+        };
+
+        let threads = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let switcher = ImportModeSwitcher::new(&cfg);
+        let mut import_mode_regions = std::collections::HashSet::new();
+        import_mode_regions.insert(1);
+        import_mode_regions.insert(2);
+        switcher.set_import_mode_regions(import_mode_regions);
+        assert!(switcher.region_in_import_mode(1));
+        assert!(switcher.region_in_import_mode(2));
+
+        switcher.start::<RocksEngine>(threads.handle(), None);
+
+        thread::sleep(Duration::from_secs(1));
+        threads.block_on(tokio::task::yield_now());
+
+        assert!(!switcher.region_in_import_mode(1));
+        assert!(!switcher.region_in_import_mode(2));
     }
 
     #[test]

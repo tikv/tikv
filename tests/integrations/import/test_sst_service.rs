@@ -149,7 +149,7 @@ fn test_switch_mode_v2() {
             // Set region id and epoch.
             meta.set_region_id(ctx.get_region_id());
             meta.set_region_epoch(ctx.get_region_epoch().clone());
-            send_upload_sst(&import, &meta, &data).unwrap();
+            send_upload_sst(import, &meta, &data).unwrap();
             let mut ingest = IngestRequest::default();
             ingest.set_context(ctx.clone());
             ingest.set_sst(meta);

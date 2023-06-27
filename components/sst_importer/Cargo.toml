@@ -5,13 +5,19 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["cloud-aws", "cloud-gcp", "cloud-azure", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
 cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
 cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 
+test-engine-kv-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb",
+]
+test-engine-raft-raft-engine = [
+  "engine_test/test-engine-raft-raft-engine",
+]
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
 ]

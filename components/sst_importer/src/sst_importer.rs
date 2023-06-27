@@ -250,11 +250,11 @@ impl SstImporter {
     }
 
     pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &Handle, db: E) {
-        self.switcher.start(executor, db, false);
+        self.switcher.start(executor, Some(db));
     }
 
-    pub fn start_switch_mode_check_v2<E: KvEngine>(&self, executor: &Handle, db: E) {
-        self.switcher.start(executor, db, true);
+    pub fn start_switch_mode_check_v2<E: KvEngine>(&self, executor: &Handle) {
+        self.switcher.start::<E>(executor, None);
     }
 
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {

@@ -323,6 +323,8 @@ impl<E: Engine> ImportSstService<E> {
             .unwrap();
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), tablet.clone());
+        } else {
+            importer.start_switch_mode_check_v2::<E::Local>(threads.handle());
         }
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
@@ -673,6 +675,22 @@ fn region_in_range(range: &KeyRange, region: &Region) -> bool {
 }
 
 impl<E: Engine> ImportSst for ImportSstService<E> {
+    // Switch mode for v1 and v2 is quite different.
+    //
+    // For v1, once it enters import mode, all regions are in import mode as there's
+    // only one kv rocksdb.
+    //
+    // V2 is different. The switch mode with import mode request carries a range
+    // where only regions fully within the range can enter import mode.
+    // And unlike v1, where some rocksdb configs will be changed when entering
+    // import mode, the config of the rocksdb will not change when entering import
+    // mode due to implementation complexity (a region's rocksdb can change
+    // overtime due to snapshot, split, and merge, which brings some
+    // implemention complexities). If it really needs, we will implement it in the
+    // future.
+    //
+    // The major effect of entering import mode for v2 is that import mode regions
+    // will not perform write stall check for sst ingest requests.
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
