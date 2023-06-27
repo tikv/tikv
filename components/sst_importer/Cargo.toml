@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["cloud-aws", "cloud-gcp", "cloud-azure", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
@@ -14,6 +14,15 @@ cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
+]
+test-engine-kv-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "engine_test/test-engine-raft-raft-engine"
+]
+test-engines-panic = [
+  "engine_test/test-engines-panic",
 ]
 
 [dependencies]
@@ -50,7 +59,7 @@ txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
-engine_test = { workspace = true }
+engine_test = { workspace = true, features = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"] }
 tempfile = "3.0"
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }

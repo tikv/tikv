@@ -128,8 +128,8 @@ fn test_switch_mode_v2() {
     let (mut cluster, mut ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
 
     let region = cluster.get_region(b"");
-    cluster.must_split(&region, &[122, 50]);
-    let region = cluster.get_region(&[122, 50]);
+    cluster.must_split(&region, &[50]);
+    let region = cluster.get_region(&[50]);
     ctx.set_region_epoch(region.get_region_epoch().clone());
 
     let mut switch_req = SwitchModeRequest::default();
