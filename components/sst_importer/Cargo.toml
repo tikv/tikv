@@ -21,6 +21,9 @@ test-engine-raft-raft-engine = [
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
 ]
+test-engines-panic = [
+  "engine_test/test-engines-panic",
+]
 
 [dependencies]
 api_version = { workspace = true }
