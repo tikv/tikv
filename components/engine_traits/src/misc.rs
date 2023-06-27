@@ -139,11 +139,24 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn is_stalled_or_stopped(&self) -> bool;
 
-    /// Returns size and age of active memtable if there's one.
+    /// Returns size and creation time of active memtable if there's one.
     fn get_active_memtable_stats_cf(
         &self,
         cf: &str,
     ) -> Result<Option<(u64, std::time::SystemTime)>>;
+
+    /// Whether there's active memtable with creation time older than
+    /// `threshold`.
+    fn has_old_active_memtable(&self, threshold: std::time::SystemTime) -> bool {
+        for cf in self.cf_names() {
+            if let Ok(Some((_, age))) = self.get_active_memtable_stats_cf(cf) {
+                if age < threshold {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 
     // Global method.
     fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64>;

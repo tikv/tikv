@@ -103,12 +103,18 @@ impl SstApplyState {
 #[derive(Debug)]
 pub struct FlushState {
     applied_index: AtomicU64,
+
+    // This is only used for flush before server stop.
+    // It provides a direct path for flush progress by letting raftstore directly know the current
+    // flush progress.
+    flushed_index: [AtomicU64; DATA_CFS_LEN],
 }
 
 impl FlushState {
     pub fn new(applied_index: u64) -> Self {
         Self {
             applied_index: AtomicU64::new(applied_index),
+            flushed_index: Default::default(),
         }
     }
 
@@ -122,6 +128,11 @@ impl FlushState {
     #[inline]
     pub fn applied_index(&self) -> u64 {
         self.applied_index.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    pub fn flushed_index(&self) -> &[AtomicU64; DATA_CFS_LEN] {
+        &self.flushed_index
     }
 }
 
@@ -234,8 +245,10 @@ impl PersistenceListener {
                 }
             }
         };
+        let apply_index = pr.apply_index;
         self.storage
             .persist_progress(self.region_id, self.tablet_index, pr);
+        self.state.flushed_index[offset].store(apply_index, Ordering::SeqCst);
     }
 }
 

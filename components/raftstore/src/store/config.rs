@@ -579,6 +579,18 @@ impl Config {
                 self.region_compact_check_step = Some(100);
             }
         }
+
+        // When use raft kv v2, we can set raft log gc size limit to a smaller value to
+        // avoid too many entry logs in cache.
+        // The snapshot support to increment snapshot sst, so the old snapshot files
+        // still be useful even if needs to sent snapshot again.
+        if self.raft_log_gc_size_limit.is_none() && raft_kv_v2 {
+            self.raft_log_gc_size_limit = Some(ReadableSize::mb(200));
+        }
+
+        if self.raft_log_gc_count_limit.is_none() && raft_kv_v2 {
+            self.raft_log_gc_count_limit = Some(10000);
+        }
     }
 
     pub fn validate(
@@ -1428,5 +1440,20 @@ mod tests {
         cfg.optimize_for(false);
         cfg.validate(split_size, true, split_size / 20).unwrap();
         assert_eq!(cfg.region_split_check_diff(), ReadableSize(1));
+
+        cfg = Config::new();
+        cfg.optimize_for(true);
+        cfg.validate(split_size, true, split_size / 20).unwrap();
+        assert_eq!(cfg.raft_log_gc_size_limit(), ReadableSize::mb(200));
+        assert_eq!(cfg.raft_log_gc_count_limit(), 10000);
+
+        cfg = Config::new();
+        cfg.optimize_for(false);
+        cfg.validate(split_size, true, split_size / 20).unwrap();
+        assert_eq!(cfg.raft_log_gc_size_limit(), split_size * 3 / 4);
+        assert_eq!(
+            cfg.raft_log_gc_count_limit(),
+            split_size * 3 / 4 / ReadableSize::kb(1)
+        );
     }
 }

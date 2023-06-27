@@ -781,7 +781,7 @@ lazy_static! {
     register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
 
     pub static ref STORE_SLOW_TREND_GAUGE: Gauge =
-    register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate").unwrap();
+    register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate.").unwrap();
 
     pub static ref STORE_SLOW_TREND_L0_GAUGE: Gauge =
     register_gauge!("tikv_raftstore_slow_trend_l0", "Slow trend L0 window avg value.").unwrap();
@@ -811,7 +811,7 @@ lazy_static! {
     register_int_gauge_vec!(
         "tikv_raftstore_slow_trend_misc",
         "Slow trend uncatelogued gauge(s)",
-        &["type"]
+        &["window"]
     ).unwrap();
 
     pub static ref STORE_SLOW_TREND_RESULT_VALUE_GAUGE: Gauge =
