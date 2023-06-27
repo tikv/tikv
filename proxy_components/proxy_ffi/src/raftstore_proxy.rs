@@ -50,6 +50,49 @@ impl RaftStoreProxy {
     }
 }
 
+pub fn maybe_use_backup_addr(u: &str, backup: impl Fn() -> String) -> Option<String> {
+    let mut res = None;
+    let mut need_backup_ip = false;
+
+    if let Ok(mut stuff) = url::Url::parse(u) {
+        match stuff.host() {
+            None => {
+                need_backup_ip = true;
+            }
+            Some(url::Host::Domain(e)) => {
+                if e == "localhost" {
+                    need_backup_ip = true;
+                }
+            }
+            Some(url::Host::Ipv4(e)) => {
+                let is_loopback_or_unspecified = e.is_unspecified() || e.is_loopback();
+                if is_loopback_or_unspecified {
+                    need_backup_ip = true;
+                }
+            }
+            Some(url::Host::Ipv6(e)) => {
+                let is_loopback_or_unspecified = e.is_unspecified() || e.is_loopback();
+                if is_loopback_or_unspecified {
+                    need_backup_ip = true;
+                }
+            }
+        };
+        if need_backup_ip {
+            let mut s = backup();
+            if !s.starts_with("http") {
+                s = format!("http://{}", s);
+            }
+            if let Ok(back) = url::Url::parse(&s) {
+                stuff
+                    .set_ip_host(back.host_str().unwrap().parse().unwrap())
+                    .unwrap();
+            }
+            res = Some(stuff.to_string())
+        }
+    }
+    res
+}
+
 impl RaftStoreProxy {
     pub fn cluster_raftstore_version(&self) -> RaftstoreVer {
         *self.cluster_raftstore_ver.read().unwrap()
@@ -116,7 +159,11 @@ impl RaftStoreProxy {
                 .any(|label| label.get_key() == "engine" && label.get_value().contains("tiflash"));
             if !shall_filter {
                 // TiKV's status server don't support https.
-                let u = format!("http://{}/{}", store.get_status_address(), "engine_type");
+                let mut u = format!("http://{}/{}", store.get_status_address(), "engine_type");
+                if let Some(nu) = maybe_use_backup_addr(&u, || store.get_address().to_string()) {
+                    tikv_util::debug!("switch from {} to {}", u, nu);
+                    u = nu;
+                }
                 // A invalid url may lead to 404, which will enforce a V1 inference, which is
                 // error.
                 if let Ok(stuff) = url::Url::parse(&u) {

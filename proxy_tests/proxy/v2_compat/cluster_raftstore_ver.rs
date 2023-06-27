@@ -136,10 +136,32 @@ impl Drop for MockServer {
 }
 
 #[test]
+fn test_maybe_substitute_addr() {
+    let b = || "http://111.111.111.111:100".to_string();
+    let b2 = || "111.111.111.111:100".to_string();
+    fn test_with_b(b: impl Fn() -> String + Clone, ba: &str) {
+        let o = proxy_ffi::maybe_use_backup_addr(
+            "http://tc-tikv-9.tc-tikv-peer.mutiple-rocksdb-btdpb.svc:20160/engine_type",
+            b.clone(),
+        );
+        assert_eq!(o, None);
+        let o = proxy_ffi::maybe_use_backup_addr("http://1.2.3.4:5/engine_type", b.clone());
+        assert_eq!(o, None);
+        let o = proxy_ffi::maybe_use_backup_addr("http://127.0.0.1/engine_type", b.clone());
+        assert_eq!(o.unwrap(), format!("http://{}/engine_type", ba));
+        let o = proxy_ffi::maybe_use_backup_addr("http://localhost:222/a", b.clone());
+        assert_eq!(o.unwrap(), format!("http://{}:222/a", ba));
+        let o = proxy_ffi::maybe_use_backup_addr("http://0.0.0.0:333/engine_type", b.clone());
+        assert_eq!(o.unwrap(), format!("http://{}:333/engine_type", ba));
+    }
+    test_with_b(b, "111.111.111.111");
+    test_with_b(b2, "111.111.111.111");
+}
+
+#[test]
 fn test_with_error_status_addr() {
     let mock_server = MockServer::new(vec![1111, 1112]);
     let (mut cluster_v1, _) = new_mock_cluster(1, 3);
-    let addrs = mock_server.ports.iter().map(|e| format!("127.0.0.1:{}", e));
     let index = mock_server.index.clone();
     cluster_v1.cluster_ext.pre_run_node_callback =
         Some(Box::new(move |cfg: &mut MixedClusterConfig| {
@@ -207,7 +229,8 @@ fn test_with_tiflash() {
 fn test_normal() {
     let mock_server = MockServer::new(vec![1111, 1112]);
     let (mut cluster_v1, _) = new_mock_cluster(1, 2);
-    let addrs = mock_server.ports.iter().map(|e| format!("127.0.0.1:{}", e));
+    // Will switch from the ipv6 localhost address into store.get_addr().
+    let addrs = mock_server.ports.iter().map(|e| format!("[::]:{}", e));
     let status_addrs = Arc::new(addrs.collect::<Vec<_>>());
     let index = mock_server.index.clone();
     cluster_v1.cluster_ext.pre_run_node_callback =
