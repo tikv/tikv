@@ -3,8 +3,9 @@
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use engine_traits::{
-    EncryptionKeyManager, Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstCompressionType,
-    SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    EncryptionKeyManager, Error, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result,
+    SeekKey, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder,
+    CF_DEFAULT,
 };
 use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
@@ -15,7 +16,10 @@ use rocksdb::{
 };
 use tikv_util::box_err;
 
-use crate::{encryption::WrappedEncryptionKeyManager, engine::RocksEngine, options::RocksReadOptions, r2e};
+use crate::{
+    encryption::WrappedEncryptionKeyManager, engine::RocksEngine, options::RocksReadOptions,
+    RocksSeekKey,
+};
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;

@@ -12,8 +12,7 @@ use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    iter_option, EncryptionKeyManager, IterOptions, Iterator, KvEngine, RefIterable, SstExt,
-    SstMetaInfo, SstReader,
+    EncryptionKeyManager, Iterable, Iterator, KvEngine, SstExt, SstMetaInfo, SstReader,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
@@ -409,8 +408,7 @@ impl ImportDir {
             Some(km) => E::SstReader::open_encrypted(&path.save.to_string_lossy(), km)?,
             None => E::SstReader::open(&path.save.to_string_lossy())?,
         };
-        let opts = IterOptions::new(None, None, false);
-        let mut i = r.iter(opts)?;
+        let mut i = r.iter();
         if !i.seek_to_first()? || !i.valid()? {
             return Ok(None);
         }
