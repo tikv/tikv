@@ -2232,9 +2232,6 @@ where
     T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
-        if self.slow_score.should_force_report_slow_store() {
-            self.handle_fake_store_heartbeat();
-        }
         // Record a fairly great value when timeout
         self.slow_trend_cause.record(500_000, Instant::now());
 
