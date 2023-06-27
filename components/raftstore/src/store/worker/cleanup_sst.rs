@@ -1,16 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{error::Error, fmt, marker::PhantomData, sync::Arc};
+use std::{fmt, marker::PhantomData, sync::Arc};
 
 use engine_traits::KvEngine;
-use kvproto::{import_sstpb::SstMeta, metapb::Region};
+use kvproto::import_sstpb::SstMeta;
 use pd_client::PdClient;
 use sst_importer::SstImporter;
-use tikv_util::{error, worker::Runnable};
+use tikv_util::worker::Runnable;
 
-use crate::store::{util::is_epoch_stale, StoreMsg, StoreRouter};
-
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+use crate::store::StoreRouter;
 
 pub enum Task {
     DeleteSst { ssts: Vec<SstMeta> },
@@ -29,10 +27,10 @@ where
     EK: KvEngine,
     S: StoreRouter<EK>,
 {
-    store_id: u64,
-    store_router: S,
+    _store_id: u64,
+    _store_router: S,
     importer: Arc<SstImporter>,
-    pd_client: Arc<C>,
+    _pd_client: Arc<C>,
     _engine: PhantomData<EK>,
 }
 
@@ -49,10 +47,10 @@ where
         pd_client: Arc<C>,
     ) -> Runner<EK, C, S> {
         Runner {
-            store_id,
-            store_router,
+            _store_id: store_id,
+            _store_router: store_router,
             importer,
-            pd_client,
+            _pd_client: pd_client,
             _engine: PhantomData,
         }
     }
@@ -62,33 +60,6 @@ where
         for sst in &ssts {
             let _ = self.importer.delete(sst);
         }
-    }
-
-    fn get_region_by_meta(&self, sst: &SstMeta) -> Result<Region> {
-        // The SST meta has been delivered with a range, use it directly.
-        // For now, no case will reach this. But this still could be a guard for
-        // reducing the superise in the future...
-        if !sst.get_range().get_start().is_empty() || !sst.get_range().get_end().is_empty() {
-            return self
-                .pd_client
-                .get_region(sst.get_range().get_start())
-                .map_err(Into::into);
-        }
-        // Once there isn't range provided.
-        let query_by_start_key_of_full_meta = || {
-            let start_key = self
-                .importer
-                .load_start_key_by_meta::<EK>(sst)?
-                .ok_or_else(|| -> Box<dyn Error> {
-                    "failed to load start key from sst, the sst might be empty".into()
-                })?;
-            let region = self.pd_client.get_region(&start_key)?;
-            Result::Ok(region)
-        };
-        query_by_start_key_of_full_meta()
-        .map_err(|err|
-            format!("failed to load full sst meta from disk for {:?} and there isn't extra information provided: {err}", sst.get_uuid()).into()
-        )
     }
 }
 

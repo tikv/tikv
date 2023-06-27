@@ -1595,8 +1595,7 @@ mod test {
                     self.map
                         .lock()
                         .unwrap()
-                        .get(&region_id)
-                        .map(|region_ref| region_ref.clone()),
+                        .get(&region_id).cloned(),
                 );
                 Ok(())
             }
