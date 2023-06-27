@@ -175,7 +175,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // Match v1::schedule_merge.
-    fn ask_target_peer_to_commit_merge<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+    fn ask_target_peer_to_commit_merge<T: Transport>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+    ) {
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
         let target_id = target.get_id();
@@ -222,27 +225,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // quorum stores of target region. Otherwise we need to enable proposal
         // forwarding.
         let msg = PeerMsg::AskCommitMerge(request);
-        // If target peer is destroyed, life.rs is responsible for telling us to
-        // rollback.
-        match store_ctx.router.force_send(target_id, msg) {
-            Ok(_) => (),
-            Err(SendError(PeerMsg::AskCommitMerge(msg))) => {
-                if let Err(e) = store_ctx
-                    .router
-                    .force_send_control(StoreMsg::AskCommitMerge(msg))
-                {
-                    if store_ctx.router.is_shutdown() {
-                        return;
+        let router = store_ctx.router.clone();
+        let logger = self.logger.clone();
+        self.start_pre_flush(
+            store_ctx,
+            "commit_merge",
+            &target.clone(),
+            Box::new(move || {
+                // If target peer is destroyed, life.rs is responsible for telling us to
+                // rollback.
+                match router.force_send(target_id, msg) {
+                    Ok(_) => (),
+                    Err(SendError(PeerMsg::AskCommitMerge(msg))) => {
+                        if let Err(e) = router.force_send_control(StoreMsg::AskCommitMerge(msg)) {
+                            if router.is_shutdown() {
+                                return;
+                            }
+                            slog_panic!(
+                                logger,
+                                "fails to send `AskCommitMerge` msg to store";
+                                "error" => ?e,
+                            );
+                        }
                     }
-                    slog_panic!(
-                        self.logger,
-                        "fails to send `AskCommitMerge` msg to store";
-                        "error" => ?e,
-                    );
+                    _ => unreachable!(),
                 }
-            }
-            _ => unreachable!(),
-        }
+            }),
+        );
     }
 }
 
@@ -275,8 +284,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // If target caught up by snapshot, the source checkpoint hasn't been used.
             let source_path =
                 merge_source_path(&store_ctx.tablet_registry, source_region.get_id(), index);
-            assert!(source_path.exists());
-            self.record_tombstone_tablet_path(store_ctx, source_path, r.get_index());
+            if source_path.exists() {
+                self.record_tombstone_tablet_path(store_ctx, source_path, r.get_index());
+            }
             let _ = store_ctx.router.force_send(
                 source_region.get_id(),
                 PeerMsg::AckCommitMerge {
@@ -400,15 +410,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "source_region" => ?source_region,
         );
 
-        let ctx = TabletContext::new(source_region, None);
-        let source_tablet = reg
-            .tablet_factory()
-            .open_tablet(ctx, &source_path)
-            .unwrap_or_else(|e| {
-                slog_panic!(self.logger, "failed to open source checkpoint"; "err" => ?e);
-            });
-        let open_time = Instant::now_coarse();
-
         let mut region = self.region().clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
         let version = cmp::max(
@@ -422,61 +423,82 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
 
-        let path = reg.tablet_path(self.region_id(), index);
-
-        // Avoid seqno jump back between self.tablet and the newly created tablet.
-        // If we are recovering, this flush would just be a noop.
-        self.tablet().flush_cfs(&[], true).unwrap();
-        let flush_time = Instant::now_coarse();
-
+        let logger = self.logger.clone();
+        let region_id = self.region_id();
+        let target_tablet = self.tablet().clone();
         let mut ctx = TabletContext::new(&region, Some(index));
         ctx.flush_state = Some(self.flush_state().clone());
-        let guard = MergeInProgressGuard::new(&self.logger, reg, self.region_id(), index, &path)
-            .unwrap_or_else(|e| {
-                slog_panic!(
-                    self.logger,
-                    "fails to create MergeInProgressGuard";
-                    "path" => %path.display(),
-                    "error" => ?e
-                )
-            });
-        let tablet = reg.tablet_factory().open_tablet(ctx, &path).unwrap();
-        if let Some(guard) = guard {
-            tablet
-                .merge(&[&source_tablet, self.tablet()])
-                .unwrap_or_else(|e| {
-                    slog_panic!(
-                        self.logger,
-                        "fails to merge tablet";
-                        "path" => %path.display(),
-                        "error" => ?e
-                    )
-                });
-            guard.defuse().unwrap_or_else(|e| {
-                slog_panic!(
-                    self.logger,
-                    "fails to defuse MergeInProgressGuard";
-                    "path" => %path.display(),
-                    "error" => ?e
-                )
-            });
-        } else {
-            info!(self.logger, "reuse merged tablet");
-        }
-        let merge_time = Instant::now_coarse();
+        let reg_clone = reg.clone();
+        let source_path_clone = source_path.clone();
+        let source_region_clone = source_region.clone();
+        let (tx, rx) = oneshot::channel();
+        self.high_priority_pool()
+            .spawn(async move {
+                let source_ctx = TabletContext::new(&source_region_clone, None);
+                let source_tablet = reg_clone
+                    .tablet_factory()
+                    .open_tablet(source_ctx, &source_path_clone)
+                    .unwrap_or_else(|e| {
+                        slog_panic!(logger, "failed to open source checkpoint"; "err" => ?e);
+                    });
+                let open_time = Instant::now_coarse();
+
+                let path = reg_clone.tablet_path(region_id, index);
+                // Avoid seqno jump back between self.tablet and the newly created tablet.
+                // If we are recovering, this flush would just be a noop.
+                target_tablet.flush_cfs(&[], true).unwrap();
+                let flush_time = Instant::now_coarse();
+
+                let guard = MergeInProgressGuard::new(&logger, &reg_clone, region_id, index, &path)
+                    .unwrap_or_else(|e| {
+                        slog_panic!(
+                            logger,
+                            "fails to create MergeInProgressGuard";
+                            "path" => %path.display(),
+                            "error" => ?e
+                        )
+                    });
+                let tablet = reg_clone.tablet_factory().open_tablet(ctx, &path).unwrap();
+                if let Some(guard) = guard {
+                    tablet
+                        .merge(&[&source_tablet, &target_tablet])
+                        .unwrap_or_else(|e| {
+                            slog_panic!(
+                                logger,
+                                "fails to merge tablet";
+                                "path" => %path.display(),
+                                "error" => ?e
+                            )
+                        });
+                    guard.defuse().unwrap_or_else(|e| {
+                        slog_panic!(
+                            logger,
+                            "fails to defuse MergeInProgressGuard";
+                            "path" => %path.display(),
+                            "error" => ?e
+                        )
+                    });
+                } else {
+                    info!(logger, "reuse merged tablet");
+                }
+                let merge_time = Instant::now_coarse();
+                info!(
+                    logger,
+                    "applied CommitMerge";
+                    "source_region" => ?source_region_clone,
+                    "wait" => ?wait_duration.map(|d| format!("{}", ReadableDuration(d))),
+                    "open" => %ReadableDuration(open_time.saturating_duration_since(start_time)),
+                    "merge" => %ReadableDuration(flush_time.saturating_duration_since(open_time)),
+                    "flush" => %ReadableDuration(merge_time.saturating_duration_since(flush_time)),
+                );
+                tx.send(tablet).unwrap();
+            })
+            .unwrap();
+        let tablet = rx.await.unwrap();
+
         fail::fail_point!("after_merge_source_checkpoint", |_| Err(
             tikv_util::box_err!("fp")
         ));
-
-        info!(
-            self.logger,
-            "applied CommitMerge";
-            "source_region" => ?source_region,
-            "wait" => ?wait_duration.map(|d| format!("{}", ReadableDuration(d))),
-            "open" => %ReadableDuration(open_time.saturating_duration_since(start_time)),
-            "merge" => %ReadableDuration(flush_time.saturating_duration_since(open_time)),
-            "flush" => %ReadableDuration(merge_time.saturating_duration_since(flush_time)),
-        );
 
         self.set_tablet(tablet.clone());
 

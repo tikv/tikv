@@ -413,7 +413,7 @@ async fn reconnect_loop(
             use tikv_util::config::ReadableDuration;
             ReadableDuration::from_str(&s.unwrap()).unwrap().0
         });
-        request_timeout()
+        cfg.retry_interval.0
     })();
     let mut last_connect = StdInstant::now();
     loop {

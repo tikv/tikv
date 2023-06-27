@@ -16,12 +16,12 @@ use raftstore::{
 };
 use slog::Logger;
 use sst_importer::SstImporter;
-use tikv_util::{log::SlogFormat, worker::Scheduler};
+use tikv_util::{log::SlogFormat, worker::Scheduler, yatp_pool::FuturePool};
 
 use crate::{
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
     router::CmdResChannel,
-    worker::checkpoint,
+    TabletTask,
 };
 
 pub(crate) struct Observe {
@@ -73,7 +73,8 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
-    checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+    tablet_scheduler: Scheduler<TabletTask<EK>>,
+    high_priority_pool: FuturePool,
 
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
@@ -99,7 +100,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         buckets: Option<BucketStat>,
         sst_importer: Arc<SstImporter>,
         coprocessor_host: CoprocessorHost<EK>,
-        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+        tablet_scheduler: Scheduler<TabletTask<EK>>,
+        high_priority_pool: FuturePool,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -133,7 +135,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
-            checkpoint_scheduler,
+            tablet_scheduler,
+            high_priority_pool,
             use_delete_range: cfg.use_delete_range,
             observe: Observe {
                 info: CmdObserveInfo::default(),
@@ -333,8 +336,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
-        &self.checkpoint_scheduler
+    pub fn high_priority_pool(&self) -> &FuturePool {
+        &self.high_priority_pool
+    }
+
+    #[inline]
+    pub fn tablet_scheduler(&self) -> &Scheduler<TabletTask<EK>> {
+        &self.tablet_scheduler
     }
 
     #[inline]
