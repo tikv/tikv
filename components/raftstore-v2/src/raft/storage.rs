@@ -247,6 +247,14 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         }
     }
+
+    // call `estimate` as persisted_applied is not guaranteed to be persisted
+    #[inline]
+    pub fn estimate_replay_count(&self) -> u64 {
+        let apply_index = self.apply_state().get_applied_index();
+        let persisted_apply = self.apply_trace.persisted_apply_index();
+        apply_index.saturating_sub(persisted_apply)
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> raft::Storage for Storage<EK, ER> {
@@ -339,7 +347,10 @@ mod tests {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::{dummy_scheduler, Worker};
+    use tikv_util::{
+        worker::{dummy_scheduler, Worker},
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
+    };
 
     use super::*;
     use crate::{
@@ -508,7 +519,7 @@ mod tests {
         let host = CoprocessorHost::<KvTestEngine>::default();
 
         let (dummy_scheduler1, _) = dummy_scheduler();
-        let (dummy_scheduler2, _) = dummy_scheduler();
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -525,7 +536,7 @@ mod tests {
             importer,
             host,
             dummy_scheduler1,
-            dummy_scheduler2,
+            high_priority_pool,
             logger,
         );
 
