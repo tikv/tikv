@@ -38,9 +38,6 @@ pub trait RaftExtension: Clone + Send {
     /// Report the address of a store is resolved.
     fn report_resolved(&self, _store_id: u64, _group_id: u64) {}
 
-    /// report slow score
-    fn slow_score(&self, _reset: bool) {}
-
     /// Split the region with the given keys.
     ///
     /// Use `BoxFuture` for simplicity as it's not performance critical path.

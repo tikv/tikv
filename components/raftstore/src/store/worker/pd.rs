@@ -198,9 +198,6 @@ where
         min_resolved_ts: u64,
     },
     ReportBuckets(BucketStat),
-    ForceUpdateSlowScore {
-        reset: bool,
-    },
 }
 
 pub struct StoreStat {
@@ -430,9 +427,6 @@ where
             }
             Task::ReportBuckets(ref buckets) => {
                 write!(f, "report buckets: {:?}", buckets)
-            }
-            Task::ForceUpdateSlowScore { reset } => {
-                write!(f, "force update: {:?}", reset)
             }
         }
     }
@@ -814,8 +808,6 @@ struct SlowScore {
     last_tick_id: u64,
     // If the last tick does not finished, it would be recorded as a timeout.
     last_tick_finished: bool,
-
-    manual_set: bool,
 }
 
 impl SlowScore {
@@ -834,7 +826,6 @@ impl SlowScore {
             round_ticks: 30,
             last_tick_id: 0,
             last_tick_finished: true,
-            manual_set: false,
         }
     }
 
@@ -865,16 +856,8 @@ impl SlowScore {
         self.value.into()
     }
 
-    fn manual_set(&mut self, val: f64) {
-        self.value = val.into();
-        self.manual_set = true;
-    }
-
     // Update the score in a AIMD way.
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
-        if self.manual_set {
-            return self.value;
-        }
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
             if OrderedFloat(desc) > self.value - OrderedFloat(1.0) {
@@ -897,8 +880,7 @@ impl SlowScore {
     }
 
     fn should_force_report_slow_store(&self) -> bool {
-        self.value >= OrderedFloat(100.0)
-            && (self.last_tick_id % self.round_ticks == 0 || self.manual_set)
+        self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
     }
 }
 
@@ -2197,13 +2179,6 @@ where
                     Instant::now(),
                 );
             }
-            Task::ForceUpdateSlowScore { reset } => {
-                if reset {
-                    self.slow_score.manual_set(0.0);
-                } else {
-                    self.slow_score.manual_set(100.0);
-                }
-            }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTs {
                 store_id,
@@ -2227,7 +2202,7 @@ where
     T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
-        if self.slow_score.manual_set && self.slow_score.should_force_report_slow_store() {
+        if self.slow_score.should_force_report_slow_store() {
             self.handle_fake_store_heartbeat();
         }
         // Record a fairly great value when timeout

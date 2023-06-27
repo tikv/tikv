@@ -436,12 +436,6 @@ where
         });
     }
 
-    fn report_slowscore(&self, reset: bool) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::SlowScore(reset))
-        });
-    }
-
     fn report_status_update(&self) {
         self.broadcast_normal(|| PeerMsg::UpdateReplicationMode)
     }
@@ -821,9 +815,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
                 StoreMsg::AwakenRegions { abnormal_stores } => {
                     self.on_wake_up_regions(abnormal_stores);
-                }
-                StoreMsg::SlowScore(reset) => {
-                    self.ctx.router.report_slowscore(reset);
                 }
             }
         }

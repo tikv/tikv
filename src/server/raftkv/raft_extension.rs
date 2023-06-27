@@ -16,7 +16,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{
         region_meta::{RaftStateRole, RegionMeta},
-        CasualMessage, StoreMsg,
+        CasualMessage,
     },
 };
 use tikv_util::future::paired_future_callback;
@@ -173,10 +173,5 @@ where
             let f = super::exec_admin(&router, req);
             f.await
         })
-    }
-
-    /// report slow score
-    fn slow_score(&self, reset: bool) {
-        self.router.send_store_msg(StoreMsg::SlowScore(reset)).unwrap(); 
     }
 }

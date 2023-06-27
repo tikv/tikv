@@ -441,11 +441,7 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
-    async fn slow_score(
-        router: R,
-        tx: mpsc::Sender<ServiceEvent>,
-    ) -> hyper::Result<Response<Body>> {
-        router.slow_score(false);
+    async fn pause_grpc(tx: mpsc::Sender<ServiceEvent>) -> hyper::Result<Response<Body>> {
         tx.send(ServiceEvent::PauseGrpc).unwrap();
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
@@ -455,11 +451,7 @@ where
         Ok(response)
     }
 
-    async fn reset_slow_score(
-        router: R,
-        tx: mpsc::Sender<ServiceEvent>,
-    ) -> hyper::Result<Response<Body>> {
-        router.slow_score(true);
+    async fn resume_grpc(tx: mpsc::Sender<ServiceEvent>) -> hyper::Result<Response<Body>> {
         tx.send(ServiceEvent::ResumeGrpc).unwrap();
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
@@ -656,11 +648,11 @@ where
                             (Method::GET, "/engine_type") => {
                                 Self::get_engine_type(&cfg_controller).await
                             }
-                            (Method::PUT, "/slow_score") => {
-                                Self::slow_score(router, service_event_sender).await
+                            (Method::PUT, "/pause_grpc") => {
+                                Self::pause_grpc(service_event_sender).await
                             }
-                            (Method::PUT, "/reset_slow_score") => {
-                                Self::reset_slow_score(router, service_event_sender).await
+                            (Method::PUT, "/resume_grpc") => {
+                                Self::resume_grpc(service_event_sender).await
                             }
                             // This interface is used for configuration file hosting scenarios,
                             // TiKV will not update configuration files, and this interface will
@@ -1148,7 +1140,7 @@ mod tests {
     #[test]
     fn test_config_endpoint() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel(); 
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
