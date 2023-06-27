@@ -95,7 +95,6 @@ pub struct Config {
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
     #[doc(hidden)]
-    #[serde(skip_serializing)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
