@@ -22,7 +22,7 @@ use std::{
 
 use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
-pub use configurable::{ConfigRes, ConfigurableDb};
+pub use configurable::{loop_registry, ConfigRes, ConfigurableDb};
 use encryption_export::DataKeyManager;
 use engine_rocks::{
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
@@ -380,6 +380,14 @@ macro_rules! cf_config {
             pub checksum: ChecksumType,
             #[online_config(skip)]
             pub max_compactions: u32,
+            // `ttl == None` means using default setting in Rocksdb.
+            // `ttl` in Rocksdb is 30 days as default.
+            #[online_config(skip)]
+            pub ttl: Option<ReadableDuration>,
+            // `periodic_compaction_seconds == None` means using default setting in Rocksdb.
+            // `periodic_compaction_seconds` in Rocksdb is 30 days as default.
+            #[online_config(skip)]
+            pub periodic_compaction_seconds: Option<ReadableDuration>,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -648,6 +656,12 @@ macro_rules! build_cf_opt {
         if let Some(r) = $compaction_limiter {
             cf_opts.set_compaction_thread_limiter(r);
         }
+        if let Some(ttl) = $opt.ttl {
+            cf_opts.set_ttl(ttl.0.as_secs());
+        }
+        if let Some(secs) = $opt.periodic_compaction_seconds {
+            cf_opts.set_periodic_compaction_seconds(secs.0.as_secs());
+        }
         cf_opts
     }};
 }
@@ -709,7 +723,7 @@ impl Default for DefaultCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_min_output_file_size: ReadableSize::mb(1),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
@@ -718,6 +732,8 @@ impl Default for DefaultCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -875,7 +891,7 @@ impl Default for WriteCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_min_output_file_size: ReadableSize::mb(1),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
@@ -884,6 +900,8 @@ impl Default for WriteCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -995,7 +1013,7 @@ impl Default for LockCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_min_output_file_size: ReadableSize::mb(1),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -1004,6 +1022,8 @@ impl Default for LockCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -1090,7 +1110,7 @@ impl Default for RaftCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_min_output_file_size: ReadableSize::mb(1),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -1099,6 +1119,8 @@ impl Default for RaftCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -1304,7 +1326,7 @@ impl Default for DbConfig {
             allow_concurrent_memtable_write: None,
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
-            write_buffer_flush_oldest_first: false,
+            write_buffer_flush_oldest_first: true,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1612,7 +1634,7 @@ impl Default for RaftDefaultCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_min_output_file_size: ReadableSize::mb(1),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -1621,6 +1643,8 @@ impl Default for RaftDefaultCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -1833,13 +1857,7 @@ impl Default for RaftEngineConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            config: RawRaftEngineConfig {
-                // TODO: after update the dependency to `raft-engine` lib, revokes the
-                // following unelegant settings.
-                // Enable log recycling by default.
-                enable_log_recycle: true,
-                ..RawRaftEngineConfig::default()
-            },
+            config: RawRaftEngineConfig::default(),
         }
     }
 }
@@ -3392,6 +3410,23 @@ impl TikvConfig {
             if !self.raft_engine.enable {
                 return Err("partitioned-raft-kv only supports raft log engine.".into());
             }
+            let recovery_threads = cmp::min((SysQuota::cpu_cores_quota() * 1.5) as usize, 16);
+            if self.raft_engine.config.recovery_threads < recovery_threads {
+                info!(
+                    "raft-engine.recovery-threads is too small. Set it to {} instead.",
+                    recovery_threads,
+                );
+                self.raft_engine.config.recovery_threads = recovery_threads;
+            }
+            // Filled in DbOptions::optimize_for.
+            let write_buffer_limit = self.rocksdb.write_buffer_limit.unwrap();
+            if self.raft_engine.config.purge_threshold.0 < write_buffer_limit.0 * 2 {
+                self.raft_engine.config.purge_threshold.0 = write_buffer_limit.0 * 2;
+                info!(
+                    "raft-engine.purge-threshold is too small. Set it to {} instead.",
+                    self.raft_engine.config.purge_threshold,
+                );
+            }
             if self.rocksdb.titan.enabled {
                 return Err("partitioned-raft-kv doesn't support titan.".into());
             }
@@ -4270,7 +4305,12 @@ impl ConfigController {
 
     pub fn update(&self, change: HashMap<String, String>) -> CfgResult<()> {
         let diff = to_config_change(change.clone())?;
-        self.update_impl(diff, Some(change))
+        self.update_impl(diff, Some(change), true)
+    }
+
+    pub fn update_without_persist(&self, change: HashMap<String, String>) -> CfgResult<()> {
+        let diff = to_config_change(change.clone())?;
+        self.update_impl(diff, Some(change), false)
     }
 
     pub fn update_from_toml_file(&self) -> CfgResult<()> {
@@ -4278,7 +4318,7 @@ impl ConfigController {
         match TikvConfig::from_file(Path::new(&current.cfg_path), None) {
             Ok(incoming) => {
                 let diff = current.diff(&incoming);
-                self.update_impl(diff, None)
+                self.update_impl(diff, None, true)
             }
             Err(e) => Err(e),
         }
@@ -4288,6 +4328,7 @@ impl ConfigController {
         &self,
         mut diff: HashMap<String, ConfigValue>,
         change: Option<HashMap<String, String>>,
+        persist: bool,
     ) -> CfgResult<()> {
         diff = {
             let incoming = self.get_current();
@@ -4322,6 +4363,11 @@ impl ConfigController {
         debug!("all config change had been dispatched"; "change" => ?to_update);
         // we already verified the correctness at the beginning of this function.
         inner.current.update(to_update).unwrap();
+
+        if !persist {
+            return Ok(());
+        }
+
         // Write change to the config file
         if let Some(change) = change {
             let content = {
@@ -5871,6 +5917,18 @@ mod tests {
         cfg.rocksdb.lockcf.ribbon_filter_above_level = None;
         cfg.rocksdb.raftcf.ribbon_filter_above_level = None;
         cfg.raftdb.defaultcf.ribbon_filter_above_level = None;
+        // ColumnFamily::ttl
+        cfg.rocksdb.defaultcf.ttl = None;
+        cfg.rocksdb.writecf.ttl = None;
+        cfg.rocksdb.lockcf.ttl = None;
+        cfg.rocksdb.raftcf.ttl = None;
+        cfg.raftdb.defaultcf.ttl = None;
+        // ColumnFamily::periodic_compaction_seconds
+        cfg.rocksdb.defaultcf.periodic_compaction_seconds = None;
+        cfg.rocksdb.writecf.periodic_compaction_seconds = None;
+        cfg.rocksdb.lockcf.periodic_compaction_seconds = None;
+        cfg.rocksdb.raftcf.periodic_compaction_seconds = None;
+        cfg.raftdb.defaultcf.periodic_compaction_seconds = None;
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);

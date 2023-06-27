@@ -476,6 +476,7 @@ make_auto_flush_static_metric! {
         err_disk_full,
         err_recovery_in_progress,
         err_flashback_in_progress,
+        err_undetermind,
     }
 
     pub label_enum RequestTypeKind {
@@ -527,7 +528,7 @@ lazy_static! {
         "tikv_storage_engine_async_request_duration_seconds",
         "Bucketed histogram of processing successful asynchronous requests.",
         &["type"],
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
+        exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
     )
     .unwrap();
 }

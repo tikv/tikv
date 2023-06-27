@@ -37,7 +37,7 @@ pub use self::{
         StoreMetaDelegate, TrackVer,
     },
     refresh_config::{
-        BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,
+        BatchComponent as RaftStoreBatchComponent, BatchComponent, Runner as RefreshConfigRunner,
         Task as RefreshConfigTask,
     },
     region::{Runner as RegionRunner, Task as RegionTask},
