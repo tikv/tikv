@@ -1591,12 +1591,7 @@ mod test {
                 region_id: u64,
                 callback: Callback<Option<RegionInfo>>,
             ) -> Result<(), raftstore::coprocessor::Error> {
-                callback(
-                    self.map
-                        .lock()
-                        .unwrap()
-                        .get(&region_id).cloned(),
-                );
+                callback(self.map.lock().unwrap().get(&region_id).cloned());
                 Ok(())
             }
         }
