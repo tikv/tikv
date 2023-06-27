@@ -825,7 +825,11 @@ where
                     router: self.router.clone(),
                     start: UnixSecs::now(),
                 };
+                let scheduled_time = Instant::now_coarse();
                 self.pool.spawn(async move {
+                    SNAP_GEN_WAIT_DURATION_HISTOGRAM
+                        .observe(scheduled_time.saturating_elapsed_secs());
+
                     ctx.handle_gen(
                         region_id,
                         last_applied_term,
