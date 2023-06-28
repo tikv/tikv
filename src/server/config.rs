@@ -37,9 +37,6 @@ const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 // be timeout already, so it can be safely aborted.
 const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 
-// For big region, the duration should be larger for some API such as checksum
-const DEFAULT_BIG_REGION_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 1800;
-
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
@@ -417,7 +414,9 @@ impl Config {
     }
 
     pub fn optimize_for(&mut self, region_size: ReadableSize) {
-        if region_size.0 < ReadableSize::mb(1024).0 {
+        // It turns out for 256MB region size, 60s is typically enough.
+        const THRESHOLD_SIZE: ReadableSize = ReadableSize::mb(256);
+        if region_size.0 < THRESHOLD_SIZE.0 {
             self.end_point_request_max_handle_duration
                 .get_or_insert(ReadableDuration::secs(
                     DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
@@ -425,7 +424,7 @@ impl Config {
         } else {
             self.end_point_request_max_handle_duration
                 .get_or_insert(ReadableDuration::secs(
-                    DEFAULT_BIG_REGION_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
+                    region_size.0 / THRESHOLD_SIZE.0 * DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
                 ));
         }
     }

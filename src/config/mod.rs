@@ -5395,7 +5395,7 @@ mod tests {
         default_cfg.validate().unwrap();
         assert_eq!(
             default_cfg.server.end_point_request_max_handle_duration(),
-            ReadableDuration::secs(1800)
+            ReadableDuration::secs(2400)
         );
 
         let mut default_cfg = TikvConfig::default();
