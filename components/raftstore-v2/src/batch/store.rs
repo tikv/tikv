@@ -807,11 +807,13 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             },
             workers.async_write.clone(),
         );
+        let apply_pool = builder.apply_pool.clone();
         let refresh_config_runner = refresh_config::Runner::new(
             self.logger.clone(),
             router.router().clone(),
             self.system.build_pool_state(builder),
             writer_control,
+            apply_pool,
         );
         assert!(workers.refresh_config_worker.start(refresh_config_runner));
         self.workers = Some(workers);

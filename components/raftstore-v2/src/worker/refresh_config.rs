@@ -6,7 +6,9 @@ use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState
 use file_system::{set_io_type, IoType};
 use raftstore::store::{BatchComponent, RefreshConfigTask, Transport, WriterContoller};
 use slog::{error, info, warn, Logger};
-use tikv_util::{sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable};
+use tikv_util::{
+    sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable, yatp_pool::FuturePool,
+};
 
 use crate::{
     fsm::{PeerFsm, StoreFsm},
@@ -89,6 +91,7 @@ where
     logger: Logger,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm, H>,
     writer_ctrl: WriterContoller<EK, ER, T, StoreRouter<EK, ER>>,
+    apply_pool: FuturePool,
 }
 
 impl<EK, ER, H, T> Runner<EK, ER, H, T>
@@ -103,12 +106,14 @@ where
         router: BatchRouter<PeerFsm<EK, ER>, StoreFsm>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm, H>,
         writer_ctrl: WriterContoller<EK, ER, T, StoreRouter<EK, ER>>,
+        apply_pool: FuturePool,
     ) -> Self {
         let raft_pool = PoolController::new(logger.clone(), router, raft_pool_state);
         Runner {
             logger,
             raft_pool,
             writer_ctrl,
+            apply_pool,
         }
     }
 
@@ -126,6 +131,22 @@ where
             "resize raft pool";
             "from" => current_pool_size,
             "to" => self.raft_pool.state.expected_pool_size
+        );
+    }
+
+    fn resize_apply_pool(&mut self, size: usize) {
+        let current_pool_size = self.apply_pool.get_pool_size();
+        if current_pool_size == size {
+            return;
+        }
+
+        
+        
+        info!(
+            self.logger,
+            "resize apply pool";
+            "from" => current_pool_size,
+            "to" => size
         );
     }
 
