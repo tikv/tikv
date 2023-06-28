@@ -42,8 +42,7 @@ impl RocksEngine {
                 .as_ref()
                 .map_or(false, |key| key.as_slice() > r.start_key)
             {
-                self.delete_all_in_range_cf_by_key(wopts, cf, &r)?;
-                written = true;
+                written |= self.delete_all_in_range_cf_by_key(wopts, cf, &r)?;
                 continue;
             }
             last_end_key = Some(r.end_key.to_owned());

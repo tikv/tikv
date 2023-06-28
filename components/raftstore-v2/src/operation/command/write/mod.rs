@@ -310,8 +310,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         if index != u64::MAX && written {
             self.modifications_mut()[off] = index;
         }
-        // delete range is an unsafe operation and it cannot be rollbacked to replay, so
-        // we don't update modification index for this operation.
 
         Ok(())
     }
