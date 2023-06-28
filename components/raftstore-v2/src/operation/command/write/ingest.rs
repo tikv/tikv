@@ -5,7 +5,7 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{data_cf_offset, KvEngine, RaftEngine};
 use kvproto::import_sstpb::SstMeta;
 use raftstore::{
-    store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER, util},
+    store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER},
     Result,
 };
 use slog::error;
@@ -38,16 +38,16 @@ impl Store {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
     ) -> Result<()> {
-        let ssts = box_try!(ctx.sst_importer.list_ssts());
+        let ssts = box_try!(ctx.sst_importer.list_applied_ssts());
         if ssts.is_empty() {
             return Ok(());
         }
         let mut region_ssts: HashMap<_, Vec<_>> = HashMap::default();
-        for sst in ssts {
+        for (sst, applied_index) in ssts {
             region_ssts
                 .entry(sst.get_region_id())
                 .or_default()
-                .push(sst);
+                .push((sst, applied_index));
         }
         for (region_id, ssts) in region_ssts {
             if let Err(TrySendError::Disconnected(msg)) = ctx.router.send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
@@ -65,36 +65,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_cleanup_import_sst<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        ssts: Box<[SstMeta]>,
+        ssts: Box<[(SstMeta, u64)]>,
     ) {
         let mut stale_ssts = Vec::from(ssts);
-        let epoch = self.region().get_region_epoch();
-        stale_ssts.retain(|sst| {
-            fail::fail_point!("on_cleanup_import_sst", |_| true);
-            util::is_epoch_stale(sst.get_region_epoch(), epoch)
-        });
 
         // some sst needs to be kept if the log didn't flush the disk.
         let flushed_indexes = self.storage().apply_trace().flushed_indexes();
-        stale_ssts.retain(|sst| {
+        stale_ssts.retain(|(sst, index)| {
             let off = data_cf_offset(sst.get_cf_name());
-            let uuid = sst.get_uuid().to_vec();
-            let sst_index = self.sst_apply_state().sst_applied_index(&uuid);
-            if let Some(index) = sst_index {
-                return flushed_indexes.as_ref()[off] >= index;
-            }
-            true
+            flushed_indexes.as_ref()[off] >= *index
         });
 
         fail::fail_point!("on_cleanup_import_sst_schedule");
         if stale_ssts.is_empty() {
             return;
         }
-        let uuids = stale_ssts
-            .iter()
-            .map(|sst| sst.get_uuid().to_vec())
-            .collect();
-        self.sst_apply_state().delete_ssts(uuids);
         let _ = ctx
             .schedulers
             .tablet
@@ -121,9 +106,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     "ingest fail";
                     "sst" => ?sst,
                     "region" => ?self.region(),
+                    "applied_index" => index,
                     "error" => ?e
                 );
-                let _ = self.sst_importer().delete(sst);
+                let _ = self.sst_importer().delete(Some(index), sst);
                 return Err(e);
             }
             match self.sst_importer().validate(sst) {
@@ -144,11 +130,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 slog_panic!(self.logger, "ingest fail"; "ssts" => ?ssts, "error" => ?e);
             }
         }
-        let uuids = infos
-            .iter()
-            .map(|info| info.meta.get_uuid().to_vec())
-            .collect::<Vec<_>>();
-        self.set_sst_applied_index(uuids, index);
+
+        for sst in infos {
+            let _ = self.sst_importer().create_applied_file(&sst.meta, index);
+        }
 
         self.metrics.size_diff_hint += size;
         self.metrics.written_bytes += size as u64;

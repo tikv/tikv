@@ -50,7 +50,7 @@ pub enum Task<EK> {
         tablet: Either<EK, PathBuf>,
     },
     /// Cleanup ssts.
-    CleanupImportSst(Box<[SstMeta]>),
+    CleanupImportSst(Box<[(SstMeta, u64)]>),
     /// Flush memtable.
     Flush {
         region_id: u64,
@@ -411,9 +411,9 @@ impl<EK: KvEngine> Runner<EK> {
         false
     }
 
-    fn cleanup_ssts(&self, ssts: Box<[SstMeta]>) {
-        for sst in Vec::from(ssts) {
-            if let Err(e) = self.sst_importer.delete(&sst) {
+    fn cleanup_ssts(&self, ssts: Box<[(SstMeta, u64)]>) {
+        for (sst, applied_index) in Vec::from(ssts) {
+            if let Err(e) = self.sst_importer.delete(Some(applied_index), &sst) {
                 warn!(self.logger, "failed to cleanup sst"; "err" => ?e, "sst" => ?sst);
             }
         }

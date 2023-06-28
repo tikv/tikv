@@ -62,7 +62,7 @@ where
     /// Deletes SST files from the importer.
     fn handle_delete_sst(&self, ssts: Vec<SstMeta>) {
         for sst in &ssts {
-            let _ = self.importer.delete(sst);
+            let _ = self.importer.delete(None, sst);
         }
     }
 

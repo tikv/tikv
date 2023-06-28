@@ -222,7 +222,7 @@ pub enum PeerMsg {
     TabletTrimmed {
         tablet_index: u64,
     },
-    CleanupImportSst(Box<[SstMeta]>),
+    CleanupImportSst(Box<[(SstMeta, u64)]>),
     AskCommitMerge(RaftCmdRequest),
     AckCommitMerge {
         index: u64,

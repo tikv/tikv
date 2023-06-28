@@ -281,7 +281,6 @@ fn test_ingest_sst_v2() {
 
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
-    fail::cfg("on_cleanup_import_sst", "return").unwrap();
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
     fail::cfg_callback("on_cleanup_import_sst_schedule", move || {
@@ -309,7 +308,6 @@ fn test_ingest_sst_v2() {
     rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
 
     fail::remove("on_update_region_keys");
-    fail::remove("on_cleanup_import_sst");
     fail::remove("on_cleanup_import_sst_schedule");
     assert_ne!(0, count);
 

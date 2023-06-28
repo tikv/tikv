@@ -408,7 +408,6 @@ mod test {
             reg,
             read_scheduler,
             Arc::new(FlushState::new(5)),
-            SstApplyState::default(),
             None,
             5,
             None,

@@ -253,8 +253,8 @@ impl SstImporter {
         }
     }
 
-    pub fn delete(&self, meta: &SstMeta) -> Result<()> {
-        match self.dir.delete(meta, self.key_manager.as_deref()) {
+    pub fn delete(&self, index: Option<u64>, meta: &SstMeta) -> Result<()> {
+        match self.dir.delete(meta, index, self.key_manager.as_deref()) {
             Ok(path) => {
                 info!("delete"; "path" => ?path);
                 Ok(())
@@ -1282,6 +1282,14 @@ impl SstImporter {
     /// Other fields may be left blank.
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         self.dir.list_ssts()
+    }
+
+    pub fn list_applied_ssts(&self) -> Result<Vec<(SstMeta, u64)>> {
+        self.dir.list_applied_ssts()
+    }
+
+    pub fn create_applied_file(&self, meta: &SstMeta, applied_index: u64) -> Result<()> {
+        self.dir.create_applied_file(meta, applied_index)
     }
 
     /// Load the start key by a metadata.

@@ -619,7 +619,7 @@ where
         if !self.delete_ssts.is_empty() {
             let tag = self.tag.clone();
             for sst in self.delete_ssts.drain(..) {
-                self.importer.delete(&sst.meta).unwrap_or_else(|e| {
+                self.importer.delete(None, &sst.meta).unwrap_or_else(|e| {
                     panic!("{} cleanup ingested file {:?}: {:?}", tag, sst, e);
                 });
             }
@@ -1990,7 +1990,7 @@ where
                  "region" => ?&self.region,
             );
             // This file is not valid, we can delete it here.
-            let _ = ctx.importer.delete(sst);
+            let _ = ctx.importer.delete(None, sst);
             return Err(e);
         }
 

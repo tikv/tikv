@@ -7,7 +7,7 @@ use std::{
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{FlushState, KvEngine, SstApplyState, TabletRegistry};
+use engine_traits::{FlushState, KvEngine, TabletRegistry};
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
@@ -82,7 +82,6 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         tablet_scheduler: Scheduler<TabletTask<EK>>,
         high_priority_pool: FuturePool,
         flush_state: Arc<FlushState>,
-        sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         buckets: Option<BucketStat>,
@@ -99,7 +98,6 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             tablet_registry,
             read_scheduler,
             flush_state,
-            sst_apply_state,
             log_recovery,
             applied_term,
             buckets,

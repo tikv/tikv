@@ -783,7 +783,9 @@ where
         let delegate = match self.get_delegate(region_id) {
             Some(d) => d,
             None => {
-                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
+                TLS_LOCAL_READ_METRICS.with(|m: &std::cell::RefCell<LocalReadMetrics>| {
+                    m.borrow_mut().reject_reason.no_region.inc()
+                });
                 debug!("rejected by no region"; "region_id" => region_id);
                 return Ok(None);
             }

@@ -219,21 +219,27 @@ pub struct ImportDir {
     root_dir: PathBuf,
     temp_dir: PathBuf,
     clone_dir: PathBuf,
+    applied_dir: PathBuf,
 }
 
 impl ImportDir {
     const TEMP_DIR: &'static str = ".temp";
     const CLONE_DIR: &'static str = ".clone";
+    const APPLIED_DIR: &'static str = ".apply";
 
     pub fn new<P: AsRef<Path>>(root: P) -> Result<ImportDir> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
         let clone_dir = root_dir.join(Self::CLONE_DIR);
+        let applied_dir = root_dir.join(Self::APPLIED_DIR);
         if temp_dir.exists() {
             file_system::remove_dir_all(&temp_dir)?;
         }
         if clone_dir.exists() {
             file_system::remove_dir_all(&clone_dir)?;
+        }
+        if !applied_dir.exists() {
+            file_system::create_dir_all(&applied_dir)?;
         }
         file_system::create_dir_all(&temp_dir)?;
         file_system::create_dir_all(&clone_dir)?;
@@ -241,6 +247,7 @@ impl ImportDir {
             root_dir,
             temp_dir,
             clone_dir,
+            applied_dir,
         })
     }
 
@@ -288,17 +295,35 @@ impl ImportDir {
         Ok(())
     }
 
-    pub fn delete(&self, meta: &SstMeta, manager: Option<&DataKeyManager>) -> Result<ImportPath> {
+    pub fn delete(
+        &self,
+        meta: &SstMeta,
+        apply_index: Option<u64>,
+        manager: Option<&DataKeyManager>,
+    ) -> Result<ImportPath> {
         let path = self.join(meta)?;
         self.delete_file(&path.save, manager)?;
         self.delete_file(&path.temp, manager)?;
         self.delete_file(&path.clone, manager)?;
+        if let Some(apply_index) = apply_index {
+            let name = apply_sst_meta_to_path(meta, apply_index)?;
+            let path = self.clone_dir.join(name);
+            if path.exists() {
+                file_system::remove_file(path)?;
+            }
+        }
         Ok(path)
     }
 
     pub fn exist(&self, meta: &SstMeta) -> Result<bool> {
         let path = self.join(meta)?;
         Ok(path.save.exists())
+    }
+
+    pub fn create_applied_file(&self, meta: &SstMeta, applied_index: u64) -> Result<()> {
+        let name = apply_sst_meta_to_path(meta, applied_index)?;
+        let path = self.clone_dir.join(name);
+        file_system::create_dir(path).map_err(|e| Error::from(e))
     }
 
     pub fn validate(
@@ -455,6 +480,22 @@ impl ImportDir {
         }
         Ok(ssts)
     }
+
+    pub fn list_applied_ssts(&self) -> Result<Vec<(SstMeta, u64)>> {
+        let mut ssts = Vec::new();
+        for e in file_system::read_dir(&self.applied_dir)? {
+            let e = e?;
+            if !e.file_type()?.is_file() {
+                continue;
+            }
+            let path = e.path();
+            match parse_apply_meta_form_path(&path) {
+                Ok(sst) => ssts.push(sst),
+                Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.display(),),
+            }
+        }
+        Ok(ssts)
+    }
 }
 
 const SST_SUFFIX: &str = ".sst";
@@ -469,6 +510,48 @@ pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
         meta.get_cf_name(),
         SST_SUFFIX,
     )))
+}
+
+pub fn apply_sst_meta_to_path(meta: &SstMeta, apply_index: u64) -> Result<PathBuf> {
+    Ok(PathBuf::from(format!(
+        "{}_{}_{}_{}_{}_{}{}",
+        UuidBuilder::from_slice(meta.get_uuid())?.build(),
+        meta.get_region_id(),
+        meta.get_region_epoch().get_conf_ver(),
+        meta.get_region_epoch().get_version(),
+        meta.get_cf_name(),
+        apply_index,
+        SST_SUFFIX,
+    )))
+}
+
+pub fn parse_apply_meta_form_path<P: AsRef<Path>>(path: P) -> Result<(SstMeta, u64)> {
+    let path = path.as_ref();
+    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name,
+        None => return Err(Error::InvalidSstPath(path.to_owned())),
+    };
+
+    // A valid file name should be in the format:
+    // "{uuid}_{region_id}_{region_epoch.conf_ver}_{region_epoch.version}_{cf}.sst"
+    if !file_name.ends_with(SST_SUFFIX) {
+        return Err(Error::InvalidSstPath(path.to_owned()));
+    }
+    let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
+    if elems.len() < 5 {
+        return Err(Error::InvalidSstPath(path.to_owned()));
+    }
+
+    let mut meta = SstMeta::default();
+    let uuid = Uuid::parse_str(elems[0])?;
+    meta.set_uuid(uuid.as_bytes().to_vec());
+    meta.set_region_id(elems[1].parse()?);
+    meta.mut_region_epoch().set_conf_ver(elems[2].parse()?);
+    meta.mut_region_epoch().set_version(elems[3].parse()?);
+    meta.set_cf_name(elems[4].to_owned());
+    let apply_index: u64 = elems[5].parse()?;
+
+    Ok((meta, apply_index))
 }
 
 pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {

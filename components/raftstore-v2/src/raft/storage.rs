@@ -529,7 +529,6 @@ mod tests {
             reg,
             sched,
             Arc::new(FlushState::new(5)),
-            SstApplyState::default(),
             None,
             5,
             None,
