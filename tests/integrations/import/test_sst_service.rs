@@ -1,7 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::{executor::block_on, stream::StreamExt};
-use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
+use kvproto::{
+    import_sstpb::*,
+    kvrpcpb::{Context, KeyRange},
+    tikvpb::*,
+};
 use pd_client::PdClient;
 use tempfile::Builder;
 use test_sst_importer::*;
@@ -135,7 +139,7 @@ fn test_switch_mode_v2() {
     let mut switch_req = SwitchModeRequest::default();
     switch_req.set_mode(SwitchMode::Import);
     let mut key_range = KeyRange::default();
-    key_range.set_start([50].to_vec());
+    key_range.set_start_key([50].to_vec());
     switch_req.set_range(key_range);
     let _ = import.switch_mode(&switch_req).unwrap();
 

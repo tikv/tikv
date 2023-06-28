@@ -22,7 +22,7 @@ use kvproto::{
         Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk, SstMeta,
         SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
     },
-    kvrpcpb::Context,
+    kvrpcpb::{Context, KeyRange},
     metapb::Region,
 };
 use nom::AsBytes;
@@ -670,8 +670,9 @@ macro_rules! impl_write {
 }
 
 fn region_in_range(range: &KeyRange, region: &Region) -> bool {
-    range.start.as_bytes() <= region.get_start_key()
-        && (range.end.is_empty() || (!region.end_key.is_empty() && region.end_key <= range.end))
+    range.start_key.as_bytes() <= region.get_start_key()
+        && (range.end_key.is_empty()
+            || (!region.end_key.is_empty() && region.end_key <= range.end_key))
 }
 
 impl<E: Engine> ImportSst for ImportSstService<E> {
