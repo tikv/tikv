@@ -54,6 +54,12 @@ pub struct Apply<EK: KvEngine, R> {
     // can fetch the wrong apply index from flush_state.
     applied_index: u64,
     /// The largest index that have modified each column family.
+    ///
+    /// Caveats: This field must be consistent with the state of memtable. If
+    /// modified is advanced when memtable is empty, the admin flushed can never
+    /// be advanced. If modified is not advanced when memtable is written, the
+    /// corresponding Raft entry may be deleted before the change is fully
+    /// persisted (flushed).
     modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
     flush_state: Arc<FlushState>,
@@ -73,9 +79,14 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
+<<<<<<< HEAD
     checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+=======
+    tablet_scheduler: Scheduler<TabletTask<EK>>,
+    high_priority_pool: FuturePool,
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
 
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
@@ -109,6 +120,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         assert_ne!(applied_index, 0, "{}", SlogFormat(&logger));
         let tablet = remote_tablet.latest().unwrap().clone();
         let perf_context = EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply);
+        assert!(
+            !cfg.use_delete_range,
+            "v2 doesn't support RocksDB delete range"
+        );
         Apply {
             peer,
             tablet,
@@ -132,8 +147,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
+<<<<<<< HEAD
             checkpoint_scheduler,
             use_delete_range: cfg.use_delete_range,
+=======
+            tablet_scheduler,
+            high_priority_pool,
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,
@@ -334,7 +354,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         &self.checkpoint_scheduler
     }
 
+<<<<<<< HEAD
     pub fn use_delete_range(&self) -> bool {
         self.use_delete_range
+=======
+    #[inline]
+    pub fn tablet_scheduler(&self) -> &Scheduler<TabletTask<EK>> {
+        &self.tablet_scheduler
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
     }
 }

@@ -507,6 +507,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
                 }
                 SimpleWrite::DeleteRange(dr) => {
+<<<<<<< HEAD
                     let _ = self.apply_delete_range(
                         dr.cf,
                         u64::MAX,
@@ -515,6 +516,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         dr.notify_only,
                         self.use_delete_range(),
                     );
+=======
+                    let _ = self
+                        .apply_delete_range(
+                            dr.cf,
+                            u64::MAX,
+                            dr.start_key,
+                            dr.end_key,
+                            dr.notify_only,
+                        )
+                        .await;
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
                 }
                 SimpleWrite::Ingest(_) => {
                     error!(
@@ -633,8 +645,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
+<<<<<<< HEAD
                                     self.use_delete_range(),
                                 )?;
+=======
+                                )
+                                .await?;
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
                             }
                             SimpleWrite::Ingest(ssts) => {
                                 self.apply_ingest(log_index, ssts)?;
@@ -732,8 +749,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
+<<<<<<< HEAD
                             self.use_delete_range(),
                         )?;
+=======
+                        )
+                        .await?;
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
                     }
                     _ => unimplemented!(),
                 }

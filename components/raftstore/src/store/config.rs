@@ -558,6 +558,7 @@ impl Config {
         region_split_size: ReadableSize,
         enable_region_bucket: bool,
         region_bucket_size: ReadableSize,
+        raft_kv_v2: bool,
     ) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
@@ -821,6 +822,11 @@ impl Config {
             }
         }
         assert!(self.region_compact_check_step.is_some());
+        if raft_kv_v2 && self.use_delete_range {
+            return Err(box_err!(
+                "partitioned-raft-kv doesn't support RocksDB delete range."
+            ));
+        }
 
         Ok(())
     }
@@ -1149,7 +1155,8 @@ mod tests {
         let split_size = coprocessor::config::SPLIT_SIZE;
         let mut cfg = Config::new();
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
         assert_eq!(
             cfg.raft_min_election_timeout_ticks,
             cfg.raft_election_timeout_ticks
@@ -1161,50 +1168,51 @@ mod tests {
 
         cfg.raft_heartbeat_ticks = 0;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_heartbeat_ticks = 10;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.raft_min_election_timeout_ticks = 5;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
         cfg.raft_min_election_timeout_ticks = 25;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
         cfg.raft_min_election_timeout_ticks = 10;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
 
         cfg.raft_heartbeat_ticks = 11;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.raft_log_gc_threshold = 0;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.raft_log_gc_size_limit = Some(ReadableSize(0));
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.raft_log_gc_size_limit = None;
         cfg.optimize_for(false);
-        cfg.validate(ReadableSize(20), false, ReadableSize(0))
+        cfg.validate(ReadableSize(20), false, ReadableSize(0), false)
             .unwrap();
         assert_eq!(cfg.raft_log_gc_size_limit, Some(ReadableSize(15)));
 
@@ -1213,27 +1221,27 @@ mod tests {
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(20);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.raft_log_gc_count_limit = Some(100);
         cfg.merge_max_log_gap = 110;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.raft_log_gc_count_limit = None;
         cfg.optimize_for(false);
-        cfg.validate(ReadableSize::mb(1), false, ReadableSize(0))
+        cfg.validate(ReadableSize::mb(1), false, ReadableSize(0), false)
             .unwrap();
         assert_eq!(cfg.raft_log_gc_count_limit, Some(768));
 
         cfg = Config::new();
         cfg.merge_check_tick_interval = ReadableDuration::secs(0);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
@@ -1241,76 +1249,78 @@ mod tests {
         cfg.raft_election_timeout_ticks = 10;
         cfg.peer_stale_state_check_interval = ReadableDuration::secs(5);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(2);
         cfg.abnormal_leader_missing_duration = ReadableDuration::minutes(1);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.abnormal_leader_missing_duration = ReadableDuration::minutes(2);
         cfg.max_leader_missing_duration = ReadableDuration::minutes(1);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.local_read_batch_size = 0;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.apply_batch_system.max_batch_size = Some(0);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.apply_batch_system.pool_size = 0;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.store_batch_system.max_batch_size = Some(0);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.store_batch_system.pool_size = 0;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.apply_batch_system.max_batch_size = Some(10241);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.store_batch_system.max_batch_size = Some(10241);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.hibernate_regions = true;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
         assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
         assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
 
         cfg = Config::new();
         cfg.hibernate_regions = false;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
         assert_eq!(cfg.store_batch_system.max_batch_size, Some(1024));
         assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
 
@@ -1319,20 +1329,21 @@ mod tests {
         cfg.store_batch_system.max_batch_size = Some(123);
         cfg.apply_batch_system.max_batch_size = Some(234);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
         assert_eq!(cfg.store_batch_system.max_batch_size, Some(123));
         assert_eq!(cfg.apply_batch_system.max_batch_size, Some(234));
 
         cfg = Config::new();
         cfg.future_poll_size = 0;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
         cfg.snap_generator_pool_size = 0;
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
@@ -1340,7 +1351,7 @@ mod tests {
         cfg.raft_election_timeout_ticks = 11;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
 
         cfg = Config::new();
@@ -1348,54 +1359,81 @@ mod tests {
         cfg.max_peer_down_duration = ReadableDuration::minutes(5);
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
 
         cfg = Config::new();
         cfg.raft_max_size_per_msg = ReadableSize(0);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
         cfg.raft_max_size_per_msg = ReadableSize::gb(64);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
         cfg.raft_max_size_per_msg = ReadableSize::gb(3);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
 
         cfg = Config::new();
         cfg.raft_entry_max_size = ReadableSize(0);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
         cfg.raft_entry_max_size = ReadableSize::mb(3073);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0))
+        cfg.validate(split_size, false, ReadableSize(0), false)
             .unwrap_err();
         cfg.raft_entry_max_size = ReadableSize::gb(3);
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
 
         cfg = Config::new();
         cfg.optimize_for(false);
-        cfg.validate(split_size, false, ReadableSize(0)).unwrap();
+        cfg.validate(split_size, false, ReadableSize(0), false)
+            .unwrap();
         assert_eq!(cfg.region_split_check_diff(), split_size / 16);
 
         cfg = Config::new();
         cfg.optimize_for(false);
-        cfg.validate(split_size, true, split_size / 8).unwrap();
+        cfg.validate(split_size, true, split_size / 8, false)
+            .unwrap();
         assert_eq!(cfg.region_split_check_diff(), split_size / 16);
 
         cfg = Config::new();
         cfg.optimize_for(false);
-        cfg.validate(split_size, true, split_size / 20).unwrap();
+        cfg.validate(split_size, true, split_size / 20, false)
+            .unwrap();
         assert_eq!(cfg.region_split_check_diff(), split_size / 20);
 
         cfg = Config::new();
         cfg.region_split_check_diff = Some(ReadableSize(1));
         cfg.optimize_for(false);
-        cfg.validate(split_size, true, split_size / 20).unwrap();
+        cfg.validate(split_size, true, split_size / 20, false)
+            .unwrap();
         assert_eq!(cfg.region_split_check_diff(), ReadableSize(1));
+<<<<<<< HEAD
+=======
+
+        cfg = Config::new();
+        cfg.optimize_for(true);
+        cfg.validate(split_size, true, split_size / 20, false)
+            .unwrap();
+        assert_eq!(cfg.raft_log_gc_size_limit(), ReadableSize::mb(200));
+        assert_eq!(cfg.raft_log_gc_count_limit(), 10000);
+
+        cfg = Config::new();
+        cfg.optimize_for(false);
+        cfg.validate(split_size, true, split_size / 20, false)
+            .unwrap();
+        assert_eq!(cfg.raft_log_gc_size_limit(), split_size * 3 / 4);
+        assert_eq!(
+            cfg.raft_log_gc_count_limit(),
+            split_size * 3 / 4 / ReadableSize::kb(1)
+        );
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
     }
 }

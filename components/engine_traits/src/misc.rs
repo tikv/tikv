@@ -6,7 +6,8 @@
 //! FIXME: Things here need to be moved elsewhere.
 
 use crate::{
-    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt, range::Range,
+    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt,
+    range::Range, WriteBatchExt, WriteOptions,
 };
 
 #[derive(Clone, Debug)]
@@ -64,7 +65,7 @@ pub struct RangeStats {
     pub num_rows: u64,
 }
 
-pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
+pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     type StatisticsReporter: StatisticsReporter<Self>;
 
     /// Flush all specified column families at once.
@@ -74,19 +75,38 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 
+<<<<<<< HEAD
     fn delete_ranges_cfs(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
+=======
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<()>;
+
+    /// Returns whether there's data written through kv interface.
+    fn delete_ranges_cfs(
+        &self,
+        wopts: &WriteOptions,
+        strategy: DeleteStrategy,
+        ranges: &[Range<'_>],
+    ) -> Result<bool> {
+        let mut written = false;
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
         for cf in self.cf_names() {
-            self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
+            written |= self.delete_ranges_cf(wopts, cf, strategy.clone(), ranges)?;
         }
-        Ok(())
+        Ok(written)
     }
 
+    /// Returns whether there's data written through kv interface.
     fn delete_ranges_cf(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
-    ) -> Result<()>;
+    ) -> Result<bool>;
 
     /// Return the approximate number of records and size in the range of
     /// memtables of the cf.

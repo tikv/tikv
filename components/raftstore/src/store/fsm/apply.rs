@@ -31,7 +31,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
     util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
     RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
-    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use kvproto::{
@@ -1948,8 +1948,9 @@ where
                     e
                 )
             };
+            let wopts = WriteOptions::default();
             engine
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+                .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
             let strategy = if use_delete_range {
@@ -1959,10 +1960,10 @@ where
             };
             // Delete all remaining keys.
             engine
-                .delete_ranges_cf(cf, strategy.clone(), &range)
+                .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
                 .unwrap_or_else(move |e| fail_f(e, strategy));
             engine
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+                .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteBlobs, &range)
                 .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteBlobs));
         }
 

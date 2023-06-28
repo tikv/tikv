@@ -231,7 +231,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         start_key: &[u8],
         end_key: &[u8],
         notify_only: bool,
-        use_delete_range: bool,
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete_range.inc();
         let off = data_cf_offset(cf);
@@ -266,12 +265,45 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let start_key = keys::data_key(start_key);
 
+<<<<<<< HEAD
+=======
+        let start = Instant::now_coarse();
+        // Use delete_files_in_range to drop as many sst files as possible, this
+        // is a way to reclaim disk space quickly after drop a table/index.
+        let written = if !notify_only {
+            let (notify, wait) = oneshot::channel();
+            let delete_range = TabletTask::delete_range(
+                self.region_id(),
+                self.tablet().clone(),
+                name_to_cf(cf).unwrap(),
+                start_key.clone().into(),
+                end_key.clone().into(),
+                Box::new(move |written| {
+                    notify.send(written).unwrap();
+                }),
+            );
+            if let Err(e) = self.tablet_scheduler().schedule_force(delete_range) {
+                error!(self.logger, "fail to delete range";
+                    "range_start" => log_wrappers::Value::key(&start_key),
+                    "range_end" => log_wrappers::Value::key(&end_key),
+                    "notify_only" => notify_only,
+                    "error" => ?e,
+                );
+            }
+
+            wait.await.unwrap()
+        } else {
+            false
+        };
+
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
         info!(
             self.logger,
             "execute delete range";
             "range_start" => log_wrappers::Value::key(&start_key),
             "range_end" => log_wrappers::Value::key(&end_key),
             "notify_only" => notify_only,
+<<<<<<< HEAD
             "use_delete_range" => use_delete_range,
         );
 
@@ -311,6 +343,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             // DeleteStrategy::DeleteBlobs));
         }
         if index != u64::MAX {
+=======
+            "duration" => ?start.saturating_elapsed(),
+        );
+
+        if index != u64::MAX && written {
+>>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
             self.modifications_mut()[off] = index;
         }
 
