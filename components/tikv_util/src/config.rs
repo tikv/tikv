@@ -647,6 +647,9 @@ pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    #[cfg(target_os = "freebsd")]
+    let expect = expect as i64;
+
     use std::mem;
 
     unsafe {
