@@ -1441,7 +1441,9 @@ where
                     }
                     // Control grpc server.
                     if let Some(op) = resp.control_grpc.take() {
-                        if let Err(e) = scheduler.schedule(Task::ControlGrpcServer(op.get_ctrl_event())) {
+                        if let Err(e) =
+                            scheduler.schedule(Task::ControlGrpcServer(op.get_ctrl_event()))
+                        {
                             warn!("fail to schedule control grpc task"; "err" => ?e);
                         }
                     }

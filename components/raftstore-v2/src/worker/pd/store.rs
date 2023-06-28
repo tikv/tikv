@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
+use std::{cmp, sync::atomic::Ordering};
 
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
@@ -231,6 +231,8 @@ where
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
         stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
         stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
+        // Update grpc server status
+        stats.set_is_grpc_paused(self.is_grpc_server_paused.load(Ordering::Relaxed));
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
@@ -269,6 +271,7 @@ where
 
         let resp = self.pd_client.store_heartbeat(stats, None, None);
         let logger = self.logger.clone();
+        let is_grpc_server_paused = self.is_grpc_server_paused.clone();
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -282,6 +285,23 @@ where
                             logger,
                             "Ignored AwakenRegions in raftstore-v2 as no hibernated regions in raftstore-v2"
                         );
+                    }
+                    // Control grpc server.
+                    else if let Some(op) = resp.control_grpc.take() {
+                        info!(logger, "forcely control grpc server";
+                                "is_grpc_server_paused" => is_grpc_server_paused.load(Ordering::Relaxed),
+                                "event" => ?op,
+                        );
+                        match op.get_ctrl_event() {
+                            pdpb::ControlGrpcEvent::Pause => {
+                                // TODO: send message to outer handler to notify PAUSE grpc server.
+                                is_grpc_server_paused.store(true, Ordering::Relaxed);
+                            }
+                            pdpb::ControlGrpcEvent::Resume => {
+                                // TODO: send message to outer handler to notify RESUME grpc server.
+                                is_grpc_server_paused.store(false, Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
                 Err(e) => {

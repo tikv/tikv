@@ -217,6 +217,9 @@ where
     // For slowness detection
     slowness_stats: slowness::SlownessStatistics,
 
+    // For grpc server.
+    is_grpc_server_paused: Arc<AtomicBool>,
+
     logger: Logger,
     shutdown: Arc<AtomicBool>,
     cfg: Arc<VersionTrack<Config>>,
@@ -276,6 +279,7 @@ where
             region_buckets: HashMap::default(),
             region_cpu_records: HashMap::default(),
             is_hb_receiver_scheduled: false,
+            is_grpc_server_paused: Arc::new(AtomicBool::new(false)),
             concurrency_manager,
             causal_ts_provider,
             slowness_stats,
