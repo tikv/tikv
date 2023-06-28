@@ -103,7 +103,7 @@ impl<E: Engine> Endpoint<E> {
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
-            max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            max_handle_duration: cfg.end_point_request_max_handle_duration().0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             quota_limiter,
             _phantom: Default::default(),
@@ -1492,9 +1492,9 @@ mod tests {
         ));
 
         let config = Config {
-            end_point_request_max_handle_duration: ReadableDuration(
+            end_point_request_max_handle_duration: Some(ReadableDuration(
                 (PAYLOAD_SMALL + PAYLOAD_LARGE) * 2,
-            ),
+            )),
             ..Default::default()
         };
 

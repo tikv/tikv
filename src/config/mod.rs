@@ -3401,6 +3401,8 @@ impl TikvConfig {
             .optimize_for(self.coprocessor.region_split_size());
         self.raft_store
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
+        self.server
+            .optimize_for(self.coprocessor.region_split_size());
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
         }
@@ -5376,6 +5378,35 @@ mod tests {
         cfg.server.raft_msg_max_batch_size = 32;
         assert_eq_debug(&cfg_controller.get_current(), &cfg);
         check_cfg(&cfg);
+    }
+
+    #[test]
+    fn test_endpoint_config() {
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.storage.engine = EngineType::RaftKv;
+        default_cfg.validate().unwrap();
+        assert_eq!(
+            default_cfg.server.end_point_request_max_handle_duration(),
+            ReadableDuration::secs(60)
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.storage.engine = EngineType::RaftKv2;
+        default_cfg.validate().unwrap();
+        assert_eq!(
+            default_cfg.server.end_point_request_max_handle_duration(),
+            ReadableDuration::secs(1800)
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.storage.engine = EngineType::RaftKv2;
+        default_cfg.server.end_point_request_max_handle_duration =
+            Some(ReadableDuration::secs(900));
+        default_cfg.validate().unwrap();
+        assert_eq!(
+            default_cfg.server.end_point_request_max_handle_duration(),
+            ReadableDuration::secs(900)
+        );
     }
 
     #[test]
