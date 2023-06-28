@@ -54,6 +54,12 @@ pub struct Apply<EK: KvEngine, R> {
     // can fetch the wrong apply index from flush_state.
     applied_index: u64,
     /// The largest index that have modified each column family.
+    ///
+    /// Caveats: This field must be consistent with the state of memtable. If
+    /// modified is advanced when memtable is empty, the admin flushed can never
+    /// be advanced. If modified is not advanced when memtable is written, the
+    /// corresponding Raft entry may be deleted before the change is fully
+    /// persisted (flushed).
     modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
     flush_state: Arc<FlushState>,
@@ -281,11 +287,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
     }
 
-    /// Caveats: This field must be consistent with the state of memtable. If
-    /// modified is advanced when memtable is empty, the admin flushed can never
-    /// be advanced. If modified is not advanced when memtable is written, the
-    /// corresponding Raft entry may be deleted before the change is fully
-    /// persisted (flushed).
     #[inline]
     pub fn modifications_mut(&mut self) -> &mut DataTrace {
         &mut self.modifications
