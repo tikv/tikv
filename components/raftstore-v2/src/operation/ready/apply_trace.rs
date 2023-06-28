@@ -183,19 +183,22 @@ impl ApplyTrace {
     fn recover(region_id: u64, engine: &impl RaftEngine) -> Result<(Self, RegionLocalState)> {
         let mut trace = ApplyTrace::default();
         // Get all the recorded apply index from data CFs.
+        let mut min_flushed = u64::MAX;
         for (off, cf) in DATA_CFS.iter().enumerate() {
             // There should be at least one record.
             let i = engine.get_flushed_index(region_id, cf)?.unwrap();
             trace.data_cfs[off].flushed = i;
             trace.data_cfs[off].last_modified = i;
+            min_flushed = cmp::min(min_flushed, i);
         }
         let i = engine.get_flushed_index(region_id, CF_RAFT)?.unwrap();
         // Index of raft CF means all data before that must be persisted.
-        trace.admin.flushed = i;
-        trace.admin.last_modified = i;
+        let mem_admin_flushed = cmp::max(i, min_flushed);
+        trace.admin.flushed = mem_admin_flushed;
+        trace.admin.last_modified = mem_admin_flushed;
         trace.persisted_applied = i;
-        trace.last_flush_trigger = i;
-        let applied_region_state = match engine.get_region_state(region_id, trace.admin.flushed)? {
+        trace.last_flush_trigger = mem_admin_flushed;
+        let applied_region_state = match engine.get_region_state(region_id, i)? {
             Some(s) => s,
             None => panic!(
                 "failed to get region state [region_id={}] [apply_trace={:?}]",
