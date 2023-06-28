@@ -4,11 +4,14 @@ use std::{sync::Arc, thread};
 
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
 use file_system::{set_io_type, IoType};
-use raftstore::store::{BatchComponent, RefreshConfigTask};
+use raftstore::store::{BatchComponent, RefreshConfigTask, Transport, WriterContoller};
 use slog::{error, info, warn, Logger};
 use tikv_util::{sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable};
 
-use crate::fsm::{PeerFsm, StoreFsm};
+use crate::{
+    fsm::{PeerFsm, StoreFsm},
+    StoreRouter,
+};
 
 pub struct PoolController<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub logger: Logger,
@@ -76,29 +79,37 @@ where
     }
 }
 
-pub struct Runner<EK, ER, H>
+pub struct Runner<EK, ER, H, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     H: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm>,
+    T: Transport + 'static,
 {
     logger: Logger,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm, H>,
+    writer_ctrl: WriterContoller<EK, ER, T, StoreRouter<EK, ER>>,
 }
 
-impl<EK, ER, H> Runner<EK, ER, H>
+impl<EK, ER, H, T> Runner<EK, ER, H, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     H: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm>,
+    T: Transport + 'static,
 {
     pub fn new(
         logger: Logger,
         router: BatchRouter<PeerFsm<EK, ER>, StoreFsm>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm, H>,
+        writer_ctrl: WriterContoller<EK, ER, T, StoreRouter<EK, ER>>,
     ) -> Self {
         let raft_pool = PoolController::new(logger.clone(), router, raft_pool_state);
-        Runner { logger, raft_pool }
+        Runner {
+            logger,
+            raft_pool,
+            writer_ctrl,
+        }
     }
 
     fn resize_raft_pool(&mut self, size: usize) {
@@ -117,13 +128,56 @@ where
             "to" => self.raft_pool.state.expected_pool_size
         );
     }
+
+    /// Resizes the count of background threads in store_writers.
+    fn resize_store_writers(&mut self, size: usize) {
+        // The resizing of store writers will not directly update the local
+        // cached store writers in each poller. Each poller will timely
+        // correct its local cached in its next `poller.begin()` after
+        // the resize operation completed.
+        let current_size = self.writer_ctrl.expected_writers_size();
+        self.writer_ctrl.set_expected_writers_size(size);
+        match current_size.cmp(&size) {
+            std::cmp::Ordering::Greater => {
+                if let Err(e) = self.writer_ctrl.mut_store_writers().decrease_to(size) {
+                    error!(
+                        self.logger,
+                        "failed to decrease store writers size";
+                        "err_msg" => ?e
+                    );
+                }
+            }
+            std::cmp::Ordering::Less => {
+                let writer_meta = self.writer_ctrl.writer_meta().clone();
+                if let Err(e) = self
+                    .writer_ctrl
+                    .mut_store_writers()
+                    .increase_to(size, writer_meta)
+                {
+                    error!(
+                        self.logger,
+                        "failed to increase store writers size";
+                        "err_msg" => ?e
+                    );
+                }
+            }
+            std::cmp::Ordering::Equal => return,
+        }
+        info!(
+            self.logger,
+            "resize store writers pool";
+            "from" => current_size,
+            "to" => size
+        );
+    }
 }
 
-impl<EK, ER, H> Runnable for Runner<EK, ER, H>
+impl<EK, ER, H, T> Runnable for Runner<EK, ER, H, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     H: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm> + std::marker::Send,
+    T: Transport + 'static,
 {
     type Task = RefreshConfigTask;
 
@@ -137,6 +191,7 @@ where
                     }
                 };
             }
+            RefreshConfigTask::ScaleWriters(size) => self.resize_store_writers(size),
             _ => {
                 warn!(
                     self.logger,
