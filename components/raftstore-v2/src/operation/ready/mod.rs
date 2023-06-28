@@ -34,6 +34,7 @@ use std::{
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{
+    metapb::PeerRole,
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
@@ -506,9 +507,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
-        // Filling start and end key is only needed for being compatible with
-        // raftstore v1 learners (e.g. tiflash engine).
-        //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
         //   leader yet
@@ -535,7 +533,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub(crate) fn send_raft_message<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        msg: RaftMessage,
+        mut msg: RaftMessage,
     ) {
         let msg_type = msg.get_message().get_msg_type();
         let to_peer_id = msg.get_to_peer().get_id();
@@ -543,6 +541,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if msg_type == MessageType::MsgSnapshot {
             let index = msg.get_message().get_snapshot().get_metadata().get_index();
             self.update_last_sent_snapshot_index(index);
+
+            // Set commit index for learner snapshots. It's needed to address
+            // compatibility issues between v1 and v2 snapshots.
+            // See https://github.com/pingcap/tiflash/issues/7568#issuecomment-1576382311
+            if let Some(p) = find_peer(self.region(), to_store_id) && p.get_role() == PeerRole::Learner  {
+                msg.mut_message().set_commit(self.raft_group().raft.raft_log.committed);
+            }
         }
 
         debug!(

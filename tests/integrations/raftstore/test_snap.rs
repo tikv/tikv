@@ -948,3 +948,36 @@ fn check_observer(observer: &MockApplySnapshotObserver, region_id: u64, snap_pat
 
     panic!("cannot find {:?} in observer", snap_path);
 }
+
+#[test]
+fn test_v2_leaner_snapshot_commit_index() {
+    let mut cluster = test_raftstore_v2::new_node_cluster(0, 2);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+
+    let (tx, rx) = mpsc::channel();
+    cluster.add_recv_filter_on_node(
+        2,
+        Box::new(RecvSnapshotFilter {
+            notifier: Mutex::new(Some(tx)),
+            region_id: r,
+        }),
+    );
+
+    cluster.must_put(b"k1", b"v1");
+
+    // Set commit index for learner snapshots. It's needed to address
+    // compatibility issues between v1 and v2 snapshots.
+    // See https://github.com/pingcap/tiflash/issues/7568#issuecomment-1576382311
+    pd_client.must_add_peer(r, new_learner_peer(2, 2));
+    let msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_ne!(msg.get_message().get_commit(), 0);
+
+    cluster.must_put(b"k2", b"v2");
+
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k3", b"v3");
+}
