@@ -14,6 +14,7 @@ use test_raftstore::Simulator;
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
 use tikv_util::{config::ReadableSize, HandyRwLock};
+use tempfile::TempDir;
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
@@ -279,6 +280,8 @@ fn test_ingest_sst_v2() {
     send_upload_sst(&import, &meta, &data).unwrap();
     ingest.set_sst(meta.clone());
 
+    // disable data flushed
+    fail::cfg("on_flush_completed", "return()").unwrap();
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
     let (tx, rx) = channel::<()>();
@@ -288,17 +291,11 @@ fn test_ingest_sst_v2() {
     })
     .unwrap();
     rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
-    let mut count = 0;
-    for path in &cluster.paths {
-        let sst_dir = path.path().join("import-sst");
-        for entry in std::fs::read_dir(sst_dir).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_file() {
-                count += 1;
-            }
-        }
-    }
-
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(1, count);
+    fail::remove("on_cleanup_import_sst_schedule");
+    
+    // region size and keys should be updated.
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
     fail::cfg_callback("on_update_region_keys", move || {
@@ -306,16 +303,55 @@ fn test_ingest_sst_v2() {
     })
     .unwrap();
     rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
-
     fail::remove("on_update_region_keys");
-    fail::remove("on_cleanup_import_sst_schedule");
-    assert_ne!(0, count);
-
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::thread::sleep(std::time::Duration::from_millis(100));
 
     let region_keys = cluster
         .pd_client
         .get_region_approximate_keys(ctx.get_region_id())
         .unwrap();
     assert_eq!(100, region_keys);
+
+    // restart node 
+    cluster.stop_node(1);
+    cluster.start().unwrap();
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(1, count);
+
+    // flush manual
+    fail::remove("on_flush_completed");
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("on_flush_completed", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    for i in 0..count{
+        cluster.must_put(format!("k-{}",i).as_bytes(), b"v");
+    }
+    cluster.flush_data();
+    
+    rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+    fail::remove("on_flush_completed");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(0, count);
+}
+
+fn sst_file_count(paths:&Vec<TempDir>)->u64{
+    let mut count = 0;
+    for path in paths {
+        let sst_dir = path.path().join("import-sst");
+        for entry in std::fs::read_dir(sst_dir).unwrap() {
+            let entry = entry.unwrap();
+           
+            if  entry.path().file_name().and_then(|n| n.to_str()).unwrap().contains("0_0_0"){
+                continue;
+            }
+            if entry.file_type().unwrap().is_file() {
+                count += 1;
+            }
+        }
+    }
+    count
 }

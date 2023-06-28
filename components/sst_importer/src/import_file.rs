@@ -307,7 +307,7 @@ impl ImportDir {
         self.delete_file(&path.clone, manager)?;
         if let Some(apply_index) = apply_index {
             let name = apply_sst_meta_to_path(meta, apply_index)?;
-            let path = self.clone_dir.join(name);
+            let path = self.applied_dir.join(name);
             if path.exists() {
                 file_system::remove_file(path)?;
             }
@@ -322,8 +322,13 @@ impl ImportDir {
 
     pub fn create_applied_file(&self, meta: &SstMeta, applied_index: u64) -> Result<()> {
         let name = apply_sst_meta_to_path(meta, applied_index)?;
-        let path = self.clone_dir.join(name);
-        file_system::create_dir(path).map_err(|e| Error::from(e))
+        let path = self.applied_dir.join(name);
+        return OpenOptions::new()
+            .read(true)
+            .create_new(true)
+            .open(path)
+            .map(|_|())
+            .map_err(|e| Error::from(e));
     }
 
     pub fn validate(
@@ -628,6 +633,28 @@ mod test {
         ));
         let new_meta = parse_meta_from_path(path).unwrap();
         assert_eq!(meta, new_meta);
+    }
+
+    #[test]
+    fn test_applied_path_to_sst_meta() {
+        let uuid = Uuid::new_v4();
+        let mut meta = SstMeta::default();
+        meta.set_uuid(uuid.as_bytes().to_vec());
+        meta.set_region_id(1);
+        meta.mut_region_epoch().set_conf_ver(222);
+        meta.mut_region_epoch().set_version(333);
+        let path = PathBuf::from(format!(
+            "{}_{}_{}_{}_{}{}",
+            UuidBuilder::from_slice(meta.get_uuid()).unwrap().build(),
+            meta.get_region_id(),
+            meta.get_region_epoch().get_conf_ver(),
+            meta.get_region_epoch().get_version(),
+            2,
+            SST_SUFFIX,
+        ));
+        let (new_meta, applied_index) = parse_apply_meta_form_path(path).unwrap();
+        assert_eq!(meta, new_meta);
+        assert_eq!(applied_index, 2);
     }
 
     #[cfg(feature = "test-engines-rocksdb")]
