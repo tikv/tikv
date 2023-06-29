@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use engine_traits::{KvEngine, RaftEngine};
+use fail::fail_point;
 use kvproto::pdpb;
 use pd_client::PdClient;
 use raftstore::store::{metrics::*, util::RaftstoreDuration, Config};
@@ -88,8 +89,15 @@ where
         self.slowness_stats
             .slow_cause
             .record(100_000, Instant::now()); // 100ms
+
         // Handle timeout if last tick is not finished as expected.
-        if !self.slowness_stats.last_tick_finished && self.is_store_heartbeat_delayed() {
+        let mock_slowness_last_tick_unfinished = || {
+            fail_point!("mock_slowness_last_tick_unfinished", |_| { true });
+            false
+        };
+        if mock_slowness_last_tick_unfinished()
+            || (!self.slowness_stats.last_tick_finished && self.is_store_heartbeat_delayed())
+        {
             // If the last slowness tick already reached abnormal state and was delayed for
             // reporting by `store-heartbeat` to PD, we should report it here manually as a
             // FAKE `store-heartbeat`. It's an assurance that the heartbeat to
