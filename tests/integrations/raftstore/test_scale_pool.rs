@@ -128,7 +128,6 @@ fn get_poller_thread_ids_by_prefix(prefixs: Vec<&str>) -> Vec<Pid> {
     for tid in all_tids {
         if let Ok(stat) = thread::full_thread_stat(pid, tid) {
             for &prefix in &prefixs {
-                println!("command {:?}", stat.command);
                 if stat.command.starts_with(prefix) {
                     poller_tids.push(tid);
                 }

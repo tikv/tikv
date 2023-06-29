@@ -353,6 +353,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::LeaderCallback(ch) => self.on_leader_callback(ch),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
+                PeerMsg::FlushBeforeClose { tx } => {
+                    self.fsm.peer_mut().flush_before_close(self.store_ctx, tx)
+                }
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.
