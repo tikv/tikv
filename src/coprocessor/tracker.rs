@@ -431,20 +431,24 @@ impl<E: Engine> Drop for Tracker<E> {
 }
 #[cfg(test)]
 mod tests {
-    use super::{ReqContext,Tracker,ReqTag,PerfLevel,TimeStamp};
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration, vec};
+
+    use kvproto::kvrpcpb;
+    use pd_client::BucketMeta;
     use tikv_kv::RocksEngine;
-    use txn_types::Key;
-    use kvproto::coprocessor::KeyRange;
+
+    use super::{PerfLevel, ReqContext, ReqTag, TimeStamp, Tracker, TLS_COP_METRICS};
+    use crate::storage::Statistics;
 
     #[test]
-    fn test_track(){
-        let range=KeyRange::default();
-        range.start_key=vec![b'a'];
-        let req_ctx=ReqContext::new(
+    fn test_track() {
+        let mut context = kvrpcpb::Context::default();
+        context.set_region_id(1);
+
+        let mut req_ctx = ReqContext::new(
             ReqTag::test,
-            Default::default(),
-            vec![range],
+            context,
+            vec![],
             Duration::from_secs(0),
             None,
             None,
@@ -452,7 +456,54 @@ mod tests {
             None,
             PerfLevel::EnableCount,
         );
-       let mut track: Tracker<RocksEngine>= Tracker::new(req_ctx,Duration::default());
-       track.track();
+        req_ctx.lower_bound = vec![
+            116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 67,
+        ];
+        req_ctx.upper_bound = vec![
+            116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 167,
+        ];
+        let mut track: Tracker<RocksEngine> = Tracker::new(req_ctx, Duration::default());
+        let mut bucket = BucketMeta::default();
+        bucket.region_id = 1;
+        bucket.version = 1;
+        bucket.keys = vec![
+            vec![
+                116, 128, 0, 0, 0, 0, 0, 0, 255, 179, 95, 114, 128, 0, 0, 0, 0, 255, 0, 175, 155,
+                0, 0, 0, 0, 0, 250,
+            ],
+            vec![
+                116, 128, 0, 255, 255, 255, 255, 255, 255, 254, 0, 0, 0, 0, 0, 0, 0, 248,
+            ],
+        ];
+        track.buckets = Some(Arc::new(bucket));
+
+        let mut stat = Statistics::default();
+        stat.write.flow_stats.read_keys = 10;
+        track.total_storage_stats = stat;
+
+        track.track();
+        drop(track);
+        TLS_COP_METRICS.with(|m| {
+            assert_eq!(
+                10,
+                m.borrow()
+                    .local_read_stats()
+                    .region_infos
+                    .get(&1)
+                    .unwrap()
+                    .flow
+                    .read_keys
+            );
+            assert_eq!(
+                vec![10],
+                m.borrow()
+                    .local_read_stats
+                    .region_buckets
+                    .get(&1)
+                    .unwrap()
+                    .stats
+                    .read_keys
+            );
+        });
     }
 }
