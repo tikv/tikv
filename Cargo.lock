@@ -5813,6 +5813,7 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "api_version",
+ "collections",
  "crc32fast",
  "dashmap",
  "encryption",

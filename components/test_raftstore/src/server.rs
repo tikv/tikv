@@ -437,6 +437,7 @@ impl ServerCluster {
                     dir,
                     key_manager.clone(),
                     cfg.storage.api_version(),
+                    false,
                 )
                 .unwrap(),
             )

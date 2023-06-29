@@ -27,6 +27,7 @@ test-engines-panic = [
 
 [dependencies]
 api_version = { workspace = true }
+collections = { workspace = true }
 crc32fast = "1.2"
 dashmap = "5"
 encryption = { workspace = true }

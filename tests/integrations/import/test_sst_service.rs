@@ -136,12 +136,16 @@ fn test_switch_mode_v2() {
     let region = cluster.get_region(&[50]);
     ctx.set_region_epoch(region.get_region_epoch().clone());
 
-    let mut switch_req = SwitchModeRequest::default();
-    switch_req.set_mode(SwitchMode::Import);
+    let switch_mode = |import: &ImportSstClient, key_range: KeyRange, mode: SwitchMode| {
+        let mut switch_req = SwitchModeRequest::default();
+        switch_req.set_mode(mode);
+        switch_req.set_range(key_range);
+        let _ = import.switch_mode(&switch_req).unwrap();
+    };
+
     let mut key_range = KeyRange::default();
     key_range.set_start_key([50].to_vec());
-    switch_req.set_range(key_range);
-    let _ = import.switch_mode(&switch_req).unwrap();
+    switch_mode(&import, key_range.clone(), SwitchMode::Import);
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
 
@@ -167,6 +171,7 @@ fn test_switch_mode_v2() {
         assert!(!resp.has_error());
     }
 
+    // For this region, it is not in the key range, so it is normal mode.
     let region = cluster.get_region(&[20]);
     let mut ctx2 = ctx.clone();
     ctx2.set_region_id(region.get_id());
@@ -180,12 +185,19 @@ fn test_switch_mode_v2() {
             assert!(resp.get_error().has_server_is_busy());
         }
     }
+    // Propose another switch mode request to let this region to ingest.
+    let mut key_range2 = KeyRange::default();
+    key_range2.set_end_key([50].to_vec());
+    switch_mode(&import, key_range2.clone(), SwitchMode::Import);
+    let resp = upload_and_ingest((0, 49), &import, "test-6.sst".to_string(), &ctx2);
+    assert!(!resp.has_error());
+    // switching back to normal should make further ingest be rejected
+    switch_mode(&import, key_range2, SwitchMode::Normal);
+    let resp = upload_and_ingest((0, 49), &import, "test-7.sst".to_string(), &ctx2);
+    assert!(resp.get_error().has_server_is_busy());
 
-    // switch back to normal, so region 1 starts to reject
-    let mut switch_req = SwitchModeRequest::default();
-    switch_req.set_mode(SwitchMode::Normal);
-    let _ = import.switch_mode(&switch_req).unwrap();
-
+    // switch back to normal, so region 1 also starts to reject
+    switch_mode(&import, key_range, SwitchMode::Normal);
     let resp = upload_and_ingest((50, 100), &import, "test10".to_string(), &ctx);
     assert!(resp.get_error().has_server_is_busy());
 }

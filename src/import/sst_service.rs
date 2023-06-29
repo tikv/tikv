@@ -22,10 +22,8 @@ use kvproto::{
         Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk, SstMeta,
         SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
     },
-    kvrpcpb::{Context, KeyRange},
-    metapb::Region,
+    kvrpcpb::Context,
 };
-use nom::AsBytes;
 use raftstore_v2::StoreMeta;
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, ConfigManager,
@@ -322,9 +320,9 @@ impl<E: Engine> ImportSstService<E> {
             .build()
             .unwrap();
         if let LocalTablets::Singleton(tablet) = &tablets {
-            importer.start_switch_mode_check(threads.handle(), tablet.clone());
+            importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
         } else {
-            importer.start_switch_mode_check_v2::<E::Local>(threads.handle());
+            importer.start_switch_mode_check::<E::Local>(threads.handle(), None);
         }
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
@@ -669,12 +667,6 @@ macro_rules! impl_write {
     };
 }
 
-fn region_in_range(range: &KeyRange, region: &Region) -> bool {
-    range.start_key.as_bytes() <= region.get_start_key()
-        && (range.end_key.is_empty()
-            || (!region.end_key.is_empty() && region.end_key <= range.end_key))
-}
-
 impl<E: Engine> ImportSst for ImportSstService<E> {
     // Switch mode for v1 and v2 is quite different.
     //
@@ -695,7 +687,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
-        req: SwitchModeRequest,
+        mut req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
         let label = "switch_mode";
@@ -713,31 +705,30 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 },
                 LocalTablets::Registry(_) => {
                     if req.get_mode() == SwitchMode::Import {
-                        if !self.importer.region_import_mode() {
-                            let mut covered_regions = HashSet::new();
-                            if req.has_range() {
-                                let range = req.get_range();
-                                let store_meta = self.store_meta.as_ref().unwrap().lock().unwrap();
-                                for (region_id, (region, _)) in &store_meta.regions {
-                                    if region_in_range(range, region) {
-                                        covered_regions.insert(*region_id);
-                                    }
-                                }
-                                self.importer.set_import_mode_regions(covered_regions);
-                                Ok(true)
-                            } else {
-                                Err(sst_importer::Error::Engine(
-                                    "partitioned-raft-kv only support import mode with range set"
-                                        .into(),
-                                ))
-                            }
+                        if req.has_range() {
+                            let range = req.take_range();
+                            let store_meta = self.store_meta.as_ref().unwrap().lock().unwrap();
+                            self.importer
+                                .extend_import_mode_regions(range, &store_meta.regions);
+                            Ok(true)
                         } else {
-                            Ok(false)
+                            Err(sst_importer::Error::Engine(
+                                "partitioned-raft-kv only support import mode with range set"
+                                    .into(),
+                            ))
                         }
                     } else {
                         // case SwitchMode::Normal
-                        self.importer.clear_import_mode_regions();
-                        Ok(true)
+                        if req.has_range() {
+                            let range = req.take_range();
+                            self.importer.clear_import_mode_regions(range);
+                            Ok(true)
+                        } else {
+                            Err(sst_importer::Error::Engine(
+                                "partitioned-raft-kv only support import mode with range set"
+                                    .into(),
+                            ))
+                        }
                     }
                 }
             }

@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -26,9 +25,6 @@ struct ImportModeSwitcherInner {
     timeout: Duration,
     next_check: Instant,
     metrics_fn: RocksDbMetricsFn,
-
-    // Only used in v2. If not None, some regions are in import mode.
-    import_mode_regions: Option<HashSet<u64>>,
 }
 
 impl ImportModeSwitcherInner {
@@ -88,14 +84,11 @@ impl ImportModeSwitcher {
             timeout,
             next_check: Instant::now() + timeout,
             metrics_fn: mf,
-            import_mode_regions: None,
         }));
         ImportModeSwitcher { inner, is_import }
     }
 
-    // Periodically perform timeout check to change import mode back to normal mode.
-    // db is None iff the current cluster is multi-rocksdb.
-    pub fn start<E: KvEngine>(&self, executor: &Handle, db: Option<E>) {
+    pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -106,15 +99,11 @@ impl ImportModeSwitcher {
                     let mut switcher = switcher.lock().unwrap();
                     let now = Instant::now();
                     if now >= switcher.next_check {
-                        if let Some(ref db) = db {
-                            if switcher.is_import.load(Ordering::Acquire) {
-                                let mf = switcher.metrics_fn;
-                                if let Err(e) = switcher.enter_normal_mode(db, mf) {
-                                    error!(?e; "failed to put TiKV back into normal mode");
-                                }
+                        if switcher.is_import.load(Ordering::Acquire) {
+                            let mf = switcher.metrics_fn;
+                            if let Err(e) = switcher.enter_normal_mode(&db, mf) {
+                                error!(?e; "failed to put TiKV back into normal mode");
                             }
-                        } else {
-                            switcher.import_mode_regions.take();
                         }
                         switcher.next_check = now + switcher.timeout
                     }
@@ -129,29 +118,6 @@ impl ImportModeSwitcher {
             }
         };
         executor.spawn(timer_loop);
-    }
-
-    // return whether some regions are in import mode
-    pub fn region_import_mode(&self) -> bool {
-        self.inner.lock().unwrap().import_mode_regions.is_some()
-    }
-
-    // set import mode for some regions
-    pub fn set_import_mode_regions(&self, import_mode_regions: HashSet<u64>) {
-        self.inner.lock().unwrap().import_mode_regions = Some(import_mode_regions);
-    }
-
-    pub fn clear_import_mode_regions(&self) {
-        self.inner.lock().unwrap().import_mode_regions.take();
-    }
-
-    // Should only be used in v2.
-    pub fn region_in_import_mode(&self, region_id: u64) -> bool {
-        if let Some(ref import_mode_regions) = self.inner.lock().unwrap().import_mode_regions {
-            return import_mode_regions.contains(&region_id);
-        }
-
-        false
     }
 
     pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
@@ -276,13 +242,13 @@ impl ImportModeCfOptions {
 mod tests {
     use std::thread;
 
-    use engine_rocks::RocksEngine;
     use engine_traits::{KvEngine, CF_DEFAULT};
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::config::ReadableDuration;
 
     use super::*;
+    use crate::import_mode2::ImportModeSwitcherV2;
 
     fn check_import_options<E>(
         db: &E,
@@ -346,7 +312,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(threads.handle(), Some(db.clone()));
+        switcher.start(threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -384,7 +350,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(threads.handle(), Some(db.clone()));
+        switcher.start(threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -407,15 +373,27 @@ mod tests {
             .build()
             .unwrap();
 
-        let switcher = ImportModeSwitcher::new(&cfg);
-        let mut import_mode_regions = std::collections::HashSet::new();
-        import_mode_regions.insert(1);
-        import_mode_regions.insert(2);
-        switcher.set_import_mode_regions(import_mode_regions);
+        let switcher = ImportModeSwitcherV2::new(&cfg);
+        let mut region_infos: HashMap<u64, _> = HashMap::default();
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(b"k1".to_vec());
+        region.set_end_key(b"k3".to_vec());
+        region_infos.insert(1, (region, true));
+        let mut region = Region::default();
+        region.set_id(2);
+        region.set_start_key(b"k3".to_vec());
+        region.set_end_key(b"k5".to_vec());
+        region_infos.insert(2, (region, true));
+
+        let mut key_range = KeyRange::default();
+        key_range.set_start_key(b"k2".to_vec());
+        key_range.set_end_key(b"k4".to_vec());
+        switcher.enter_or_extend_import_mode_regions_in_range(key_range, &region_infos);
         assert!(switcher.region_in_import_mode(1));
         assert!(switcher.region_in_import_mode(2));
 
-        switcher.start::<RocksEngine>(threads.handle(), None);
+        switcher.start(threads.handle());
 
         thread::sleep(Duration::from_secs(1));
         threads.block_on(tokio::task::yield_now());
