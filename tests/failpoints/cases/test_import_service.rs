@@ -321,3 +321,58 @@ fn test_ingest_sst_v2() {
         .unwrap();
     assert_eq!(100, region_keys);
 }
+
+#[test]
+fn test_cleanup_sst_panic_v2() {
+    let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
+    let mut config = TikvConfig::default();
+    config.server.addr = "127.0.0.1:0".to_owned();
+    config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
+    config.server.grpc_concurrency = 1;
+
+    // don't cleanup ingest sst before start
+    let cleanup_interval = Duration::from_millis(100);
+    config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
+    config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
+    config.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
+
+    let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config), &mut cluster);
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+
+    // No region id and epoch.
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx.clone());
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    send_upload_sst(&import, &meta, &data).unwrap();
+    ingest.set_sst(meta.clone());
+
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
+
+    // stop cluster
+    cluster.shutdown();
+
+    // stop apply ingest after cluster restart. and wait cleanup sst starts first
+    fail::cfg("on_apply_ingest", "sleep(1000)").unwrap();
+    // cleanup all ssts
+    fail::cfg("on_cleanup_import_sst", "return").unwrap();
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("on_cleanup_import_sst_schedule", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    // start cluster again to trigger replay
+    let _ = cluster.start();
+
+    rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+    fail::remove("on_cleanup_import_sst");
+    fail::remove("on_cleanup_import_sst_schedule");
+    fail::remove("on_apply_ingest");
+    cluster.must_put(b"k2", b"v2");
+}

@@ -67,6 +67,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         ssts: Box<[SstMeta]>,
     ) {
+        if self.storage().entry_storage().commit_index()
+            > self.storage().entry_storage().applied_index()
+        {
+            fail::fail_point!("on_cleanup_import_sst_schedule");
+            return;
+        }
         let mut stale_ssts = Vec::from(ssts);
         let epoch = self.region().get_region_epoch();
         stale_ssts.retain(|sst| {
@@ -75,7 +81,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         });
 
         // some sst needs to be kept if the log didn't flush the disk.
-        let flushed_indexes = self.storage().apply_trace().flushed_indexes();
+        let flushed_indexes: [u64; 3] = self.storage().apply_trace().flushed_indexes();
         stale_ssts.retain(|sst| {
             let off = data_cf_offset(sst.get_cf_name());
             let uuid = sst.get_uuid().to_vec();
@@ -105,6 +111,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub fn apply_ingest(&mut self, index: u64, ssts: Vec<SstMeta>) -> Result<()> {
+        fail::fail_point!("on_apply_ingest", |_| Ok(()));
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let mut infos = Vec::with_capacity(ssts.len());
         let mut size: i64 = 0;
