@@ -28,7 +28,8 @@ impl RocksEngine {
         cf: &str,
         sst_path: String,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut written = false;
         let mut ranges = ranges.to_owned();
         ranges.sort_by(|a, b| a.start_key.cmp(b.start_key));
 
@@ -41,7 +42,7 @@ impl RocksEngine {
                 .as_ref()
                 .map_or(false, |key| key.as_slice() > r.start_key)
             {
-                self.delete_all_in_range_cf_by_key(wopts, cf, &r)?;
+                written |= self.delete_all_in_range_cf_by_key(wopts, cf, &r)?;
                 continue;
             }
             last_end_key = Some(r.end_key.to_owned());
@@ -86,17 +87,18 @@ impl RocksEngine {
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
-                wb.delete_cf(cf, key)?;
                 if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
                     wb.write_opt(wopts)?;
                     wb.clear();
                 }
+                wb.delete_cf(cf, key)?;
             }
             if wb.count() > 0 {
                 wb.write_opt(wopts)?;
+                written = true;
             }
         }
-        Ok(())
+        Ok(written)
     }
 
     fn delete_all_in_range_cf_by_key(
@@ -104,7 +106,7 @@ impl RocksEngine {
         wopts: &WriteOptions,
         cf: &str,
         range: &Range<'_>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let start = KeyBuilder::from_slice(range.start_key, 0, 0);
         let end = KeyBuilder::from_slice(range.end_key, 0, 0);
         let mut opts = IterOptions::new(Some(start), Some(end), false);
@@ -117,18 +119,22 @@ impl RocksEngine {
         let mut it_valid = it.seek(range.start_key)?;
         let mut wb = self.write_batch();
         while it_valid {
-            wb.delete_cf(cf, it.key())?;
             if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
                 wb.write_opt(wopts)?;
                 wb.clear();
             }
+            wb.delete_cf(cf, it.key())?;
             it_valid = it.next()?;
         }
         if wb.count() > 0 {
             wb.write_opt(wopts)?;
+            if !wopts.disable_wal() {
+                self.sync_wal()?;
+            }
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        self.sync_wal()?;
-        Ok(())
     }
 }
 
@@ -199,9 +205,10 @@ impl MiscExt for RocksEngine {
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut written = false;
         if ranges.is_empty() {
-            return Ok(());
+            return Ok(written);
         }
         match strategy {
             DeleteStrategy::DeleteFiles => {
@@ -217,7 +224,7 @@ impl MiscExt for RocksEngine {
                     })
                     .collect();
                 if rocks_ranges.is_empty() {
-                    return Ok(());
+                    return Ok(written);
                 }
                 self.as_inner()
                     .delete_files_in_ranges_cf(handle, &rocks_ranges, false)
@@ -237,7 +244,7 @@ impl MiscExt for RocksEngine {
                         })
                         .collect();
                     if rocks_ranges.is_empty() {
-                        return Ok(());
+                        return Ok(written);
                     }
                     self.as_inner()
                         .delete_blob_files_in_ranges_cf(handle, &rocks_ranges, false)
@@ -250,17 +257,18 @@ impl MiscExt for RocksEngine {
                     wb.delete_range_cf(cf, r.start_key, r.end_key)?;
                 }
                 wb.write_opt(wopts)?;
+                written = true;
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
-                    self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
+                    written |= self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
                 }
             }
             DeleteStrategy::DeleteByWriter { sst_path } => {
-                self.delete_all_in_range_cf_by_ingest(wopts, cf, sst_path, ranges)?;
+                written |= self.delete_all_in_range_cf_by_ingest(wopts, cf, sst_path, ranges)?;
             }
         }
-        Ok(())
+        Ok(written)
     }
 
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)> {

@@ -235,7 +235,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         start_key: &[u8],
         end_key: &[u8],
         notify_only: bool,
-        use_delete_range: bool,
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete_range.inc();
         let off = data_cf_offset(cf);
@@ -266,7 +265,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let start = Instant::now_coarse();
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        if !notify_only {
+        let written = if !notify_only {
             let (notify, wait) = oneshot::channel();
             let delete_range = TabletTask::delete_range(
                 self.region_id(),
@@ -274,9 +273,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 name_to_cf(cf).unwrap(),
                 start_key.clone().into(),
                 end_key.clone().into(),
-                use_delete_range,
-                Box::new(move || {
-                    notify.send(()).unwrap();
+                Box::new(move |written| {
+                    notify.send(written).unwrap();
                 }),
             );
             if let Err(e) = self.tablet_scheduler().schedule_force(delete_range) {
@@ -288,8 +286,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 );
             }
 
-            let _ = wait.await;
-        }
+            wait.await.unwrap()
+        } else {
+            false
+        };
 
         info!(
             self.logger,
@@ -297,12 +297,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "range_start" => log_wrappers::Value::key(&start_key),
             "range_end" => log_wrappers::Value::key(&end_key),
             "notify_only" => notify_only,
-            "use_delete_range" => use_delete_range,
             "duration" => ?start.saturating_elapsed(),
         );
 
-        // delete range is an unsafe operation and it cannot be rollbacked to replay, so
-        // we don't update modification index for this operation.
+        if index != u64::MAX && written {
+            self.modifications_mut()[off] = index;
+        }
 
         Ok(())
     }
@@ -333,6 +333,7 @@ mod test {
     use tikv_util::{
         store::new_peer,
         worker::{dummy_scheduler, Worker},
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
 
     use crate::{
@@ -380,13 +381,13 @@ mod test {
 
         let snap_mgr = TabletSnapManager::new(tmp_dir.path(), None).unwrap();
         let tablet_worker = Worker::new("tablet-worker");
-        let checkpoint_scheduler = tablet_worker.start(
+        let tablet_scheduler = tablet_worker.start(
             "tablet-worker",
             tablet::Runner::new(reg.clone(), importer.clone(), snap_mgr, logger.clone()),
         );
         tikv_util::defer!(tablet_worker.stop());
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
 
-        let (dummy_scheduler, _) = dummy_scheduler();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -406,8 +407,8 @@ mod test {
             None,
             importer,
             host,
-            dummy_scheduler,
-            checkpoint_scheduler,
+            tablet_scheduler,
+            high_priority_pool,
             logger.clone(),
         );
 

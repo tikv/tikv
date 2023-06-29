@@ -47,7 +47,7 @@ impl MiscExt for PanicEngine {
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         panic!()
     }
 
