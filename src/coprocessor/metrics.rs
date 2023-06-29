@@ -204,8 +204,7 @@ pub struct CopLocalMetrics {
 }
 
 impl CopLocalMetrics {
-    #[inline]
-    #[allow(unused)]
+    #[cfg(test)]
     pub fn local_read_stats(&self) -> &ReadStats {
         &self.local_read_stats
     }
