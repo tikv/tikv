@@ -417,3 +417,30 @@ impl<E: Engine> Drop for Tracker<E> {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::{ReqContext,Tracker,ReqTag,PerfLevel,TimeStamp};
+    use std::time::Duration;
+    use tikv_kv::RocksEngine;
+    use txn_types::Key;
+    use kvproto::coprocessor::KeyRange;
+
+    #[test]
+    fn test_track(){
+        let range=KeyRange::default();
+        range.start_key=vec![b'a'];
+        let req_ctx=ReqContext::new(
+            ReqTag::test,
+            Default::default(),
+            vec![range],
+            Duration::from_secs(0),
+            None,
+            None,
+            TimeStamp::max(),
+            None,
+            PerfLevel::EnableCount,
+        );
+       let mut track: Tracker<RocksEngine>= Tracker::new(req_ctx,Duration::default());
+       track.track();
+    }
+}
