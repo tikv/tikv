@@ -330,7 +330,6 @@ fn test_cleanup_sst_panic_v2() {
     config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
     config.server.grpc_concurrency = 1;
 
-    // don't cleanup ingest sst before start
     let cleanup_interval = Duration::from_millis(100);
     config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
     config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
@@ -353,12 +352,12 @@ fn test_cleanup_sst_panic_v2() {
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
 
-    // stop cluster
+    // Stop cluster first.
     cluster.shutdown();
 
-    // stop apply ingest after cluster restart. and wait cleanup sst starts first
+    // Inject sleep in apply_ingest, after cluster restart makes cleanup sst finished first
     fail::cfg("on_apply_ingest", "sleep(1000)").unwrap();
-    // cleanup all ssts
+    // collect all ssts regardless epoch version.
     fail::cfg("on_cleanup_import_sst", "return").unwrap();
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
@@ -370,6 +369,7 @@ fn test_cleanup_sst_panic_v2() {
     // start cluster again to trigger replay
     let _ = cluster.start();
 
+    // wait sst cleanup and no panic
     rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
     fail::remove("on_cleanup_import_sst");
     fail::remove("on_cleanup_import_sst_schedule");

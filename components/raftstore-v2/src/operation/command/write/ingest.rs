@@ -81,7 +81,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         });
 
         // some sst needs to be kept if the log didn't flush the disk.
-        let flushed_indexes: [u64; 3] = self.storage().apply_trace().flushed_indexes();
+        let flushed_indexes = self.storage().apply_trace().flushed_indexes();
         stale_ssts.retain(|sst| {
             let off = data_cf_offset(sst.get_cf_name());
             let uuid = sst.get_uuid().to_vec();
