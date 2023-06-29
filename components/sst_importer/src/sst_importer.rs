@@ -1447,7 +1447,7 @@ mod tests {
                 File::create(&path.clone).unwrap();
             }
 
-            dir.delete(&meta, key_manager.as_deref()).unwrap();
+            dir.delete(&meta, None, key_manager.as_deref()).unwrap();
             check_file_not_exists(&path.temp, key_manager.as_deref());
             check_file_not_exists(&path.save, key_manager.as_deref());
             check_file_not_exists(&path.clone, key_manager.as_deref());
@@ -1490,7 +1490,7 @@ mod tests {
                 .iter()
                 .find(|s| s.get_uuid() == sst.get_uuid())
                 .unwrap();
-            dir.delete(sst, key_manager.as_deref()).unwrap();
+            dir.delete(sst, None, key_manager.as_deref()).unwrap();
         }
         assert!(dir.list_ssts().unwrap().is_empty());
     }
