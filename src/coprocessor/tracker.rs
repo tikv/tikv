@@ -497,7 +497,7 @@ mod tests {
             assert_eq!(
                 vec![10],
                 m.borrow()
-                    .local_read_stats
+                    .local_read_stats()
                     .region_buckets
                     .get(&1)
                     .unwrap()

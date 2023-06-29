@@ -203,9 +203,10 @@ pub struct CopLocalMetrics {
     local_read_stats: ReadStats,
 }
 
-impl CopLocalMetrics{
+impl CopLocalMetrics {
     #[inline]
-    pub fn local_read_stats(&self)->&ReadStats{
+    #[allow(unused)]
+    pub fn local_read_stats(&self) -> &ReadStats {
         &self.local_read_stats
     }
 }
