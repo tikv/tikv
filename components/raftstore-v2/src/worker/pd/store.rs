@@ -240,14 +240,15 @@ where
         self.store_stat
             .engine_last_query_num
             .fill_query_stats(&self.store_stat.engine_total_query_num);
-        self.store_stat.last_report_ts = if stats.get_start_time() == STORE_HEARTBEAT_DELAY_LIMIT as u32 {
-            // The given Task::StoreHeartbeat should be a fake heartbeat to PD, we won't
-            // update the last_report_ts to avoid incorrectly marking current TiKV node in
-            // normal state.
-            self.store_stat.last_report_ts
-        } else {
-            UnixSecs::now()
-        };
+        self.store_stat.last_report_ts =
+            if stats.get_start_time() == STORE_HEARTBEAT_DELAY_LIMIT as u32 {
+                // The given Task::StoreHeartbeat should be a fake heartbeat to PD, we won't
+                // update the last_report_ts to avoid incorrectly marking current TiKV node in
+                // normal state.
+                self.store_stat.last_report_ts
+            } else {
+                UnixSecs::now()
+            };
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
