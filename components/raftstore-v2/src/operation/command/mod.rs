@@ -510,7 +510,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
                 }
                 SimpleWrite::DeleteRange(dr) => {
-                    let use_delete_range = self.use_delete_range();
                     let _ = self
                         .apply_delete_range(
                             dr.cf,
@@ -518,7 +517,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.start_key,
                             dr.end_key,
                             dr.notify_only,
-                            use_delete_range,
                         )
                         .await;
                 }
@@ -635,14 +633,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 self.apply_delete(delete.cf, log_index, delete.key)?;
                             }
                             SimpleWrite::DeleteRange(dr) => {
-                                let use_delete_range = self.use_delete_range();
                                 self.apply_delete_range(
                                     dr.cf,
                                     log_index,
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
-                                    use_delete_range,
                                 )
                                 .await?;
                             }
@@ -737,7 +733,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         self.apply_delete(delete.get_cf(), log_index, delete.get_key())?;
                     }
                     CmdType::DeleteRange => {
-                        let use_delete_range = self.use_delete_range();
                         let dr = r.get_delete_range();
                         self.apply_delete_range(
                             dr.get_cf(),
@@ -745,7 +740,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
-                            use_delete_range,
                         )
                         .await?;
                     }

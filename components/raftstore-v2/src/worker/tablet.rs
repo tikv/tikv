@@ -9,7 +9,7 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS,
+    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
@@ -67,8 +67,7 @@ pub enum Task<EK> {
         cf: CfName,
         start_key: Box<[u8]>,
         end_key: Box<[u8]>,
-        use_delete_range: bool,
-        cb: Box<dyn FnOnce() + Send>,
+        cb: Box<dyn FnOnce(bool) + Send>,
     },
     // Gc snapshot
     SnapGc(Box<[TabletSnapKey]>),
@@ -217,8 +216,7 @@ impl<EK> Task<EK> {
         cf: CfName,
         start_key: Box<[u8]>,
         end_key: Box<[u8]>,
-        use_delete_range: bool,
-        cb: Box<dyn FnOnce() + Send>,
+        cb: Box<dyn FnOnce(bool) + Send>,
     ) -> Self {
         Task::DeleteRange {
             region_id,
@@ -226,7 +224,6 @@ impl<EK> Task<EK> {
             cf,
             start_key,
             end_key,
-            use_delete_range,
             cb,
         }
     }
@@ -277,7 +274,11 @@ impl<EK: KvEngine> Runner<EK> {
         let end_key = keys::data_end_key(&end);
         let range1 = Range::new(&[], &start_key);
         let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
-        if let Err(e) = tablet.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2]) {
+        let mut wopts = WriteOptions::default();
+        wopts.set_disable_wal(true);
+        if let Err(e) =
+            tablet.delete_ranges_cfs(&wopts, DeleteStrategy::DeleteFiles, &[range1, range2])
+        {
             error!(
                 self.logger,
                 "failed to trim tablet";
@@ -517,7 +518,7 @@ impl<EK: KvEngine> Runner<EK> {
     }
 
     fn delete_range(&self, delete_range: Task<EK>) {
-        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, use_delete_range, cb } = delete_range else {
+        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, cb } = delete_range else {
             slog_panic!(self.logger, "unexpected task"; "task" => format!("{}", delete_range))
         };
 
@@ -533,27 +534,25 @@ impl<EK: KvEngine> Runner<EK> {
                 "error" => ?e,
             )
         };
-        tablet
-            .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+        let mut wopts = WriteOptions::default();
+        wopts.set_disable_wal(true);
+        let mut written = tablet
+            .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
             .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
-        let strategy = if use_delete_range {
-            DeleteStrategy::DeleteByRange
-        } else {
-            DeleteStrategy::DeleteByKey
-        };
+        let strategy = DeleteStrategy::DeleteByKey;
         // Delete all remaining keys.
-        tablet
-            .delete_ranges_cf(cf, strategy.clone(), &range)
+        written |= tablet
+            .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
             .unwrap_or_else(move |e| fail_f(e, strategy));
 
         // TODO: support titan?
         // tablet
-        //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+        //     .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteBlobs, &range)
         //     .unwrap_or_else(move |e| fail_f(e,
         // DeleteStrategy::DeleteBlobs));
 
-        cb();
+        cb(written);
     }
 }
 

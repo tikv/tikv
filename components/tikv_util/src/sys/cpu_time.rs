@@ -83,7 +83,7 @@ impl ProcessStat {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod imp {
     use std::{fs::File, io, io::Read, time::Duration};
 
@@ -191,7 +191,7 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
 mod imp {
     use std::io;
 
