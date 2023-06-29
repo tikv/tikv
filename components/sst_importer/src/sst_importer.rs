@@ -183,12 +183,9 @@ impl SstImporter {
             .thread_name("sst_import_misc")
             .with_sys_and_custom_hooks(
                 || {
-                    tikv_alloc::add_thread_memory_accessor();
                     file_system::set_io_type(IoType::Import);
                 },
-                || {
-                    tikv_alloc::remove_thread_memory_accessor();
-                },
+                || {},
             )
             .enable_all()
             .build()?;

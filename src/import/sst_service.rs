@@ -306,12 +306,11 @@ impl<E: Engine> ImportSstService<E> {
             .with_sys_and_custom_hooks(
                 move || {
                     tikv_util::thread_group::set_properties(props.clone());
-                    tikv_alloc::add_thread_memory_accessor();
+
                     set_io_type(IoType::Import);
                     tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
                 },
                 move || {
-                    tikv_alloc::remove_thread_memory_accessor();
                     // SAFETY: we have set the engine at some lines above with type `E`.
                     unsafe { tikv_kv::destroy_tls_engine::<E>() };
                 },
