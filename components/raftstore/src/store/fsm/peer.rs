@@ -85,7 +85,7 @@ use crate::{
         },
         transport::Transport,
         util,
-        util::{is_learner, KeysInfoFormatter, LeaseState},
+        util::{find_peer, is_learner, KeysInfoFormatter, LeaseState},
         worker::{
             new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
             GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
@@ -686,32 +686,12 @@ where
                 }
             }
         }
-<<<<<<< HEAD
-=======
-        self.on_loop_finished();
         self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
         self.ctx
             .raft_metrics
             .event_time
             .peer_msg
             .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
-    }
-
-    #[inline]
-    fn on_loop_finished(&mut self) {
-        let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
-        let should_propose = self.ctx.sync_write_worker.is_some()
-            || ready_concurrency == 0
-            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
-        let force_delay_fp = || {
-            fail_point!(
-                "force_delay_propose_batch_raft_command",
-                self.ctx.sync_write_worker.is_none(),
-                |_| true
-            );
-            false
-        };
->>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
         // Propose batch request which may be still waiting for more raft-command
         if self.ctx.sync_write_worker.is_some() {
             self.propose_batch_raft_command(true);

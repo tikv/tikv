@@ -397,7 +397,6 @@ impl RaftLogGcSkippedMetrics {
 }
 
 /// The buffered metrics counters for raft.
-#[derive(Clone)]
 pub struct RaftMetrics {
     pub store_time: LocalHistogram,
     pub ready: RaftReadyMetrics,

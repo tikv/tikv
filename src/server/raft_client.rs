@@ -690,13 +690,8 @@ where
             .keepalive_time(cfg.grpc_keepalive_time.0)
             .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
             .default_compression_algorithm(cfg.grpc_compression_algorithm())
-<<<<<<< HEAD
-=======
-            .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
-            .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
             .max_reconnect_backoff(cfg.raft_client_max_backoff.0)
             .initial_reconnect_backoff(cfg.raft_client_initial_reconnect_backoff.0)
->>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -856,20 +851,12 @@ async fn start<S, R, E>(
 
         let client = TikvClient::new(channel);
         let f = back_end.batch_call(&client, addr.clone());
-<<<<<<< HEAD
-        let mut res = f.await;
-        if res == Ok(()) {
-            // If the call is setup successfully, it will never finish. Returning `Ok(())` means the
-            // batch_call is not supported, we are probably connect to an old version of TiKV. So we
-            // need to fallback to use legacy API.
-=======
         let mut res = f.await; // block here until the stream call is closed or aborted.
         if res == Ok(RaftCallRes::Fallback) {
             // If the call is setup successfully, it will never finish. Returning
             // `UnImplemented` means the batch_call is not supported, we are probably
             // connect to an old version of TiKV. So we need to fallback to use
             // legacy API.
->>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
             let f = back_end.call(&client, addr.clone());
             res = f.await;
         }
@@ -880,21 +867,9 @@ async fn start<S, R, E>(
             // Err(_) should be tx is dropped
             Ok(RaftCallRes::Disconnected) | Err(_) => {
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
-<<<<<<< HEAD
-                if retry_times > 1 {
-                    // Clears pending messages to avoid consuming high memory when one node is shutdown.
-                    back_end.clear_pending_message("unreachable");
-                } else {
-                    // At least report failure in metrics.
-                    REPORT_FAILURE_MSG_COUNTER
-                        .with_label_values(&["unreachable", &back_end.store_id.to_string()])
-                        .inc_by(1);
-                }
-=======
                 REPORT_FAILURE_MSG_COUNTER
                     .with_label_values(&["unreachable", &back_end.store_id.to_string()])
                     .inc_by(1);
->>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
                 back_end
                     .builder
                     .router
