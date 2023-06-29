@@ -327,7 +327,7 @@ impl ImportDir {
             .read(true)
             .create_new(true)
             .open(path)
-            .map(|_|())
+            .map(|_| ())
             .map_err(|e| Error::from(e));
     }
 
