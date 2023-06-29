@@ -3588,6 +3588,7 @@ impl TikvConfig {
             self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket(),
             self.coprocessor.region_bucket_size,
+            self.storage.engine == EngineType::RaftKv2,
         )?;
         self.security.validate()?;
         self.import.validate()?;
