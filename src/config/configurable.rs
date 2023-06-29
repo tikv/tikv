@@ -84,7 +84,7 @@ impl ConfigurableDb for RocksEngine {
     }
 }
 
-fn loop_registry(
+pub fn loop_registry(
     registry: &TabletRegistry<RocksEngine>,
     mut f: impl FnMut(&mut CachedTablet<RocksEngine>) -> std::result::Result<bool, Box<dyn Error>>,
 ) -> ConfigRes {

@@ -1029,6 +1029,7 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .before_stop_wrapper(|| {})
         .enable_io()
         .enable_time()
+        .with_sys_hook() 
         .build()
 }
 

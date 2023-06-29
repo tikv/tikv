@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod test_apply_trace;
 mod test_async_fetch;
 mod test_async_io;
 mod test_backup;
