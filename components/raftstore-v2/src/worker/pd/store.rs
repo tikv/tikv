@@ -28,7 +28,7 @@ use crate::router::StoreMsg;
 
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
-/// Max limitation of delayed store_heartbeat.
+/// Max limitation of delayed store heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = Duration::from_secs(5 * 60).as_secs();
 
 fn hotspot_key_report_threshold() -> u64 {
@@ -240,15 +240,14 @@ where
         self.store_stat
             .engine_last_query_num
             .fill_query_stats(&self.store_stat.engine_total_query_num);
-        self.store_stat.last_report_ts =
-            if self.store_stat.last_report_ts.into_inner() as u32 == stats.get_start_time() {
-                // The given Task::StoreHeartbeat should be a fake heartbeat to PD, we won't
-                // update the last_report_ts to avoid incorrectly marking current TiKV node in
-                // normal state.
-                self.store_stat.last_report_ts
-            } else {
-                UnixSecs::now()
-            };
+        self.store_stat.last_report_ts = if stats.get_start_time() == STORE_HEARTBEAT_DELAY_LIMIT as u32 {
+            // The given Task::StoreHeartbeat should be a fake heartbeat to PD, we won't
+            // update the last_report_ts to avoid incorrectly marking current TiKV node in
+            // normal state.
+            self.store_stat.last_report_ts
+        } else {
+            UnixSecs::now()
+        };
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
@@ -311,9 +310,9 @@ where
 
         // This calling means that the current node cannot report heartbeat in normaly
         // scheduler. That is, the current node must in `busy` state. Meanwhile, mark
-        // this fake `StoreStats.start_time` == `store_stat.last_report_ts` to reveal
+        // this fake `StoreStats.start_time` == `STORE_HEARTBEAT_DELAY_LIMIT` to reveal
         // that current heartbeat is fake and used for reporting slowness forcely.
-        stats.set_start_time(self.store_stat.last_report_ts.into_inner() as u32);
+        stats.set_start_time(STORE_HEARTBEAT_DELAY_LIMIT as u32);
         stats.set_is_busy(true);
 
         // We do not need to report store_info, so we just set `None` here.
