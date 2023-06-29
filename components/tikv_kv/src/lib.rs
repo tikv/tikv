@@ -674,7 +674,7 @@ pub fn snapshot<E: Engine>(
     let val = engine.async_snapshot(ctx);
     // make engine not cross yield point
     async move {
-        let result = val.await;
+        let result: result::Result<<E as Engine>::Snap, Error> = val.await;
         with_tls_tracker(|tracker| {
             tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
         });
