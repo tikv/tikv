@@ -1027,10 +1027,9 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .worker_threads(thread_count)
         .enable_io()
         .enable_time()
-        .after_start_wrapper(|| {
+        .with_sys_and_custom_hooks(|| {
             tikv_alloc::add_thread_memory_accessor();
-        })
-        .before_stop_wrapper(|| {
+        }, || {
             tikv_alloc::remove_thread_memory_accessor();
         })
         .build()
