@@ -675,16 +675,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     // only one kv rocksdb.
     //
     // V2 is different. The switch mode with import mode request carries a range
-    // where only regions fully within the range can enter import mode.
+    // where only regions overlapped with the range can enter import mode.
     // And unlike v1, where some rocksdb configs will be changed when entering
     // import mode, the config of the rocksdb will not change when entering import
     // mode due to implementation complexity (a region's rocksdb can change
     // overtime due to snapshot, split, and merge, which brings some
     // implemention complexities). If it really needs, we will implement it in the
     // future.
-    //
-    // The major effect of entering import mode for v2 is that import mode regions
-    // will not perform write stall check for sst ingest requests.
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
@@ -710,11 +707,11 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                             let range = req.take_range();
                             let store_meta = self.store_meta.as_ref().unwrap().lock().unwrap();
                             self.importer
-                                .extend_import_mode_regions(range, &store_meta.regions);
+                                .enter_import_mode_for_regions_in_range(range, &store_meta.regions);
                             Ok(true)
                         } else {
                             Err(sst_importer::Error::Engine(
-                                "partitioned-raft-kv only support import mode with range set"
+                                "partitioned-raft-kv only support switch mode with range set"
                                     .into(),
                             ))
                         }
@@ -726,7 +723,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                             Ok(true)
                         } else {
                             Err(sst_importer::Error::Engine(
-                                "partitioned-raft-kv only support import mode with range set"
+                                "partitioned-raft-kv only support switch mode with range set"
                                     .into(),
                             ))
                         }

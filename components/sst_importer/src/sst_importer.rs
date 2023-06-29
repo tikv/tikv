@@ -221,13 +221,13 @@ impl SstImporter {
         })
     }
 
-    pub fn extend_import_mode_regions(
+    pub fn enter_import_mode_for_regions_in_range(
         &self,
         range: KeyRange,
         store_regions_info: &collections::HashMap<u64, (Region, bool)>,
     ) {
         if let Either::Right(ref switcher) = self.switcher {
-            switcher.enter_or_extend_import_mode_regions_in_range(range, store_regions_info)
+            switcher.enter_import_mode_for_regions_in_range(range, store_regions_info)
         } else {
             unreachable!();
         }
@@ -249,8 +249,8 @@ impl SstImporter {
         }
     }
 
-    // sometimes, regional_import_mode should be used rather than
-    // region_in_import_mode as some region may not have be created now but will be
+    // Sometimes, regional_import_mode should be used rather than
+    // region_in_import_mode as some regions may not have be created now but will be
     // created later
     pub fn regional_import_mode(&self) -> bool {
         if let Either::Right(ref switcher) = self.switcher {
@@ -433,7 +433,7 @@ impl SstImporter {
         if let Either::Left(ref switcher) = self.switcher {
             switcher.get_mode()
         } else {
-            // v2 should use region_in_import_mode(region_id) to check regional mode
+            // v2 should use region_in_import_mode(id) or regional_import_mode to check mode
             SwitchMode::Normal
         }
     }

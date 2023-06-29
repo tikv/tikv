@@ -39,7 +39,7 @@ impl Store {
         ctx: &mut StoreContext<EK, ER, T>,
     ) -> Result<()> {
         let ssts = box_try!(ctx.sst_importer.list_ssts());
-        if ssts.is_empty() {
+        if ssts.is_empty() || ctx.sst_importer.regional_import_mode() {
             return Ok(());
         }
         let mut region_ssts: HashMap<_, Vec<_>> = HashMap::default();

@@ -115,7 +115,7 @@ impl ImportModeSwitcherV2 {
         executor.spawn(timer_loop);
     }
 
-    pub fn enter_or_extend_import_mode_regions_in_range(
+    pub fn enter_import_mode_for_regions_in_range(
         &self,
         range: KeyRange,
         store_regions_info: &HashMap<u64, (Region, bool)>,
@@ -186,7 +186,7 @@ mod test {
 
         let mut key_range = KeyRange::default();
         key_range.set_end_key(b"j".to_vec());
-        switcher.enter_or_extend_import_mode_regions_in_range(key_range.clone(), &region_infos);
+        switcher.enter_import_mode_for_regions_in_range(key_range.clone(), &region_infos);
         // no regions should be set in import mode
         for i in 1..=5 {
             assert!(!switcher.region_in_import_mode(i));
@@ -196,7 +196,7 @@ mod test {
         // region 1 2 3 should be included
         key_range.set_start_key(b"k09".to_vec());
         key_range.set_end_key(b"k21".to_vec());
-        switcher.enter_or_extend_import_mode_regions_in_range(key_range.clone(), &region_infos);
+        switcher.enter_import_mode_for_regions_in_range(key_range.clone(), &region_infos);
         for i in 1..=3 {
             assert!(switcher.region_in_import_mode(i));
         }
@@ -209,7 +209,7 @@ mod test {
         // region 3 4 5 should be included
         key_range2.set_start_key(b"k29".to_vec());
         key_range2.set_end_key(b"".to_vec());
-        switcher.enter_or_extend_import_mode_regions_in_range(key_range2.clone(), &region_infos);
+        switcher.enter_import_mode_for_regions_in_range(key_range2.clone(), &region_infos);
         for i in 1..=5 {
             assert!(switcher.region_in_import_mode(i));
         }
@@ -235,7 +235,7 @@ mod test {
         region.set_end_key(b"k30".to_vec());
         region_infos.insert(6, (region, true));
         // use key_range2 again
-        switcher.enter_or_extend_import_mode_regions_in_range(key_range2.clone(), &region_infos);
+        switcher.enter_import_mode_for_regions_in_range(key_range2.clone(), &region_infos);
         for i in 4..=6 {
             assert!(switcher.region_in_import_mode(i));
         }
@@ -275,7 +275,7 @@ mod test {
         let mut key_range = KeyRange::default();
         key_range.set_start_key(b"k2".to_vec());
         key_range.set_end_key(b"k4".to_vec());
-        switcher.enter_or_extend_import_mode_regions_in_range(key_range, &region_infos);
+        switcher.enter_import_mode_for_regions_in_range(key_range, &region_infos);
         assert!(switcher.region_in_import_mode(1));
         assert!(switcher.region_in_import_mode(2));
 
@@ -287,7 +287,7 @@ mod test {
         let mut key_range = KeyRange::default();
         key_range.set_start_key(b"k4".to_vec());
         key_range.set_end_key(b"k5".to_vec());
-        switcher.enter_or_extend_import_mode_regions_in_range(key_range, &region_infos);
+        switcher.enter_import_mode_for_regions_in_range(key_range, &region_infos);
 
         assert!(!switcher.region_in_import_mode(1));
         assert!(switcher.region_in_import_mode(2));
