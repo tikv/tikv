@@ -3,6 +3,7 @@
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
+    WriteOptions,
 };
 use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
@@ -23,10 +24,12 @@ impl RocksEngine {
     // of region will never be larger than max-region-size.
     fn delete_all_in_range_cf_by_ingest(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         sst_path: String,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut written = false;
         let mut ranges = ranges.to_owned();
         ranges.sort_by(|a, b| a.start_key.cmp(b.start_key));
 
@@ -39,7 +42,7 @@ impl RocksEngine {
                 .as_ref()
                 .map_or(false, |key| key.as_slice() > r.start_key)
             {
-                self.delete_all_in_range_cf_by_key(cf, &r)?;
+                written |= self.delete_all_in_range_cf_by_key(wopts, cf, &r)?;
                 continue;
             }
             last_end_key = Some(r.end_key.to_owned());
@@ -84,20 +87,26 @@ impl RocksEngine {
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
-                wb.delete_cf(cf, key)?;
                 if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                    wb.write()?;
+                    wb.write_opt(wopts)?;
                     wb.clear();
                 }
+                wb.delete_cf(cf, key)?;
             }
             if wb.count() > 0 {
-                wb.write()?;
+                wb.write_opt(wopts)?;
+                written = true;
             }
         }
-        Ok(())
+        Ok(written)
     }
 
-    fn delete_all_in_range_cf_by_key(&self, cf: &str, range: &Range<'_>) -> Result<()> {
+    fn delete_all_in_range_cf_by_key(
+        &self,
+        wopts: &WriteOptions,
+        cf: &str,
+        range: &Range<'_>,
+    ) -> Result<bool> {
         let start = KeyBuilder::from_slice(range.start_key, 0, 0);
         let end = KeyBuilder::from_slice(range.end_key, 0, 0);
         let mut opts = IterOptions::new(Some(start), Some(end), false);
@@ -110,18 +119,22 @@ impl RocksEngine {
         let mut it_valid = it.seek(range.start_key)?;
         let mut wb = self.write_batch();
         while it_valid {
-            wb.delete_cf(cf, it.key())?;
             if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                wb.write()?;
+                wb.write_opt(wopts)?;
                 wb.clear();
             }
+            wb.delete_cf(cf, it.key())?;
             it_valid = it.next()?;
         }
         if wb.count() > 0 {
-            wb.write()?;
+            wb.write_opt(wopts)?;
+            if !wopts.disable_wal() {
+                self.sync_wal()?;
+            }
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        self.sync_wal()?;
-        Ok(())
     }
 }
 
@@ -188,12 +201,14 @@ impl MiscExt for RocksEngine {
 
     fn delete_ranges_cf(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut written = false;
         if ranges.is_empty() {
-            return Ok(());
+            return Ok(written);
         }
         match strategy {
             DeleteStrategy::DeleteFiles => {
@@ -209,7 +224,7 @@ impl MiscExt for RocksEngine {
                     })
                     .collect();
                 if rocks_ranges.is_empty() {
-                    return Ok(());
+                    return Ok(written);
                 }
                 self.as_inner()
                     .delete_files_in_ranges_cf(handle, &rocks_ranges, false)
@@ -229,7 +244,7 @@ impl MiscExt for RocksEngine {
                         })
                         .collect();
                     if rocks_ranges.is_empty() {
-                        return Ok(());
+                        return Ok(written);
                     }
                     self.as_inner()
                         .delete_blob_files_in_ranges_cf(handle, &rocks_ranges, false)
@@ -241,18 +256,19 @@ impl MiscExt for RocksEngine {
                 for r in ranges.iter() {
                     wb.delete_range_cf(cf, r.start_key, r.end_key)?;
                 }
-                wb.write()?;
+                wb.write_opt(wopts)?;
+                written = true;
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
-                    self.delete_all_in_range_cf_by_key(cf, r)?;
+                    written |= self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
                 }
             }
             DeleteStrategy::DeleteByWriter { sst_path } => {
-                self.delete_all_in_range_cf_by_ingest(cf, sst_path, ranges)?;
+                written |= self.delete_all_in_range_cf_by_ingest(wopts, cf, sst_path, ranges)?;
             }
         }
-        Ok(())
+        Ok(written)
     }
 
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)> {
@@ -482,7 +498,8 @@ mod tests {
         wb.write().unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        db.delete_ranges_cfs(strategy, ranges).unwrap();
+        db.delete_ranges_cfs(&WriteOptions::default(), strategy, ranges)
+            .unwrap();
 
         let mut kvs_left: Vec<_> = kvs;
         for r in ranges {
@@ -620,10 +637,18 @@ mod tests {
         }
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        db.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[Range::new(b"k2", b"k4")])
-            .unwrap();
-        db.delete_ranges_cfs(DeleteStrategy::DeleteBlobs, &[Range::new(b"k2", b"k4")])
-            .unwrap();
+        db.delete_ranges_cfs(
+            &WriteOptions::default(),
+            DeleteStrategy::DeleteFiles,
+            &[Range::new(b"k2", b"k4")],
+        )
+        .unwrap();
+        db.delete_ranges_cfs(
+            &WriteOptions::default(),
+            DeleteStrategy::DeleteBlobs,
+            &[Range::new(b"k2", b"k4")],
+        )
+        .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -668,6 +693,7 @@ mod tests {
 
         // Delete all in ["k2", "k4").
         db.delete_ranges_cfs(
+            &WriteOptions::default(),
             DeleteStrategy::DeleteByRange,
             &[Range::new(b"kabcdefg2", b"kabcdefg4")],
         )
