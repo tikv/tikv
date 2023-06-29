@@ -92,10 +92,12 @@ pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResu
         .thread_name(thread_name)
         .enable_io()
         .enable_time()
-        .after_start_wrapper(|| {
-            file_system::set_io_type(IoType::Export);
-        })
-        .before_stop_wrapper(|| {})
+        .with_sys_and_custom_hooks(
+            || {
+                file_system::set_io_type(IoType::Export);
+            },
+            || {},
+        )
         .worker_threads(thread_count)
         .build()
 }

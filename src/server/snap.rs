@@ -384,8 +384,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("snap-sender"))
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .worker_threads(DEFAULT_POOL_SIZE)
                 .build()
                 .unwrap(),
