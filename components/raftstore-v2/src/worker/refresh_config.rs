@@ -131,12 +131,11 @@ where
         match task {
             RefreshConfigTask::ScalePool(component, size) => {
                 match component {
-                    BatchComponent::Store => {}
+                    BatchComponent::Store => self.resize_raft_pool(size),
                     BatchComponent::Apply => {
                         unreachable!("v2 does not have apply batch system")
                     }
                 };
-                self.resize_raft_pool(size);
             }
             _ => {
                 warn!(

@@ -73,11 +73,13 @@ impl<ER: RaftEngine> RecoveryService<ER> {
         let threads = ThreadPoolBuilder::new()
             .pool_size(4)
             .name_prefix("recovery-service")
-            .after_start_wrapper(move || {
-                tikv_util::thread_group::set_properties(props.clone());
-                tikv_alloc::add_thread_memory_accessor();
-            })
-            .before_stop_wrapper(|| tikv_alloc::remove_thread_memory_accessor())
+            .with_sys_and_custom_hooks(
+                move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+                    tikv_alloc::add_thread_memory_accessor();
+                },
+                || tikv_alloc::remove_thread_memory_accessor(),
+            )
             .create()
             .unwrap();
 
