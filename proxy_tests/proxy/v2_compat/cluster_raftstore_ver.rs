@@ -139,6 +139,7 @@ impl Drop for MockServer {
 fn test_maybe_substitute_addr() {
     let b = || "http://111.111.111.111:100".to_string();
     let b2 = || "111.111.111.111:100".to_string();
+    let b3 = || "tikv2:100".to_string();
     fn test_with_b(b: impl Fn() -> String + Clone, ba: &str) {
         let o = proxy_ffi::maybe_use_backup_addr(
             "http://tc-tikv-9.tc-tikv-peer.mutiple-rocksdb-btdpb.svc:20160/engine_type",
@@ -156,6 +157,7 @@ fn test_maybe_substitute_addr() {
     }
     test_with_b(b, "111.111.111.111");
     test_with_b(b2, "111.111.111.111");
+    test_with_b(b3, "tikv2");
 }
 
 #[test]

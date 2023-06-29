@@ -83,9 +83,7 @@ pub fn maybe_use_backup_addr(u: &str, backup: impl Fn() -> String) -> Option<Str
                 s = format!("http://{}", s);
             }
             if let Ok(back) = url::Url::parse(&s) {
-                stuff
-                    .set_ip_host(back.host_str().unwrap().parse().unwrap())
-                    .unwrap();
+                stuff.set_host(back.host_str()).unwrap();
             }
             res = Some(stuff.to_string())
         }
@@ -146,7 +144,7 @@ impl RaftStoreProxy {
         let stores = match self.pd_client.as_ref().unwrap().get_all_stores(false) {
             Ok(stores) => stores,
             Err(e) => {
-                tikv_util::debug!("get_all_stores error {:?}", e);
+                tikv_util::info!("get_all_stores error {:?}", e);
                 return false;
             }
         };
@@ -161,7 +159,7 @@ impl RaftStoreProxy {
                 // TiKV's status server don't support https.
                 let mut u = format!("http://{}/{}", store.get_status_address(), "engine_type");
                 if let Some(nu) = maybe_use_backup_addr(&u, || store.get_address().to_string()) {
-                    tikv_util::debug!("switch from {} to {}", u, nu);
+                    tikv_util::info!("switch from {} to {}", u, nu);
                     u = nu;
                 }
                 // A invalid url may lead to 404, which will enforce a V1 inference, which is
