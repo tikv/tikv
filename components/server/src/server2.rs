@@ -748,7 +748,7 @@ where
             import_path,
             self.core.encryption_key_manager.clone(),
             self.core.config.storage.api_version(),
-            true
+            true,
         )
         .unwrap();
         for (cf_name, compression_type) in &[

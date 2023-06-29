@@ -19,8 +19,8 @@ mod sst_writer;
 mod util;
 #[macro_use]
 pub mod import_mode;
-pub mod import_mode2;
 mod caching;
+pub mod import_mode2;
 pub mod metrics;
 pub mod sst_importer;
 

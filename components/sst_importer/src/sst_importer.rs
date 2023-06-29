@@ -242,10 +242,20 @@ impl SstImporter {
         }
     }
 
-    // Should only be used in v2.
     pub fn region_in_import_mode(&self, region_id: u64) -> bool {
         if let Either::Right(ref switcher) = self.switcher {
             switcher.region_in_import_mode(region_id)
+        } else {
+            unreachable!();
+        }
+    }
+
+    // sometimes, regional_import_mode should be used rather than
+    // region_in_import_mode as some region may not have be created now but will be
+    // created later
+    pub fn regional_import_mode(&self) -> bool {
+        if let Either::Right(ref switcher) = self.switcher {
+            switcher.regional_import_mode()
         } else {
             unreachable!();
         }
@@ -424,6 +434,7 @@ impl SstImporter {
         if let Either::Left(ref switcher) = self.switcher {
             switcher.get_mode()
         } else {
+            // v2 should use region_in_import_mode(region_id) to check regional mode
             SwitchMode::Normal
         }
     }

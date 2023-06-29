@@ -248,7 +248,6 @@ mod tests {
     use tikv_util::config::ReadableDuration;
 
     use super::*;
-    use crate::import_mode2::ImportModeSwitcherV2;
 
     fn check_import_options<E>(
         db: &E,
@@ -359,47 +358,6 @@ mod tests {
         threads.block_on(tokio::task::yield_now());
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-    }
-
-    #[test]
-    fn test_import_mode_timeout_v2() {
-        let cfg = Config {
-            import_mode_timeout: ReadableDuration::millis(300),
-            ..Config::default()
-        };
-
-        let threads = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let switcher = ImportModeSwitcherV2::new(&cfg);
-        let mut region_infos: HashMap<u64, _> = HashMap::default();
-        let mut region = Region::default();
-        region.set_id(1);
-        region.set_start_key(b"k1".to_vec());
-        region.set_end_key(b"k3".to_vec());
-        region_infos.insert(1, (region, true));
-        let mut region = Region::default();
-        region.set_id(2);
-        region.set_start_key(b"k3".to_vec());
-        region.set_end_key(b"k5".to_vec());
-        region_infos.insert(2, (region, true));
-
-        let mut key_range = KeyRange::default();
-        key_range.set_start_key(b"k2".to_vec());
-        key_range.set_end_key(b"k4".to_vec());
-        switcher.enter_or_extend_import_mode_regions_in_range(key_range, &region_infos);
-        assert!(switcher.region_in_import_mode(1));
-        assert!(switcher.region_in_import_mode(2));
-
-        switcher.start(threads.handle());
-
-        thread::sleep(Duration::from_secs(1));
-        threads.block_on(tokio::task::yield_now());
-
-        assert!(!switcher.region_in_import_mode(1));
-        assert!(!switcher.region_in_import_mode(2));
     }
 
     #[test]
