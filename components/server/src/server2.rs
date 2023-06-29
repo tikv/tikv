@@ -447,10 +447,9 @@ where
                 .worker_threads(1)
                 .with_sys_and_custom_hooks(
                     move || {
-                        tikv_alloc::add_thread_memory_accessor();
                         tikv_util::thread_group::set_properties(props.clone());
                     },
-                    tikv_alloc::remove_thread_memory_accessor,
+                    || {},
                 )
                 .build()
                 .unwrap(),

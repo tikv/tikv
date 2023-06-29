@@ -632,7 +632,6 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn_wrapper(move || {
-                tikv_alloc::add_thread_memory_accessor();
                 let mut checker = self;
                 let mut deadline = std::time::Instant::now();
                 let mut enabled = true;
@@ -661,7 +660,6 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                         checker.on_flow_info_msg(enabled, msg);
                     }
                 }
-                tikv_alloc::remove_thread_memory_accessor();
             })
             .unwrap()
     }
