@@ -112,6 +112,7 @@ engine_test = { workspace = true }
 engine_traits = { workspace = true }
 external_storage_export = { workspace = true }
 file_system = { workspace = true }
+hex = "0.4"
 hyper = { version = "0.14", default-features = false, features = ["runtime"] }
 keys = { workspace = true }
 panic_hook = { workspace = true }
