@@ -54,6 +54,8 @@ pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
+pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
+
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.

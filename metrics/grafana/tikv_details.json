@@ -7082,7 +7082,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\", name=~\"cdcwkr.*\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"cdcwkr.*\"}[1m])) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}} - worker",
@@ -7090,7 +7090,7 @@
               "step": 4
             },
             {
-              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\", name=~\"tso\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"tso\"}[1m])) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}} - tso",
@@ -7188,7 +7188,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\", name=~\"cdc_.*\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"cdc_.*\"}[1m])) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
