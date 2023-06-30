@@ -4971,9 +4971,14 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
+<<<<<<< HEAD
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c280c91abd1aed2e36be1bc8f56fbc7a2acbb2b58fbcac9641510179cc72dd9"
+=======
+version = "0.26.9"
+source = "git+https://github.com/tikv/sysinfo?branch=0.26-fix-cpu#5a1bcf08816979624ef2ad79cfb896de432a9501"
+>>>>>>> 425f6f262f (diagnostic: fix index out of bounds error in sysinfo (#15007))
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
