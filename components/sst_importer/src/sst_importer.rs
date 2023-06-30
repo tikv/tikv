@@ -245,7 +245,7 @@ impl SstImporter {
         if let Either::Right(ref switcher) = self.switcher {
             switcher.region_in_import_mode(region_id)
         } else {
-            unreachable!();
+            false
         }
     }
 
@@ -256,7 +256,7 @@ impl SstImporter {
         if let Either::Right(ref switcher) = self.switcher {
             switcher.regional_import_mode()
         } else {
-            unreachable!();
+            false
         }
     }
 
