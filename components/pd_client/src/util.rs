@@ -49,7 +49,6 @@ const MAX_RETRY_TIMES: u64 = 5;
 const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
 
 // FIXME: Use a request-independent way to handle reconnection.
-const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
 pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
 
 #[derive(Clone)]
@@ -160,6 +159,7 @@ pub struct Client {
     pub(crate) inner: RwLock<Inner>,
     pub feature_gate: FeatureGate,
     enable_forwarding: bool,
+    retry_interval: Duration,
 }
 
 impl Client {
@@ -171,6 +171,7 @@ impl Client {
         target: TargetInfo,
         tso: TimestampOracle,
         enable_forwarding: bool,
+        retry_interval: Duration,
     ) -> Client {
         if !target.direct_connected() {
             REQUEST_FORWARDED_GAUGE_VEC
@@ -206,6 +207,7 @@ impl Client {
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
+            retry_interval,
         }
     }
 
@@ -333,8 +335,7 @@ impl Client {
 
         let future = {
             let inner = self.inner.rl();
-            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
-            {
+            if start.saturating_duration_since(inner.last_try_reconnect) < self.retry_interval {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
                 PD_RECONNECT_COUNTER_VEC
@@ -360,8 +361,7 @@ impl Client {
 
         {
             let mut inner = self.inner.wl();
-            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
-            {
+            if start.saturating_duration_since(inner.last_try_reconnect) < self.retry_interval {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
                 PD_RECONNECT_COUNTER_VEC

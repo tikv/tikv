@@ -31,10 +31,6 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
-    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
-        panic!()
-    }
-
     fn is_empty(&self) -> Result<bool> {
         panic!()
     }
@@ -79,7 +75,7 @@ impl RaftEngineReadOnly for PanicEngine {
 impl RaftEngineDebug for PanicEngine {
     fn scan_entries<F>(&self, _: u64, _: F) -> Result<()>
     where
-        F: FnMut(&Entry) -> Result<bool>,
+        F: FnMut(Entry) -> Result<bool>,
     {
         panic!()
     }

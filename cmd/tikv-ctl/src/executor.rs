@@ -12,6 +12,7 @@ use engine_traits::{
     Engines, Error as EngineError, RaftEngine, TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK,
     CF_WRITE, DATA_CFS,
 };
+use file_system::read_dir;
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -56,6 +57,27 @@ pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
 type MvccInfoStream = Pin<Box<dyn Stream<Item = result::Result<(Vec<u8>, MvccInfo), String>>>>;
 
+fn get_engine_type(dir: &str) -> EngineType {
+    let mut entries = read_dir(dir).unwrap();
+    let mut engine1 = false;
+    let mut engine2 = false;
+    while let Some(Ok(e)) = entries.next() {
+        if let Ok(ty) = e.file_type() && ty.is_dir() {
+            if e.file_name() == "tablets" {
+                engine2 = true;
+            } else if e.file_name() == "db" {
+                engine1 = true;
+            }
+        }
+    }
+    assert_ne!(engine1, engine2);
+    if engine1 {
+        EngineType::RaftKv
+    } else {
+        EngineType::RaftKv2
+    }
+}
+
 pub fn new_debug_executor(
     cfg: &TikvConfig,
     data_dir: Option<&str>,
@@ -68,15 +90,13 @@ pub fn new_debug_executor(
 
     // TODO: perhaps we should allow user skip specifying data path.
     let data_dir = data_dir.unwrap();
+    let engine_type = get_engine_type(data_dir);
 
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
 
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(cfg.storage.engine);
+    let cache = cfg.storage.block_cache.build_shared_cache(engine_type);
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
@@ -87,7 +107,7 @@ pub fn new_debug_executor(
 
     let cfg_controller = ConfigController::default();
     if !cfg.raft_engine.enable {
-        assert_eq!(EngineType::RaftKv, cfg.storage.engine);
+        assert_eq!(EngineType::RaftKv, engine_type);
         let raft_db_opts = cfg.raftdb.build_opt(env, None);
         let raft_db_cf_opts = cfg.raftdb.build_cf_opts(factory.block_cache());
         let raft_path = cfg.infer_raft_db_path(Some(data_dir)).unwrap();
@@ -117,7 +137,7 @@ pub fn new_debug_executor(
             tikv_util::logger::exit_process_gracefully(-1);
         }
         let raft_db = RaftLogEngine::new(config, key_manager, None /* io_rate_limiter */).unwrap();
-        match cfg.storage.engine {
+        match engine_type {
             EngineType::RaftKv => {
                 let kv_db = match factory.create_shared_db(data_dir) {
                     Ok(db) => db,
@@ -1283,16 +1303,42 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         }
     }
 
-    fn recover_regions(&self, _regions: Vec<Region>, _read_only: bool) {
-        unimplemented!()
+    fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
+        let ret = self
+            .recover_regions(regions, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
     }
 
-    fn recover_all(&self, _threads: usize, _read_only: bool) {
-        unimplemented!()
+    fn recover_all(&self, threads: usize, read_only: bool) {
+        DebuggerImplV2::recover_all(self, threads, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover all", e));
     }
 
     fn print_bad_regions(&self) {
-        unimplemented!()
+        let bad_regions = self
+            .bad_regions()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::bad_regions", e));
+        if !bad_regions.is_empty() {
+            for (region_id, error) in bad_regions {
+                println!("{}: {}", region_id, error);
+            }
+            return;
+        }
+        println!("all regions are healthy")
+    }
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        println!("removing unapplied raftlog on region {:?} ...", region_ids);
+        self.drop_unapplied_raftlog(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
     }
 
     fn remove_fail_stores(
@@ -1303,8 +1349,6 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     ) {
         unimplemented!()
     }
-
-    fn drop_unapplied_raftlog(&self, _region_ids: Option<Vec<u64>>) {}
 
     fn recreate_region(&self, _mgr: Arc<SecurityManager>, _pd_cfg: &PdConfig, _region_id: u64) {
         unimplemented!()

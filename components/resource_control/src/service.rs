@@ -199,15 +199,16 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
+        assert_eq!(s.manager.get_all_resource_groups().len(), 1);
         let group = new_resource_group("TEST".into(), true, 100, 100, 0);
         add_resource_group(s.pd_client.clone(), group);
         block_on(s.reload_all_resource_groups());
-        assert_eq!(s.manager.get_all_resource_groups().len(), 1);
+        assert_eq!(s.manager.get_all_resource_groups().len(), 2);
         assert_eq!(s.revision, 1);
 
         delete_resource_group(s.pd_client.clone(), "TEST");
         block_on(s.reload_all_resource_groups());
-        assert_eq!(s.manager.get_all_resource_groups().len(), 0);
+        assert_eq!(s.manager.get_all_resource_groups().len(), 1);
         assert_eq!(s.revision, 2);
 
         server.stop();
@@ -220,7 +221,7 @@ pub mod tests {
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         block_on(s.reload_all_resource_groups());
-        assert_eq!(s.manager.get_all_resource_groups().len(), 0);
+        assert_eq!(s.manager.get_all_resource_groups().len(), 1);
         assert_eq!(s.revision, 0);
 
         // TODO: find a better way to observe the watch is ready.
@@ -251,26 +252,18 @@ pub mod tests {
         // Mock modify
         let group2 = new_resource_group_ru("TEST2".into(), 50, 0);
         add_resource_group(s.pd_client.clone(), group2);
-        wait_watch_ready(&s, 2);
+        wait_watch_ready(&s, 3);
 
         // Mock delete
         delete_resource_group(s.pd_client.clone(), "TEST1");
 
         // Wait for watcher
-        wait_watch_ready(&s, 1);
+        wait_watch_ready(&s, 2);
         let groups = s.manager.get_all_resource_groups();
-        assert_eq!(groups.len(), 1);
+        assert_eq!(groups.len(), 2);
         assert!(s.manager.get_resource_group("TEST1").is_none());
         let group = s.manager.get_resource_group("TEST2").unwrap();
-        assert_eq!(
-            group
-                .value()
-                .get_r_u_settings()
-                .get_r_u()
-                .get_settings()
-                .get_fill_rate(),
-            50
-        );
+        assert_eq!(group.get_ru_quota(), 50);
         server.stop();
     }
 
@@ -299,7 +292,7 @@ pub mod tests {
         // Wait watcher update
         std::thread::sleep(Duration::from_secs(1));
         let groups = s.manager.get_all_resource_groups();
-        assert_eq!(groups.len(), 2);
+        assert_eq!(groups.len(), 3);
 
         server.stop();
     }

@@ -406,18 +406,14 @@ where
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
+
                     info!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
                         log_wrappers::Value::key(&start_key),
                         log_wrappers::Value::key(&end_key)
                     );
-
-                    let result =
-                        recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index);
-                    tikv_alloc::remove_thread_memory_accessor();
-                    result
+                    recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
                 })
                 .unwrap();
 
@@ -1223,7 +1219,7 @@ pub fn dump_write_cf_properties(
     Ok(res)
 }
 
-fn recover_mvcc_for_range(
+pub fn recover_mvcc_for_range(
     db: &RocksEngine,
     start_key: &[u8],
     end_key: &[u8],
@@ -1276,7 +1272,7 @@ pub struct MvccChecker {
 }
 
 impl MvccChecker {
-    fn new(db: RocksEngine, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
+    pub fn new(db: RocksEngine, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_end_key(end_key);
         let gen_iter = |cf: &str| -> Result<_> {
@@ -2123,6 +2119,7 @@ mod tests {
         let kv_engine = &debugger.engines.kv;
         let raft_engine = &debugger.engines.raft;
         let store_id = 1; // It's a fake id.
+        debugger.set_store_id(store_id);
 
         let mut wb1 = raft_engine.write_batch();
         let cf1 = CF_DEFAULT;

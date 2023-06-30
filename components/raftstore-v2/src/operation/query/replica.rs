@@ -9,7 +9,7 @@ use raftstore::{
         fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index, Config, ReadIndexContext, ReadIndexRequest, Transport,
+        propose_read_index, Config, ReadIndexContext, ReadIndexRequest,
     },
     Error,
 };
@@ -49,7 +49,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// read index on follower
     ///
     /// call set_has_ready if it's proposed.
-    pub(crate) fn read_index_follower<T: Transport>(
+    pub(crate) fn read_index_follower<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
