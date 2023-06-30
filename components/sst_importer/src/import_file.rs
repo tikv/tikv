@@ -323,12 +323,14 @@ impl ImportDir {
     pub fn create_applied_file(&self, meta: &SstMeta, applied_index: u64) -> Result<()> {
         let name = apply_sst_meta_to_path(meta, applied_index)?;
         let path = self.applied_dir.join(name);
-        return OpenOptions::new()
-            .read(true)
+        print!("create_applied_file,path:{:?}", path);
+        // std::File::create(path)?;
+        OpenOptions::new()
+            .write(true)
             .create_new(true)
             .open(path)
-            .map(|_|())
-            .map_err(|e| Error::from(e));
+            .map(|_| ())
+            .map_err(|e| Error::from(e))
     }
 
     pub fn validate(

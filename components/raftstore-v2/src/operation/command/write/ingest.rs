@@ -132,7 +132,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
 
         for sst in infos {
-            let _ = self.sst_importer().create_applied_file(&sst.meta, index);
+            if let Err(err) = self.sst_importer().create_applied_file(&sst.meta, index) {
+                error!(self.logger,
+                        "create applied file failed",
+                        "sst" => ?ssts,
+                        "err" => ?err
+                );
+            }
         }
 
         self.metrics.size_diff_hint += size;

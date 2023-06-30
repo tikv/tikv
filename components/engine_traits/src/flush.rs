@@ -13,10 +13,10 @@
 //! be used as the start state.
 
 use std::{
-    collections:: LinkedList,
+    collections::LinkedList,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex
+        Arc, Mutex,
     },
 };
 
