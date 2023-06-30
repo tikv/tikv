@@ -7,7 +7,6 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use file_system::IoType;
 use futures::FutureExt;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
