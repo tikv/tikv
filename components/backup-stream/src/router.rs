@@ -35,7 +35,6 @@ use tikv_util::{
     codec::stream_event::EventEncoder,
     config::ReadableSize,
     error, info,
-    sys::SysQuota,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
@@ -294,20 +293,32 @@ impl ApplyEvent {
 #[derive(Debug, Clone)]
 pub struct Router(Arc<RouterInner>);
 
+pub struct Config {
+    pub prefix: PathBuf,
+    pub temp_file_size_limit: u64,
+    pub temp_file_memory_quota: u64,
+    pub max_flush_interval: Duration,
+}
+
+impl From<tikv::config::BackupStreamConfig> for Config {
+    fn from(value: tikv::config::BackupStreamConfig) -> Self {
+        let prefix = PathBuf::from(value.temp_path);
+        let temp_file_size_limit = value.file_size_limit.0;
+        let temp_file_memory_quota = value.temp_file_memory_quota.0;
+        let max_flush_interval = value.max_flush_interval.0;
+        Self {
+            prefix,
+            temp_file_size_limit,
+            temp_file_memory_quota,
+            max_flush_interval,
+        }
+    }
+}
+
 impl Router {
     /// Create a new router with the temporary folder.
-    pub fn new(
-        prefix: PathBuf,
-        scheduler: Scheduler<Task>,
-        temp_file_size_limit: u64,
-        max_flush_interval: Duration,
-    ) -> Self {
-        Self(Arc::new(RouterInner::new(
-            prefix,
-            scheduler,
-            temp_file_size_limit,
-            max_flush_interval,
-        )))
+    pub fn new(scheduler: Scheduler<Task>, config: Config) -> Self {
+        Self(Arc::new(RouterInner::new(scheduler, config)))
     }
 }
 
@@ -343,6 +354,7 @@ pub struct RouterInner {
     scheduler: Scheduler<Task>,
     /// The size limit of temporary file per task.
     temp_file_size_limit: AtomicU64,
+    temp_file_memory_quota: AtomicU64,
     /// The max duration the local data can be pending.
     max_flush_interval: SyncRwLock<Duration>,
 }
@@ -358,19 +370,15 @@ impl std::fmt::Debug for RouterInner {
 }
 
 impl RouterInner {
-    pub fn new(
-        prefix: PathBuf,
-        scheduler: Scheduler<Task>,
-        temp_file_size_limit: u64,
-        max_flush_interval: Duration,
-    ) -> Self {
+    pub fn new(scheduler: Scheduler<Task>, config: Config) -> Self {
         RouterInner {
             ranges: SyncRwLock::new(SegmentMap::default()),
             tasks: Mutex::new(HashMap::default()),
-            prefix,
+            prefix: config.prefix,
             scheduler,
-            temp_file_size_limit: AtomicU64::new(temp_file_size_limit),
-            max_flush_interval: SyncRwLock::new(max_flush_interval),
+            temp_file_size_limit: AtomicU64::new(config.temp_file_size_limit),
+            temp_file_memory_quota: AtomicU64::new(config.temp_file_memory_quota),
+            max_flush_interval: SyncRwLock::new(config.max_flush_interval),
         }
     }
 
@@ -378,12 +386,14 @@ impl RouterInner {
         *self.max_flush_interval.write().unwrap() = config.max_flush_interval.0;
         self.temp_file_size_limit
             .store(config.file_size_limit.0, Ordering::SeqCst);
+        self.temp_file_memory_quota
+            .store(config.temp_file_memory_quota.0, Ordering::SeqCst);
         let tasks = self.tasks.blocking_lock();
         for task in tasks.values() {
             task.temp_file_pool
                 .config()
                 .cache_size
-                .store(config.file_size_limit.0 as usize * 2, Ordering::Release)
+                .store(config.temp_file_memory_quota.0 as usize, Ordering::SeqCst);
         }
     }
 
@@ -454,18 +464,14 @@ impl RouterInner {
     }
 
     fn tempfile_config_for_task(&self, task: &StreamTask) -> tempfiles::Config {
-        let mem_quota = SysQuota::memory_limit_in_bytes();
-        // Don't use too many memory.
-        let temp_file_quota = mem_quota / 16;
-        // 2x of the max pending bytes. The extra buffer make us easier to keep all
-        // files in memory.
-        // Also note the scope of this config is per-task. That means, when there are
-        // multi tasks, we may need to share the pool over tasks. That is, we may need
-        // to move the compression options into the argument of `open_for_write`.
-        let preferred_cache_size = self.temp_file_size_limit.load(Ordering::SeqCst) * 2;
-        let cache_size = AtomicUsize::new(temp_file_quota.min(preferred_cache_size) as usize);
+        // Note: the scope of this config is per-task. That means, when there are
+        // multi tasks, we may need to share the pool over tasks, or at least share the
+        // quota between tasks -- but not for now. We don't support that.
         tempfiles::Config {
-            cache_size,
+            // Note: will it be more effective to directly sharing the same atomic value?
+            cache_size: AtomicUsize::new(
+                self.temp_file_memory_quota.load(Ordering::SeqCst) as usize
+            ),
             swap_files: self.prefix.join(task.info.get_name()),
             content_compression: task.info.get_compression_type(),
             minimal_swap_out_file_size: ReadableSize::mb(1).0 as _,
@@ -1618,7 +1624,15 @@ mod tests {
     #[test]
     fn test_register() {
         let (tx, _) = dummy_scheduler();
-        let router = RouterInner::new(PathBuf::new(), tx, 1024, Duration::from_secs(300));
+        let router = RouterInner::new(
+            tx,
+            Config {
+                prefix: PathBuf::new(),
+                temp_file_size_limit: 1024,
+                temp_file_memory_quota: 1024 * 2,
+                max_flush_interval: Duration::from_secs(300),
+            },
+        );
         // -----t1.start-----t1.end-----t2.start-----t2.end------
         // --|------------|----------|------------|-----------|--
         // case1        case2      case3        case4       case5
@@ -1720,7 +1734,15 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&tmp).await.unwrap();
         let (tx, rx) = dummy_scheduler();
-        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
+        let router = RouterInner::new(
+            tx,
+            Config {
+                prefix: tmp.clone(),
+                temp_file_size_limit: 32,
+                temp_file_memory_quota: 32 * 2,
+                max_flush_interval: Duration::from_secs(300),
+            },
+        );
         let (stream_task, storage_path) = task("dummy".to_owned()).await.unwrap();
         must_register_table(&router, stream_task, 1).await;
 
@@ -1962,10 +1984,13 @@ mod tests {
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = Arc::new(RouterInner::new(
-            tmp.clone(),
             tx,
-            1,
-            Duration::from_secs(300),
+            Config {
+                prefix: tmp.clone(),
+                temp_file_size_limit: 1,
+                temp_file_memory_quota: 2,
+                max_flush_interval: Duration::from_secs(300),
+            },
         ));
         let (task, _path) = task("error_prone".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
@@ -1996,7 +2021,15 @@ mod tests {
     async fn test_empty_resolved_ts() {
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
+        let router = RouterInner::new(
+            tx,
+            Config {
+                prefix: tmp.clone(),
+                temp_file_size_limit: 32,
+                temp_file_memory_quota: 32 * 2,
+                max_flush_interval: Duration::from_secs(300),
+            },
+        );
         let mut stream_task = StreamBackupTaskInfo::default();
         stream_task.set_name("nothing".to_string());
         stream_task.set_storage(create_noop_storage_backend());
@@ -2024,10 +2057,13 @@ mod tests {
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = Arc::new(RouterInner::new(
-            tmp.clone(),
             tx,
-            1,
-            Duration::from_secs(300),
+            Config {
+                prefix: tmp.clone(),
+                temp_file_size_limit: 1,
+                temp_file_memory_quota: 2,
+                max_flush_interval: Duration::from_secs(300),
+            },
         ));
         let (task, _path) = task("cleanup_test".to_owned()).await?;
         must_register_table(&router, task, 1).await;
@@ -2065,10 +2101,13 @@ mod tests {
         let (tx, rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = Arc::new(RouterInner::new(
-            tmp.clone(),
             tx,
-            1,
-            Duration::from_secs(300),
+            Config {
+                prefix: tmp.clone(),
+                temp_file_size_limit: 1,
+                temp_file_memory_quota: 2,
+                max_flush_interval: Duration::from_secs(300),
+            },
         ));
         let (task, _path) = task("flush_failure".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
@@ -2323,10 +2362,13 @@ mod tests {
         let (sched, rx) = dummy_scheduler();
         let cfg = BackupStreamConfig::default();
         let router = Arc::new(RouterInner::new(
-            PathBuf::new(),
             sched.clone(),
-            1,
-            cfg.max_flush_interval.0,
+            Config {
+                prefix: PathBuf::new(),
+                temp_file_size_limit: 1,
+                temp_file_memory_quota: 2,
+                max_flush_interval: cfg.max_flush_interval.0,
+            },
         ));
 
         let mut cfg_manager = BackupStreamConfigManager::new(sched, cfg.clone());

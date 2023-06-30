@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
+    collections::HashSet, fmt, marker::PhantomData, sync::Arc, time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -50,7 +50,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{ApplyEvents, Router, TaskSelector},
+    router::{ApplyEvents, Router, TaskSelector, self},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
@@ -119,10 +119,8 @@ where
 
         let meta_client = MetadataClient::new(store, store_id);
         let range_router = Router::new(
-            PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
-            config.file_size_limit.0,
-            config.max_flush_interval.0,
+            router::Config::from(config.clone()),
         );
 
         // spawn a worker to watch task changes from etcd periodically.
