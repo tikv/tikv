@@ -686,6 +686,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             self.region_id(),
             false,
         )?;
+        if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
