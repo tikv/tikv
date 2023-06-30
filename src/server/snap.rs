@@ -165,7 +165,9 @@ pub fn send_snap(
         .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
         .keepalive_time(cfg.grpc_keepalive_time.0)
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
-        .default_compression_algorithm(cfg.grpc_compression_algorithm());
+        .default_compression_algorithm(cfg.grpc_compression_algorithm())
+        .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
+        .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress);
 
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
