@@ -181,13 +181,15 @@ impl SstImporter {
         let download_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("sst_import_misc")
-            .after_start_wrapper(|| {
-                tikv_alloc::add_thread_memory_accessor();
-                file_system::set_io_type(IoType::Import);
-            })
-            .before_stop_wrapper(|| {
-                tikv_alloc::remove_thread_memory_accessor();
-            })
+            .with_sys_and_custom_hooks(
+                || {
+                    tikv_alloc::add_thread_memory_accessor();
+                    file_system::set_io_type(IoType::Import);
+                },
+                || {
+                    tikv_alloc::remove_thread_memory_accessor();
+                },
+            )
             .enable_all()
             .build()?;
         download_rt.spawn(cached_storage.gc_loop());
@@ -1447,7 +1449,7 @@ mod tests {
                 File::create(&path.clone).unwrap();
             }
 
-            dir.delete(&meta, key_manager.as_deref()).unwrap();
+            dir.delete(&meta, None, key_manager.as_deref()).unwrap();
             check_file_not_exists(&path.temp, key_manager.as_deref());
             check_file_not_exists(&path.save, key_manager.as_deref());
             check_file_not_exists(&path.clone, key_manager.as_deref());
@@ -1490,7 +1492,7 @@ mod tests {
                 .iter()
                 .find(|s| s.get_uuid() == sst.get_uuid())
                 .unwrap();
-            dir.delete(sst, key_manager.as_deref()).unwrap();
+            dir.delete(sst, None, key_manager.as_deref()).unwrap();
         }
         assert!(dir.list_ssts().unwrap().is_empty());
     }

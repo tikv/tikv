@@ -373,13 +373,17 @@ pub trait StdThreadBuildWrapper {
 }
 
 pub trait ThreadBuildWrapper {
-    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    /// Register all system hooks along with a custom hook pair.
+    fn with_sys_and_custom_hooks<F1, F2>(&mut self, after_start: F1, before_end: F2) -> &mut Self
     where
-        F: Fn() + Send + Sync + 'static;
+        F1: Fn() + Send + Sync + 'static,
+        F2: Fn() + Send + Sync + 'static;
 
-    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
-    where
-        F: Fn() + Send + Sync + 'static;
+    /// Register some generic hooks like memory tracing or thread lifetime
+    /// tracing.
+    fn with_sys_hooks(&mut self) -> &mut Self {
+        self.with_sys_and_custom_hooks(|| {}, || {})
+    }
 }
 
 lazy_static::lazy_static! {
@@ -432,50 +436,38 @@ impl StdThreadBuildWrapper for std::thread::Builder {
 }
 
 impl ThreadBuildWrapper for tokio::runtime::Builder {
-    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    fn with_sys_and_custom_hooks<F1, F2>(&mut self, start: F1, end: F2) -> &mut Self
     where
-        F: Fn() + Send + Sync + 'static,
+        F1: Fn() + Send + Sync + 'static,
+        F2: Fn() + Send + Sync + 'static,
     {
         #[allow(clippy::disallowed_methods)]
         self.on_thread_start(move || {
             call_thread_start_hooks();
             add_thread_name_to_map();
-            f();
+            start();
         })
-    }
-
-    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        #[allow(clippy::disallowed_methods)]
-        self.on_thread_stop(move || {
-            f();
+        .on_thread_stop(move || {
+            end();
             remove_thread_name_from_map();
         })
     }
 }
 
 impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
-    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    fn with_sys_and_custom_hooks<F1, F2>(&mut self, start: F1, end: F2) -> &mut Self
     where
-        F: Fn() + Send + Sync + 'static,
+        F1: Fn() + Send + Sync + 'static,
+        F2: Fn() + Send + Sync + 'static,
     {
         #[allow(clippy::disallowed_methods)]
         self.after_start(move |_| {
             call_thread_start_hooks();
             add_thread_name_to_map();
-            f();
+            start();
         })
-    }
-
-    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        #[allow(clippy::disallowed_methods)]
-        self.before_stop(move |_| {
-            f();
+        .before_stop(move |_| {
+            end();
             remove_thread_name_from_map();
         })
     }
@@ -599,8 +591,7 @@ mod tests {
         block_on(
             tokio::runtime::Builder::new_multi_thread()
                 .thread_name(thread_name)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap()
                 .spawn(async move { get_name_fn() }),

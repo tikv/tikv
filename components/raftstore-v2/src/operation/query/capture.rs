@@ -182,7 +182,7 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
+        FlushState, Peekable, TabletContext, TabletRegistry, CF_DEFAULT, DATA_CFS,
     };
     use futures::executor::block_on;
     use kvproto::{
@@ -289,7 +289,6 @@ mod test {
             reg,
             read_scheduler,
             Arc::new(FlushState::new(5)),
-            SstApplyState::default(),
             None,
             5,
             None,

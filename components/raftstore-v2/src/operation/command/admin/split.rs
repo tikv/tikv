@@ -943,8 +943,7 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT,
-        DATA_CFS,
+        FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
     };
     use futures::executor::block_on;
     use kvproto::{
