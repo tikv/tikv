@@ -297,7 +297,9 @@ where
     fn run(&mut self, task: Task) {
         self.maybe_schedule_heartbeat_receiver();
         match task {
-            Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
+            Task::StoreHeartbeat { stats } => {
+                self.handle_store_heartbeat(stats, false /* is_fake_hb */)
+            }
             Task::UpdateStoreInfos {
                 cpu_usages,
                 read_io_rates,
