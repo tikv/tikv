@@ -1,11 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Duration;
+
 use futures::{executor::block_on, stream::StreamExt};
-use kvproto::{
-    import_sstpb::*,
-    kvrpcpb::{Context, KeyRange},
-    tikvpb::*,
-};
+use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
 use pd_client::PdClient;
 use tempfile::Builder;
 use test_sst_importer::*;
@@ -122,6 +120,13 @@ fn test_ingest_sst() {
     assert!(!resp.has_error(), "{:?}", resp.get_error());
 }
 
+fn switch_mode(import: &ImportSstClient, range: Range, mode: SwitchMode) {
+    let mut switch_req = SwitchModeRequest::default();
+    switch_req.set_mode(mode);
+    switch_req.set_range(range);
+    let _ = import.switch_mode(&switch_req).unwrap();
+}
+
 #[test]
 fn test_switch_mode_v2() {
     let mut cfg = TikvConfig::default();
@@ -136,15 +141,8 @@ fn test_switch_mode_v2() {
     let region = cluster.get_region(&[50]);
     ctx.set_region_epoch(region.get_region_epoch().clone());
 
-    let switch_mode = |import: &ImportSstClient, key_range: KeyRange, mode: SwitchMode| {
-        let mut switch_req = SwitchModeRequest::default();
-        switch_req.set_mode(mode);
-        switch_req.set_range(key_range);
-        let _ = import.switch_mode(&switch_req).unwrap();
-    };
-
-    let mut key_range = KeyRange::default();
-    key_range.set_start_key([50].to_vec());
+    let mut key_range = Range::default();
+    key_range.set_start([50].to_vec());
     switch_mode(&import, key_range.clone(), SwitchMode::Import);
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
@@ -186,8 +184,8 @@ fn test_switch_mode_v2() {
         }
     }
     // Propose another switch mode request to let this region to ingest.
-    let mut key_range2 = KeyRange::default();
-    key_range2.set_end_key([50].to_vec());
+    let mut key_range2 = Range::default();
+    key_range2.set_end([50].to_vec());
     switch_mode(&import, key_range2.clone(), SwitchMode::Import);
     let resp = upload_and_ingest((0, 49), &import, "test-6.sst".to_string(), &ctx2);
     assert!(!resp.has_error());
@@ -351,6 +349,62 @@ fn test_cleanup_sst() {
     let res = block_on(cluster.pd_client.get_region_by_id(left.get_id()));
     assert_eq!(res.unwrap(), None);
 
+    check_sst_deleted(&import, &meta, &data);
+}
+
+#[test]
+fn test_cleanup_sst_v2() {
+    let (mut cluster, ctx, _, import) = open_cluster_and_tikv_import_client_v2(None);
+
+    let temp_dir = Builder::new().prefix("test_cleanup_sst").tempdir().unwrap();
+
+    let sst_path = temp_dir.path().join("test_split.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+    send_upload_sst(&import, &meta, &data).unwrap();
+
+    // Can not upload the same file when it exists.
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
+
+    // The uploaded SST should be deleted if the region split.
+    let region = cluster.get_region(&[]);
+    cluster.must_split(&region, &[100]);
+
+    check_sst_deleted(&import, &meta, &data);
+
+    // upload an SST of an unexisted region
+    let sst_path = temp_dir.path().join("test_non_exist.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(9999);
+    send_upload_sst(&import, &meta, &data).unwrap();
+    // This should be cleanuped
+    check_sst_deleted(&import, &meta, &data);
+
+    let mut key_range = Range::default();
+    key_range.set_start([50].to_vec());
+    key_range.set_start([70].to_vec());
+    // switch to import so that the overlapped sst will not be cleanuped
+    switch_mode(&import, key_range.clone(), SwitchMode::Import);
+    let sst_path = temp_dir.path().join("test_non_exist1.sst");
+    let sst_range = (60, 80);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(9999);
+    send_upload_sst(&import, &meta, &data).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
+
+    // switch back to normal mode
+    switch_mode(&import, key_range, SwitchMode::Normal);
     check_sst_deleted(&import, &meta, &data);
 }
 

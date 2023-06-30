@@ -1,78 +1,59 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use futures_util::compat::Future01CompatExt;
-use kvproto::{kvrpcpb::KeyRange, metapb::Region};
+use kvproto::{import_sstpb::Range, metapb::Region};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio::runtime::Handle;
 
 use super::Config;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
-struct Range {
+// implement hash so that it can be a key in HashMap
+pub struct HashRange {
     pub start_key: std::vec::Vec<u8>,
     pub end_key: std::vec::Vec<u8>,
 }
 
-impl From<KeyRange> for Range {
-    fn from(key_range: KeyRange) -> Self {
+impl From<Range> for HashRange {
+    fn from(key_range: Range) -> Self {
         Self {
-            start_key: key_range.start_key,
-            end_key: key_range.end_key,
+            start_key: key_range.start,
+            end_key: key_range.end,
         }
     }
 }
 
 struct ImportModeSwitcherInnerV2 {
-    is_regional_import: Arc<AtomicBool>,
     timeout: Duration,
-    next_check: HashMap<Range, Instant>,
-
-    import_mode_regions: HashMap<Range, HashSet<u64>>,
+    // range in import mode -> timeout to restore to normal mode
+    import_mode_ranges: HashMap<HashRange, Instant>,
 }
 
 impl ImportModeSwitcherInnerV2 {
-    fn clear_import_mode_regions_in_range(&mut self, range: Range) {
-        self.import_mode_regions.remove(&range);
-        self.next_check.remove(&range);
-
-        if self.import_mode_regions.is_empty() {
-            // no region is in import mode
-            self.is_regional_import.store(false, Ordering::Release);
-        }
+    fn clear_import_mode_range(&mut self, range: HashRange) {
+        self.import_mode_ranges.remove(&range);
     }
 }
 
 #[derive(Clone)]
 pub struct ImportModeSwitcherV2 {
     inner: Arc<Mutex<ImportModeSwitcherInnerV2>>,
-    // true if any one region is in import mode
-    is_regional_import: Arc<AtomicBool>,
 }
 
 impl ImportModeSwitcherV2 {
     pub fn new(cfg: &Config) -> ImportModeSwitcherV2 {
         let timeout = cfg.import_mode_timeout.0;
-        let is_regional_import = Arc::new(AtomicBool::new(false));
         let inner = Arc::new(Mutex::new(ImportModeSwitcherInnerV2 {
             timeout,
-            next_check: HashMap::default(),
-            import_mode_regions: HashMap::default(),
-            is_regional_import: is_regional_import.clone(),
+            import_mode_ranges: HashMap::default(),
         }));
-        ImportModeSwitcherV2 {
-            inner,
-            is_regional_import,
-        }
+        ImportModeSwitcherV2 { inner }
     }
 
     // Periodically perform timeout check to change import mode of some regions back
@@ -89,15 +70,15 @@ impl ImportModeSwitcherV2 {
                     let now = Instant::now();
                     let mut switcher = switcher.lock().unwrap();
                     if let Some(range) = prev_range.take() {
-                        if let Some(next_check) = switcher.next_check.get(&range) {
+                        if let Some(next_check) = switcher.import_mode_ranges.get(&range) {
                             if now >= *next_check {
-                                switcher.clear_import_mode_regions_in_range(range);
+                                switcher.clear_import_mode_range(range);
                             }
                         }
                     }
 
                     let mut min_next_check = now + switcher.timeout;
-                    for (range, next_check) in &switcher.next_check {
+                    for (range, next_check) in &switcher.import_mode_ranges {
                         if *next_check < min_next_check {
                             min_next_check = *next_check;
                             prev_range = Some(range.clone());
@@ -115,52 +96,54 @@ impl ImportModeSwitcherV2 {
         executor.spawn(timer_loop);
     }
 
-    pub fn enter_import_mode_for_regions_in_range(
-        &self,
-        range: KeyRange,
-        store_regions_info: &HashMap<u64, (Region, bool)>,
-    ) {
-        let range = Range::from(range);
+    pub fn range_enter_import_mode(&self, range: Range) {
+        let range = HashRange::from(range);
         let mut inner = self.inner.lock().unwrap();
-        let mut regions = HashSet::default();
-        for (region_id, (region, _)) in store_regions_info {
-            if region_overlap_with_range(&range, region) {
-                regions.insert(*region_id);
-            }
-        }
-        if regions.is_empty() {
-            return;
-        }
-        inner.is_regional_import.store(true, Ordering::Release);
         let next_check = Instant::now() + inner.timeout;
-        // range may exist before, but store_regions_info may have been changed
-        inner.import_mode_regions.insert(range.clone(), regions);
-        inner.next_check.insert(range, next_check);
+        // if the range exists before, the timeout is updated
+        inner.import_mode_ranges.insert(range, next_check);
     }
 
-    pub fn clear_import_mode_regions_in_range(&self, range: KeyRange) {
+    pub fn clear_import_mode_range(&self, range: Range) {
         let mut inner = self.inner.lock().unwrap();
-        let range = Range::from(range);
-        inner.clear_import_mode_regions_in_range(range);
+        let range = HashRange::from(range);
+        inner.clear_import_mode_range(range);
     }
 
-    pub fn regional_import_mode(&self) -> bool {
-        self.is_regional_import.load(Ordering::Acquire)
-    }
-
-    pub fn region_in_import_mode(&self, region_id: u64) -> bool {
-        for regions in self.inner.lock().unwrap().import_mode_regions.values() {
-            if regions.contains(&region_id) {
+    pub fn region_in_import_mode(&self, region: &Region) -> bool {
+        let inner = self.inner.lock().unwrap();
+        for r in inner.import_mode_ranges.keys() {
+            if region_overlap_with_range(r, region) {
                 return true;
             }
         }
         false
     }
+
+    pub fn range_in_import_mode(&self, range: &Range) -> bool {
+        let inner = self.inner.lock().unwrap();
+        for r in inner.import_mode_ranges.keys() {
+            if range_overlaps(r, range) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn ranges_in_import(&self) -> HashSet<HashRange> {
+        let inner = self.inner.lock().unwrap();
+        HashSet::from_iter(inner.import_mode_ranges.keys().into_iter().cloned())
+    }
 }
 
-fn region_overlap_with_range(range: &Range, region: &Region) -> bool {
+fn region_overlap_with_range(range: &HashRange, region: &Region) -> bool {
     (region.end_key.is_empty() || range.start_key < region.end_key)
         && (range.end_key.is_empty() || region.start_key < range.end_key)
+}
+
+pub fn range_overlaps(range1: &HashRange, range2: &Range) -> bool {
+    (range2.end.is_empty() || range1.start_key < range2.end)
+        && (range1.end_key.is_empty() || range2.start < range1.end_key)
 }
 
 #[cfg(test)]
@@ -175,76 +158,59 @@ mod test {
     fn test_region_import_mode() {
         let cfg = Config::default();
         let switcher = ImportModeSwitcherV2::new(&cfg);
-        let mut region_infos: HashMap<u64, _> = HashMap::default();
+        let mut regions = vec![];
         for i in 1..=5 {
             let mut region = Region::default();
             region.set_id(i);
             region.set_start_key(format!("k{:02}", (i - 1) * 10).into());
             region.set_end_key(format!("k{:02}", i * 10).into());
-            region_infos.insert(i, (region, true));
+            regions.push(region);
         }
 
-        let mut key_range = KeyRange::default();
-        key_range.set_end_key(b"j".to_vec());
-        switcher.enter_import_mode_for_regions_in_range(key_range.clone(), &region_infos);
+        let mut key_range = Range::default();
+        key_range.set_end(b"j".to_vec());
+        switcher.range_enter_import_mode(key_range.clone());
         // no regions should be set in import mode
         for i in 1..=5 {
-            assert!(!switcher.region_in_import_mode(i));
+            assert!(!switcher.region_in_import_mode(&regions[i - 1]));
         }
-        assert!(!switcher.is_regional_import.load(Ordering::Acquire));
+
+        let mut r = Range::default();
+        r.set_end(b"k".to_vec());
+        assert!(switcher.range_in_import_mode(&r));
 
         // region 1 2 3 should be included
-        key_range.set_start_key(b"k09".to_vec());
-        key_range.set_end_key(b"k21".to_vec());
-        switcher.enter_import_mode_for_regions_in_range(key_range.clone(), &region_infos);
+        key_range.set_start(b"k09".to_vec());
+        key_range.set_end(b"k21".to_vec());
+        switcher.range_enter_import_mode(key_range.clone());
         for i in 1..=3 {
-            assert!(switcher.region_in_import_mode(i));
+            assert!(switcher.region_in_import_mode(&regions[i - 1]));
         }
         for i in 4..=5 {
-            assert!(!switcher.region_in_import_mode(i));
+            assert!(!switcher.region_in_import_mode(&regions[i - 1]));
         }
-        assert!(switcher.is_regional_import.load(Ordering::Acquire));
 
-        let mut key_range2 = KeyRange::default();
+        let mut key_range2 = Range::default();
         // region 3 4 5 should be included
-        key_range2.set_start_key(b"k29".to_vec());
-        key_range2.set_end_key(b"".to_vec());
-        switcher.enter_import_mode_for_regions_in_range(key_range2.clone(), &region_infos);
+        key_range2.set_start(b"k29".to_vec());
+        key_range2.set_end(b"".to_vec());
+        switcher.range_enter_import_mode(key_range2.clone());
         for i in 1..=5 {
-            assert!(switcher.region_in_import_mode(i));
+            assert!(switcher.region_in_import_mode(&regions[i - 1]));
         }
 
-        switcher.clear_import_mode_regions_in_range(key_range);
+        switcher.clear_import_mode_range(key_range);
         for i in 1..=2 {
-            assert!(!switcher.region_in_import_mode(i));
+            assert!(!switcher.region_in_import_mode(&regions[i - 1]));
         }
         for i in 3..5 {
-            assert!(switcher.region_in_import_mode(i));
-        }
-        assert!(switcher.is_regional_import.load(Ordering::Acquire));
-
-        // Mock that region 3 is spliited to region 3 and region 6
-        let mut region = Region::default();
-        region.set_id(3);
-        region.set_start_key(b"k20".to_vec());
-        region.set_end_key(b"k25".to_vec());
-        region_infos.insert(3, (region, true));
-        let mut region = Region::default();
-        region.set_id(6);
-        region.set_start_key(b"k25".to_vec());
-        region.set_end_key(b"k30".to_vec());
-        region_infos.insert(6, (region, true));
-        // use key_range2 again
-        switcher.enter_import_mode_for_regions_in_range(key_range2.clone(), &region_infos);
-        for i in 4..=6 {
-            assert!(switcher.region_in_import_mode(i));
+            assert!(switcher.region_in_import_mode(&regions[i - 1]));
         }
 
-        switcher.clear_import_mode_regions_in_range(key_range2);
-        for i in 4..=6 {
-            assert!(!switcher.region_in_import_mode(i));
+        switcher.clear_import_mode_range(key_range2);
+        for i in 3..=5 {
+            assert!(!switcher.region_in_import_mode(&regions[i - 1]));
         }
-        assert!(!switcher.is_regional_import.load(Ordering::Acquire));
     }
 
     #[test]
@@ -260,43 +226,37 @@ mod test {
             .unwrap();
 
         let switcher = ImportModeSwitcherV2::new(&cfg);
-        let mut region_infos: HashMap<u64, _> = HashMap::default();
         let mut region = Region::default();
         region.set_id(1);
         region.set_start_key(b"k1".to_vec());
         region.set_end_key(b"k3".to_vec());
-        region_infos.insert(1, (region, true));
-        let mut region = Region::default();
-        region.set_id(2);
-        region.set_start_key(b"k3".to_vec());
-        region.set_end_key(b"k5".to_vec());
-        region_infos.insert(2, (region, true));
+        let mut region2 = Region::default();
+        region2.set_id(2);
+        region2.set_start_key(b"k3".to_vec());
+        region2.set_end_key(b"k5".to_vec());
 
-        let mut key_range = KeyRange::default();
-        key_range.set_start_key(b"k2".to_vec());
-        key_range.set_end_key(b"k4".to_vec());
-        switcher.enter_import_mode_for_regions_in_range(key_range, &region_infos);
-        assert!(switcher.region_in_import_mode(1));
-        assert!(switcher.region_in_import_mode(2));
+        let mut key_range = Range::default();
+        key_range.set_start(b"k2".to_vec());
+        key_range.set_end(b"k4".to_vec());
+        switcher.range_enter_import_mode(key_range);
+        assert!(switcher.region_in_import_mode(&region));
+        assert!(switcher.region_in_import_mode(&region2));
 
         switcher.start(threads.handle());
 
         thread::sleep(Duration::from_secs(1));
         threads.block_on(tokio::task::yield_now());
 
-        let mut key_range = KeyRange::default();
-        key_range.set_start_key(b"k4".to_vec());
-        key_range.set_end_key(b"k5".to_vec());
-        switcher.enter_import_mode_for_regions_in_range(key_range, &region_infos);
+        let mut key_range = Range::default();
+        key_range.set_start(b"k4".to_vec());
+        key_range.set_end(b"k5".to_vec());
+        switcher.range_enter_import_mode(key_range);
 
-        assert!(!switcher.region_in_import_mode(1));
-        assert!(switcher.region_in_import_mode(2));
-        assert!(switcher.is_regional_import.load(Ordering::Acquire));
+        assert!(!switcher.region_in_import_mode(&region));
+        assert!(switcher.region_in_import_mode(&region2));
 
         thread::sleep(Duration::from_secs(1));
         threads.block_on(tokio::task::yield_now());
-        assert!(!switcher.region_in_import_mode(2));
-
-        assert!(!switcher.is_regional_import.load(Ordering::Acquire));
+        assert!(!switcher.region_in_import_mode(&region2));
     }
 }

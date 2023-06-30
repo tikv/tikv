@@ -5725,7 +5725,7 @@ where
         // because of region-epoch not matched. So we hope TiKV do not check region size
         // and split region during importing.
         if self.ctx.importer.get_mode() == SwitchMode::Import
-            || self.ctx.importer.regional_import_mode()
+            || self.ctx.importer.region_in_import_mode(self.region())
         {
             return;
         }

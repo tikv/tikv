@@ -28,8 +28,8 @@ use external_storage_export::{
 use file_system::{get_io_rate_limiter, IoType, OpenOptions};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
-    import_sstpb::*,
-    kvrpcpb::{ApiVersion, KeyRange},
+    import_sstpb::{Range, *},
+    kvrpcpb::ApiVersion,
     metapb::Region,
 };
 use tikv_util::{
@@ -45,13 +45,14 @@ use tokio::{
     runtime::{Handle, Runtime},
     sync::OnceCell,
 };
+use collections::HashSet;
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
-    import_mode2::ImportModeSwitcherV2,
+    import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util, Config, ConfigManager as ImportConfigManager, Error, Result,
@@ -221,42 +222,45 @@ impl SstImporter {
         })
     }
 
-    pub fn enter_import_mode_for_regions_in_range(
-        &self,
-        range: KeyRange,
-        store_regions_info: &collections::HashMap<u64, (Region, bool)>,
-    ) {
+    pub fn range_enter_import_mode(&self, range: Range) {
         if let Either::Right(ref switcher) = self.switcher {
-            switcher.enter_import_mode_for_regions_in_range(range, store_regions_info)
+            switcher.range_enter_import_mode(range)
         } else {
             unreachable!();
         }
     }
 
-    pub fn clear_import_mode_regions(&self, range: KeyRange) {
+    pub fn clear_import_mode_regions(&self, range: Range) {
         if let Either::Right(ref switcher) = self.switcher {
-            switcher.clear_import_mode_regions_in_range(range);
+            switcher.clear_import_mode_range(range);
         } else {
             unreachable!();
         }
     }
 
-    pub fn region_in_import_mode(&self, region_id: u64) -> bool {
+    // it always returns false for v1
+    pub fn region_in_import_mode(&self, region: &Region) -> bool {
         if let Either::Right(ref switcher) = self.switcher {
-            switcher.region_in_import_mode(region_id)
+            switcher.region_in_import_mode(region)
         } else {
             false
         }
     }
 
-    // Sometimes, regional_import_mode should be used rather than
-    // region_in_import_mode as some regions may not have be created now but will be
-    // created later
-    pub fn regional_import_mode(&self) -> bool {
+    // it always returns false for v1
+    pub fn range_in_import_mode(&self, range: &Range) -> bool {
         if let Either::Right(ref switcher) = self.switcher {
-            switcher.regional_import_mode()
+            switcher.range_in_import_mode(range)
         } else {
             false
+        }
+    }
+
+    pub fn ranges_in_import(&self) -> HashSet<HashRange> {
+        if let Either::Right(ref switcher) = self.switcher {
+            switcher.ranges_in_import()
+        } else {
+            unreachable!()
         }
     }
 
@@ -433,7 +437,7 @@ impl SstImporter {
         if let Either::Left(ref switcher) = self.switcher {
             switcher.get_mode()
         } else {
-            // v2 should use region_in_import_mode(id) or regional_import_mode to check mode
+            // v2 should use region_in_import_mode(region_id) to check regional mode
             SwitchMode::Normal
         }
     }

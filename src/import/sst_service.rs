@@ -117,6 +117,7 @@ pub struct ImportSstService<E: Engine> {
 
     writer: raft_writer::ThrottledTlsEngineWriter,
 
+    // it's some iff multi-rocksdb is enabled
     store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
 }
 
@@ -409,9 +410,33 @@ impl<E: Engine> ImportSstService<E> {
             }
         };
 
-        if self.importer.region_in_import_mode(region_id) {
-            // This region is in import mode, don't do flow control
-            return None;
+        let reject_error = |region_id: Option<u64>| -> Option<errorpb::Error> {
+            let mut errorpb = errorpb::Error::default();
+            let err = if let Some(id) = region_id {
+                format!("too many sst files are ingesting for region {}", id)
+            } else {
+                "too many sst files are ingesting".to_string()
+            };
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(err.clone());
+            errorpb.set_message(err);
+            errorpb.set_server_is_busy(server_is_busy_err);
+            Some(errorpb)
+        };
+
+        if let Some(ref store_meta) = self.store_meta {
+            if let Some((region, _)) = store_meta.lock().unwrap().regions.get(&region_id) {
+                if !self.importer.region_in_import_mode(region)
+                    && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
+                {
+                    return reject_error(Some(region_id));
+                }
+            } else {
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message(format!("region {} not found", region_id));
+                errorpb.mut_region_not_found().set_region_id(region_id);
+                return Some(errorpb);
+            }
         } else if self.importer.get_mode() == SwitchMode::Normal
             && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
         {
@@ -426,13 +451,7 @@ impl<E: Engine> ImportSstService<E> {
                     error!("get sst key ranges failed"; "err" => ?e);
                 }
             }
-            let mut errorpb = errorpb::Error::default();
-            let err = "too many sst files are ingesting";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(err.to_string());
-            errorpb.set_message(err.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-            return Some(errorpb);
+            return reject_error(None);
         }
 
         None
@@ -705,9 +724,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     if req.get_mode() == SwitchMode::Import {
                         if req.has_range() {
                             let range = req.take_range();
-                            let store_meta = self.store_meta.as_ref().unwrap().lock().unwrap();
-                            self.importer
-                                .enter_import_mode_for_regions_in_range(range, &store_meta.regions);
+                            self.importer.range_enter_import_mode(range);
                             Ok(true)
                         } else {
                             Err(sst_importer::Error::Engine(

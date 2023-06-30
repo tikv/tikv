@@ -2966,7 +2966,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/SpadeA-Tang/kvproto?branch=import-sst#5037db1e95480c6d8030b8f262071c23d734c5a1"
+source = "git+https://github.com/SpadeA-Tang/kvproto?branch=import-sst#3aa30049c633aa0f37a701848f392b7f4f56a42d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5825,6 +5825,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
+ "fxhash",
  "grpcio",
  "keys",
  "kvproto",
