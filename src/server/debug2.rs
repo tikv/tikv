@@ -277,7 +277,6 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
 
                     let mut results = vec![];
                     for (region, tablet) in region_group.into_iter().zip(tablets) {
