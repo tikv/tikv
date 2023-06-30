@@ -91,6 +91,7 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
+        service_event::ServiceEvent,
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
@@ -128,9 +129,12 @@ use crate::{
 };
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let mut tikv = TikvServer::<CER, F>::init(config);
-
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
+    config: TikvConfig,
+    service_event_tx: mpsc::Sender<ServiceEvent>,
+    service_event_rx: mpsc::Receiver<ServiceEvent>,
+) {
+    let mut tikv = TikvServer::<CER, F>::init(config, service_event_tx.clone());
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
@@ -152,17 +156,42 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.run_status_server();
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-    signal_handler::wait_for_signal(
-        Some(tikv.engines.take().unwrap().engines),
-        tikv.kv_statistics.clone(),
-        tikv.raft_statistics.clone(),
-    );
+    let engines = tikv.engines.take().unwrap().engines;
+    let kv_statistics = tikv.kv_statistics.clone();
+    let raft_statistics = tikv.raft_statistics.clone();
+    std::thread::spawn(move || {
+        signal_handler::wait_for_signal(
+            Some(engines),
+            kv_statistics,
+            raft_statistics,
+            Some(service_event_tx),
+        )
+    });
+    loop {
+        if let Ok(service_event) = service_event_rx.recv() {
+            match service_event {
+                ServiceEvent::PauseGrpc => {
+                    tikv.pause();
+                }
+                ServiceEvent::ResumeGrpc => {
+                    tikv.resume();
+                }
+                ServiceEvent::Exit => {
+                    break;
+                }
+            }
+        }
+    }
     tikv.stop();
 }
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TikvConfig) {
+pub fn run_tikv(
+    config: TikvConfig,
+    service_event_tx: mpsc::Sender<ServiceEvent>,
+    service_event_rx: mpsc::Receiver<ServiceEvent>,
+) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -183,9 +212,9 @@ pub fn run_tikv(config: TikvConfig) {
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config)
+            run_impl::<RocksEngine, API>(config, service_event_tx, service_event_rx)
         } else {
-            run_impl::<RaftLogEngine, API>(config)
+            run_impl::<RaftLogEngine, API>(config, service_event_tx, service_event_rx)
         }
     })
 }
@@ -219,6 +248,7 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
+    tx: mpsc::Sender<ServiceEvent>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -247,7 +277,7 @@ where
     ER: RaftEngine,
     F: KvFormat,
 {
-    fn init(mut config: TikvConfig) -> TikvServer<ER, F> {
+    fn init(mut config: TikvConfig, tx: mpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -400,6 +430,7 @@ where
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
+            tx,
         }
     }
 
@@ -1388,6 +1419,7 @@ where
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.core.store_path.clone(),
                 self.resource_manager.clone(),
+                self.tx.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1422,6 +1454,28 @@ where
         }
 
         self.core.to_stop.into_iter().for_each(|s| s.stop());
+    }
+
+    fn pause(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        let r = server.server.pause();
+        if let Err(e) = r {
+            warn!(
+                "failed to pause the server";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn resume(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        let r = server.server.resume();
+        if let Err(e) = r {
+            warn!(
+                "failed to resume the server";
+                "err" => ?e
+            );
+        }
     }
 }
 

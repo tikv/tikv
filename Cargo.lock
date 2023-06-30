@@ -6420,6 +6420,7 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "server",
  "slog",
  "slog-global",
  "sst_importer",

@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     pin::Pin,
     str::{self, FromStr},
-    sync::Arc,
+    sync::{mpsc, Arc},
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -64,7 +64,7 @@ use tokio_openssl::SslStream;
 
 use crate::{
     config::{ConfigController, LogLevel},
-    server::Result,
+    server::{service_event::ServiceEvent, Result},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -93,6 +93,7 @@ pub struct StatusServer<R> {
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    service_event_sender: mpsc::Sender<ServiceEvent>,
 }
 
 impl<R> StatusServer<R>
@@ -106,6 +107,7 @@ where
         router: R,
         store_path: PathBuf,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        service_event_sender: mpsc::Sender<ServiceEvent>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -128,6 +130,7 @@ where
             security_config,
             store_path,
             resource_manager,
+            service_event_sender,
         })
     }
 
@@ -440,6 +443,26 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
+    async fn pause_grpc(tx: mpsc::Sender<ServiceEvent>) -> hyper::Result<Response<Body>> {
+        tx.send(ServiceEvent::PauseGrpc).unwrap();
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("Content-Length", 2)
+            .body("Ok".into())
+            .unwrap();
+        Ok(response)
+    }
+
+    async fn resume_grpc(tx: mpsc::Sender<ServiceEvent>) -> hyper::Result<Response<Body>> {
+        tx.send(ServiceEvent::ResumeGrpc).unwrap();
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("Content-Length", 2)
+            .body("Ok".into())
+            .unwrap();
+        Ok(response)
+    }
+
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -553,6 +576,7 @@ where
         let router = self.router.clone();
         let store_path = self.store_path.clone();
         let resource_manager = self.resource_manager.clone();
+        let service_event_sender = self.service_event_sender.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -561,6 +585,7 @@ where
             let router = router.clone();
             let store_path = store_path.clone();
             let resource_manager = resource_manager.clone();
+            let service_event_sender = service_event_sender.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -570,6 +595,7 @@ where
                     let router = router.clone();
                     let store_path = store_path.clone();
                     let resource_manager = resource_manager.clone();
+                    let service_event_sender = service_event_sender.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -649,6 +675,12 @@ where
                             }
                             (Method::GET, "/resource_groups") => {
                                 Self::handle_get_all_resource_groups(resource_manager.as_ref())
+                            }
+                            (Method::PUT, "/pause_grpc") => {
+                                Self::pause_grpc(service_event_sender).await
+                            }
+                            (Method::PUT, "/resume_grpc") => {
+                                Self::resume_grpc(service_event_sender).await
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
@@ -1016,7 +1048,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{env, io::Read, path::PathBuf, sync::Arc};
+    use std::{
+        env,
+        io::Read,
+        path::PathBuf,
+        sync::{mpsc, Arc},
+    };
 
     use collections::HashSet;
     use flate2::read::GzDecoder;
@@ -1053,6 +1090,7 @@ mod tests {
 
     #[test]
     fn test_status_service() {
+        let (sender, _) = mpsc::channel();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
@@ -1061,6 +1099,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1103,6 +1142,7 @@ mod tests {
     #[test]
     fn test_config_endpoint() {
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1110,6 +1150,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1149,6 +1190,7 @@ mod tests {
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1156,6 +1198,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1266,6 +1309,7 @@ mod tests {
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1273,6 +1317,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1311,6 +1356,7 @@ mod tests {
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1318,6 +1364,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1348,6 +1395,7 @@ mod tests {
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1355,6 +1403,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1453,6 +1502,7 @@ mod tests {
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1460,6 +1510,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1487,6 +1538,7 @@ mod tests {
     fn test_metrics() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1494,6 +1546,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1543,6 +1596,7 @@ mod tests {
     #[test]
     fn test_change_log_level() {
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = mpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1550,6 +1604,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            sender,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1598,6 +1653,7 @@ mod tests {
         let resp_strs = ["raft-kv", "partitioned-raft-kv"];
         for (cfg, resp_str) in IntoIterator::into_iter(cfgs).zip(resp_strs) {
             let temp_dir = tempfile::TempDir::new().unwrap();
+            let (sender, _) = mpsc::channel();
             let mut status_server = StatusServer::new(
                 1,
                 ConfigController::new(cfg),
@@ -1605,6 +1661,7 @@ mod tests {
                 MockRouter,
                 temp_dir.path().to_path_buf(),
                 None,
+                sender,
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();

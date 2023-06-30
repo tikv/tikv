@@ -1,6 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{error::Error, net::SocketAddr, sync::Arc};
+use std::{
+    error::Error,
+    net::SocketAddr,
+    sync::{mpsc, Arc},
+};
 
 use hyper::{body, Client, StatusCode, Uri};
 use raftstore::store::region_meta::RegionMeta;
@@ -39,6 +43,7 @@ fn test_region_meta_endpoint() {
     assert!(peer.is_some());
     let store_id = peer.unwrap().get_store_id();
     let router = cluster.raft_extension(store_id);
+    let (sender, _) = mpsc::channel();
     let mut status_server = StatusServer::new(
         1,
         ConfigController::default(),
@@ -46,6 +51,7 @@ fn test_region_meta_endpoint() {
         router,
         std::env::temp_dir(),
         None,
+        sender,
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());

@@ -1,9 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 use engine_rocks::RocksStatistics;
 use engine_traits::{Engines, KvEngine, RaftEngine};
+use tikv::server::service_event::ServiceEvent;
 
 pub use self::imp::wait_for_signal;
 
@@ -23,6 +24,7 @@ mod imp {
         engines: Option<Engines<impl KvEngine, impl RaftEngine>>,
         kv_statistics: Option<Arc<RocksStatistics>>,
         raft_statistics: Option<Arc<RocksStatistics>>,
+        tx: Option<mpsc::Sender<ServiceEvent>>,
     ) {
         let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
         for signal in &mut signals {
@@ -48,6 +50,9 @@ mod imp {
                 // TODO: handle more signal
                 _ => unreachable!(),
             }
+        }
+        if let Some(tx) = tx {
+            tx.send(ServiceEvent::Exit).unwrap();
         }
     }
 }
