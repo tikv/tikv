@@ -17,7 +17,6 @@ fn test_fake_store_heartbeat() {
     });
     let store_id = cluster.node(0).id();
     let router = &cluster.routers[0];
-
     // Report store heartbeat to pd.
     router
         .store_router()
@@ -30,7 +29,6 @@ fn test_fake_store_heartbeat() {
         assert_ne!(prev_stats.get_used_size(), 0);
         assert_eq!(prev_stats.get_keys_written(), 0);
     }
-
     // Inject failpoints to trigger reporting fake store heartbeat to pd.
     fail::cfg("mock_slowness_last_tick_unfinished", "return(0)").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
