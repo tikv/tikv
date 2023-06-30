@@ -647,7 +647,7 @@ where
             .name(thd_name!("stats-monitor"))
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
+
                 // Create different `ThreadInfoStatistics` for different purposes to
                 // make sure the record won't be disturbed.
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
@@ -693,7 +693,6 @@ where
                     }
                     timer_cnt += 1;
                 }
-                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);
