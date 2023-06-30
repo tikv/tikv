@@ -1026,15 +1026,9 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         // (`File` API in `tokio::io` would use this pool.)
         .max_blocking_threads(thread_count * 8)
         .worker_threads(thread_count)
+        .with_sys_hooks()
         .enable_io()
         .enable_time()
-        .after_start_wrapper(|| {
-            file_system::set_io_type(IoType::Replication);
-            tikv_alloc::add_thread_memory_accessor();
-        })
-        .before_stop_wrapper(|| {
-            tikv_alloc::remove_thread_memory_accessor();
-        })
         .build()
 }
 
