@@ -78,7 +78,9 @@ where
                         if last_log_ts.elapsed() > log_interval {
                             warn!(
                                 logger,
-                                "failed to update max timestamp for region {}: {:?}", region_id, e
+                                "failed to update max timestamp for region";
+                                "region_id" => region_id,
+                                "error" => ?e
                             );
                             last_log_ts = Instant::now();
                         }
