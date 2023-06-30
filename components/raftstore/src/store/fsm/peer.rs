@@ -85,7 +85,7 @@ use crate::{
         },
         transport::Transport,
         util,
-        util::{is_learner, KeysInfoFormatter, LeaseState},
+        util::{find_peer, is_learner, KeysInfoFormatter, LeaseState},
         worker::{
             new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
             GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
@@ -610,6 +610,8 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
+        let timer = TiInstant::now_coarse();
+        let count = msgs.len();
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -684,6 +686,12 @@ where
                 }
             }
         }
+        self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
+        self.ctx
+            .raft_metrics
+            .event_time
+            .peer_msg
+            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
         // Propose batch request which may be still waiting for more raft-command
         if self.ctx.sync_write_worker.is_some() {
             self.propose_batch_raft_command(true);
@@ -1260,7 +1268,7 @@ where
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
-            SignificantMsg::StoreResolved { group_id, .. } => {
+            SignificantMsg::StoreResolved { group_id, store_id } => {
                 let state = self.ctx.global_replication_state.lock().unwrap();
                 if state.status().get_mode() != ReplicationMode::DrAutoSync {
                     return;
@@ -1269,11 +1277,13 @@ where
                     return;
                 }
                 drop(state);
-                self.fsm
-                    .peer
-                    .raft_group
-                    .raft
-                    .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
+                if let Some(peer_id) = find_peer(self.region(), store_id).map(|p| p.get_id()) {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_commit_groups(&[(peer_id, group_id)]);
+                }
             }
             SignificantMsg::CaptureChange {
                 cmd,
