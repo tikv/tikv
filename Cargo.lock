@@ -6011,7 +6011,7 @@ checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
 [[package]]
 name = "sysinfo"
 version = "0.26.9"
-source = "git+https://github.com/mornyx/sysinfo?branch=0.26-fix-cpu#5a1bcf08816979624ef2ad79cfb896de432a9501"
+source = "git+https://github.com/tikv/sysinfo?branch=0.26-fix-cpu#5a1bcf08816979624ef2ad79cfb896de432a9501"
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
