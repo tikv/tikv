@@ -33,7 +33,7 @@ where
         let causal_ts_provider = self.causal_ts_provider.clone();
         let logger = self.logger.clone();
         let shutdown = self.shutdown.clone();
-        let log_interval = Duration::from_secs(1);
+        let log_interval = Duration::from_secs(5);
         let mut last_log_ts = Instant::now().checked_sub(log_interval).unwrap();
 
         let f = async move {
