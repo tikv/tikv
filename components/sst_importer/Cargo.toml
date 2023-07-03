@@ -12,6 +12,10 @@ cloud-azure = ["external_storage_export/cloud-azure"]
 cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
 cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 
+test-engines-rocksdb = [
+  "engine_test/test-engines-rocksdb",
+]
+
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
 crc32fast = "1.2"
@@ -43,6 +47,7 @@ txn_types = { path = "../txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+engine_test = { path = "../engine_test" }
 tempfile = "3.0"
 test_sst_importer = { path = "../test_sst_importer", default-features = false }
 test_util = { path = "../test_util", default-features = false }
