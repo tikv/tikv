@@ -295,7 +295,7 @@ fn test_serde_custom_tikv_config() {
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
         wal_size_limit: ReadableSize::kb(1),
-        max_total_wal_size: Some(ReadableSize::gb(1)),
+        max_total_wal_size: ReadableSize::gb(1),
         max_background_jobs: 12,
         max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),

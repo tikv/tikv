@@ -1930,7 +1930,7 @@ mod tests {
         importer1.start_time = SystemTime::now() - std::time::Duration::from_secs(1000000);
         importer1.add("3", file0.iv.clone(), key.clone()).unwrap();
         let mut importer2 = DataKeyImporter::new(&manager);
-        importer2.add("4", file0.iv.clone(), key.clone()).unwrap();
+        importer2.add("4", file0.iv, key.clone()).unwrap();
         // This time, even though importer2 will use the same key_id, importer1 rollback
         // cannot remove it.
         importer1.rollback().unwrap();
