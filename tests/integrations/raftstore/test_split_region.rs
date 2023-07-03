@@ -1431,3 +1431,64 @@ fn test_node_slow_split_does_not_prevent_leader_election() {
 
     cluster.must_put(b"k0", b"v0");
 }
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_split_during_read_index() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    let region = cluster.get_region(b"");
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+
+    let (msg, sub) = PeerMsg::raft_query(request.clone());
+    match self.async_peer_msg_on_node(node_id, region_id, msg) {
+        Ok(()) => {}
+        Err(e) => {
+            let mut resp = RaftCmdResponse::default();
+            resp.mut_header().set_error(e.into());
+            return Ok(resp);
+        }
+    }
+
+    // cluster.async
+
+    // async_read_index_on_peer(&mut cluster, )
+
+    // Do not let node 2 and 3 split.
+    cluster.add_recv_filter_on_node(2, Box::new(EraseHeartbeatCommit));
+    cluster.add_recv_filter_on_node(3, Box::new(EraseHeartbeatCommit));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_recv_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgRequestVoteResponse,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Node 1 must receive request vote response twice.
+    notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    cluster.must_put(b"k0", b"v0");
+}
