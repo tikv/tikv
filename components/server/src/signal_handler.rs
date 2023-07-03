@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 
 use engine_rocks::RocksStatistics;
 use engine_traits::{Engines, KvEngine, RaftEngine};
