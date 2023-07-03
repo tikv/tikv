@@ -660,12 +660,16 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         // Because pending compaction bytes changes dramatically, take the
         // logarithm of pending compaction bytes to make the values fall into
         // a relative small range
-        let num = (self
+        let mut num = (self
             .engine
             .get_cf_pending_compaction_bytes(&cf)
             .unwrap_or(None)
             .unwrap_or(0) as f64)
             .log2();
+        if !num.is_finite() {
+            // 0.log2() == -inf, which is not expected and may lead to sum always be NaN
+            num = 0.0;
+        }
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         checker.long_term_pending_bytes.observe(num);
         SCHED_PENDING_COMPACTION_BYTES_GAUGE
@@ -1004,6 +1008,14 @@ mod tests {
         }
     }
 
+    fn send_flow_info(tx: &mpsc::SyncSender<FlowInfo>) {
+        tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
+        tx.send(FlowInfo::Compaction("default".to_string()))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
+            .unwrap();
+    }
+
     #[test]
     fn test_flow_controller_basic() {
         let stub = EngineStub::new();
@@ -1044,39 +1056,29 @@ mod tests {
 
         // exceeds the threshold on start
         stub.0.num_memtable_files.store(8, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert_eq!(flow_controller.should_drop(), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(), true);
         // once falls below the threshold, pass the on start check
         stub.0.num_memtable_files.store(1, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         // not throttle when the average of the sliding window doesn't exceeds the threshold
         stub.0.num_memtable_files.store(6, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), true);
 
         // the average of sliding window exceeds the threshold
         stub.0.num_memtable_files.store(6, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), false);
         assert_ne!(flow_controller.consume(2000), Duration::ZERO);
 
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtable_files.store(1, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), true);
     }
@@ -1097,23 +1099,17 @@ mod tests {
 
         // exceeds the threshold
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert_eq!(flow_controller.should_drop(), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(), true);
         // once fall below the threshold, pass the on start check
         stub.0.num_l0_files.store(10, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
 
         // exceeds the threshold, throttle now
         stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert_eq!(flow_controller.should_drop(), false);
         assert_eq!(flow_controller.is_unlimited(), false);
         assert_ne!(flow_controller.consume(2000), Duration::ZERO);
@@ -1129,37 +1125,25 @@ mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string()))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         // on start check forbids flow control
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
         // once fall below the threshold, pass the on start check
         stub.0
             .pending_compaction_bytes
             .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string()))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
 
         stub.0
             .pending_compaction_bytes
             .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string()))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert!(flow_controller.discard_ratio() > f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string()))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         // pending compaction bytes jump after unsafe destroy range
@@ -1172,10 +1156,7 @@ mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string()))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         stub.0
@@ -1192,19 +1173,34 @@ mod tests {
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string()))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
         assert!(flow_controller.discard_ratio() < f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
             .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string()))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0))
-            .unwrap();
+        send_flow_info(&tx);
+        assert!(flow_controller.discard_ratio() > f64::EPSILON);
+    }
+
+    #[test]
+    fn test_flow_controller_pending_compaction_bytes_of_zero() {
+        let stub = EngineStub::new();
+        let (tx, rx) = mpsc::sync_channel(0);
+        let flow_controller = FlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+
+        // should handle zero pending compaction bytes properly
+        stub.0.pending_compaction_bytes.store(0, Ordering::Relaxed);
+        send_flow_info(&tx);
+        assert!(flow_controller.discard_ratio() < f64::EPSILON);
+        stub.0
+            .pending_compaction_bytes
+            .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx);
+        stub.0
+            .pending_compaction_bytes
+            .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(&tx);
         assert!(flow_controller.discard_ratio() > f64::EPSILON);
     }
 
