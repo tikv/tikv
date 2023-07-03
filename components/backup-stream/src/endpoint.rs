@@ -1,8 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::HashSet, fmt, marker::PhantomData, sync::Arc, time::Duration,
-};
+use std::{collections::HashSet, fmt, marker::PhantomData, sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
@@ -50,7 +48,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{ApplyEvents, Router, TaskSelector, self},
+    router::{self, ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
@@ -118,10 +116,7 @@ where
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
-        let range_router = Router::new(
-            scheduler.clone(),
-            router::Config::from(config.clone()),
-        );
+        let range_router = Router::new(scheduler.clone(), router::Config::from(config.clone()));
 
         // spawn a worker to watch task changes from etcd periodically.
         let meta_client_clone = meta_client.clone();
