@@ -155,6 +155,49 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_region_range_overlaps() {
+        let verify_overlap = |ranges1: &[(&str, &str)], ranges2: &[(&str, &str)], overlap: bool| {
+            for r in ranges1 {
+                let hash_range = HashRange {
+                    start_key: r.0.as_bytes().to_vec(),
+                    end_key: r.1.as_bytes().to_vec(),
+                };
+
+                for r2 in ranges2 {
+                    let mut region = Region::default();
+                    region.set_start_key(r2.0.as_bytes().to_vec());
+                    region.set_end_key(r2.1.as_bytes().to_vec());
+
+                    if overlap {
+                        assert!(region_overlap_with_range(&hash_range, &region));
+                    } else {
+                        assert!(!region_overlap_with_range(&hash_range, &region));
+                    }
+
+                    let mut range = Range::default();
+                    range.set_start(r2.0.as_bytes().to_vec());
+                    range.set_end(r2.1.as_bytes().to_vec());
+                    if overlap {
+                        assert!(range_overlaps(&hash_range, &range));
+                    } else {
+                        assert!(!range_overlaps(&hash_range, &range));
+                    }
+                }
+            }
+        };
+
+        let ranges1 = vec![("", ""), ("", "k10"), ("k01", ""), ("k01", "k08")];
+        let ranges2 = vec![("", ""), ("k02", "k07"), ("k07", "k11"), ("k07", "")];
+        verify_overlap(&ranges1, &ranges2, true);
+        verify_overlap(&ranges2, &ranges1, true);
+
+        let ranges1 = vec![("k10", "k20")];
+        let ranges2 = vec![("", "k10"), ("k20", "k30"), ("k20", "")];
+        verify_overlap(&ranges1, &ranges2, false);
+        verify_overlap(&ranges2, &ranges1, false);
+    }
+
+    #[test]
     fn test_region_import_mode() {
         let cfg = Config::default();
         let switcher = ImportModeSwitcherV2::new(&cfg);

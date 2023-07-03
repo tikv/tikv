@@ -174,9 +174,9 @@ impl SstImporter {
         root: P,
         key_manager: Option<Arc<DataKeyManager>>,
         api_version: ApiVersion,
-        multi_rocksdb: bool,
+        raft_kv_v2: bool,
     ) -> Result<SstImporter> {
-        let switcher = if multi_rocksdb {
+        let switcher = if raft_kv_v2 {
             Either::Right(ImportModeSwitcherV2::new(cfg))
         } else {
             Either::Left(ImportModeSwitcher::new(cfg))
