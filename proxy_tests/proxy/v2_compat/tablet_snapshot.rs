@@ -21,7 +21,7 @@ use tikv::server::tablet_snap::send_snap as send_snap_v2;
 use tikv_util::time::Limiter;
 
 use super::utils::*;
-use crate::utils::v1::*;
+use crate::utils::{sst::*, v1::*};
 
 fn random_long_vec(length: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
@@ -291,51 +291,4 @@ fn test_v1_apply_snap_from_v2() {
     }
 
     panic!("tablet snap {:?} still exists", path_str);
-}
-
-pub fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
-    if key.starts_with("0x") || key.starts_with("0X") {
-        return hex::decode(&key[2..]);
-    }
-    hex::decode(key)
-}
-
-pub unsafe fn must_get_in_tablet_snapshot(path: &str, cf: ColumnFamilyType, key: &str) {
-    use proxy_ffi::interfaces_ffi::SSTFormatKind;
-    // key is something like
-    // "7480000000000000FF795F720380000000FF0000026303800000FF0000017801000000FCF9DE534E2797FB83"
-    // .
-    let reader = TabletReader::ffi_get_cf_file_reader(path, cf, None);
-    assert_eq!(reader.kind, SSTFormatKind::KIND_TABLET);
-    let encoded = from_hex(key).unwrap();
-    let bf = BaseBuffView {
-        data: encoded.as_ptr() as *const _,
-        len: encoded.len() as u64,
-    };
-
-    ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Key, bf);
-    assert_eq!(ffi_sst_reader_remained(reader.clone(), cf), 1);
-    let actual = ffi_sst_reader_key(reader.clone(), cf);
-    assert_eq!(actual.to_slice(), encoded);
-}
-
-pub unsafe fn must_not_get_in_tablet_snapshot(path: &str, cf: ColumnFamilyType, key: &str) {
-    use proxy_ffi::interfaces_ffi::SSTFormatKind;
-    // key is something like
-    // "7480000000000000FF795F720380000000FF0000026303800000FF0000017801000000FCF9DE534E2797FB83"
-    // .
-    let reader = TabletReader::ffi_get_cf_file_reader(path, cf, None);
-    assert_eq!(reader.kind, SSTFormatKind::KIND_TABLET);
-    let encoded = from_hex(key).unwrap();
-    let bf = BaseBuffView {
-        data: encoded.as_ptr() as *const _,
-        len: encoded.len() as u64,
-    };
-
-    ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Key, bf);
-    if ffi_sst_reader_remained(reader.clone(), cf) == 0 {
-        return;
-    }
-    let actual = ffi_sst_reader_key(reader.clone(), cf);
-    assert_ne!(actual.to_slice(), encoded);
 }
