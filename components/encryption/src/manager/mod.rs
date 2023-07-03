@@ -1869,6 +1869,53 @@ mod tests {
         assert_eq!(manager.get_file("2").unwrap().key, key2);
     }
 
+    // Test two importer importing duplicate files.
+    // issue-15052
+    #[test]
+    fn test_import_keys_duplicate() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+
+        let (_, key) = generate_data_key(EncryptionMethod::Aes192Ctr);
+        let file0 = manager.new_file("0").unwrap();
+        let key = DataKey {
+            key: key,
+            method: EncryptionMethod::Aes192Ctr,
+            ..Default::default()
+        };
+
+        // Because of time window check, importer2 will create yet another key_id, so no conflict.
+        let mut importer1 = DataKeyImporter::new(&manager);
+        let mut importer2 = DataKeyImporter::new(&manager);
+        importer1
+            .add("1", file0.iv.clone(), key.clone())
+            .unwrap();
+        importer2
+            .add("2", file0.iv.clone(), key.clone())
+            .unwrap();
+        importer1.rollback().unwrap();
+        importer2.commit().unwrap();
+        assert_eq!(manager.get_file_exists("1").unwrap(), None);
+        assert_eq!(manager.get_file("2").unwrap().key, key.key);
+
+        let mut importer1 = DataKeyImporter::new(&manager);
+        let mut importer2 = DataKeyImporter::new(&manager);
+        // Use a super old time to bypass the window check.
+        importer1.start_time = SystemTime::now() - Duration::from_secs(1000000);
+        // This time, even though importer2 will use the same key_id, importer1 rollback cannot remove it.
+        importer1
+            .add("3", file0.iv.clone(), key.clone())
+            .unwrap();
+        importer2
+            .add("4", file0.iv.clone(), key.clone())
+            .unwrap();
+        importer1.rollback().unwrap();
+        importer2.commit().unwrap();
+        assert_eq!(manager.get_file_exists("3").unwrap(), None);
+        assert_eq!(manager.get_file("4").unwrap().key, key.key);
+    }
+
     #[test]
     fn test_trash_encrypted_dir() {
         let tmp_dir = tempfile::Builder::new()
