@@ -5968,6 +5968,17 @@ mod tests {
         cfg.rocksdb.lockcf.periodic_compaction_seconds = None;
         cfg.rocksdb.raftcf.periodic_compaction_seconds = None;
         cfg.raftdb.defaultcf.periodic_compaction_seconds = None;
+        //
+        cfg.rocksdb.defaultcf.format_version = None;
+        cfg.rocksdb.writecf.format_version = None;
+        cfg.rocksdb.lockcf.format_version = None;
+        cfg.rocksdb.raftcf.format_version = None;
+        //
+        cfg.rocksdb.defaultcf.max_compactions = None;
+        cfg.rocksdb.writecf.max_compactions = None;
+        cfg.rocksdb.lockcf.max_compactions = None;
+        cfg.rocksdb.raftcf.max_compactions = None;
+        cfg.raftdb.defaultcf.max_compactions = None;
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
