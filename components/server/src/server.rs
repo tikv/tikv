@@ -536,11 +536,12 @@ where
                 .thread_name(thd_name!("debugger"))
                 .enable_time()
                 .worker_threads(1)
-                .after_start_wrapper(move || {
-                    tikv_alloc::add_thread_memory_accessor();
-                    tikv_util::thread_group::set_properties(props.clone());
-                })
-                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
+                .with_sys_and_custom_hooks(
+                    move || {
+                        tikv_util::thread_group::set_properties(props.clone());
+                    },
+                    || {},
+                )
                 .build()
                 .unwrap(),
         );
