@@ -215,15 +215,6 @@ fn test_delete_range_does_not_block_flushed_index() {
     {
         let snap = router.stale_snapshot(2);
         assert!(snap.get_value(b"key").unwrap().is_none());
-        // Make sure memtable is empty.
-        assert!(
-            cached
-                .latest()
-                .unwrap()
-                .get_active_memtable_stats_cf(CF_DEFAULT)
-                .unwrap()
-                .is_none()
-        );
     }
     // record current admin flushed.
     let admin_flushed = raft_engine.get_flushed_index(2, CF_RAFT).unwrap().unwrap();

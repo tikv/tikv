@@ -8,13 +8,9 @@ use std::{
 };
 
 use collections::HashMap;
-<<<<<<< HEAD
-use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
-=======
 use engine_traits::{
-    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
+    DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
 };
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
@@ -57,19 +53,6 @@ pub enum Task<EK> {
         region_id: u64,
         cb: Option<Box<dyn FnOnce() + Send>>,
     },
-<<<<<<< HEAD
-=======
-    DeleteRange {
-        region_id: u64,
-        tablet: EK,
-        cf: CfName,
-        start_key: Box<[u8]>,
-        end_key: Box<[u8]>,
-        cb: Box<dyn FnOnce(bool) + Send>,
-    },
-    // Gc snapshot
-    SnapGc(Box<[TabletSnapKey]>),
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
 }
 
 impl<EK> Display for Task<EK> {
@@ -171,27 +154,6 @@ impl<EK> Task<EK> {
             tablet: Either::Right(path),
         }
     }
-<<<<<<< HEAD
-=======
-
-    pub fn delete_range(
-        region_id: u64,
-        tablet: EK,
-        cf: CfName,
-        start_key: Box<[u8]>,
-        end_key: Box<[u8]>,
-        cb: Box<dyn FnOnce(bool) + Send>,
-    ) -> Self {
-        Task::DeleteRange {
-            region_id,
-            tablet,
-            cf,
-            start_key,
-            end_key,
-            cb,
-        }
-    }
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
 }
 
 pub struct Runner<EK: KvEngine> {
@@ -417,47 +379,6 @@ impl<EK: KvEngine> Runner<EK> {
             tablet.flush_cfs(DATA_CFS, false).unwrap();
         }
     }
-<<<<<<< HEAD
-=======
-
-    fn delete_range(&self, delete_range: Task<EK>) {
-        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, cb } = delete_range else {
-            slog_panic!(self.logger, "unexpected task"; "task" => format!("{}", delete_range))
-        };
-
-        let range = vec![Range::new(&start_key, &end_key)];
-        let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
-            slog_panic!(
-                self.logger,
-                "failed to delete";
-                "region_id" => region_id,
-                "strategy" => ?strategy,
-                "range_start" => log_wrappers::Value::key(&start_key),
-                "range_end" => log_wrappers::Value::key(&end_key),
-                "error" => ?e,
-            )
-        };
-        let mut wopts = WriteOptions::default();
-        wopts.set_disable_wal(true);
-        let mut written = tablet
-            .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
-            .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
-
-        let strategy = DeleteStrategy::DeleteByKey;
-        // Delete all remaining keys.
-        written |= tablet
-            .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
-            .unwrap_or_else(move |e| fail_f(e, strategy));
-
-        // TODO: support titan?
-        // tablet
-        //     .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteBlobs, &range)
-        //     .unwrap_or_else(move |e| fail_f(e,
-        // DeleteStrategy::DeleteBlobs));
-
-        cb(written);
-    }
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
 }
 
 impl<EK> Runnable for Runner<EK>

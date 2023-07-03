@@ -3377,6 +3377,7 @@ impl TikvConfig {
             self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket(),
             self.coprocessor.region_bucket_size,
+            self.storage.engine == EngineType::RaftKv2,
         )?;
         self.security
             .validate(self.storage.engine == EngineType::RaftKv2)?;
@@ -3508,38 +3509,6 @@ impl TikvConfig {
             );
         }
 
-<<<<<<< HEAD
-=======
-        // Validate sub-components.
-        self.log.validate()?;
-        self.readpool.validate()?;
-        self.storage.validate()?;
-        self.rocksdb.validate()?;
-        self.raftdb.validate()?;
-        self.raft_engine.validate()?;
-        self.server.validate()?;
-        self.pd.validate()?;
-        self.coprocessor.validate()?;
-        self.raft_store.validate(
-            self.coprocessor.region_split_size(),
-            self.coprocessor.enable_region_bucket(),
-            self.coprocessor.region_bucket_size,
-            self.storage.engine == EngineType::RaftKv2,
-        )?;
-        self.security.validate()?;
-        self.import.validate()?;
-        self.backup.validate()?;
-        self.log_backup.validate()?;
-        self.cdc
-            .validate(self.storage.engine == EngineType::RaftKv2)?;
-        self.pessimistic_txn.validate()?;
-        self.gc.validate()?;
-        self.resolved_ts.validate()?;
-        self.resource_metering.validate()?;
-        self.quota.validate()?;
-        self.causal_ts.validate()?;
-
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
         Ok(())
     }
 

@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    data_cf_offset, DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange, ALL_CFS,
-    CF_DEFAULT,
+    data_cf_offset, DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange,
+    WriteOptions, ALL_CFS, CF_DEFAULT,
 };
 use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
@@ -265,50 +265,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let start_key = keys::data_key(start_key);
 
-<<<<<<< HEAD
-=======
-        let start = Instant::now_coarse();
-        // Use delete_files_in_range to drop as many sst files as possible, this
-        // is a way to reclaim disk space quickly after drop a table/index.
-        let written = if !notify_only {
-            let (notify, wait) = oneshot::channel();
-            let delete_range = TabletTask::delete_range(
-                self.region_id(),
-                self.tablet().clone(),
-                name_to_cf(cf).unwrap(),
-                start_key.clone().into(),
-                end_key.clone().into(),
-                Box::new(move |written| {
-                    notify.send(written).unwrap();
-                }),
-            );
-            if let Err(e) = self.tablet_scheduler().schedule_force(delete_range) {
-                error!(self.logger, "fail to delete range";
-                    "range_start" => log_wrappers::Value::key(&start_key),
-                    "range_end" => log_wrappers::Value::key(&end_key),
-                    "notify_only" => notify_only,
-                    "error" => ?e,
-                );
-            }
-
-            wait.await.unwrap()
-        } else {
-            false
-        };
-
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
         info!(
             self.logger,
             "execute delete range";
             "range_start" => log_wrappers::Value::key(&start_key),
             "range_end" => log_wrappers::Value::key(&end_key),
             "notify_only" => notify_only,
-<<<<<<< HEAD
-            "use_delete_range" => use_delete_range,
         );
 
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
+        let mut written = false;
         if !notify_only {
             let range = vec![EngineRange::new(&start_key, &end_key)];
             let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
@@ -322,18 +289,16 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 )
             };
             let tablet = self.tablet();
-            tablet
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+            let mut wopts = WriteOptions::default();
+            wopts.set_disable_wal(true);
+            written |= tablet
+                .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
-            let strategy = if use_delete_range {
-                DeleteStrategy::DeleteByRange
-            } else {
-                DeleteStrategy::DeleteByKey
-            };
+            let strategy = DeleteStrategy::DeleteByKey;
             // Delete all remaining keys.
-            tablet
-                .delete_ranges_cf(cf, strategy.clone(), &range)
+            written |= tablet
+                .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
                 .unwrap_or_else(move |e| fail_f(e, strategy));
 
             // to do: support titan?
@@ -342,13 +307,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             //     .unwrap_or_else(move |e| fail_f(e,
             // DeleteStrategy::DeleteBlobs));
         }
-        if index != u64::MAX {
-=======
-            "duration" => ?start.saturating_elapsed(),
-        );
-
         if index != u64::MAX && written {
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
             self.modifications_mut()[off] = index;
         }
 

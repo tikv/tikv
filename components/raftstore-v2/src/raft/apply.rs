@@ -79,14 +79,7 @@ pub struct Apply<EK: KvEngine, R> {
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
-<<<<<<< HEAD
     checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
-    // Whether to use the delete range API instead of deleting one by one.
-    use_delete_range: bool,
-=======
-    tablet_scheduler: Scheduler<TabletTask<EK>>,
-    high_priority_pool: FuturePool,
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
 
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
@@ -147,13 +140,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
-<<<<<<< HEAD
             checkpoint_scheduler,
-            use_delete_range: cfg.use_delete_range,
-=======
-            tablet_scheduler,
-            high_priority_pool,
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,
@@ -352,15 +339,5 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
         &self.checkpoint_scheduler
-    }
-
-<<<<<<< HEAD
-    pub fn use_delete_range(&self) -> bool {
-        self.use_delete_range
-=======
-    #[inline]
-    pub fn tablet_scheduler(&self) -> &Scheduler<TabletTask<EK>> {
-        &self.tablet_scheduler
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
     }
 }

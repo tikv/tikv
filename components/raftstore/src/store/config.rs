@@ -1415,25 +1415,5 @@ mod tests {
         cfg.validate(split_size, true, split_size / 20, false)
             .unwrap();
         assert_eq!(cfg.region_split_check_diff(), ReadableSize(1));
-<<<<<<< HEAD
-=======
-
-        cfg = Config::new();
-        cfg.optimize_for(true);
-        cfg.validate(split_size, true, split_size / 20, false)
-            .unwrap();
-        assert_eq!(cfg.raft_log_gc_size_limit(), ReadableSize::mb(200));
-        assert_eq!(cfg.raft_log_gc_count_limit(), 10000);
-
-        cfg = Config::new();
-        cfg.optimize_for(false);
-        cfg.validate(split_size, true, split_size / 20, false)
-            .unwrap();
-        assert_eq!(cfg.raft_log_gc_size_limit(), split_size * 3 / 4);
-        assert_eq!(
-            cfg.raft_log_gc_count_limit(),
-            split_size * 3 / 4 / ReadableSize::kb(1)
-        );
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
     }
 }

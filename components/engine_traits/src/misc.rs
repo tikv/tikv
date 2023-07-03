@@ -75,15 +75,6 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 
-<<<<<<< HEAD
-    fn delete_ranges_cfs(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
-=======
-    fn flush_oldest_cf(
-        &self,
-        wait: bool,
-        age_threshold: Option<std::time::SystemTime>,
-    ) -> Result<()>;
-
     /// Returns whether there's data written through kv interface.
     fn delete_ranges_cfs(
         &self,
@@ -92,7 +83,6 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
         ranges: &[Range<'_>],
     ) -> Result<bool> {
         let mut written = false;
->>>>>>> 1ce8ee7df8 (raftstore-v2: fix delete range (#15019))
         for cf in self.cf_names() {
             written |= self.delete_ranges_cf(wopts, cf, strategy.clone(), ranges)?;
         }
