@@ -197,6 +197,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 })
             });
 
+            // Check region epoch before responding read index because region
+            // may be splitted or merged during read index.
             if let Err(e) = check_req_region_epoch(&req, self.region(), true) {
                 debug!(self.logger,
                     "read index epoch not match";
