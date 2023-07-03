@@ -22,8 +22,8 @@ use engine_rocks::{
     FlowInfo, RocksEngine, RocksStatistics,
 };
 use engine_traits::{
-    data_cf_offset, CachedTablet, CfOptionsExt, FlowControlFactorsExt, KvEngine, RaftEngine,
-    StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
+    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
@@ -478,6 +478,8 @@ pub fn check_system_config(config: &TikvConfig) {
 
 pub struct EnginesResourceInfo {
     tablet_registry: TabletRegistry<RocksEngine>,
+    // The initial value of max_compactions. For kvdb.defaultcf, kvdb.writecf only.
+    base_max_compactions: [u32; 2],
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
@@ -487,12 +489,18 @@ impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
     pub fn new(
+        config: &TikvConfig,
         tablet_registry: TabletRegistry<RocksEngine>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
+        let base_max_compactions = [
+            config.rocksdb.defaultcf.max_compactions.unwrap_or(0),
+            config.rocksdb.writecf.max_compactions.unwrap_or(0),
+        ];
         EnginesResourceInfo {
             tablet_registry,
+            base_max_compactions,
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
@@ -550,15 +558,43 @@ impl EnginesResourceInfo {
         cached_latest_tablets.clear();
 
         let mut normalized_pending_bytes = 0;
-        for (pending, limit) in compaction_pending_bytes
+        for (i, (pending, limit)) in compaction_pending_bytes
             .iter()
             .zip(soft_pending_compaction_bytes_limit)
+            .enumerate()
         {
             if limit > 0 {
                 normalized_pending_bytes = cmp::max(
                     normalized_pending_bytes,
                     (*pending * EnginesResourceInfo::SCALE_FACTOR / limit) as u32,
-                )
+                );
+                // kvdb defaultcf or writecf.
+                if (i == 1 || i == 2 )
+                    && let base = self.base_max_compactions[i-1]
+                    && base > 0
+                {
+                    let level = *pending as f32 / limit as f32;
+                    let delta = if level > 0.7 {
+                        2
+                    } else {
+                        u32::from(level > 0.5)
+                    };
+                    let cf = if i == 1 {
+                        CF_DEFAULT
+                    } else {
+                        CF_WRITE
+                    };
+                    self.tablet_registry.for_each_opened_tablet(|_, cache|
+                        if let Some(latest) = cache.latest() {
+                            let opts = latest.get_options_cf(cf).unwrap();
+                            if let Err(e) = opts.set_max_compactions(base + delta) {
+                                error!("failed to adjust `max-compactions`"; "err" => ?e);
+                            }
+                            false
+                        } else {
+                            true
+                        });
+                }
             }
         }
 

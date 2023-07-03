@@ -379,7 +379,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub checksum: ChecksumType,
             #[online_config(skip)]
-            pub max_compactions: u32,
+            pub max_compactions: Option<u32>,
             // `ttl == None` means using default setting in Rocksdb.
             // `ttl` in Rocksdb is 30 days as default.
             #[online_config(skip)]
@@ -583,7 +583,7 @@ macro_rules! build_cf_opt {
         }
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
         block_base_opts.set_prepopulate_block_cache($opt.prepopulate_block_cache);
-        block_base_opts.set_format_version($opt.format_version);
+        block_base_opts.set_format_version($opt.format_version.unwrap_or(2));
         block_base_opts.set_checksum($opt.checksum);
         block_base_opts.set_optimize_filters_for_memory($opt.optimize_filters_for_memory);
         let mut cf_opts = RocksCfOptions::default();
@@ -730,7 +730,7 @@ impl Default for DefaultCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: None,
             checksum: ChecksumType::CRC32c,
-            max_compactions: 0,
+            max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
@@ -898,7 +898,7 @@ impl Default for WriteCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: None,
             checksum: ChecksumType::CRC32c,
-            max_compactions: 0,
+            max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
@@ -1020,7 +1020,7 @@ impl Default for LockCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: None,
             checksum: ChecksumType::CRC32c,
-            max_compactions: 0,
+            max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
@@ -1117,7 +1117,7 @@ impl Default for RaftCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: None,
             checksum: ChecksumType::CRC32c,
-            max_compactions: 0,
+            max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
@@ -1376,14 +1376,12 @@ impl DbConfig {
                 self.raftcf.format_version.get_or_insert(5);
                 // According to FB, Ribbon filter is more cost-efficient for SST with 1h+
                 // lifetime. We conservatively use it for L6.
-                self.defaultcf
-                    .format_version
-                    .ribbon_filter_above_level
-                    .get_or_insert(6);
-                self.writecf
-                    .format_version
-                    .ribbon_filter_above_level
-                    .get_or_insert(6);
+                self.defaultcf.ribbon_filter_above_level.get_or_insert(6);
+                self.writecf.ribbon_filter_above_level.get_or_insert(6);
+                // Initially only allow one compaction. Pace up when pending bytes is high. This
+                // strategy is consistent with single RocksDB.
+                self.defaultcf.max_compactions.get_or_insert(1);
+                self.writecf.max_compactions.get_or_insert(1);
             }
         }
     }
@@ -1480,28 +1478,28 @@ impl DbConfig {
 
     pub fn build_cf_resources(&self, cache: Cache) -> CfResources {
         let mut compaction_thread_limiters = HashMap::new();
-        if self.defaultcf.max_compactions > 0 {
+        if let Some(n) = self.defaultcf.max_compactions && n > 0 {
             compaction_thread_limiters.insert(
                 CF_DEFAULT,
-                ConcurrentTaskLimiter::new(CF_DEFAULT, self.defaultcf.max_compactions),
+                ConcurrentTaskLimiter::new(CF_DEFAULT, n),
             );
         }
-        if self.writecf.max_compactions > 0 {
+        if let Some(n) = self.writecf.max_compactions && n > 0 {
             compaction_thread_limiters.insert(
                 CF_WRITE,
-                ConcurrentTaskLimiter::new(CF_WRITE, self.writecf.max_compactions),
+                ConcurrentTaskLimiter::new(CF_WRITE, n),
             );
         }
-        if self.lockcf.max_compactions > 0 {
+        if let Some(n) = self.lockcf.max_compactions && n > 0 {
             compaction_thread_limiters.insert(
                 CF_LOCK,
-                ConcurrentTaskLimiter::new(CF_LOCK, self.lockcf.max_compactions),
+                ConcurrentTaskLimiter::new(CF_LOCK, n),
             );
         }
-        if self.raftcf.max_compactions > 0 {
+        if let Some(n) = self.raftcf.max_compactions && n > 0 {
             compaction_thread_limiters.insert(
                 CF_RAFT,
-                ConcurrentTaskLimiter::new(CF_RAFT, self.raftcf.max_compactions),
+                ConcurrentTaskLimiter::new(CF_RAFT, n),
             );
         }
         CfResources {
@@ -1659,7 +1657,7 @@ impl Default for RaftDefaultCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: Some(2),
             checksum: ChecksumType::CRC32c,
-            max_compactions: 0,
+            max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
@@ -1669,8 +1667,8 @@ impl Default for RaftDefaultCfConfig {
 
 impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Cache) -> RocksCfOptions {
-        let limiter = if self.max_compactions > 0 {
-            Some(ConcurrentTaskLimiter::new(CF_DEFAULT, self.max_compactions))
+        let limiter = if let Some(n) = self.max_compactions && n > 0 {
+            Some(ConcurrentTaskLimiter::new(CF_DEFAULT, n))
         } else {
             None
         };
