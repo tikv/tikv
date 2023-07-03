@@ -374,7 +374,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub prepopulate_block_cache: PrepopulateBlockCache,
             #[online_config(skip)]
-            pub format_version: u32,
+            pub format_version: Option<u32>,
             #[serde(with = "rocks_config::checksum_serde")]
             #[online_config(skip)]
             pub checksum: ChecksumType,
@@ -408,8 +408,7 @@ macro_rules! cf_config {
                     )
                     .into());
                 }
-                if self.format_version > 5 {
-                    // TODO: allow version 5 if we have another LTS capable of reading it?
+                if self.format_version.map_or(false, |v| v > 5) {
                     return Err("format-version larger than 5 is unsupported".into());
                 }
                 self.titan.validate()?;
@@ -729,7 +728,7 @@ impl Default for DefaultCfConfig {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
-            format_version: 2,
+            format_version: None,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
             ttl: None,
@@ -897,7 +896,7 @@ impl Default for WriteCfConfig {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
-            format_version: 2,
+            format_version: None,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
             ttl: None,
@@ -1019,7 +1018,7 @@ impl Default for LockCfConfig {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
-            format_version: 2,
+            format_version: None,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
             ttl: None,
@@ -1116,7 +1115,7 @@ impl Default for RaftCfConfig {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
-            format_version: 2,
+            format_version: None,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
             ttl: None,
@@ -1344,6 +1343,10 @@ impl DbConfig {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
                 self.defaultcf.enable_compaction_guard.get_or_insert(true);
                 self.writecf.enable_compaction_guard.get_or_insert(true);
+                self.defaultcf.format_version.get_or_insert(2);
+                self.writecf.format_version.get_or_insert(2);
+                self.lockcf.format_version.get_or_insert(2);
+                self.raftcf.format_version.get_or_insert(2);
             }
             EngineType::RaftKv2 => {
                 self.enable_multi_batch_write.get_or_insert(false);
@@ -1367,6 +1370,20 @@ impl DbConfig {
                 self.writecf.disable_write_stall = true;
                 self.lockcf.disable_write_stall = true;
                 self.raftcf.disable_write_stall = true;
+                self.defaultcf.format_version.get_or_insert(5);
+                self.writecf.format_version.get_or_insert(5);
+                self.lockcf.format_version.get_or_insert(5);
+                self.raftcf.format_version.get_or_insert(5);
+                // According to FB, Ribbon filter is more cost-efficient for SST with 1h+
+                // lifetime. We conservatively use it for L6.
+                self.defaultcf
+                    .format_version
+                    .ribbon_filter_above_level
+                    .get_or_insert(6);
+                self.writecf
+                    .format_version
+                    .ribbon_filter_above_level
+                    .get_or_insert(6);
             }
         }
     }
@@ -1640,7 +1657,7 @@ impl Default for RaftDefaultCfConfig {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
-            format_version: 2,
+            format_version: Some(2),
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
             ttl: None,
@@ -3840,11 +3857,31 @@ impl TikvConfig {
             }
         }
 
-        if last_cfg.raftdb.defaultcf.format_version > 5
-            || last_cfg.rocksdb.defaultcf.format_version > 5
-            || last_cfg.rocksdb.writecf.format_version > 5
-            || last_cfg.rocksdb.lockcf.format_version > 5
-            || last_cfg.rocksdb.raftcf.format_version > 5
+        if last_cfg
+            .raftdb
+            .defaultcf
+            .format_version
+            .map_or(false, |v| v > 5)
+            || last_cfg
+                .rocksdb
+                .defaultcf
+                .format_version
+                .map_or(false, |v| v > 5)
+            || last_cfg
+                .rocksdb
+                .writecf
+                .format_version
+                .map_or(false, |v| v > 5)
+            || last_cfg
+                .rocksdb
+                .lockcf
+                .format_version
+                .map_or(false, |v| v > 5)
+            || last_cfg
+                .rocksdb
+                .raftcf
+                .format_version
+                .map_or(false, |v| v > 5)
         {
             return Err("format_version larger than 5 is unsupported".into());
         }
