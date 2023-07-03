@@ -423,9 +423,10 @@ impl Config {
                 ));
         } else {
             self.end_point_request_max_handle_duration
-                .get_or_insert(ReadableDuration::secs(
+                .get_or_insert(ReadableDuration::secs(cmp::min(
+                    1800,
                     region_size.0 / THRESHOLD_SIZE.0 * DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
-                ));
+                )));
         }
     }
 }
