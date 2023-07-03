@@ -1056,6 +1056,7 @@ mod tests {
 
         // exceeds the threshold on start
         stub.0.num_memtable_files.store(8, Ordering::Relaxed);
+        send_flow_info(&tx);
         assert_eq!(flow_controller.should_drop(), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(), true);
