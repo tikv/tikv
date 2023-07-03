@@ -342,6 +342,20 @@ impl TestSuite {
         )
     }
 
+    pub fn region_tracked_index(&mut self, region_id: u64) -> u64 {
+        for _ in 0..50 {
+            if let Some(leader) = self.cluster.leader_of_region(region_id) {
+                let meta = self.cluster.store_metas[&leader.store_id].lock().unwrap();
+                if let Some(tracked_index) = meta.region_read_progress.get_tracked_index(&region_id)
+                {
+                    return tracked_index;
+                }
+            }
+            sleep_ms(100)
+        }
+        panic!("fail to get region tracked index after 50 trys");
+    }
+
     pub fn must_get_rts(&mut self, region_id: u64, rts: TimeStamp) {
         for _ in 0..50 {
             if let Some(ts) = self.region_resolved_ts(region_id) {

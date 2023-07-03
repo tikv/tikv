@@ -63,7 +63,7 @@ fn test_resolved_ts_basic() {
     mutation_1pc.value = v.to_vec();
     suite.must_kv_prewrite(r1.id, vec![mutation_1pc], k.to_vec(), start_ts, true);
 
-    tracked_index_after = suite.region_tracked_index(r1.id);
+    let mut tracked_index_after = suite.region_tracked_index(r1.id);
     for _ in 0..10 {
         if tracked_index_after > tracked_index_before {
             break;
