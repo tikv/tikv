@@ -46,6 +46,8 @@ struct Dicts {
     // key id used to encrypt the encryption file dictionary. The content is encrypted
     // using master key.
     key_dict: Mutex<KeyDictionary>,
+    // A lock used to protect key_dict rotation.
+    key_dict_file_lock: Mutex<()>,
     // Thread-safe version of current_key_id. Only when writing back to key_dict,
     // write it back to `key_dict`. Reader should always use this atomic, instead of
     // key_dict.current_key_id, since the latter can reflect an update-in-progress key.
@@ -73,6 +75,7 @@ impl Dicts {
                 current_key_id: 0,
                 ..Default::default()
             }),
+            key_dict_file_lock: Mutex::new(()),
             current_key_id: AtomicU64::new(0),
             rotation_period,
             base: Path::new(path).to_owned(),
@@ -115,6 +118,7 @@ impl Dicts {
                     file_dict: Mutex::new(file_dict),
                     file_dict_file: Mutex::new(file_dict_file),
                     key_dict: Mutex::new(key_dict),
+                    key_dict_file_lock: Mutex::default(),
                     current_key_id,
                     rotation_period,
                     base: base.to_owned(),
@@ -149,6 +153,7 @@ impl Dicts {
     }
 
     fn save_key_dict(&self, master_key: &dyn Backend) -> Result<()> {
+        let _lk = self.key_dict_file_lock.lock().unwrap();
         let file = EncryptedFile::new(&self.base, KEY_DICT_NAME);
         let (keys_len, key_bytes) = {
             let mut key_dict = self.key_dict.lock().unwrap();
@@ -985,6 +990,7 @@ impl<'a> DataKeyImporter<'a> {
                         key_id = Some(id);
                         e.insert(new_key);
                         self.key_additions.push(id);
+                        info!("generate new ID for imported key"; "id" => id, "fname" => fname);
                         break;
                     }
                 }
@@ -1040,6 +1046,9 @@ impl<'a> DataKeyImporter<'a> {
     }
 
     pub fn rollback(&mut self) -> Result<()> {
+        if let Some(fname) = self.file_additions.first() {
+            info!("rollback imported data keys"; "fname" => fname);
+        }
         assert!(!self.committed);
         let mut iter = self.file_additions.drain(..).peekable();
         while let Some(f) = iter.next() {
