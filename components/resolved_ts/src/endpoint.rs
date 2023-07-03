@@ -191,9 +191,6 @@ impl ObserveRegion {
                                 ChangeRow::OnePc { .. } => {
                                     self.resolver.update_tracked_index(*index);
                                 }
-                                ChangeRow::IngestSsT => {
-                                    self.resolver.update_tracked_index(*index);
-                                }
                             });
                         }
                     }
