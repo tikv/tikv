@@ -952,6 +952,7 @@ impl EncryptionKeyManager for DataKeyManager {
 /// doesn't exist locally. It synchronizes log file in batch. It automatically
 /// reverts changes if caller aborts.
 pub struct DataKeyImporter<'a> {
+    start_time: SystemTime,
     manager: &'a DataKeyManager,
     // Added file names.
     file_additions: Vec<String>,
@@ -962,8 +963,11 @@ pub struct DataKeyImporter<'a> {
 
 #[allow(dead_code)]
 impl<'a> DataKeyImporter<'a> {
+    const EXPECTED_TIME_WINDOW_SECS: u64 = 120;
+
     pub fn new(manager: &'a DataKeyManager) -> Self {
         Self {
+            start_time: SystemTime::now(),
             manager,
             file_additions: Vec::new(),
             key_additions: Vec::new(),
@@ -971,14 +975,27 @@ impl<'a> DataKeyImporter<'a> {
         }
     }
 
-    pub fn add(&mut self, fname: &str, iv: Vec<u8>, new_key: DataKey) -> Result<()> {
+    pub fn add(&mut self, fname: &str, iv: Vec<u8>, mut new_key: DataKey) -> Result<()> {
+        // Needed for time window check.
+        new_key.creation_time = self
+            .start_time
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let method = new_key.method;
         let mut key_id = None;
         {
             let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
             for (id, data_key) in &key_dict.keys {
                 if data_key.key == new_key.key {
-                    key_id = Some(*id);
+                    // If this key is created within the window, there's a risk it is created by
+                    // another importer, and can be rollback-ed.
+                    if new_key.creation_time.saturating_sub(data_key.creation_time)
+                        > Self::EXPECTED_TIME_WINDOW_SECS
+                    {
+                        key_id = Some(*id);
+                    }
+                    break;
                 }
             }
             if key_id.is_none() {
@@ -1047,16 +1064,23 @@ impl<'a> DataKeyImporter<'a> {
 
     pub fn rollback(&mut self) -> Result<()> {
         if let Some(fname) = self.file_additions.first() {
-            info!("rollback imported data keys"; "fname" => fname);
+            info!("rollback imported file encryption info"; "sample_fname" => fname);
         }
         assert!(!self.committed);
         let mut iter = self.file_additions.drain(..).peekable();
         while let Some(f) = iter.next() {
             self.manager.dicts.delete_file(&f, iter.peek().is_none())?;
         }
-        if !self.key_additions.is_empty() {
+        // If the duration is longer than the window, we cannot delete keys because they
+        // may already be referenced by other files.
+        // System time can drift, use 1s as safety padding.
+        if !self.key_additions.is_empty()
+            && let Ok(duration) = self.start_time.elapsed()
+            && duration.as_secs() < Self::EXPECTED_TIME_WINDOW_SECS - 1
+        {
             for key_id in self.key_additions.drain(..) {
                 let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
+                info!("rollback one imported data key"; "key_id" => key_id);
                 key_dict.keys.remove(&key_id);
             }
             let (tx, rx) = std::sync::mpsc::channel();
@@ -1879,37 +1903,36 @@ mod tests {
 
         let (_, key) = generate_data_key(EncryptionMethod::Aes192Ctr);
         let file0 = manager.new_file("0").unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let key = DataKey {
-            key: key,
+            key,
             method: EncryptionMethod::Aes192Ctr,
+            creation_time: now,
             ..Default::default()
         };
 
-        // Because of time window check, importer2 will create yet another key_id, so no conflict.
+        // Because of time window check, importer2 will create yet another key_id, so no
+        // conflict.
         let mut importer1 = DataKeyImporter::new(&manager);
+        importer1.add("1", file0.iv.clone(), key.clone()).unwrap();
         let mut importer2 = DataKeyImporter::new(&manager);
-        importer1
-            .add("1", file0.iv.clone(), key.clone())
-            .unwrap();
-        importer2
-            .add("2", file0.iv.clone(), key.clone())
-            .unwrap();
+        importer2.add("2", file0.iv.clone(), key.clone()).unwrap();
         importer1.rollback().unwrap();
         importer2.commit().unwrap();
         assert_eq!(manager.get_file_exists("1").unwrap(), None);
         assert_eq!(manager.get_file("2").unwrap().key, key.key);
 
         let mut importer1 = DataKeyImporter::new(&manager);
+        // Use a super old time.
+        importer1.start_time = SystemTime::now() - std::time::Duration::from_secs(1000000);
+        importer1.add("3", file0.iv.clone(), key.clone()).unwrap();
         let mut importer2 = DataKeyImporter::new(&manager);
-        // Use a super old time to bypass the window check.
-        importer1.start_time = SystemTime::now() - Duration::from_secs(1000000);
-        // This time, even though importer2 will use the same key_id, importer1 rollback cannot remove it.
-        importer1
-            .add("3", file0.iv.clone(), key.clone())
-            .unwrap();
-        importer2
-            .add("4", file0.iv.clone(), key.clone())
-            .unwrap();
+        importer2.add("4", file0.iv.clone(), key.clone()).unwrap();
+        // This time, even though importer2 will use the same key_id, importer1 rollback
+        // cannot remove it.
         importer1.rollback().unwrap();
         importer2.commit().unwrap();
         assert_eq!(manager.get_file_exists("3").unwrap(), None);
