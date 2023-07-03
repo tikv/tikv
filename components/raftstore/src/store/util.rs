@@ -927,11 +927,6 @@ impl RegionReadProgressRegistry {
             .map(|rp| rp.safe_ts())
     }
 
-<<<<<<< HEAD
-    // Update `safe_ts` with the provided `LeaderInfo` and return the regions that have the
-    // same `LeaderInfo`
-    pub fn handle_check_leaders(&self, leaders: Vec<LeaderInfo>) -> Vec<u64> {
-=======
     pub fn get_tracked_index(&self, region_id: &u64) -> Option<u64> {
         self.registry
             .lock()
@@ -963,14 +958,9 @@ impl RegionReadProgressRegistry {
             .unwrap_or(0)
     }
 
-    // Update `safe_ts` with the provided `LeaderInfo` and return the regions that
-    // have the same `LeaderInfo`
-    pub fn handle_check_leaders<E: KvEngine>(
-        &self,
-        leaders: Vec<LeaderInfo>,
-        coprocessor: &CoprocessorHost<E>,
-    ) -> Vec<u64> {
->>>>>>> ed64ed21cf (resolved_ts: track 1PC (#13579))
+    // Update `safe_ts` with the provided `LeaderInfo` and return the regions that have the
+    // same `LeaderInfo`
+    pub fn handle_check_leaders(&self, leaders: Vec<LeaderInfo>) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
         for leader_info in leaders {

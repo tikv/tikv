@@ -52,8 +52,6 @@ fn test_resolved_ts_basic() {
     let current_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_get_rts_ge(r1.id, current_ts);
 
-<<<<<<< HEAD
-=======
     // ingest sst
     let temp_dir = Builder::new().prefix("test_resolved_ts").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
@@ -102,7 +100,6 @@ fn test_resolved_ts_basic() {
     }
     assert!(tracked_index_after > tracked_index_before);
 
->>>>>>> ed64ed21cf (resolved_ts: track 1PC (#13579))
     suite.stop();
 }
 
