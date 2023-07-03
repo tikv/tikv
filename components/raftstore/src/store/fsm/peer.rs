@@ -6489,6 +6489,21 @@ where
         })());
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
+        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = if self.region().is_in_flashback {
+            // To prevent the insertion of any new pessimistic locks, set the lock status
+            // to `LocksStatus::IsInFlashback` and clear all the existing locks.
+            pessimistic_locks.clear();
+            LocksStatus::IsInFlashback
+        } else if self.fsm.peer.is_leader() {
+            // If the region is not in flashback, the leader can continue to insert
+            // pessimistic locks.
+            LocksStatus::Normal
+        } else {
+            // If the region is not in flashback and the peer is not the leader, it
+            // cannot insert pessimistic locks.
+            LocksStatus::NotLeader
+        }
     }
 
     fn on_ready_batch_switch_witness(&mut self, sw: SwitchWitness) {
