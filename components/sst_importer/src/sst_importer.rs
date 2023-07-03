@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashSet;
 use dashmap::{mapref::entry::Entry, DashMap};
 use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
@@ -45,7 +46,6 @@ use tokio::{
     runtime::{Handle, Runtime},
     sync::OnceCell,
 };
-use collections::HashSet;
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -437,7 +437,8 @@ impl SstImporter {
         if let Either::Left(ref switcher) = self.switcher {
             switcher.get_mode()
         } else {
-            // v2 should use region_in_import_mode(region_id) to check regional mode
+            // v2 should use region_in_import_mode/range_in_import_mode to check regional
+            // mode
             SwitchMode::Normal
         }
     }

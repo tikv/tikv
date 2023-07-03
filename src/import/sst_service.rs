@@ -424,6 +424,7 @@ impl<E: Engine> ImportSstService<E> {
             Some(errorpb)
         };
 
+        // store_meta being Some means it is v2
         if let Some(ref store_meta) = self.store_meta {
             if let Some((region, _)) = store_meta.lock().unwrap().regions.get(&region_id) {
                 if !self.importer.region_in_import_mode(region)
