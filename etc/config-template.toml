@@ -567,8 +567,6 @@
 # wal-size-limit = 0
 
 ## Max RocksDB WAL size in total
-## When storage.engine is "raft-kv", default value is 4GB.
-## When storage.engine is "partitioned-raft-kv", default value is 1.
 # max-total-wal-size = "4GB"
 
 ## Dump statistics periodically in information logs.
