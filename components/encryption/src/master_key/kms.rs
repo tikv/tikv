@@ -51,8 +51,7 @@ impl KmsBackend {
             Builder::new_current_thread()
                 .thread_name("kms-runtime")
                 .enable_all()
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()?,
         );
 
