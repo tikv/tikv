@@ -19,7 +19,6 @@ mod reset_to_version;
 pub mod resolve;
 pub mod server;
 pub mod service;
-pub mod service_event;
 pub mod snap;
 pub mod status_server;
 pub mod tablet_snap;

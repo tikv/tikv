@@ -18,6 +18,7 @@ use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyI
 use slog::{error, info, warn};
 use tikv_util::{
     metrics::RecordPairVec,
+    service_event::ServiceEvent,
     store::QueryStats,
     time::{Duration, Instant as TiInstant, UnixSecs},
     topn::TopN,
@@ -271,6 +272,7 @@ where
         let resp = self.pd_client.store_heartbeat(stats, None, None);
         let logger = self.logger.clone();
         let is_grpc_server_paused = self.is_grpc_server_paused.clone();
+        let service_event_sender = self.service_event_sender.clone();
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -293,12 +295,23 @@ where
                         );
                         match op.get_ctrl_event() {
                             pdpb::ControlGrpcEvent::Pause => {
-                                // TODO: send message to outer handler to notify PAUSE grpc server.
-                                is_grpc_server_paused.store(true, Ordering::Relaxed);
+                                // Send message to outer handler to notify PAUSE grpc server.
+                                if let Err(e) = service_event_sender.send(ServiceEvent::PauseGrpc) {
+                                    warn!(logger, "failed to send service event to PAUSE grpc server";
+                                        "err" => ?e);
+                                } else {
+                                    is_grpc_server_paused.store(true, Ordering::Relaxed);
+                                }
                             }
                             pdpb::ControlGrpcEvent::Resume => {
-                                // TODO: send message to outer handler to notify RESUME grpc server.
-                                is_grpc_server_paused.store(false, Ordering::Relaxed);
+                                // Send message to outer handler to notify RESUME grpc server.
+                                if let Err(e) = service_event_sender.send(ServiceEvent::ResumeGrpc)
+                                {
+                                    warn!(logger, "failed to send service event to RESUME grpc server";
+                                        "err" => ?e);
+                                } else {
+                                    is_grpc_server_paused.store(false, Ordering::Relaxed);
+                                }
                             }
                         }
                     }

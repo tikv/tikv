@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     pin::Pin,
     str::{self, FromStr},
-    sync::{mpsc, Arc},
+    sync::Arc,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -53,6 +53,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
+    service_event::ServiceEvent,
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::{
@@ -64,8 +65,8 @@ use tokio_openssl::SslStream;
 
 use crate::{
     config::{ConfigController, LogLevel},
-    server::{service_event::ServiceEvent, Result},
-    tikv_util::sys::thread::ThreadBuildWrapper,
+    server::Result,
+    tikv_util::{mpsc as TikvMpsc, sys::thread::ThreadBuildWrapper},
 };
 
 static TIMER_CANCELED: &str = "tokio timer canceled";
@@ -93,7 +94,7 @@ pub struct StatusServer<R> {
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
     resource_manager: Option<Arc<ResourceGroupManager>>,
-    service_event_sender: mpsc::Sender<ServiceEvent>,
+    service_event_sender: TikvMpsc::Sender<ServiceEvent>,
 }
 
 impl<R> StatusServer<R>
@@ -107,7 +108,7 @@ where
         router: R,
         store_path: PathBuf,
         resource_manager: Option<Arc<ResourceGroupManager>>,
-        service_event_sender: mpsc::Sender<ServiceEvent>,
+        service_event_sender: TikvMpsc::Sender<ServiceEvent>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -443,7 +444,7 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
-    async fn pause_grpc(tx: mpsc::Sender<ServiceEvent>) -> hyper::Result<Response<Body>> {
+    async fn pause_grpc(tx: TikvMpsc::Sender<ServiceEvent>) -> hyper::Result<Response<Body>> {
         tx.send(ServiceEvent::PauseGrpc).unwrap();
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
@@ -453,7 +454,7 @@ where
         Ok(response)
     }
 
-    async fn resume_grpc(tx: mpsc::Sender<ServiceEvent>) -> hyper::Result<Response<Body>> {
+    async fn resume_grpc(tx: TikvMpsc::Sender<ServiceEvent>) -> hyper::Result<Response<Body>> {
         tx.send(ServiceEvent::ResumeGrpc).unwrap();
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
@@ -1052,7 +1053,7 @@ mod tests {
         env,
         io::Read,
         path::PathBuf,
-        sync::{mpsc, Arc},
+        sync::{Arc, TikvMpsc},
     };
 
     use collections::HashSet;
@@ -1090,7 +1091,7 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
@@ -1142,7 +1143,7 @@ mod tests {
     #[test]
     fn test_config_endpoint() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1190,7 +1191,7 @@ mod tests {
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1309,7 +1310,7 @@ mod tests {
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1356,7 +1357,7 @@ mod tests {
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1395,7 +1396,7 @@ mod tests {
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1502,7 +1503,7 @@ mod tests {
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1538,7 +1539,7 @@ mod tests {
     fn test_metrics() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1596,7 +1597,7 @@ mod tests {
     #[test]
     fn test_change_log_level() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = mpsc::channel();
+        let (sender, _) = TikvMpsc::channel();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1653,7 +1654,7 @@ mod tests {
         let resp_strs = ["raft-kv", "partitioned-raft-kv"];
         for (cfg, resp_str) in IntoIterator::into_iter(cfgs).zip(resp_strs) {
             let temp_dir = tempfile::TempDir::new().unwrap();
-            let (sender, _) = mpsc::channel();
+            let (sender, _) = TikvMpsc::channel();
             let mut status_server = StatusServer::new(
                 1,
                 ConfigController::new(cfg),

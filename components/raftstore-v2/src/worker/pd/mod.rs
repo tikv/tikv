@@ -22,6 +22,8 @@ use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use slog::{error, warn, Logger};
 use tikv_util::{
     config::VersionTrack,
+    mpsc,
+    service_event::ServiceEvent,
     time::{Instant as TiInstant, UnixSecs},
     worker::{Runnable, Scheduler},
 };
@@ -219,6 +221,7 @@ where
 
     // For grpc server.
     is_grpc_server_paused: Arc<AtomicBool>,
+    service_event_sender: mpsc::Sender<ServiceEvent>,
 
     logger: Logger,
     shutdown: Arc<AtomicBool>,
@@ -245,6 +248,7 @@ where
         auto_split_controller: AutoSplitController,
         region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
+        service_event_sender: mpsc::Sender<ServiceEvent>,
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
@@ -279,10 +283,11 @@ where
             region_buckets: HashMap::default(),
             region_cpu_records: HashMap::default(),
             is_hb_receiver_scheduled: false,
-            is_grpc_server_paused: Arc::new(AtomicBool::new(false)),
             concurrency_manager,
             causal_ts_provider,
             slowness_stats,
+            is_grpc_server_paused: Arc::new(AtomicBool::new(false)),
+            service_event_sender,
             logger,
             shutdown,
             cfg,

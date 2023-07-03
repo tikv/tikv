@@ -39,6 +39,8 @@ use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecord
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
+    mpsc as TikvMpsc,
+    service_event::ServiceEvent,
     store::QueryStats,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
@@ -954,6 +956,9 @@ where
     curr_health_status: ServingStatus,
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+
+    // Service event sender for controlling grpc service.
+    service_event_sender: TikvMpsc::Sender<ServiceEvent>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -977,6 +982,7 @@ where
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        service_event_sender: TikvMpsc::Sender<ServiceEvent>,
     ) -> Runner<EK, ER, T> {
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
@@ -1049,6 +1055,7 @@ where
             curr_health_status: ServingStatus::Serving,
             coprocessor_host,
             causal_ts_provider,
+            service_event_sender,
         }
     }
 
@@ -1986,12 +1993,22 @@ where
         );
         match event {
             pdpb::ControlGrpcEvent::Pause => {
-                // TODO: send message to outer handler to notify PAUSE grpc server.
-                self.update_health_status(ServingStatus::NotServing);
+                // Send message to outer handler to notify PAUSE grpc server.
+                if let Err(e) = self.service_event_sender.send(ServiceEvent::PauseGrpc) {
+                    warn!("failed to send service event to PAUSE grpc server";
+                            "err" => ?e);
+                } else {
+                    self.update_health_status(ServingStatus::NotServing);
+                }
             }
             pdpb::ControlGrpcEvent::Resume => {
-                // TODO: send message to outer handler to notify RESUME grpc server.
-                self.update_health_status(ServingStatus::Serving);
+                // Send message to outer handler to notify RESUME grpc server.
+                if let Err(e) = self.service_event_sender.send(ServiceEvent::ResumeGrpc) {
+                    warn!("failed to send service event to RESUME grpc server";
+                            "err" => ?e);
+                } else {
+                    self.update_health_status(ServingStatus::Serving);
+                }
             }
         }
     }

@@ -45,6 +45,8 @@ use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
     log::SlogFormat,
+    mpsc,
+    service_event::ServiceEvent,
     sys::SysQuota,
     time::{duration_to_sec, Instant as TiInstant, Limiter},
     timer::SteadyTimer,
@@ -641,6 +643,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         pd_worker: LazyWorker<pd::Task>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
+        service_event_sender: mpsc::Sender<ServiceEvent>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -730,6 +733,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             auto_split_controller,
             store_meta.lock().unwrap().region_read_progress.clone(),
             collector_reg_handle,
+            service_event_sender, // TODO: add grpc controller receiver.
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),

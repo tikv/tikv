@@ -91,7 +91,6 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
-        service_event::ServiceEvent,
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
@@ -110,7 +109,9 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
+    mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
+    service_event::ServiceEvent,
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
@@ -131,8 +132,8 @@ use crate::{
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     config: TikvConfig,
-    service_event_tx: mpsc::Sender<ServiceEvent>,
-    service_event_rx: mpsc::Receiver<ServiceEvent>,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
 ) {
     let mut tikv = TikvServer::<CER, F>::init(config, service_event_tx.clone());
     // Must be called after `TikvServer::init`.
@@ -189,8 +190,8 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
 /// case the server will be properly stopped.
 pub fn run_tikv(
     config: TikvConfig,
-    service_event_tx: mpsc::Sender<ServiceEvent>,
-    service_event_rx: mpsc::Receiver<ServiceEvent>,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
 ) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
@@ -248,7 +249,7 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
-    tx: mpsc::Sender<ServiceEvent>,
+    tx: TikvMpsc::Sender<ServiceEvent>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -277,7 +278,7 @@ where
     ER: RaftEngine,
     F: KvFormat,
 {
-    fn init(mut config: TikvConfig, tx: mpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
+    fn init(mut config: TikvConfig, tx: TikvMpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -953,6 +954,7 @@ where
             self.concurrency_manager.clone(),
             collector_reg_handle,
             self.causal_ts_provider.clone(),
+            self.tx.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

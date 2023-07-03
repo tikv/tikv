@@ -27,6 +27,8 @@ use raftstore::{
 use resource_metering::CollectorRegHandle;
 use tikv_util::{
     config::VersionTrack,
+    mpsc,
+    service_event::ServiceEvent,
     worker::{LazyWorker, Scheduler, Worker},
 };
 
@@ -172,6 +174,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        service_event_sender: mpsc::Sender<ServiceEvent>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -209,6 +212,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
+            service_event_sender,
         )?;
 
         Ok(())
@@ -456,6 +460,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        service_event_sender: mpsc::Sender<ServiceEvent>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -489,6 +494,7 @@ where
             collector_reg_handle,
             self.health_service.clone(),
             causal_ts_provider,
+            service_event_sender,
         )?;
         Ok(())
     }

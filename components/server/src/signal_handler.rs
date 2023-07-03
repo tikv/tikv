@@ -4,7 +4,6 @@ use std::sync::{mpsc, Arc};
 
 use engine_rocks::RocksStatistics;
 use engine_traits::{Engines, KvEngine, RaftEngine};
-use tikv::server::service_event::ServiceEvent;
 
 pub use self::imp::wait_for_signal;
 
@@ -15,7 +14,7 @@ mod imp {
         consts::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2},
         iterator::Signals,
     };
-    use tikv_util::metrics;
+    use tikv_util::{metrics, mpsc as TikvMpsc, service_event::ServiceEvent};
 
     use super::*;
 
@@ -24,7 +23,7 @@ mod imp {
         engines: Option<Engines<impl KvEngine, impl RaftEngine>>,
         kv_statistics: Option<Arc<RocksStatistics>>,
         raft_statistics: Option<Arc<RocksStatistics>>,
-        tx: Option<mpsc::Sender<ServiceEvent>>,
+        tx: Option<TikvMpsc::Sender<ServiceEvent>>,
     ) {
         let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
         for signal in &mut signals {

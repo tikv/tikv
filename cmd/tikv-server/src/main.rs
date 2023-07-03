@@ -2,7 +2,7 @@
 
 #![feature(proc_macro_hygiene)]
 
-use std::{path::Path, process, sync::mpsc};
+use std::{path::Path, process};
 
 use clap::{crate_authors, App, Arg};
 use serde_json::{Map, Value};
@@ -11,6 +11,7 @@ use tikv::{
     config::{to_flatten_config_info, TikvConfig},
     storage::config::EngineType,
 };
+use tikv_util::mpsc;
 
 fn main() {
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
