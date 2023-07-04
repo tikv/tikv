@@ -153,7 +153,8 @@ impl Dicts {
     }
 
     fn save_key_dict(&self, master_key: &dyn Backend) -> Result<()> {
-        let _lk = self.key_dict_file_lock.lock().unwrap();
+        // In reality we only call this function inside `run_background_rotate_work`.
+        let _lk = self.key_dict_file_lock.try_lock().unwrap();
         let file = EncryptedFile::new(&self.base, KEY_DICT_NAME);
         let (keys_len, key_bytes) = {
             let mut key_dict = self.key_dict.lock().unwrap();
