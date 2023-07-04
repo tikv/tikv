@@ -4,6 +4,14 @@ use lazy_static::*;
 use prometheus::*;
 
 lazy_static! {
+    pub static ref BACKUP_RPC_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_backup_rpc_duration_seconds",
+        "Bucketed histogram of backup rpc duration",
+        &["request", "result"],
+        // Start from 10ms.
+        exponential_buckets(0.01, 2.0, 20).unwrap()
+    )
+    .unwrap();
     pub static ref BACKUP_REQUEST_HISTOGRAM: Histogram = register_histogram!(
         "tikv_backup_request_duration_seconds",
         "Bucketed histogram of backup requests duration"
