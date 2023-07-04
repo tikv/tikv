@@ -68,9 +68,9 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
         eventually_meet(
             Box::new(move || {
                 let pessimistic_locks = txn_ext.pessimistic_locks.read();
-                return !pessimistic_locks.is_writable()
+                !pessimistic_locks.is_writable()
                     && pessimistic_locks.status == LocksStatus::IsInFlashback
-                    && pessimistic_locks.is_empty();
+                    && pessimistic_locks.is_empty()
             }),
             "pessimistic locks status should be LocksStatus::IsInFlashback",
         );
@@ -84,9 +84,9 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
         eventually_meet(
             Box::new(move || {
                 let pessimistic_locks = txn_ext.pessimistic_locks.read();
-                return pessimistic_locks.is_writable() && pessimistic_locks.is_empty();
+                pessimistic_locks.is_writable() && pessimistic_locks.is_empty()
             }),
-            "pessimistic locks status should be writable again",
+            "pessimistic locks should be writable again",
         );
     }
 }
