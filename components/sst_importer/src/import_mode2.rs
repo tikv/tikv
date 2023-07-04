@@ -59,7 +59,7 @@ impl ImportModeSwitcherV2 {
     // Periodically perform timeout check to change import mode of some regions back
     // to normal mode.
     pub fn start(&self, executor: &Handle) {
-        // spawn a background future to put TiKV back into normal mode after timeout
+        // spawn a background future to put regions back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
         let timer_loop = async move {
