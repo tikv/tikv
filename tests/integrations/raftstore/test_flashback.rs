@@ -62,7 +62,7 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
         );
         let txn_ext = snapshot.txn_ext.unwrap();
         eventually_meet(
-            Box::new(|| {
+            Box::new(move || {
                 let pessimistic_locks = txn_ext.pessimistic_locks.read();
                 return !pessimistic_locks.is_writable()
                     && pessimistic_locks.status == LocksStatus::IsInFlashback
@@ -78,7 +78,7 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
         let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
         let txn_ext = snapshot.txn_ext.unwrap();
         eventually_meet(
-            Box::new(|| {
+            Box::new(move || {
                 let pessimistic_locks = txn_ext.pessimistic_locks.read();
                 return pessimistic_locks.is_writable() && pessimistic_locks.is_empty();
             }),
