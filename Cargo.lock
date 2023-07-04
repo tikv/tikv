@@ -3095,7 +3095,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=230525-encrypte-rename#3a7269a71598a77f2463215bb09fca5141e8ad90"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230525-encrypte-rename#d57f684a77f9dacbc07bee615ea0ee47f78e4381"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3114,7 +3114,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=230525-encrypte-rename#3a7269a71598a77f2463215bb09fca5141e8ad90"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230525-encrypte-rename#d57f684a77f9dacbc07bee615ea0ee47f78e4381"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5084,7 +5084,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=230525-encrypte-rename#3a7269a71598a77f2463215bb09fca5141e8ad90"
+source = "git+https://github.com/tabokie/rust-rocksdb?branch=230525-encrypte-rename#d57f684a77f9dacbc07bee615ea0ee47f78e4381"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",

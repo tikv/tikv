@@ -112,7 +112,7 @@ pprof = { version = "0.11", default-features = false, features = ["flamegraph", 
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
@@ -354,6 +354,7 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
