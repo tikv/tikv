@@ -698,6 +698,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         for cf in ALL_CFS {
             lb.put_flushed_index(region_id, cf, last_index, last_index)
                 .unwrap();
+            self.set_flushed_epoch(self.region_state().get_region().get_region_epoch().clone());
         }
 
         let (path, clean_split) = match self.split_init_mut() {

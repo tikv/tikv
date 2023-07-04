@@ -1200,6 +1200,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                     slog_panic!(self.logger(), "failed to clean up region"; "error" => ?e);
                 });
             self.init_apply_trace(write_task);
+            self.set_flushed_epoch(self.region_state().get_region().get_region_epoch().clone());
             self.set_ever_persisted();
         }
         if self.apply_trace().should_persist() {

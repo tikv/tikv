@@ -2738,7 +2738,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
-        let mut validate_ssts = Vec::new();
+        let mut validate_ssts: Vec<SstMeta> = Vec::new();
 
         let ssts = box_try!(self.ctx.importer.list_ssts());
         if ssts.is_empty() {

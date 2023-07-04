@@ -9,6 +9,7 @@ use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
+    metapb::RegionEpoch,
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
@@ -46,6 +47,8 @@ pub struct Storage<EK: KvEngine, ER> {
     split_init: Option<Box<SplitInit>>,
     /// The flushed index of all CFs.
     apply_trace: ApplyTrace,
+    // The flushed epoch means that the epoch has persisted into the raft engine.
+    flushed_epoch: RegionEpoch,
 }
 
 impl<EK: KvEngine, ER> Debug for Storage<EK, ER> {
@@ -129,6 +132,16 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     pub fn has_dirty_data(&self) -> bool {
         self.has_dirty_data
     }
+
+    #[inline]
+    pub fn set_flushed_epoch(&mut self, epoch: RegionEpoch) {
+        self.flushed_epoch = epoch;
+    }
+
+    #[inline]
+    pub fn flushed_epoch(&self) -> &RegionEpoch {
+        &self.flushed_epoch
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
@@ -151,6 +164,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
         let region = region_state.get_region();
+        let epoch = region.get_region_epoch().clone();
         let logger = logger.new(o!("region_id" => region.id, "peer_id" => peer.get_id()));
         let has_dirty_data =
             match engine.get_dirty_mark(region.get_id(), region_state.get_tablet_index()) {
@@ -183,6 +197,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             gen_snap_task: RefCell::new(Box::new(None)),
             split_init: None,
             apply_trace,
+            flushed_epoch: epoch,
         })
     }
 

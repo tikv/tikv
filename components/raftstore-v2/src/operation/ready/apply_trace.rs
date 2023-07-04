@@ -57,6 +57,7 @@ use crate::{
     },
     raft::{Peer, Storage},
     router::PeerMsg,
+    worker::tablet,
     Result, StoreRouter,
 };
 
@@ -519,6 +520,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
         let region_id = self.region().get_id();
         let raft_engine = self.entry_storage().raft_engine();
+        let epoch = raft_engine
+            .get_region_state(region_id, trace.admin.flushed)
+            .unwrap()
+            .unwrap()
+            .get_region()
+            .get_region_epoch()
+            .clone();
         let tablet_index = self.tablet_index();
         let lb = write_task
             .extra_write
@@ -529,11 +537,19 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             .unwrap();
         trace.try_persist = false;
         trace.persisted_applied = trace.admin.flushed;
+
+        self.set_flushed_epoch(epoch);
     }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn on_data_flushed(&mut self, cf: &str, tablet_index: u64, index: u64) {
+    pub fn on_data_flushed<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        cf: &str,
+        tablet_index: u64,
+        index: u64,
+    ) {
         trace!(self.logger, "data flushed"; "cf" => cf, "tablet_index" => tablet_index, "index" => index, "trace" => ?self.storage().apply_trace());
         if tablet_index < self.storage().tablet_index() {
             // Stale tablet.
@@ -543,6 +559,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply_trace = self.storage_mut().apply_trace_mut();
         apply_trace.on_flush(cf, index);
         apply_trace.maybe_advance_admin_flushed(apply_index);
+        let stale_ssts = self.sst_apply_state().stale_ssts(cf, index);
+        if stale_ssts.is_empty() {
+            return;
+        }
+        info!(
+            self.logger,
+            "delete stale ssts after flush";
+            "stale_ssts" => ?stale_ssts,
+            "apply_index" => apply_index,
+            "cf" => cf,
+            "flushed_index" => index,
+        );
+        let _ = ctx
+            .schedulers
+            .tablet
+            .schedule(tablet::Task::CleanupImportSst(
+                stale_ssts.into_boxed_slice(),
+            ));
     }
 
     pub fn on_data_modified(&mut self, modification: DataTrace) {

@@ -95,6 +95,7 @@ fn test_unsafe_recovery_execution_result_report() {
         pdpb::CheckPolicy::Usekey,
         vec![b"random_key1".to_vec()],
     );
+
     let region1 = pd_client.get_region(b"random_key".as_ref()).unwrap();
     let region2 = pd_client.get_region(b"random_key1".as_ref()).unwrap();
     let region1_store0_peer = find_peer(&region1, nodes[0]).unwrap().to_owned();
