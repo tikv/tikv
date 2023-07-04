@@ -20,6 +20,7 @@ use kvproto::{
     raft_serverpb::{RaftMessage, RaftSnapshotData},
     tikvpb::TikvClient,
 };
+use protobuf::Message as M1;
 use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{
     coprocessor::{ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost},
@@ -972,12 +973,16 @@ fn test_v2_leaner_snapshot_commit_index() {
     // See https://github.com/pingcap/tiflash/issues/7568#issuecomment-1576382311
     pd_client.must_add_peer(r, new_learner_peer(2, 2));
     let msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_ne!(msg.get_message().get_commit(), 0);
+    let mut snapshot_data = RaftSnapshotData::default();
+    snapshot_data
+        .merge_from_bytes(msg.get_message().get_snapshot().get_data())
+        .unwrap();
+    assert_ne!(snapshot_data.get_meta().get_commit_index_hint(), 0);
 
     cluster.must_put(b"k2", b"v2");
 
     pd_client.must_add_peer(r, new_peer(2, 2));
-    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
 
     cluster.must_put(b"k3", b"v3");
 }
