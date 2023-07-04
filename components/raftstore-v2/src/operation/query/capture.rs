@@ -53,6 +53,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
         fail_point!("raft_on_capture_change");
 
         let apply_scheduler = self.fsm.peer().apply_scheduler().cloned();
+        let id = self.fsm.peer().region_id();
+        let term = self.fsm.peer().term();
         let (ch, _) = QueryResChannel::with_callback(Box::new(move |res| {
             if let QueryResult::Response(resp) = res && resp.get_header().has_error() {
                 // Return error
@@ -61,6 +63,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
             }
             if let Some(scheduler) = apply_scheduler {
                 scheduler.send(ApplyTask::CaptureApply(capture_change))
+            } else {
+                let mut resp = cmd_resp::err_resp(raftstore::Error::RegionNotFound(id), term);
+                resp.mut_header()
+                    .mut_error()
+                    .set_message("apply scheduler is None".to_owned());
+                capture_change.snap_cb.report_error(resp);
             }
         }));
         self.on_leader_callback(ch);

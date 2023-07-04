@@ -142,7 +142,7 @@ pub struct UnsafeWrite {
 pub struct CaptureChange {
     pub observer: ChangeObserver,
     pub region_epoch: RegionEpoch,
-    // A callback accpets a snapshot.
+    // A callback accepts a snapshot.
     pub snap_cb: AnyResChannel,
 }
 
