@@ -74,6 +74,7 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-stream = "0.1"
 txn_types = { workspace = true }
+uuid = "0.8"
 yatp = { workspace = true }
 
 [dev-dependencies]

@@ -73,6 +73,15 @@ struct Request {
     replica_read: bool,
 }
 
+// Backup Operation corrosponsed to backup service
+#[derive(Debug)]
+pub enum Operation {
+    BackupTask(Task),
+    Prepare(bool, Sender<PrepareResponse>),
+    Cleanup(String, Sender<CleanupResponse>),
+}
+impl_display_as_debug!(Operation);
+
 /// Backup Task.
 pub struct Task {
     request: Request,
@@ -1125,15 +1134,25 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 }
 
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for Endpoint<E, R> {
-    type Task = Task;
+    type Task = Operation;
 
-    fn run(&mut self, task: Task) {
-        if task.has_canceled() {
-            warn!("backup task has canceled"; "task" => %task);
-            return;
+    fn run(&mut self, op: Operation) {
+        match op {
+            Operation::BackupTask(task) => {
+                if task.has_canceled() {
+                    warn!("backup task has canceled"; "task" => %task);
+                    return;
+                }
+                info!("run backup task"; "task" => %task);
+                self.handle_backup_task(task);
+            }
+            Operation::Prepare(_persistent, _tx) => {
+                unimplemented!();
+            }
+            Operation::Cleanup(_unique_id, _tx) => {
+                unimplemented!();
+            }
         }
-        info!("run backup task"; "task" => %task);
-        self.handle_backup_task(task);
     }
 }
 
