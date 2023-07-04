@@ -123,10 +123,6 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
 impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
     pub async fn handle_all_tasks(&mut self) {
         loop {
-            let id = std::thread::current().id();
-            println!("before, id {:?}", id);
-            fail_point!("on_handle_all_tasks");
-            println!("after, id {:?}", id);
             let timeout = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + Duration::from_secs(10))
                 .compat();
@@ -146,6 +142,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                 }
             };
             loop {
+                fail_point!("before_handle_tasks");
                 match task {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,

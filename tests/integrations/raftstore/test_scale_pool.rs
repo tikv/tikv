@@ -200,12 +200,13 @@ fn test_decrease_pool() {
 }
 
 #[test]
-fn test_apply_pool_v2() {
+fn test_increase_apply_pool_v2() {
     use test_raftstore_v2::*;
     let mut cluster = new_node_cluster(0, 1);
     cluster.pd_client.disable_default_operator();
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     let _ = cluster.run_conf_change();
+    std::thread::sleep(std::time::Duration::from_millis(200));
 
     let region = cluster.get_region(b"");
     cluster.must_split(&region, b"k10");
@@ -213,6 +214,9 @@ fn test_apply_pool_v2() {
     cluster.must_split(&region, b"k20");
     let region = cluster.get_region(b"k21");
     cluster.must_split(&region, b"k30");
+
+    fail::cfg("before_handle_tasks", "1*pause").unwrap();
+    put_with_timeout(&mut cluster, 1, b"k35", b"val", Duration::from_secs(2)).unwrap_err();
 
     {
         let sim = cluster.sim.rl();
@@ -227,13 +231,38 @@ fn test_apply_pool_v2() {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
-    fail::cfg("on_handle_all_tasks", "1*pause").unwrap();
-
     cluster.must_put(b"k05", b"val");
     cluster.must_put(b"k15", b"val");
     cluster.must_put(b"k25", b"val");
 
-    fail::remove("on_handle_all_tasks");
+    fail::remove("before_handle_tasks");
+}
+
+#[test]
+fn test_decrease_apply_pool_v2() {
+    use test_raftstore_v2::*;
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 3;
+    let _ = cluster.run_conf_change();
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.apply-pool-size".to_owned(), "1".to_owned());
+            change
+        };
+
+        cfg_controller.update(change).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    fail::cfg("before_handle_tasks", "1*pause").unwrap();
+    put_with_timeout(&mut cluster, 1, b"k10", b"val", Duration::from_secs(2)).unwrap_err();
+
+    fail::remove("before_handle_tasks");
 }
 
 #[test]
