@@ -21,6 +21,7 @@ use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType, WithIoType};
+use futures::compat::Future01CompatExt;
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::{StateRole, INVALID_ID};
@@ -44,8 +45,13 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     log::SlogFormat,
     sys::SysQuota,
+<<<<<<< HEAD
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
+=======
+    time::{duration_to_sec, Instant as TiInstant, Limiter},
+    timer::{SteadyTimer, GLOBAL_TIMER_HANDLE},
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
     worker::{Builder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
@@ -61,6 +67,12 @@ use crate::{
     Error, Result,
 };
 
+<<<<<<< HEAD
+=======
+const MIN_MANUAL_FLUSH_RATE: f64 = 0.2;
+const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(90);
+
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// A logger without any KV. It's clean for creating new PeerFSM.
@@ -616,6 +628,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let raft_clone = raft_engine.clone();
             let logger = self.logger.clone();
             let router = router.clone();
+<<<<<<< HEAD
             worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
                 let _guard = WithIoType::new(IoType::RewriteLog);
                 match raft_clone.manual_purge() {
@@ -626,8 +639,74 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                     }
                     Err(e) => {
                         warn!(logger, "purge expired files"; "err" => %e);
+=======
+            let registry = tablet_registry.clone();
+            let base_max_rate = cfg
+                .value()
+                .max_manual_flush_rate
+                .clamp(MIN_MANUAL_FLUSH_RATE, f64::INFINITY);
+            let mut last_flush = (
+                EK::get_accumulated_flush_count().unwrap(),
+                TiInstant::now_coarse(),
+            );
+            worker.spawn_interval_async_task(cfg.value().raft_engine_purge_interval.0, move || {
+                let regions = {
+                    let _guard = WithIoType::new(IoType::RewriteLog);
+                    match raft_clone.manual_purge() {
+                        Err(e) => {
+                            warn!(logger, "purge expired files"; "err" => %e);
+                            Vec::new()
+                        }
+                        Ok(regions) => regions,
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
                     }
                 };
+                // Lift up max rate if the background flush rate is high.
+                let flush_count = EK::get_accumulated_flush_count().unwrap();
+                let now = TiInstant::now_coarse();
+                let duration = now.saturating_duration_since(last_flush.1).as_secs_f64();
+                let max_rate = if duration > 10.0 {
+                    let total_flush_rate = (flush_count - last_flush.0) as f64 / duration;
+                    last_flush = (flush_count, now);
+                    base_max_rate.clamp(total_flush_rate, f64::INFINITY)
+                } else {
+                    base_max_rate
+                };
+                // Try to finish flush just in time.
+                let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
+                let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, max_rate);
+                // Return early if there're too many regions. Otherwise even if we manage to
+                // compact regions, the space can't be reclaimed in time.
+                let mut to_flush = (rate * MAX_MANUAL_FLUSH_PERIOD.as_secs_f64()) as usize;
+                // Skip tablets that are flushed elsewhere.
+                let threshold = std::time::SystemTime::now() - MAX_MANUAL_FLUSH_PERIOD;
+                for r in &regions {
+                    let _ = router.send(*r, PeerMsg::ForceCompactLog);
+                }
+                let registry = registry.clone();
+                let logger = logger.clone();
+                let limiter = Limiter::new(rate);
+                async move {
+                    for r in regions {
+                        if to_flush == 0 {
+                            break;
+                        }
+                        if let Some(mut t) = registry.get(r)
+                            && let Some(t) = t.latest()
+                        {
+                            match t.flush_oldest_cf(true, Some(threshold)) {
+                                Err(e) => warn!(logger, "failed to flush oldest cf"; "err" => %e),
+                                Ok(true) => {
+                                    to_flush -= 1;
+                                    let time =
+                                        std::time::Instant::now() + limiter.consume_duration(1);
+                                    let _ = GLOBAL_TIMER_HANDLE.delay(time).compat().await;
+                                }
+                                _ => (),
+                            }
+                        }
+                    }
+                }
             });
             Some(worker)
         } else {

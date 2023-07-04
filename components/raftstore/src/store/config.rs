@@ -85,6 +85,12 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
+<<<<<<< HEAD
+=======
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub max_manual_flush_rate: f64,
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
     // Deprecated! The configuration has no effect.
@@ -371,6 +377,10 @@ impl Default for Config {
             raft_log_gc_size_limit: None,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
+<<<<<<< HEAD
+=======
+            max_manual_flush_rate: 2.0,
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),

@@ -8,8 +8,12 @@ use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
-    engine::RocksEngine, r2e, rocks_metrics::RocksStatisticsReporter, rocks_metrics_defs::*,
-    sst::RocksSstWriterBuilder, util, RocksSstWriter,
+    engine::RocksEngine,
+    r2e,
+    rocks_metrics::{RocksStatisticsReporter, STORE_ENGINE_EVENT_COUNTER_VEC},
+    rocks_metrics_defs::*,
+    sst::RocksSstWriterBuilder,
+    util, RocksSstWriter,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -143,7 +147,49 @@ impl MiscExt for RocksEngine {
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
+<<<<<<< HEAD
         self.as_inner().flush_cf(handle, wait).map_err(r2e)
+=======
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(wait);
+        fopts.set_allow_write_stall(true);
+        self.as_inner().flush_cf(handle, &fopts).map_err(r2e)
+    }
+
+    // Don't flush if a memtable is just flushed within the threshold.
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<bool> {
+        let cfs = self.cf_names();
+        let mut handles = Vec::with_capacity(cfs.len());
+        for cf in cfs {
+            handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        }
+        if let Some((handle, time)) = handles
+            .into_iter()
+            .filter_map(|handle| {
+                self.as_inner()
+                    .get_approximate_active_memtable_stats_cf(handle)
+                    .map(|(_, time)| (handle, time))
+            })
+            .min_by(|(_, a), (_, b)| a.cmp(b))
+            && age_threshold.map_or(true, |threshold| time <= threshold)
+        {
+            let mut fopts = FlushOptions::default();
+            fopts.set_wait(wait);
+            fopts.set_allow_write_stall(true);
+            fopts.set_check_if_compaction_disabled(true);
+            fopts.set_expected_oldest_key_time(time);
+            self
+                .as_inner()
+                .flush_cf(handle, &fopts)
+                .map_err(r2e)?;
+            return Ok(true);
+        }
+        Ok(false)
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
     }
 
     fn delete_ranges_cf(
@@ -370,6 +416,26 @@ impl MiscExt for RocksEngine {
                 .unwrap_or_default()
                 != 0
     }
+<<<<<<< HEAD
+=======
+
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_approximate_active_memtable_stats_cf(handle))
+    }
+
+    fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64> {
+        let n = STORE_ENGINE_EVENT_COUNTER_VEC
+            .with_label_values(&["kv", cf, "flush"])
+            .get();
+        Ok(n)
+    }
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
 }
 
 #[cfg(test)]
@@ -690,4 +756,49 @@ mod tests {
         let expected = vec![(b"k1".to_vec(), b"k8".to_vec())];
         assert_eq!(sst_range, expected);
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_flush_oldest() {
+        let path = Builder::new()
+            .prefix("test_flush_oldest")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let mut opts = RocksDbOptions::default();
+        opts.create_if_missing(true);
+
+        let db = new_engine(path_str, ALL_CFS).unwrap();
+        db.put_cf("default", b"k", b"v").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        db.put_cf("write", b"k", b"v").unwrap();
+        db.put_cf("lock", b"k", b"v").unwrap();
+        assert_eq!(
+            db.get_total_sst_files_size_cf("default").unwrap().unwrap(),
+            0
+        );
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        let now = std::time::SystemTime::now();
+        assert!(
+            !db.flush_oldest_cf(true, Some(now - std::time::Duration::from_secs(5)))
+                .unwrap()
+        );
+        assert_eq!(
+            db.get_total_sst_files_size_cf("default").unwrap().unwrap(),
+            0
+        );
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        assert!(
+            db.flush_oldest_cf(true, Some(now - std::time::Duration::from_secs(1)))
+                .unwrap()
+        );
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        assert!(db.get_total_sst_files_size_cf("default").unwrap().unwrap() > 0);
+    }
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
 }

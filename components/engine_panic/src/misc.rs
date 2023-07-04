@@ -31,6 +31,17 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+<<<<<<< HEAD
+=======
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<bool> {
+        panic!()
+    }
+
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
     fn delete_ranges_cf(
         &self,
         cf: &str,
@@ -107,4 +118,18 @@ impl MiscExt for PanicEngine {
     fn is_stalled_or_stopped(&self) -> bool {
         panic!()
     }
+<<<<<<< HEAD
+=======
+
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>> {
+        panic!()
+    }
+
+    fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64> {
+        panic!()
+    }
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
 }

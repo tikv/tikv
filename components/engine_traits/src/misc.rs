@@ -74,7 +74,22 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 
+<<<<<<< HEAD
     fn delete_ranges_cfs(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
+=======
+    /// Returns `false` if all memtables are created after `threshold`.
+    fn flush_oldest_cf(&self, wait: bool, threshold: Option<std::time::SystemTime>)
+    -> Result<bool>;
+
+    /// Returns whether there's data written through kv interface.
+    fn delete_ranges_cfs(
+        &self,
+        wopts: &WriteOptions,
+        strategy: DeleteStrategy,
+        ranges: &[Range<'_>],
+    ) -> Result<bool> {
+        let mut written = false;
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
         for cf in self.cf_names() {
             self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
         }
@@ -134,4 +149,37 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
+<<<<<<< HEAD
+=======
+
+    /// Returns size and creation time of active memtable if there's one.
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>>;
+
+    /// Whether there's active memtable with creation time older than
+    /// `threshold`.
+    fn has_old_active_memtable(&self, threshold: std::time::SystemTime) -> bool {
+        for cf in self.cf_names() {
+            if let Ok(Some((_, age))) = self.get_active_memtable_stats_cf(cf) {
+                if age < threshold {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    // Global method.
+    fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64>;
+
+    fn get_accumulated_flush_count() -> Result<u64> {
+        let mut n = 0;
+        for cf in crate::ALL_CFS {
+            n += Self::get_accumulated_flush_count_cf(cf)?;
+        }
+        Ok(n)
+    }
+>>>>>>> 4c7dd8bb18 (raftstore-v2: adaptive manual flush rate (#14909))
 }
