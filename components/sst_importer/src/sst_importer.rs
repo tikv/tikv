@@ -181,13 +181,12 @@ impl SstImporter {
         let download_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("sst_import_misc")
-            .after_start_wrapper(|| {
-                tikv_alloc::add_thread_memory_accessor();
-                file_system::set_io_type(IoType::Import);
-            })
-            .before_stop_wrapper(|| {
-                tikv_alloc::remove_thread_memory_accessor();
-            })
+            .with_sys_and_custom_hooks(
+                || {
+                    file_system::set_io_type(IoType::Import);
+                },
+                || {},
+            )
             .enable_all()
             .build()?;
         download_rt.spawn(cached_storage.gc_loop());

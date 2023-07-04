@@ -536,11 +536,12 @@ where
                 .thread_name(thd_name!("debugger"))
                 .enable_time()
                 .worker_threads(1)
-                .after_start_wrapper(move || {
-                    tikv_alloc::add_thread_memory_accessor();
-                    tikv_util::thread_group::set_properties(props.clone());
-                })
-                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
+                .with_sys_and_custom_hooks(
+                    move || {
+                        tikv_util::thread_group::set_properties(props.clone());
+                    },
+                    || {},
+                )
                 .build()
                 .unwrap(),
         );
@@ -725,6 +726,7 @@ where
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
                 self.core.config.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
