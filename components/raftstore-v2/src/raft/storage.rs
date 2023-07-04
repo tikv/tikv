@@ -349,7 +349,7 @@ mod tests {
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
-        store::{new_learner_peer, new_peer},
+        store::new_peer,
         worker::{dummy_scheduler, Worker},
         yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
