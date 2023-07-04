@@ -10,9 +10,20 @@ use raft::{
 };
 use raftstore::{
     store::{
+<<<<<<< HEAD
         can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::ReadCallback, propose_read_index, should_renew_lease, util::LeaseState, ReadDelegate,
         ReadIndexRequest, ReadProgress, Transport,
+=======
+        can_amend_read, cmd_resp,
+        fsm::{apply::notify_stale_req, new_read_index_request},
+        metrics::RAFT_READ_INDEX_PENDING_COUNT,
+        msg::{ErrorCallback, ReadCallback},
+        propose_read_index, should_renew_lease,
+        simple_write::SimpleWriteEncoder,
+        util::{check_req_region_epoch, LeaseState},
+        ReadDelegate, ReadIndexRequest, ReadProgress, Transport,
+>>>>>>> 6ca4a629a1 (raftstore-v2: check region epoch before response read index (#15046))
     },
     Error, Result,
 };
@@ -183,7 +194,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
         let time = monotonic_raw_now();
-        for (_, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
+        for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
@@ -193,6 +204,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         as u64;
                 })
             });
+
+            // Check region epoch before responding read index because region
+            // may be splitted or merged during read index.
+            if let Err(e) = check_req_region_epoch(&req, self.region(), true) {
+                debug!(self.logger,
+                    "read index epoch not match";
+                    "region_id" => self.region_id(),
+                    "err" => ?e,
+                );
+                let mut response = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut response, self.term());
+                ch.report_error(response);
+                return;
+            }
 
             // Key lock should not happen when read_index is running at the leader.
             // Because it only happens when concurrent read and write requests on the same
