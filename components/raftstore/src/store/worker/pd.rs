@@ -1754,6 +1754,8 @@ where
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let causal_ts_provider = self.causal_ts_provider.clone();
+        let log_interval = Duration::from_secs(5);
+        let mut last_log_ts = Instant::now().checked_sub(log_interval).unwrap();
 
         let f = async move {
             let mut success = false;
@@ -1792,10 +1794,14 @@ where
                         break;
                     }
                     Err(e) => {
-                        warn!(
-                            "failed to update max timestamp for region {}: {:?}",
-                            region_id, e
-                        );
+                        if last_log_ts.elapsed() > log_interval {
+                            warn!(
+                                "failed to update max timestamp for region";
+                                "region_id" => region_id,
+                                "error" => ?e
+                            );
+                            last_log_ts = Instant::now();
+                        }
                     }
                 }
             }
