@@ -16,6 +16,7 @@ pub mod router;
 mod service;
 mod subscription_manager;
 mod subscription_track;
+mod tempfiles;
 // Publish it for integration test.
 // Perhaps we'd better move some of then into `tikv_util`.
 pub mod utils;
