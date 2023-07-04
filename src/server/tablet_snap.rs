@@ -733,7 +733,6 @@ pub async fn send_snap(
         let (snap_mgr, key) = (snap_mgr.clone(), key.clone());
         DeferContext::new(move || {
             snap_mgr.finish_snapshot(key.clone(), timer);
-            snap_mgr.delete_snapshot(&key);
         })
     };
     let (sink, mut receiver) = client.tablet_snapshot()?;
@@ -817,9 +816,8 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("tablet-snap-sender"))
+                .with_sys_hooks()
                 .worker_threads(DEFAULT_POOL_SIZE)
-                .after_start_wrapper(tikv_alloc::add_thread_memory_accessor)
-                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
             raft_router: r,
@@ -914,14 +912,8 @@ where
                 let region_id = msg.get_region_id();
                 let sending_count = self.snap_mgr.sending_count().clone();
                 if sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit {
-                    let key = TabletSnapKey::from_region_snap(
-                        msg.get_region_id(),
-                        msg.get_to_peer().get_id(),
-                        msg.get_message().get_snapshot(),
-                    );
-                    self.snap_mgr.delete_snapshot(&key);
                     warn!(
-                        "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
+                        "Too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg
                     );
                     cb(Err(Error::Other("Too many sending snapshot tasks".into())));
@@ -950,12 +942,13 @@ where
                 self.pool.spawn(async move {
                     let res = send_snap(
                         client,
-                        snap_mgr,
+                        snap_mgr.clone(),
                         msg,
                         limiter,
                     ).await;
                     match res {
                         Ok(stat) => {
+                            snap_mgr.delete_snapshot(&stat.key);
                             info!(
                                 "sent snapshot";
                                 "region_id" => region_id,

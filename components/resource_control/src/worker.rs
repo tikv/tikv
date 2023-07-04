@@ -24,6 +24,8 @@ use crate::{
 
 pub const BACKGROUND_LIMIT_ADJUST_DURATION: Duration = Duration::from_secs(10);
 
+const MICROS_PER_SEC: f64 = 1_000_000.0;
+
 #[derive(Clone, Copy, Eq, PartialEq, EnumCount)]
 #[repr(usize)]
 pub enum ResourceType {
@@ -63,8 +65,8 @@ impl ResourceStatsProvider for SysQuotaGetter {
                 let total_quota = SysQuota::cpu_cores_quota();
                 self.process_stat.cpu_usage().map(|u| ResourceUsageStats {
                     // cpu is measured in us.
-                    total_quota: total_quota * 1_000_000.0,
-                    current_used: u * 1_000_000.0,
+                    total_quota: total_quota * MICROS_PER_SEC,
+                    current_used: u * MICROS_PER_SEC,
                 })
             }
             ResourceType::Io => {
@@ -137,10 +139,10 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let dur_secs = now
             .saturating_duration_since(self.last_adjust_time)
             .as_secs_f64();
-        self.last_adjust_time = now;
         if dur_secs < 1.0 {
             return;
         }
+        self.last_adjust_time = now;
 
         let mut background_groups: Vec<_> = self
             .resource_ctl
@@ -232,7 +234,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 rate_limit = 0.0;
             }
             let group_expected_cost = g.stats.total_consumed as f64
-                + g.stats.total_wait_dur_us as f64 / 1000000.0 * rate_limit;
+                + g.stats.total_wait_dur_us as f64 / MICROS_PER_SEC * rate_limit;
             g.expect_cost_per_ru = group_expected_cost / g.ru_quota;
             total_expected_cost += group_expected_cost;
         }
@@ -375,6 +377,10 @@ mod tests {
         }
 
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check_limiter(&limiter, 7.2, 9000.0);
+
+        reset_quota(&mut worker, 4.0, 2000.0, Duration::from_millis(500));
         worker.adjust_quota();
         check_limiter(&limiter, 7.2, 9000.0);
 

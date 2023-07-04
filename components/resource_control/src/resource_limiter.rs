@@ -80,15 +80,14 @@ impl QuotaLimiter {
     }
 }
 
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, PartialEq, Eq, Copy, Debug)]
 pub struct GroupStatistics {
     pub total_consumed: u64,
     pub total_wait_dur_us: u64,
 }
 
 impl std::ops::Sub for GroupStatistics {
-    type Output = GroupStatistics;
-
+    type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
             total_consumed: self.total_consumed.saturating_sub(rhs.total_consumed),

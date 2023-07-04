@@ -1,16 +1,20 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{mpsc::sync_channel, Arc, Mutex},
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
+use engine_traits::{
+    Engines, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
+};
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{bootstrap_store, fsm, fsm::store::StoreMeta, AutoSplitController, SnapManager},
 };
+use raftstore_v2::router::PeerMsg;
 use resource_metering::CollectorRegHandle;
 use tempfile::Builder;
 use test_pd_client::{bootstrap_with_first_region, TestPdClient};
@@ -188,4 +192,56 @@ fn test_node_switch_api_version() {
             }
         }
     }
+}
+
+#[test]
+fn test_flush_before_stop() {
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k020");
+
+    let region = cluster.get_region(b"k40");
+    cluster.must_split(&region, b"k040");
+
+    let region = cluster.get_region(b"k60");
+    cluster.must_split(&region, b"k070");
+
+    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+
+    for i in 0..100 {
+        let key = format!("k{:03}", i);
+        cluster.must_put_cf(CF_WRITE, key.as_bytes(), b"val");
+        cluster.must_put_cf(CF_LOCK, key.as_bytes(), b"val");
+    }
+
+    let router = cluster.get_router(1).unwrap();
+    let raft_engine = cluster.get_raft_engine(1);
+
+    let mut rxs = vec![];
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
+            let (tx, rx) = sync_channel(1);
+            rxs.push(rx);
+            let msg = PeerMsg::FlushBeforeClose { tx };
+            router.force_send(id, msg).unwrap();
+
+            Ok(())
+        })
+        .unwrap();
+
+    for rx in rxs {
+        rx.recv().unwrap();
+    }
+
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
+            let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT).unwrap().unwrap();
+            assert!(admin_flush >= 40);
+            Ok(())
+        })
+        .unwrap();
 }

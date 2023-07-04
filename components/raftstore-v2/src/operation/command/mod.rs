@@ -145,7 +145,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             mailbox,
             store_ctx.tablet_registry.clone(),
             read_scheduler,
-            store_ctx.schedulers.checkpoint.clone(),
+            store_ctx.schedulers.tablet.clone(),
+            store_ctx.high_priority_pool.clone(),
             self.flush_state().clone(),
             sst_apply_state,
             self.storage().apply_trace().log_recovery(),
@@ -491,7 +492,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    pub fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
+    pub async fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
         let decoder = match SimpleWriteReqDecoder::new(
             |buf, index, term| parse_at(&self.logger, buf, index, term),
             &self.logger,
@@ -511,14 +512,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
                 }
                 SimpleWrite::DeleteRange(dr) => {
-                    let _ = self.apply_delete_range(
-                        dr.cf,
-                        u64::MAX,
-                        dr.start_key,
-                        dr.end_key,
-                        dr.notify_only,
-                        self.use_delete_range(),
-                    );
+                    let _ = self
+                        .apply_delete_range(
+                            dr.cf,
+                            u64::MAX,
+                            dr.start_key,
+                            dr.end_key,
+                            dr.notify_only,
+                        )
+                        .await;
                 }
                 SimpleWrite::Ingest(_) => {
                     error!(
@@ -639,8 +641,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
-                                    self.use_delete_range(),
-                                )?;
+                                )
+                                .await?;
                             }
                             SimpleWrite::Ingest(ssts) => {
                                 self.apply_ingest(log_index, ssts)?;
@@ -686,7 +688,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
                 AdminCmdType::Split => self.apply_split(admin_req, log_index).await?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index).await?,
-                AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
+                AdminCmdType::PrepareMerge => {
+                    self.apply_prepare_merge(admin_req, log_index).await?
+                }
                 AdminCmdType::CommitMerge => self.apply_commit_merge(admin_req, log_index).await?,
                 AdminCmdType::RollbackMerge => self.apply_rollback_merge(admin_req, log_index)?,
                 AdminCmdType::TransferLeader => {
@@ -738,8 +742,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
-                            self.use_delete_range(),
-                        )?;
+                        )
+                        .await?;
                     }
                     _ => slog_panic!(
                         self.logger,
