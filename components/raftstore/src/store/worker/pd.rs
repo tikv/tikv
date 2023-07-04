@@ -36,11 +36,10 @@ use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
+use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
-    mpsc as TikvMpsc,
-    service_event::ServiceEvent,
     store::QueryStats,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
@@ -957,8 +956,8 @@ where
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
 
-    // Service event sender for controlling grpc service.
-    service_event_sender: TikvMpsc::Sender<ServiceEvent>,
+    // Service manager for grpc service.
+    grpc_service_manager: GrpcServiceManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -982,7 +981,7 @@ where
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        service_event_sender: TikvMpsc::Sender<ServiceEvent>,
+        grpc_service_manager: GrpcServiceManager,
     ) -> Runner<EK, ER, T> {
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
@@ -1055,7 +1054,7 @@ where
             curr_health_status: ServingStatus::Serving,
             coprocessor_host,
             causal_ts_provider,
-            service_event_sender,
+            grpc_service_manager,
         }
     }
 
@@ -1366,7 +1365,7 @@ where
         stats.set_slow_score(slow_score as u64);
         self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
 
-        stats.set_is_grpc_paused(self.curr_health_status == ServingStatus::NotServing);
+        stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
 
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
@@ -1993,21 +1992,15 @@ where
         );
         match event {
             pdpb::ControlGrpcEvent::Pause => {
-                // Send message to outer handler to notify PAUSE grpc server.
-                if let Err(e) = self.service_event_sender.send(ServiceEvent::PauseGrpc) {
+                if let Err(e) = self.grpc_service_manager.pause() {
                     warn!("failed to send service event to PAUSE grpc server";
                             "err" => ?e);
-                } else {
-                    self.update_health_status(ServingStatus::NotServing);
                 }
             }
             pdpb::ControlGrpcEvent::Resume => {
-                // Send message to outer handler to notify RESUME grpc server.
-                if let Err(e) = self.service_event_sender.send(ServiceEvent::ResumeGrpc) {
+                if let Err(e) = self.grpc_service_manager.resume() {
                     warn!("failed to send service event to RESUME grpc server";
                             "err" => ?e);
-                } else {
-                    self.update_health_status(ServingStatus::Serving);
                 }
             }
         }

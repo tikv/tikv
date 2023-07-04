@@ -45,6 +45,7 @@ use protobuf::Message;
 use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -54,7 +55,6 @@ use tikv_util::{
     future::poll_future_notify,
     info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    service_event::ServiceEvent,
     slow_log,
     store::{find_peer, region_on_stores},
     sys as sys_util,
@@ -1792,7 +1792,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             health_service,
             coprocessor_host,
             causal_ts_provider,
-            service_event_sender, // TODO: add grpc controller receiver.
+            GrpcServiceManager::new(service_event_sender),
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 

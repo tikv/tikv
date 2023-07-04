@@ -6,9 +6,9 @@ use std::{
 
 use grpcio::*;
 use grpcio_health::{proto::HealthCheckRequest, HealthClient, ServingStatus};
+use service::service_event::ServiceEvent;
 use test_pd::Server as MockServer;
 use tikv::config::TikvConfig;
-use tikv_util::service_event::ServiceEvent;
 
 #[test]
 fn test_restart_grpc() {

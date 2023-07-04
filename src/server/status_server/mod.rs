@@ -49,11 +49,11 @@ use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
 use serde::Serialize;
 use serde_json::Value;
+use service::service_event::ServiceEvent;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
-    service_event::ServiceEvent,
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::{
@@ -1683,6 +1683,46 @@ mod tests {
                 assert_eq!(engine_type, resp_str);
             });
             block_on(handle).unwrap();
+            status_server.stop();
+        }
+    }
+
+    #[test]
+    fn test_switch_raftstore_disk() {
+        let mut multi_rocks_cfg = TikvConfig::default();
+        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
+        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
+        for cfg in IntoIterator::into_iter(cfgs) {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(cfg),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                temp_dir.path().to_path_buf(),
+                None,
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            let client = Client::new();
+            for req in ["pause_grpc", "resume_grpc"] {
+                let uri = Uri::builder()
+                    .scheme("http")
+                    .authority(status_server.listening_addr().to_string().as_str())
+                    .path_and_query(req)
+                    .build()
+                    .unwrap();
+
+                let mut grpc_req = Request::default();
+                *grpc_req.method_mut() = Method::PUT;
+                *grpc_req.uri_mut() = uri;
+                let handle = status_server.thread_pool.spawn(async move {
+                    let res = client.request(grpc_req).await.unwrap();
+                    assert_eq!(res.status(), StatusCode::OK);
+                });
+                block_on(handle).unwrap();
+            }
             status_server.stop();
         }
     }

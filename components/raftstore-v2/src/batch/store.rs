@@ -39,6 +39,7 @@ use raftstore::{
     },
 };
 use resource_metering::CollectorRegHandle;
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use slog::{warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -46,7 +47,6 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     log::SlogFormat,
     mpsc,
-    service_event::ServiceEvent,
     sys::SysQuota,
     time::{duration_to_sec, Instant as TiInstant, Limiter},
     timer::SteadyTimer,
@@ -733,7 +733,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             auto_split_controller,
             store_meta.lock().unwrap().region_read_progress.clone(),
             collector_reg_handle,
-            service_event_sender, // TODO: add grpc controller receiver.
+            GrpcServiceManager::new(service_event_sender),
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),

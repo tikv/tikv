@@ -25,10 +25,10 @@ use raftstore::{
     },
 };
 use resource_metering::CollectorRegHandle;
+use service::service_event::ServiceEvent;
 use tikv_util::{
     config::VersionTrack,
     mpsc,
-    service_event::ServiceEvent,
     worker::{LazyWorker, Scheduler, Worker},
 };
 

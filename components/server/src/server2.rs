@@ -70,6 +70,7 @@ use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
+use service::service_event::ServiceEvent;
 use tikv::{
     config::{
         loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
@@ -108,7 +109,6 @@ use tikv_util::{
     config::VersionTrack,
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    service_event::ServiceEvent,
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},

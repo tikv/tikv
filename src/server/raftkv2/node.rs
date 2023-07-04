@@ -17,12 +17,12 @@ use raftstore::{
 };
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
 use resource_metering::CollectorRegHandle;
+use service::service_event::ServiceEvent;
 use slog::{info, o, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
     config::VersionTrack,
     mpsc,
-    service_event::ServiceEvent,
     worker::{LazyWorker, Scheduler, Worker},
 };
 

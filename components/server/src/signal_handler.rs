@@ -10,11 +10,12 @@ pub use self::imp::wait_for_signal;
 #[cfg(unix)]
 mod imp {
     use engine_traits::MiscExt;
+    use service::service_event::ServiceEvent;
     use signal_hook::{
         consts::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2},
         iterator::Signals,
     };
-    use tikv_util::{metrics, mpsc as TikvMpsc, service_event::ServiceEvent};
+    use tikv_util::{metrics, mpsc as TikvMpsc};
 
     use super::*;
 

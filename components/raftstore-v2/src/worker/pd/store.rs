@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, sync::atomic::Ordering};
+use std::cmp;
 
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
@@ -18,7 +18,6 @@ use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyI
 use slog::{error, info, warn};
 use tikv_util::{
     metrics::RecordPairVec,
-    service_event::ServiceEvent,
     store::QueryStats,
     time::{Duration, Instant as TiInstant, UnixSecs},
     topn::TopN,
@@ -233,7 +232,7 @@ where
         stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
         stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
         // Update grpc server status
-        stats.set_is_grpc_paused(self.is_grpc_server_paused.load(Ordering::Relaxed));
+        stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
@@ -271,8 +270,7 @@ where
 
         let resp = self.pd_client.store_heartbeat(stats, None, None);
         let logger = self.logger.clone();
-        let is_grpc_server_paused = self.is_grpc_server_paused.clone();
-        let service_event_sender = self.service_event_sender.clone();
+        let mut grpc_service_manager = self.grpc_service_manager.clone();
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -290,27 +288,20 @@ where
                     // Control grpc server.
                     else if let Some(op) = resp.control_grpc.take() {
                         info!(logger, "forcely control grpc server";
-                                "is_grpc_server_paused" => is_grpc_server_paused.load(Ordering::Relaxed),
+                                "is_grpc_server_paused" => grpc_service_manager.is_paused(),
                                 "event" => ?op,
                         );
                         match op.get_ctrl_event() {
                             pdpb::ControlGrpcEvent::Pause => {
-                                // Send message to outer handler to notify PAUSE grpc server.
-                                if let Err(e) = service_event_sender.send(ServiceEvent::PauseGrpc) {
+                                if let Err(e) = grpc_service_manager.pause() {
                                     warn!(logger, "failed to send service event to PAUSE grpc server";
                                         "err" => ?e);
-                                } else {
-                                    is_grpc_server_paused.store(true, Ordering::Relaxed);
                                 }
                             }
                             pdpb::ControlGrpcEvent::Resume => {
-                                // Send message to outer handler to notify RESUME grpc server.
-                                if let Err(e) = service_event_sender.send(ServiceEvent::ResumeGrpc)
-                                {
+                                if let Err(e) = grpc_service_manager.resume() {
                                     warn!(logger, "failed to send service event to RESUME grpc server";
                                         "err" => ?e);
-                                } else {
-                                    is_grpc_server_paused.store(false, Ordering::Relaxed);
                                 }
                             }
                         }

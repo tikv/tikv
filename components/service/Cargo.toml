@@ -1,0 +1,11 @@
+[package]
+name = "service"
+version = "0.0.1"
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+atomic = "0.5"
+crossbeam = "0.8"
+tikv_util = { workspace = true }
