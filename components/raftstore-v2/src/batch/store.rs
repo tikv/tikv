@@ -682,16 +682,17 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                         Ok(regions) => regions,
                     }
                 };
-                let mut max_rate = base_max_rate;
                 // Lift up max rate if the background flush rate is high.
                 let flush_count = EK::get_accumulated_flush_count().unwrap();
                 let now = TiInstant::now_coarse();
                 let duration = now.saturating_duration_since(last_flush.1).as_secs_f64();
-                if duration > 5.0 {
+                let max_rate = if duration > 10.0 {
                     let total_flush_rate = (flush_count - last_flush.0) as f64 / duration;
-                    max_rate = max_rate.clamp(total_flush_rate, f64::INFINITY);
-                }
-                last_flush = (flush_count, now);
+                    last_flush = (flush_count, now);
+                    base_max_rate.clamp(total_flush_rate, f64::INFINITY)
+                } else {
+                    base_max_rate
+                };
                 // Try to finish flush just in time.
                 let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
                 let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, max_rate);
