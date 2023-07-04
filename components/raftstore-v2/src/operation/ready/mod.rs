@@ -55,7 +55,7 @@ use tikv_util::{
     log::SlogFormat,
     slog_panic,
     store::find_peer,
-    time::{duration_to_sec, monotonic_raw_now},
+    time::{duration_to_sec, monotonic_raw_now, Duration},
 };
 
 pub use self::{
@@ -299,6 +299,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .tablet
                         .schedule(crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
+                            reason: "unknown",
+                            threshold: Some(std::time::Duration::from_secs(10)),
                             cb: None,
                         });
                     return;
@@ -916,6 +918,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let now = Instant::now();
+        let stat_raft_commit_log = &mut ctx.raft_metrics.stat_commit_log;
         for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
@@ -926,10 +929,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         &ctx.raft_metrics.wf_commit_not_persist_log
                     };
                     for tracker in trackers {
-                        tracker.observe(now, hist, |t| {
-                            t.metrics.commit_not_persisted = !commit_persisted;
-                            &mut t.metrics.wf_commit_log_nanos
-                        });
+                        // Collect the metrics related to commit_log
+                        // durations.
+                        stat_raft_commit_log.record(Duration::from_nanos(tracker.observe(
+                            now,
+                            hist,
+                            |t| {
+                                t.metrics.commit_not_persisted = !commit_persisted;
+                                &mut t.metrics.wf_commit_log_nanos
+                            },
+                        )));
                     }
                 }
             }

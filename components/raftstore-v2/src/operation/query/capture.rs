@@ -196,7 +196,11 @@ mod test {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::{store::new_peer, worker::dummy_scheduler};
+    use tikv_util::{
+        store::new_peer,
+        worker::dummy_scheduler,
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
+    };
 
     use super::*;
     use crate::{
@@ -271,7 +275,7 @@ mod test {
             .register_cmd_observer(0, BoxCmdObserver::new(ob));
 
         let (dummy_scheduler1, _) = dummy_scheduler();
-        let (dummy_scheduler2, _) = dummy_scheduler();
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -292,7 +296,7 @@ mod test {
             importer,
             host,
             dummy_scheduler1,
-            dummy_scheduler2,
+            high_priority_pool,
             logger.clone(),
         );
 

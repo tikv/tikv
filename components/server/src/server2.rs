@@ -17,7 +17,11 @@ use std::{
     marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{atomic::AtomicU64, mpsc, Arc},
+    sync::{
+        atomic::AtomicU64,
+        mpsc::{self, sync_channel},
+        Arc,
+    },
     time::Duration,
     u64,
 };
@@ -58,13 +62,19 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
-use raftstore_v2::{router::RaftRouter, StateStorage};
+use raftstore_v2::{
+    router::{PeerMsg, RaftRouter},
+    StateStorage,
+};
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
+    config::{
+        loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
+        TikvConfig,
+    },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -435,11 +445,12 @@ where
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .after_start_wrapper(move || {
-                    tikv_alloc::add_thread_memory_accessor();
-                    tikv_util::thread_group::set_properties(props.clone());
-                })
-                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
+                .with_sys_and_custom_hooks(
+                    move || {
+                        tikv_util::thread_group::set_properties(props.clone());
+                    },
+                    || {},
+                )
                 .build()
                 .unwrap(),
         );
@@ -690,6 +701,7 @@ where
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
                 self.core.config.coprocessor.region_bucket_size,
+                true,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
@@ -1216,7 +1228,7 @@ where
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.core.config.server.status_thread_pool_size,
-                self.cfg_controller.take().unwrap(),
+                self.cfg_controller.clone().unwrap(),
                 Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.core.store_path.clone(),
@@ -1237,14 +1249,84 @@ where
         }
     }
 
+    fn flush_before_stop(&mut self) {
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.store_pool_size".to_owned(), "10".to_owned());
+            change
+        };
+        if let Err(e) = self
+            .cfg_controller
+            .as_mut()
+            .unwrap()
+            .update_without_persist(change)
+        {
+            warn!(
+                "config change failed";
+                "error" => ?e,
+            );
+        }
+        let tablet_registry = self.tablet_registry.as_ref().unwrap();
+        // It should not return error.
+        if let Err(e) = loop_registry(tablet_registry, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_high_priority_background_threads(10, false)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        }) {
+            warn!(
+                "increase high priority background threads failed during server stop (it will impact close speed)";
+                "error" => ?e,
+            );
+        }
+
+        info!("server stop: flush begin");
+        let engines = self.engines.as_mut().unwrap();
+        let router = self.router.as_ref().unwrap();
+        let mut rxs = vec![];
+        engines
+            .raft_engine
+            .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                let (tx, rx) = sync_channel(1);
+                let flush_msg = PeerMsg::FlushBeforeClose { tx };
+                if let Err(e) = router.store_router().force_send(region_id, flush_msg) {
+                    warn!(
+                        "flush-before-close: force send error";
+                        "error" => ?e,
+                        "region_id" => region_id,
+                    );
+                } else {
+                    rxs.push(rx);
+                }
+
+                Ok(())
+            })
+            .unwrap();
+
+        for rx in rxs {
+            if let Err(e) = rx.recv() {
+                warn!(
+                    "flush-before-close: receive error";
+                    "error" => ?e,
+                );
+            }
+        }
+
+        info!(
+            "server stop: flush done";
+        );
+    }
+
     fn stop(mut self) {
+        self.flush_before_stop();
         tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
             .server
             .stop()
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
-
         self.node.as_mut().unwrap().stop();
         self.region_info_accessor.as_mut().unwrap().stop();
 

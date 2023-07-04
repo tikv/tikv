@@ -536,15 +536,27 @@ impl Cluster {
         Cluster::with_node_count(1, Some(config))
     }
 
+    pub fn with_config_and_extra_setting(
+        config: Config,
+        extra_setting: impl FnMut(&mut Config),
+    ) -> Cluster {
+        Cluster::with_configs(1, Some(config), None, extra_setting)
+    }
+
     pub fn with_node_count(count: usize, config: Option<Config>) -> Self {
-        Cluster::with_configs(count, config, None)
+        Cluster::with_configs(count, config, None, |_| {})
     }
 
     pub fn with_cop_cfg(config: Option<Config>, coprocessor_cfg: CopConfig) -> Cluster {
-        Cluster::with_configs(1, config, Some(coprocessor_cfg))
+        Cluster::with_configs(1, config, Some(coprocessor_cfg), |_| {})
     }
 
-    pub fn with_configs(count: usize, config: Option<Config>, cop_cfg: Option<CopConfig>) -> Self {
+    pub fn with_configs(
+        count: usize,
+        config: Option<Config>,
+        cop_cfg: Option<CopConfig>,
+        mut extra_setting: impl FnMut(&mut Config),
+    ) -> Self {
         let pd_server = test_pd::Server::new(1);
         let logger = slog_global::borrow_global().new(o!());
         let mut cluster = Cluster {
@@ -560,6 +572,7 @@ impl Cluster {
             v2_default_config()
         };
         disable_all_auto_ticks(&mut cfg);
+        extra_setting(&mut cfg);
         let cop_cfg = cop_cfg.unwrap_or_default();
         for _ in 1..=count {
             let mut node = TestNode::with_pd(&cluster.pd_server, cluster.logger.clone());
