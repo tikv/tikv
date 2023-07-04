@@ -537,7 +537,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         debug!("starting node {}", node_id);
         let tablet_registry = self.tablet_registries[&node_id].clone();
         let raft_engine = self.raft_engines[&node_id].clone();
-        let key_mgr: Option<Arc<DataKeyManager>> = self.key_managers_map[&node_id].clone();
+        let key_mgr = self.key_managers_map[&node_id].clone();
         let cfg = self.cfg.clone();
 
         // if let Some(labels) = self.labels.get(&node_id) {

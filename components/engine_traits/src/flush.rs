@@ -62,7 +62,7 @@ struct FlushProgress {
 /// if the flushed index greater than it .
 #[derive(Debug, Clone)]
 pub struct SstApplyState {
-    // Map from sst meta to the apply index, <(cf_index)> --> [SstApplyEntry].
+    // Map from cf to SstApplyEntry.
     sst_map: Arc<RwLock<HashMap<usize, Vec<SstApplyEntry>>>>,
 }
 
