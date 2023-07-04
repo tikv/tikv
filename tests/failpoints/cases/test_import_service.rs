@@ -13,7 +13,7 @@ use tempfile::{Builder, TempDir};
 use test_raftstore::Simulator;
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
-use tikv_util::{config::ReadableSize, store::new_peer, HandyRwLock};
+use tikv_util::{config::ReadableSize, HandyRwLock};
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
