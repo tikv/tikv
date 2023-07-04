@@ -8,6 +8,7 @@ use std::{
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{FlushState, KvEngine, SstApplyState, TabletRegistry};
+use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
@@ -122,6 +123,10 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
 impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
     pub async fn handle_all_tasks(&mut self) {
         loop {
+            let id = std::thread::current().id();
+            println!("before, id {:?}", id);
+            fail_point!("on_handle_all_tasks");
+            println!("after, id {:?}", id);
             let timeout = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + Duration::from_secs(10))
                 .compat();

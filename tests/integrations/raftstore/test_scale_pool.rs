@@ -128,6 +128,7 @@ fn get_poller_thread_ids_by_prefix(prefixs: Vec<&str>) -> Vec<Pid> {
     for tid in all_tids {
         if let Ok(stat) = thread::full_thread_stat(pid, tid) {
             for &prefix in &prefixs {
+                println!("{:?}", stat.command);
                 if stat.command.starts_with(prefix) {
                     poller_tids.push(tid);
                 }
@@ -196,6 +197,43 @@ fn test_decrease_pool() {
     // Request can be handled as usual
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+}
+
+#[test]
+fn test_apply_pool_v2() {
+    use test_raftstore_v2::*;
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    let _ = cluster.run_conf_change();
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k10");
+    let region = cluster.get_region(b"k11");
+    cluster.must_split(&region, b"k20");
+    let region = cluster.get_region(b"k21");
+    cluster.must_split(&region, b"k30");
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let change = {
+            let mut change = HashMap::new();
+            change.insert("raftstore.apply-pool-size".to_owned(), "4".to_owned());
+            change
+        };
+
+        cfg_controller.update(change).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    fail::cfg("on_handle_all_tasks", "1*pause").unwrap();
+
+    cluster.must_put(b"k05", b"val");
+    cluster.must_put(b"k15", b"val");
+    cluster.must_put(b"k25", b"val");
+
+    fail::remove("on_handle_all_tasks");
 }
 
 #[test]

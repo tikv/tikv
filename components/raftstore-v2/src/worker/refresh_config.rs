@@ -140,11 +140,12 @@ where
             return;
         }
 
-        
-        
+        // It may not take effect immediately. See comments of
+        // ThreadPool::scale_workers.
+        self.apply_pool.scale_pool_size(size);
         info!(
             self.logger,
-            "resize apply pool";
+            "resize apply pool (the ultimate pool size will be clamped between 1 and max-pool-size)";
             "from" => current_pool_size,
             "to" => size
         );
@@ -207,9 +208,7 @@ where
             RefreshConfigTask::ScalePool(component, size) => {
                 match component {
                     BatchComponent::Store => self.resize_raft_pool(size),
-                    BatchComponent::Apply => {
-                        unreachable!("v2 does not have apply batch system")
-                    }
+                    BatchComponent::Apply => self.resize_apply_pool(size),
                 };
             }
             RefreshConfigTask::ScaleWriters(size) => self.resize_store_writers(size),
