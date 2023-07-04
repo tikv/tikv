@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DeleteStrategy, MiscExt, Range, RangeStats, Result, StatisticsReporter};
+use engine_traits::{
+    DeleteStrategy, MiscExt, Range, RangeStats, Result, StatisticsReporter, WriteOptions,
+};
 
 use crate::engine::PanicEngine;
 
@@ -41,10 +43,11 @@ impl MiscExt for PanicEngine {
 
     fn delete_ranges_cf(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         panic!()
     }
 
