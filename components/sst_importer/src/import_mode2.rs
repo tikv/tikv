@@ -79,12 +79,12 @@ impl ImportModeSwitcherV2 {
 
                     let mut min_next_check = now + switcher.timeout;
                     for (range, next_check) in &switcher.import_mode_ranges {
-                        if *next_check < min_next_check {
-                            min_next_check = *next_check;
-                            prev_ranges.clear();
+                        if *next_check <= min_next_check {
+                            if *next_check < min_next_check {
+                                min_next_check = *next_check;
+                                prev_ranges.clear();
+                            }
                             prev_ranges.push(range.clone());
-                        } else if *next_check == min_next_check {
-                            prev_ranges.push(range.clone())
                         }
                     }
                     min_next_check

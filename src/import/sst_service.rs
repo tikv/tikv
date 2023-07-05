@@ -723,7 +723,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 },
                 LocalTablets::Registry(_) => {
                     if req.get_mode() == SwitchMode::Import {
-                        if req.has_range() {
+                        if !req.get_range().is_empty() {
                             let ranges = req.take_range().to_vec();
                             self.importer.ranges_enter_import_mode(ranges);
                             Ok(true)
@@ -735,9 +735,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         }
                     } else {
                         // case SwitchMode::Normal
-                        if req.has_range() {
+                        if !req.get_range().is_empty() {
                             let ranges = req.take_range().to_vec();
-                            self.importer.clear_import_mode_regions(range);
+                            self.importer.clear_import_mode_regions(ranges);
                             Ok(true)
                         } else {
                             Err(sst_importer::Error::Engine(
