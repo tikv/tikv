@@ -567,6 +567,8 @@
 # wal-size-limit = 0
 
 ## Max RocksDB WAL size in total
+## When storage.engine is "raft-kv", default value is 4GB.
+## When storage.engine is "partitioned-raft-kv", default value is 1.
 # max-total-wal-size = "4GB"
 
 ## Dump statistics periodically in information logs.
@@ -849,6 +851,13 @@
 ## values in index blocks.
 ## This option only affects newly written tables. When reading existing tables,
 ## the information about version is read from the footer.
+##
+## 5 -- Can be read by TiKV's versions since 6.3. Full and partitioned filters
+## use a generally faster and more accurate Bloom filter implementation, with a
+## different schema.
+##
+## When storage.engine is "raft-kv", default value is 2.
+## When storage.engine is "partitioned-raft-kv", default value is 5.
 ##
 # format-version = 2
 
