@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(test)]
+#![feature(local_key_cell_methods)]
 
 use online_config::OnlineConfig;
 use serde::{Deserialize, Serialize};

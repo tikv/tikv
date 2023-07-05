@@ -20,6 +20,7 @@ mod util;
 #[macro_use]
 pub mod import_mode;
 mod caching;
+pub mod import_mode2;
 pub mod metrics;
 pub mod sst_importer;
 
@@ -27,6 +28,7 @@ pub use self::{
     config::{Config, ConfigManager},
     errors::{error_inc, Error, Result},
     import_file::sst_meta_to_path,
+    import_mode2::range_overlaps,
     sst_importer::SstImporter,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util::{copy_sst_for_ingestion, prepare_sst_for_ingestion},

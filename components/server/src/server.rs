@@ -873,6 +873,7 @@ where
             import_path,
             self.core.encryption_key_manager.clone(),
             self.core.config.storage.api_version(),
+            false,
         )
         .unwrap();
         for (cf_name, compression_type) in &[
@@ -1064,6 +1065,7 @@ where
             engines.engine.clone(),
             LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
+            None,
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1542,6 +1544,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
         engines.raft.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
+            &self.core.config,
             reg,
             engines.raft.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
@@ -1648,7 +1651,7 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

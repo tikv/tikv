@@ -328,6 +328,7 @@ impl RunningState {
                 path.join("importer"),
                 key_manager.clone(),
                 ApiVersion::V1,
+                true,
             )
             .unwrap(),
         );

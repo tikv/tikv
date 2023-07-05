@@ -75,11 +75,9 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 
-    fn flush_oldest_cf(
-        &self,
-        wait: bool,
-        age_threshold: Option<std::time::SystemTime>,
-    ) -> Result<()>;
+    /// Returns `false` if all memtables are created after `threshold`.
+    fn flush_oldest_cf(&self, wait: bool, threshold: Option<std::time::SystemTime>)
+    -> Result<bool>;
 
     /// Returns whether there's data written through kv interface.
     fn delete_ranges_cfs(
@@ -168,5 +166,16 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
             }
         }
         false
+    }
+
+    // Global method.
+    fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64>;
+
+    fn get_accumulated_flush_count() -> Result<u64> {
+        let mut n = 0;
+        for cf in crate::ALL_CFS {
+            n += Self::get_accumulated_flush_count_cf(cf)?;
+        }
+        Ok(n)
     }
 }
