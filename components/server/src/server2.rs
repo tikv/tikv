@@ -1400,11 +1400,14 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         self.tablet_registry = Some(registry.clone());
         raft_engine.register_config(cfg_controller);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(
+        let mut engines_info = EnginesResourceInfo::new(
             registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
-        ));
+        );
+        engines_info.set_min_throughput_portion(0.2);
+        engines_info.set_optimize_for_read(false);
+        let engines_info = Arc::new(engines_info);
 
         let router = RaftRouter::new(node.id(), router);
         let mut coprocessor_host: CoprocessorHost<RocksEngine> = CoprocessorHost::new(

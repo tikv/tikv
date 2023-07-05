@@ -20,7 +20,7 @@ use super::{
     IoOp, IoPriority, IoType,
 };
 
-const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
+pub const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
 const DEFAULT_REFILLS_PER_SEC: usize = (1.0 / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
 const MAX_WAIT_DURATION_PER_REQUEST: Duration = Duration::from_millis(500);
 
@@ -164,6 +164,14 @@ impl Default for IoRateLimiterStatistics {
 /// limited, e.g. when mode is IoRateLimitMode::WriteOnly.
 pub trait IoBudgetAdjustor: Send + Sync {
     fn adjust(&self, threshold: usize) -> usize;
+
+    /// Return the current pressure of the system. It should be an int between
+    /// 0 and 100, where 0 means no pressure and 100 means full pressure.
+    ///
+    /// `None` means no measure is made since last query.
+    fn pressure(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Limit total IO flow below provided threshold by throttling lower-priority
@@ -439,7 +447,7 @@ impl PriorityBasedIoRateLimiter {
 pub struct IoRateLimiter {
     mode: IoRateLimitMode,
     priority_map: [CachePadded<AtomicU32>; IoType::COUNT],
-    throughput_limiter: Arc<PriorityBasedIoRateLimiter>,
+    throughput_limiter: Arc<crate::QueueBasedRateLimiter>,
     stats: Option<Arc<IoRateLimiterStatistics>>,
 }
 
@@ -452,7 +460,7 @@ impl IoRateLimiter {
         IoRateLimiter {
             mode,
             priority_map,
-            throughput_limiter: Arc::new(PriorityBasedIoRateLimiter::new(strict)),
+            throughput_limiter: Arc::new(crate::QueueBasedRateLimiter::new(strict)),
             stats: if enable_statistics {
                 Some(Arc::new(IoRateLimiterStatistics::new()))
             } else {
@@ -474,7 +482,7 @@ impl IoRateLimiter {
     }
 
     pub fn set_io_rate_limit(&self, rate: usize) {
-        self.throughput_limiter.set_bytes_per_sec(rate);
+        self.throughput_limiter.set_bytes_per_sec(rate as u64);
     }
 
     pub fn set_io_priority(&self, io_type: IoType, io_priority: IoPriority) {
@@ -486,8 +494,7 @@ impl IoRateLimiter {
         adjustor: Option<Arc<dyn IoBudgetAdjustor>>,
     ) {
         if self.mode != IoRateLimitMode::AllIo {
-            self.throughput_limiter
-                .set_low_priority_io_adjustor(adjustor);
+            self.throughput_limiter.set_io_budget_adjustor(adjustor);
         }
     }
 
@@ -496,10 +503,15 @@ impl IoRateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IoType, io_op: IoOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            bytes = self.throughput_limiter.request(
-                IoPriority::from_u32(self.priority_map[io_type as usize].load(Ordering::Relaxed)),
-                bytes,
-            );
+            let pri =
+                IoPriority::from_u32(self.priority_map[io_type as usize].load(Ordering::Relaxed));
+            bytes = match self.throughput_limiter.request_no_wait(pri, bytes as u64) {
+                Some(bytes) => bytes as usize,
+                None => {
+                    futures::executor::block_on(self.throughput_limiter.request(pri, bytes as u64))
+                        as usize
+                }
+            };
         }
         if let Some(stats) = &self.stats {
             stats.record(io_type, io_op, bytes);
@@ -515,13 +527,13 @@ impl IoRateLimiter {
         if self.mode.contains(io_op) {
             bytes = self
                 .throughput_limiter
-                .async_request(
+                .request(
                     IoPriority::from_u32(
                         self.priority_map[io_type as usize].load(Ordering::Relaxed),
                     ),
-                    bytes,
+                    bytes as u64,
                 )
-                .await;
+                .await as usize;
         }
         if let Some(stats) = &self.stats {
             stats.record(io_type, io_op, bytes);
@@ -532,10 +544,10 @@ impl IoRateLimiter {
     #[cfg(test)]
     fn request_with_skewed_clock(&self, io_type: IoType, io_op: IoOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            bytes = self.throughput_limiter.request_with_skewed_clock(
+            bytes = futures::executor::block_on(self.throughput_limiter.request(
                 IoPriority::from_u32(self.priority_map[io_type as usize].load(Ordering::Relaxed)),
-                bytes,
-            );
+                bytes as u64,
+            )) as usize;
         }
         if let Some(stats) = &self.stats {
             stats.record(io_type, io_op, bytes);

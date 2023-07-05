@@ -8,7 +8,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc, Arc,
     },
     time::Duration,
@@ -481,6 +481,9 @@ pub struct EnginesResourceInfo {
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
+    min_throughput_portion: f32,
+    optimize_for_read: bool,
+    latest_pressure: AtomicU64,
 }
 
 impl EnginesResourceInfo {
@@ -496,7 +499,21 @@ impl EnginesResourceInfo {
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
+            min_throughput_portion: 0.5,
+            optimize_for_read: true,
+            latest_pressure: AtomicU64::new(u64::MAX),
         }
+    }
+
+    /// Allowing minimum throughput, if it's usize::MAX, then 50% of total
+    /// budget is chosen.
+    pub fn set_min_throughput_portion(&mut self, min_throughput_portion: f32) {
+        self.min_throughput_portion = min_throughput_portion;
+    }
+
+    /// When optimize for read, pending bytes presure are prioritized.
+    pub fn set_optimize_for_read(&mut self, optimize_for_read: bool) {
+        self.optimize_for_read = optimize_for_read;
     }
 
     pub fn update(
@@ -506,6 +523,7 @@ impl EnginesResourceInfo {
     ) {
         let mut compaction_pending_bytes = [0; DATA_CFS.len()];
         let mut soft_pending_compaction_bytes_limit = [0; DATA_CFS.len()];
+        let mut level0_pressure = 0;
 
         let mut fetch_engine_cf = |engine: &RocksEngine, cf: &str| {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
@@ -516,6 +534,10 @@ impl EnginesResourceInfo {
                         cf_opts.get_soft_pending_compaction_bytes_limit(),
                         soft_pending_compaction_bytes_limit[offset],
                     );
+                }
+                if let Ok(Some(b)) = engine.get_cf_num_files_at_level(cf, 0) {
+                    level0_pressure = level0_pressure
+                        .max(b * 100 / cf_opts.get_level_zero_slowdown_writes_trigger() as u64);
                 }
             }
         };
@@ -565,8 +587,14 @@ impl EnginesResourceInfo {
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
+        // TODO: also need to consider level0 file count if level0 is set to low
+        // priority.
         self.latest_normalized_pending_bytes.store(
             std::cmp::max(normalized_pending_bytes, avg),
+            Ordering::Relaxed,
+        );
+        self.latest_pressure.store(
+            level0_pressure.max(normalized_pending_bytes as u64),
             Ordering::Relaxed,
         );
     }
@@ -581,17 +609,25 @@ impl IoBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
         let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
             / Self::SCALE_FACTOR as f32;
-        // Two reasons for adding `sqrt` on top:
-        // 1) In theory the convergence point is independent of the value of pending
-        //    bytes (as long as backlog generating rate equals consuming rate, which is
-        //    determined by compaction budgets), a convex helps reach that point while
-        //    maintaining low level of pending bytes.
-        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
-        //    with decreasing derivative can help balance such trend.
-        let score = score.sqrt();
-        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
-        let score = 0.5 + score / 2.0;
+        let score = if self.optimize_for_read {
+            score.sqrt()
+        } else {
+            score * score
+        };
+        let score = self.min_throughput_portion + score * (1.0 - self.min_throughput_portion);
         (total_budgets as f32 * score) as usize
+    }
+
+    fn pressure(&self) -> Option<u64> {
+        let mut latest_pressure = self.latest_pressure.load(Ordering::Relaxed);
+        if latest_pressure != u64::MAX {
+            latest_pressure = self.latest_pressure.swap(u64::MAX, Ordering::Relaxed);
+        }
+        if latest_pressure == u64::MAX {
+            None
+        } else {
+            Some(latest_pressure)
+        }
     }
 }
 
