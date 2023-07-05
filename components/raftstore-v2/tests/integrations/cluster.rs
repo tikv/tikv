@@ -45,12 +45,14 @@ use raftstore_v2::{
     Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use slog::{debug, o, Logger};
 use sst_importer::SstImporter;
 use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize, VersionTrack},
+    mpsc,
     store::new_peer,
     worker::{LazyWorker, Worker},
 };
@@ -330,6 +332,7 @@ impl RunningState {
             .unwrap(),
         );
 
+        let (svr_sender, _) = mpsc::unbounded(); // Currently, no adaptive testcases.
         let background = Worker::new("background");
         let pd_worker = LazyWorker::new("pd-worker");
         system
@@ -352,6 +355,7 @@ impl RunningState {
                 pd_worker,
                 importer,
                 key_manager,
+                GrpcServiceManager::new(svr_sender),
             )
             .unwrap();
 

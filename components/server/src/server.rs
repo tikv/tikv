@@ -74,7 +74,7 @@ use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
-use service::service_event::ServiceEvent;
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
@@ -249,7 +249,7 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
-    tx: TikvMpsc::Sender<ServiceEvent>,
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -431,7 +431,7 @@ where
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
-            tx,
+            grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
 

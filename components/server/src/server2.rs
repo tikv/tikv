@@ -70,7 +70,7 @@ use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
-use service::service_event::ServiceEvent;
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
         loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
@@ -248,7 +248,7 @@ struct TikvServer<ER: RaftEngine> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
-    tx: TikvMpsc::Sender<ServiceEvent>,
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -390,7 +390,7 @@ where
             resource_manager,
             causal_ts_provider,
             tablet_registry: None,
-            tx,
+            grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
 

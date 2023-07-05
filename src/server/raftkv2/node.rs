@@ -17,12 +17,11 @@ use raftstore::{
 };
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
 use resource_metering::CollectorRegHandle;
-use service::service_event::ServiceEvent;
+use service::service_manager::GrpcServiceManager;
 use slog::{info, o, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
     config::VersionTrack,
-    mpsc,
     worker::{LazyWorker, Scheduler, Worker},
 };
 
@@ -108,7 +107,7 @@ where
         state: &Mutex<GlobalReplicationState>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
-        service_event_sender: mpsc::Sender<ServiceEvent>,
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -149,7 +148,7 @@ where
             store_cfg,
             sst_importer,
             key_manager,
-            service_event_sender,
+            grpc_service_mgr,
         )?;
 
         Ok(())
@@ -213,7 +212,7 @@ where
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
-        service_event_sender: mpsc::Sender<ServiceEvent>,
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -247,7 +246,7 @@ where
             pd_worker,
             sst_importer,
             key_manager,
-            service_event_sender,
+            grpc_service_mgr,
         )?;
         Ok(())
     }

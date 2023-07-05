@@ -96,7 +96,7 @@ where
             .stream_initial_window_size(self.cfg.value().grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(self.cfg.value().grpc_concurrent_stream)
             .max_receive_message_len(-1)
-            .set_resource_quota(mem_quota.clone())
+            .set_resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
@@ -201,7 +201,7 @@ where
             resource_manager,
         );
         let builder_factory = Box::new(BuilderFactory::new(
-            kv_service.clone(),
+            kv_service,
             cfg.clone(),
             security_mgr.clone(),
             health_service.clone(),
