@@ -68,6 +68,7 @@ use crate::{
 
 const MIN_MANUAL_FLUSH_RATE: f64 = 0.2;
 const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(90);
+const DEFAULT_MAX_THREAD_COUNT: usize = 8;
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
@@ -587,7 +588,9 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
     fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
         let checkpoint = Builder::new("checkpoint-worker").thread_count(2).create();
         Self {
-            async_read: Worker::new("async-read-worker"),
+            async_read: Builder::new("async-read-worker")
+                .max_thread_count(DEFAULT_MAX_THREAD_COUNT)
+                .create(),
             pd,
             tablet: Worker::new("tablet-worker"),
             checkpoint,

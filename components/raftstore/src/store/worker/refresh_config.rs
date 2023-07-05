@@ -8,7 +8,8 @@ use std::{
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
 use file_system::{set_io_type, IoType};
 use tikv_util::{
-    debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable,
+    debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, warn,
+    worker::Runnable,
 };
 
 use crate::store::{
@@ -171,6 +172,7 @@ pub enum Task {
     ScalePool(BatchComponent, usize),
     ScaleBatchSize(BatchComponent, usize),
     ScaleWriters(usize),
+    ScaleAsyncReader(usize),
 }
 
 impl Display for Task {
@@ -184,6 +186,9 @@ impl Display for Task {
             }
             Task::ScaleWriters(size) => {
                 write!(f, "Scale store_io_pool_size adjusts {} ", size)
+            }
+            Task::ScaleAsyncReader(size) => {
+                unimplemented!()
             }
         }
     }
@@ -319,6 +324,12 @@ where
                 }
             },
             Task::ScaleWriters(size) => self.resize_store_writers(size),
+            Task::ScaleAsyncReader(_) => {
+                warn!(
+                    "only partitioned raft kv supports scale async reader";
+                );
+                return;
+            }
         }
     }
 }

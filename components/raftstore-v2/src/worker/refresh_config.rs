@@ -6,7 +6,9 @@ use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState
 use file_system::{set_io_type, IoType};
 use raftstore::store::{BatchComponent, RefreshConfigTask};
 use slog::{error, info, warn, Logger};
-use tikv_util::{sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable};
+use tikv_util::{
+    sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable, yatp_pool::FuturePool,
+};
 
 use crate::fsm::{PeerFsm, StoreFsm};
 
@@ -84,6 +86,7 @@ where
 {
     logger: Logger,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm, H>,
+    async_read_pool: FuturePool,
 }
 
 impl<EK, ER, H> Runner<EK, ER, H>
@@ -96,9 +99,14 @@ where
         logger: Logger,
         router: BatchRouter<PeerFsm<EK, ER>, StoreFsm>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm, H>,
+        async_read_pool: FuturePool,
     ) -> Self {
         let raft_pool = PoolController::new(logger.clone(), router, raft_pool_state);
-        Runner { logger, raft_pool }
+        Runner {
+            logger,
+            raft_pool,
+            async_read_pool,
+        }
     }
 
     fn resize_raft_pool(&mut self, size: usize) {
