@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     convert::identity,
     future::Future,
     path::PathBuf,
@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use collections::HashSet;
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
@@ -25,6 +24,7 @@ use kvproto::{
     },
     kvrpcpb::Context,
 };
+use raftstore_v2::StoreMeta;
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, ConfigManager,
     Error, Result, SstImporter,
@@ -116,6 +116,9 @@ pub struct ImportSstService<E: Engine> {
     raft_entry_max_size: ReadableSize,
 
     writer: raft_writer::ThrottledTlsEngineWriter,
+
+    // it's some iff multi-rocksdb is enabled
+    store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
 }
 
 struct RequestCollector {
@@ -296,6 +299,7 @@ impl<E: Engine> ImportSstService<E> {
         engine: E,
         tablets: LocalTablets<E::Local>,
         importer: Arc<SstImporter>,
+        store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
         let eng = Mutex::new(engine.clone());
@@ -318,7 +322,9 @@ impl<E: Engine> ImportSstService<E> {
             .build()
             .unwrap();
         if let LocalTablets::Singleton(tablet) = &tablets {
-            importer.start_switch_mode_check(threads.handle(), tablet.clone());
+            importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
+        } else {
+            importer.start_switch_mode_check::<E::Local>(threads.handle(), None);
         }
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
@@ -342,6 +348,7 @@ impl<E: Engine> ImportSstService<E> {
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
             writer,
+            store_meta,
         }
     }
 
@@ -402,7 +409,36 @@ impl<E: Engine> ImportSstService<E> {
                 return Some(errorpb);
             }
         };
-        if self.importer.get_mode() == SwitchMode::Normal
+
+        let reject_error = |region_id: Option<u64>| -> Option<errorpb::Error> {
+            let mut errorpb = errorpb::Error::default();
+            let err = if let Some(id) = region_id {
+                format!("too many sst files are ingesting for region {}", id)
+            } else {
+                "too many sst files are ingesting".to_string()
+            };
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(err.clone());
+            errorpb.set_message(err);
+            errorpb.set_server_is_busy(server_is_busy_err);
+            Some(errorpb)
+        };
+
+        // store_meta being Some means it is v2
+        if let Some(ref store_meta) = self.store_meta {
+            if let Some((region, _)) = store_meta.lock().unwrap().regions.get(&region_id) {
+                if !self.importer.region_in_import_mode(region)
+                    && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
+                {
+                    return reject_error(Some(region_id));
+                }
+            } else {
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message(format!("region {} not found", region_id));
+                errorpb.mut_region_not_found().set_region_id(region_id);
+                return Some(errorpb);
+            }
+        } else if self.importer.get_mode() == SwitchMode::Normal
             && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
         {
             match tablet.get_sst_key_ranges(CF_WRITE, 0) {
@@ -416,14 +452,9 @@ impl<E: Engine> ImportSstService<E> {
                     error!("get sst key ranges failed"; "err" => ?e);
                 }
             }
-            let mut errorpb = errorpb::Error::default();
-            let err = "too many sst files are ingesting";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(err.to_string());
-            errorpb.set_message(err.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-            return Some(errorpb);
+            return reject_error(None);
         }
+
         None
     }
 
@@ -658,10 +689,23 @@ macro_rules! impl_write {
 }
 
 impl<E: Engine> ImportSst for ImportSstService<E> {
+    // Switch mode for v1 and v2 is quite different.
+    //
+    // For v1, once it enters import mode, all regions are in import mode as there's
+    // only one kv rocksdb.
+    //
+    // V2 is different. The switch mode with import mode request carries a range
+    // where only regions overlapped with the range can enter import mode.
+    // And unlike v1, where some rocksdb configs will be changed when entering
+    // import mode, the config of the rocksdb will not change when entering import
+    // mode due to implementation complexity (a region's rocksdb can change
+    // overtime due to snapshot, split, and merge, which brings some
+    // implemention complexities). If it really needs, we will implement it in the
+    // future.
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
-        req: SwitchModeRequest,
+        mut req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
         let label = "switch_mode";
@@ -672,17 +716,37 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
             }
 
-            if let LocalTablets::Singleton(tablet) = &self.tablets {
-                match req.get_mode() {
+            match &self.tablets {
+                LocalTablets::Singleton(tablet) => match req.get_mode() {
                     SwitchMode::Normal => self.importer.enter_normal_mode(tablet.clone(), mf),
                     SwitchMode::Import => self.importer.enter_import_mode(tablet.clone(), mf),
+                },
+                LocalTablets::Registry(_) => {
+                    if req.get_mode() == SwitchMode::Import {
+                        if req.has_range() {
+                            let range = req.take_range();
+                            self.importer.range_enter_import_mode(range);
+                            Ok(true)
+                        } else {
+                            Err(sst_importer::Error::Engine(
+                                "partitioned-raft-kv only support switch mode with range set"
+                                    .into(),
+                            ))
+                        }
+                    } else {
+                        // case SwitchMode::Normal
+                        if req.has_range() {
+                            let range = req.take_range();
+                            self.importer.clear_import_mode_regions(range);
+                            Ok(true)
+                        } else {
+                            Err(sst_importer::Error::Engine(
+                                "partitioned-raft-kv only support switch mode with range set"
+                                    .into(),
+                            ))
+                        }
+                    }
                 }
-            } else if req.get_mode() != SwitchMode::Normal {
-                Err(sst_importer::Error::Engine(
-                    "partitioned-raft-kv doesn't support import mode".into(),
-                ))
-            } else {
-                Ok(false)
             }
         };
         match res {
