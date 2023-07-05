@@ -142,16 +142,28 @@ where
 
         // It may not take effect immediately. See comments of
         // ThreadPool::scale_workers.
-        // Also, the size will be clamped between 1 and the max_pool_size set when the
-        // apply_pool is initialized. This is fine as max_pool_size is relatively a
-        // large value and there's no use case to set a value larger than that.
+        // Also, the size will be clamped between min_thread_count and the max_pool_size
+        // set when the apply_pool is initialized. This is fine as max_pool_size
+        // is relatively a large value and there's no use case to set a value
+        // larger than that.
         self.apply_pool.scale_pool_size(size);
-        info!(
-            self.logger,
-            "resize apply pool";
-            "from" => current_pool_size,
-            "to" => size
-        );
+        let (min_thread_count, max_thread_count) = self.apply_pool.thread_count_limit();
+        if size > max_thread_count || size < min_thread_count {
+            warn!(
+                self.logger,
+                "apply pool scale size is out of bound, and the size is clamped";
+                "size" => size,
+                "min_thread_limit" => min_thread_count,
+                "max_thread_count" => max_thread_count,
+            );
+        } else {
+            info!(
+                self.logger,
+                "resize apply pool";
+                "from" => current_pool_size,
+                "to" => size
+            );
+        }
     }
 
     /// Resizes the count of background threads in store_writers.
