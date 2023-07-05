@@ -538,24 +538,12 @@ impl EnginesResourceInfo {
                 true
             });
 
-        // todo(SpadeA): Now, there's a potential race condition problem where the
-        // tablet could be destroyed after the clone and before the fetching
-        // which could result in programme panic. It's okay now as the single global
-        // kv_engine will not be destroyed in normal operation and v2 is not
-        // ready for operation. Furthermore, this race condition is general to v2 as
-        // tablet clone is not a case exclusively happened here. We should
-        // propose another PR to tackle it such as destory tablet lazily in a GC
-        // thread.
-
         for (_, cache) in cached_latest_tablets.iter_mut() {
             let Some(tablet) = cache.latest() else { continue };
             for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
                 fetch_engine_cf(tablet, cf);
             }
         }
-
-        // Clear ensures that these tablets are not hold forever.
-        cached_latest_tablets.clear();
 
         let mut normalized_pending_bytes = 0;
         for (i, (pending, limit)) in compaction_pending_bytes
@@ -584,19 +572,34 @@ impl EnginesResourceInfo {
                     } else {
                         CF_WRITE
                     };
-                    self.tablet_registry.for_each_opened_tablet(|_, cache|
-                        if let Some(latest) = cache.latest() {
+                    if delta != 0 {
+                        info!(
+                            "adjusting `max-compactions`";
+                            "cf" => cf,
+                            "n" => base + delta,
+                            "pending_bytes" => *pending,
+                            "soft_limit" => limit
+                        );
+                    }
+                    // We cannot get the current limit from limiter to avoid repeatedly setting the
+                    // same value. But this operation is as simple as an atomic store.
+                    cached_latest_tablets.iter_mut().any(|(_, tablet)| {
+                        if let Some(latest) = tablet.latest() {
                             let opts = latest.get_options_cf(cf).unwrap();
                             if let Err(e) = opts.set_max_compactions(base + delta) {
                                 error!("failed to adjust `max-compactions`"; "err" => ?e);
                             }
-                            false
-                        } else {
                             true
-                        });
+                        } else {
+                            false
+                        }
+                    });
                 }
             }
         }
+
+        // Clear ensures that these tablets are not hold forever.
+        cached_latest_tablets.clear();
 
         let (_, avg) = self
             .normalized_pending_bytes_collector
