@@ -292,7 +292,7 @@ fn test_serde_custom_tikv_config() {
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
         wal_size_limit: ReadableSize::kb(1),
-        max_total_wal_size: ReadableSize::gb(1),
+        max_total_wal_size: Some(ReadableSize::gb(1)),
         max_background_jobs: 12,
         max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
@@ -375,9 +375,15 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 1024,
             bottommost_zstd_compression_sample_size: 1024,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
+<<<<<<< HEAD
             max_compactions: 3,
+=======
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
+>>>>>>> 48b18a66b8 (raftstore-v2: optimize RocksDB config (#15055))
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -444,9 +450,15 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
+<<<<<<< HEAD
             max_compactions: 3,
+=======
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
+>>>>>>> 48b18a66b8 (raftstore-v2: optimize RocksDB config (#15055))
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -513,9 +525,15 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
+<<<<<<< HEAD
             max_compactions: 3,
+=======
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
+>>>>>>> 48b18a66b8 (raftstore-v2: optimize RocksDB config (#15055))
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -582,9 +600,15 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
+<<<<<<< HEAD
             max_compactions: 3,
+=======
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
+>>>>>>> 48b18a66b8 (raftstore-v2: optimize RocksDB config (#15055))
         },
         titan: titan_db_config.clone(),
     };
@@ -666,9 +690,15 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
+<<<<<<< HEAD
             max_compactions: 3,
+=======
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
+>>>>>>> 48b18a66b8 (raftstore-v2: optimize RocksDB config (#15055))
         },
         titan: titan_db_config,
     };

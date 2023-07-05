@@ -333,7 +333,7 @@ enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
 
@@ -396,7 +396,7 @@ enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
 
@@ -446,7 +446,7 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
 
@@ -496,7 +496,7 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
 
@@ -578,7 +578,7 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
 
