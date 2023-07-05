@@ -243,6 +243,7 @@ impl Simulator for NodeCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
@@ -298,7 +299,9 @@ impl Simulator for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
+            Arc::new(
+                SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version(), false).unwrap(),
+            )
         };
 
         let local_reader = LocalReader::new(
@@ -355,7 +358,12 @@ impl Simulator for NodeCluster {
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg.optimize_for(false);
         raftstore_cfg
-            .validate(region_split_size, enable_region_bucket, region_bucket_size)
+            .validate(
+                region_split_size,
+                enable_region_bucket,
+                region_bucket_size,
+                false,
+            )
             .unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(

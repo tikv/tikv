@@ -1098,6 +1098,7 @@ pub mod tests {
         // Clean the engine, prepare for later tests.
         raw_engine
             .delete_ranges_cf(
+                &WriteOptions::default(),
                 CF_WRITE,
                 DeleteStrategy::DeleteFiles,
                 &[Range::new(b"z", b"zz")],

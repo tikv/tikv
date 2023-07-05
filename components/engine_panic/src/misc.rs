@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DeleteStrategy, MiscExt, Range, RangeStats, Result, StatisticsReporter};
+use engine_traits::{
+    DeleteStrategy, MiscExt, Range, RangeStats, Result, StatisticsReporter, WriteOptions,
+};
 
 use crate::engine::PanicEngine;
 
@@ -31,12 +33,21 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<bool> {
+        panic!()
+    }
+
     fn delete_ranges_cf(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         panic!()
     }
 
@@ -105,6 +116,17 @@ impl MiscExt for PanicEngine {
     }
 
     fn is_stalled_or_stopped(&self) -> bool {
+        panic!()
+    }
+
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>> {
+        panic!()
+    }
+
+    fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64> {
         panic!()
     }
 }

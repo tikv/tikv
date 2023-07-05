@@ -1151,6 +1151,7 @@ fn test_debug_region_info_v2() {
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     lb.put_region_state(region_id, 42, &region_state).unwrap();
 
+    lb.put_flushed_index(region_id, CF_RAFT, 5, 42).unwrap();
     raft_engine.consume(&mut lb, false).unwrap();
     assert_eq!(
         raft_engine.get_raft_state(region_id).unwrap().unwrap(),
@@ -1387,7 +1388,9 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(MiscExt::path(&engines.kv)).join("import-sst");
-        Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
+        Arc::new(
+            SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1, false).unwrap(),
+        )
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 

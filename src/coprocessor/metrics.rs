@@ -203,6 +203,13 @@ pub struct CopLocalMetrics {
     local_read_stats: ReadStats,
 }
 
+impl CopLocalMetrics {
+    #[cfg(test)]
+    pub fn local_read_stats(&self) -> &ReadStats {
+        &self.local_read_stats
+    }
+}
+
 thread_local! {
     pub static TLS_COP_METRICS: RefCell<CopLocalMetrics> = RefCell::new(
         CopLocalMetrics {

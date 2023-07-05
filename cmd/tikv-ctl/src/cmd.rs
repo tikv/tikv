@@ -600,6 +600,33 @@ pub enum Cmd {
         #[structopt(long, default_value = "symlink")]
         rocksdb_files: String,
     },
+    /// flashback data in cluster to a certain version
+    ///
+    /// NOTE: Should use `./pd-ctl config set halt-scheduling true` to halt PD
+    /// scheduling before flashback.
+    Flashback {
+        #[structopt(short = "v")]
+        /// the version to flashback
+        version: u64,
+
+        #[structopt(
+            short = "r",
+            aliases = &["region"],
+            use_delimiter = true,
+            require_delimiter = true,
+            value_delimiter = ","
+        )]
+        /// specific regions to flashback
+        regions: Option<Vec<u64>>,
+
+        #[structopt(long, default_value = "")]
+        /// hex start key
+        start: String,
+
+        #[structopt(long, default_value = "")]
+        /// hex end key
+        end: String,
+    },
 }
 
 #[derive(StructOpt)]

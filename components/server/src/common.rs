@@ -22,8 +22,8 @@ use engine_rocks::{
     FlowInfo, RocksEngine, RocksStatistics,
 };
 use engine_traits::{
-    data_cf_offset, CachedTablet, CfOptionsExt, FlowControlFactorsExt, KvEngine, RaftEngine,
-    StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
+    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
@@ -478,6 +478,8 @@ pub fn check_system_config(config: &TikvConfig) {
 
 pub struct EnginesResourceInfo {
     tablet_registry: TabletRegistry<RocksEngine>,
+    // The initial value of max_compactions. For kvdb.defaultcf, kvdb.writecf only.
+    base_max_compactions: [u32; 2],
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
@@ -487,12 +489,18 @@ impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
     pub fn new(
+        config: &TikvConfig,
         tablet_registry: TabletRegistry<RocksEngine>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
+        let base_max_compactions = [
+            config.rocksdb.defaultcf.max_compactions.unwrap_or(0),
+            config.rocksdb.writecf.max_compactions.unwrap_or(0),
+        ];
         EnginesResourceInfo {
             tablet_registry,
+            base_max_compactions,
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
@@ -530,15 +538,6 @@ impl EnginesResourceInfo {
                 true
             });
 
-        // todo(SpadeA): Now, there's a potential race condition problem where the
-        // tablet could be destroyed after the clone and before the fetching
-        // which could result in programme panic. It's okay now as the single global
-        // kv_engine will not be destroyed in normal operation and v2 is not
-        // ready for operation. Furthermore, this race condition is general to v2 as
-        // tablet clone is not a case exclusively happened here. We should
-        // propose another PR to tackle it such as destory tablet lazily in a GC
-        // thread.
-
         for (_, cache) in cached_latest_tablets.iter_mut() {
             let Some(tablet) = cache.latest() else { continue };
             for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
@@ -546,21 +545,61 @@ impl EnginesResourceInfo {
             }
         }
 
-        // Clear ensures that these tablets are not hold forever.
-        cached_latest_tablets.clear();
-
         let mut normalized_pending_bytes = 0;
-        for (pending, limit) in compaction_pending_bytes
+        for (i, (pending, limit)) in compaction_pending_bytes
             .iter()
             .zip(soft_pending_compaction_bytes_limit)
+            .enumerate()
         {
             if limit > 0 {
                 normalized_pending_bytes = cmp::max(
                     normalized_pending_bytes,
                     (*pending * EnginesResourceInfo::SCALE_FACTOR / limit) as u32,
-                )
+                );
+                // kvdb defaultcf or writecf.
+                if (i == 1 || i == 2 )
+                    && let base = self.base_max_compactions[i-1]
+                    && base > 0
+                {
+                    let level = *pending as f32 / limit as f32;
+                    let delta = if level > 0.7 {
+                        2
+                    } else {
+                        u32::from(level > 0.5)
+                    };
+                    let cf = if i == 1 {
+                        CF_DEFAULT
+                    } else {
+                        CF_WRITE
+                    };
+                    if delta != 0 {
+                        info!(
+                            "adjusting `max-compactions`";
+                            "cf" => cf,
+                            "n" => base + delta,
+                            "pending_bytes" => *pending,
+                            "soft_limit" => limit
+                        );
+                    }
+                    // We cannot get the current limit from limiter to avoid repeatedly setting the
+                    // same value. But this operation is as simple as an atomic store.
+                    cached_latest_tablets.iter_mut().any(|(_, tablet)| {
+                        if let Some(latest) = tablet.latest() {
+                            let opts = latest.get_options_cf(cf).unwrap();
+                            if let Err(e) = opts.set_max_compactions(base + delta) {
+                                error!("failed to adjust `max-compactions`"; "err" => ?e);
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                }
             }
         }
+
+        // Clear ensures that these tablets are not hold forever.
+        cached_latest_tablets.clear();
 
         let (_, avg) = self
             .normalized_pending_bytes_collector
