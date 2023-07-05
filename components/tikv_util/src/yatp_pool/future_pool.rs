@@ -111,7 +111,7 @@ impl FuturePool {
 
     /// Return the min thread count and the max thread count that this pool can
     /// scale to.
-    pub fn thread_count_limit(&self) -> (u64, u64) {
+    pub fn thread_count_limit(&self) -> (usize, usize) {
         self.inner.pool.thread_count_limit()
     }
 }
