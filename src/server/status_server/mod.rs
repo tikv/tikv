@@ -49,7 +49,7 @@ use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
 use serde::Serialize;
 use serde_json::Value;
-use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
+use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     logger::set_log_level,
@@ -66,7 +66,7 @@ use tokio_openssl::SslStream;
 use crate::{
     config::{ConfigController, LogLevel},
     server::Result,
-    tikv_util::{mpsc as TikvMpsc, sys::thread::ThreadBuildWrapper},
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 static TIMER_CANCELED: &str = "tokio timer canceled";
@@ -108,7 +108,7 @@ where
         router: R,
         store_path: PathBuf,
         resource_manager: Option<Arc<ResourceGroupManager>>,
-        service_event_sender: TikvMpsc::Sender<ServiceEvent>,
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -131,7 +131,7 @@ where
             security_config,
             store_path,
             resource_manager,
-            grpc_service_mgr: GrpcServiceManager::new(service_event_sender),
+            grpc_service_mgr,
         })
     }
 
@@ -1075,9 +1075,10 @@ mod tests {
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
     use raftstore::store::region_meta::RegionMeta;
     use security::SecurityConfig;
+    use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-    use tikv_util::{logger::get_log_level, mpcs as TikvMpsc};
+    use tikv_util::{logger::get_log_level, mpsc as TikvMpsc};
 
     use crate::{
         config::{ConfigController, TikvConfig},
@@ -1096,7 +1097,7 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
@@ -1105,7 +1106,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1148,7 +1149,7 @@ mod tests {
     #[test]
     fn test_config_endpoint() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1156,7 +1157,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1196,7 +1197,7 @@ mod tests {
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1204,7 +1205,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1315,7 +1316,7 @@ mod tests {
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1323,7 +1324,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1362,7 +1363,7 @@ mod tests {
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1370,7 +1371,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1401,7 +1402,7 @@ mod tests {
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1409,7 +1410,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1477,6 +1478,7 @@ mod tests {
     #[ignore]
     fn test_pprof_heap_service() {
         let temp_dir = tempfile::TempDir::new().unwrap();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1484,6 +1486,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1508,7 +1511,7 @@ mod tests {
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1516,7 +1519,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1544,7 +1547,7 @@ mod tests {
     fn test_metrics() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1552,7 +1555,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1602,7 +1605,7 @@ mod tests {
     #[test]
     fn test_change_log_level() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let (sender, _) = TikvMpsc::channel();
+        let (sender, _) = TikvMpsc::unbounded();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -1610,7 +1613,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
-            sender,
+            GrpcServiceManager::new(sender),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1659,7 +1662,7 @@ mod tests {
         let resp_strs = ["raft-kv", "partitioned-raft-kv"];
         for (cfg, resp_str) in IntoIterator::into_iter(cfgs).zip(resp_strs) {
             let temp_dir = tempfile::TempDir::new().unwrap();
-            let (sender, _) = TikvMpsc::channel();
+            let (sender, _) = TikvMpsc::unbounded();
             let mut status_server = StatusServer::new(
                 1,
                 ConfigController::new(cfg),
@@ -1667,7 +1670,7 @@ mod tests {
                 MockRouter,
                 temp_dir.path().to_path_buf(),
                 None,
-                sender,
+                GrpcServiceManager::new(sender),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1699,7 +1702,7 @@ mod tests {
         let cfgs = [TikvConfig::default(), multi_rocks_cfg];
         for cfg in IntoIterator::into_iter(cfgs) {
             let temp_dir = tempfile::TempDir::new().unwrap();
-            let (sender, _) = TikvMpsc::channel();
+            let (sender, _) = TikvMpsc::unbounded();
             let mut status_server = StatusServer::new(
                 1,
                 ConfigController::new(cfg),
@@ -1707,13 +1710,13 @@ mod tests {
                 MockRouter,
                 temp_dir.path().to_path_buf(),
                 None,
-                sender,
+                GrpcServiceManager::new(sender),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
             let _ = status_server.start(addr);
-            let client = Client::new();
             for req in ["pause_grpc", "resume_grpc"] {
+                let client = Client::new();
                 let uri = Uri::builder()
                     .scheme("http")
                     .authority(status_server.listening_addr().to_string().as_str())

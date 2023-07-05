@@ -1,18 +1,15 @@
-use std::{
-    fs,
-    sync::{mpsc, Arc},
-    time::Duration,
-};
+use std::{fs, sync::Arc, time::Duration};
 
 use grpcio::*;
 use grpcio_health::{proto::HealthCheckRequest, HealthClient, ServingStatus};
 use service::service_event::ServiceEvent;
 use test_pd::Server as MockServer;
 use tikv::config::TikvConfig;
+use tikv_util::mpsc;
 
 #[test]
 fn test_restart_grpc() {
-    let (service_event_tx, service_event_rx) = mpsc::channel();
+    let (service_event_tx, service_event_rx) = mpsc::unbounded();
     let sender = service_event_tx.clone();
     let tikv_thread = std::thread::spawn(move || {
         let eps_count = 1;

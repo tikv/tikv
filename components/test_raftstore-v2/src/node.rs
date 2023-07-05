@@ -33,6 +33,7 @@ use raftstore_v2::{
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
@@ -47,6 +48,7 @@ use tikv::{
 use tikv_util::{
     box_err,
     config::VersionTrack,
+    mpsc,
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
@@ -299,6 +301,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             )
         };
 
+        let (sender, _) = mpsc::unbounded();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
         node.start(
@@ -318,6 +321,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             &state,
             importer,
             key_manager,
+            GrpcServiceManager::new(sender),
         )?;
         assert!(
             raft_engine

@@ -862,7 +862,7 @@ where
                 &state,
                 importer.clone(),
                 self.core.encryption_key_manager.clone(),
-                self.tx.clone(),
+                self.grpc_service_mgr.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1271,7 +1271,7 @@ where
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.core.store_path.clone(),
                 self.resource_manager.clone(),
-                self.tx.clone(),
+                self.grpc_service_mgr.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {

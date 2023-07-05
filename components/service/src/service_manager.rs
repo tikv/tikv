@@ -27,6 +27,13 @@ impl GrpcServiceManager {
         }
     }
 
+    /// Only for test.
+    /// Generate a dummy GrpcServiceManager.
+    pub fn dummy() -> Self {
+        let (sender, _) = mpsc::unbounded();
+        GrpcServiceManager::new(sender)
+    }
+
     /// Send message to outer handler to notify PAUSE grpc server.
     pub fn pause(&mut self) -> Result<(), SendError<ServiceEvent>> {
         if self.is_paused() {
@@ -55,6 +62,7 @@ impl GrpcServiceManager {
         result
     }
 
+    #[inline]
     pub fn is_paused(&self) -> bool {
         self.status.load(Ordering::Relaxed) == GrpcServiceStatus::NotServing
     }
