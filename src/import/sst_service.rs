@@ -724,8 +724,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 LocalTablets::Registry(_) => {
                     if req.get_mode() == SwitchMode::Import {
                         if req.has_range() {
-                            let range = req.take_range();
-                            self.importer.range_enter_import_mode(range);
+                            let ranges = req.take_range().to_vec();
+                            self.importer.ranges_enter_import_mode(ranges);
                             Ok(true)
                         } else {
                             Err(sst_importer::Error::Engine(

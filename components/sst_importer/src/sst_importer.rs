@@ -222,9 +222,9 @@ impl SstImporter {
         })
     }
 
-    pub fn range_enter_import_mode(&self, range: Range) {
+    pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
         if let Either::Right(ref switcher) = self.switcher {
-            switcher.range_enter_import_mode(range)
+            switcher.ranges_enter_import_mode(ranges)
         } else {
             unreachable!();
         }
