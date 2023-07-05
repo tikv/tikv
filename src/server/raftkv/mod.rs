@@ -556,8 +556,9 @@ where
                 .map_err(kv::Error::from);
         }
         if res.is_err() {
-            // Note that `on_applied` is not called in this case. We send message to the channel
-            // here to notify the caller that the writing ended, like how the `applied_cb` does.
+            // Note that `on_applied` is not called in this case. We send message to the
+            // channel here to notify the caller that the writing ended, like
+            // how the `applied_cb` does.
             tx.notify(res);
         }
         rx.inspect(move |ev| {
