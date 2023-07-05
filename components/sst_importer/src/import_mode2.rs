@@ -109,10 +109,12 @@ impl ImportModeSwitcherV2 {
         }
     }
 
-    pub fn clear_import_mode_range(&self, range: Range) {
+    pub fn clear_import_mode_range(&self, ranges: Vec<Range>) {
         let mut inner = self.inner.lock().unwrap();
-        let range = HashRange::from(range);
-        inner.clear_import_mode_range(range);
+        for range in ranges {
+            let range = HashRange::from(range);
+            inner.clear_import_mode_range(range);
+        }
     }
 
     pub fn region_in_import_mode(&self, region: &Region) -> bool {
@@ -247,7 +249,7 @@ mod test {
             assert!(switcher.region_in_import_mode(&regions[i - 1]));
         }
 
-        switcher.clear_import_mode_range(key_range);
+        switcher.clear_import_mode_range(vec![key_range]);
         for i in 1..=2 {
             assert!(!switcher.region_in_import_mode(&regions[i - 1]));
         }
@@ -255,7 +257,7 @@ mod test {
             assert!(switcher.region_in_import_mode(&regions[i - 1]));
         }
 
-        switcher.clear_import_mode_range(key_range2);
+        switcher.clear_import_mode_range(vec![key_range2]);
         for i in 3..=5 {
             assert!(!switcher.region_in_import_mode(&regions[i - 1]));
         }

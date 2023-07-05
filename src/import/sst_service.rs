@@ -736,7 +736,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     } else {
                         // case SwitchMode::Normal
                         if req.has_range() {
-                            let range = req.take_range();
+                            let ranges = req.take_range().to_vec();
                             self.importer.clear_import_mode_regions(range);
                             Ok(true)
                         } else {
