@@ -142,10 +142,13 @@ where
 
         // It may not take effect immediately. See comments of
         // ThreadPool::scale_workers.
+        // Also, the size will be clamped between 1 and the max_pool_size set when the
+        // apply_pool is initialized. This is fine as max_pool_size is relatively a
+        // large value and there's no use case to set a value larger than that.
         self.apply_pool.scale_pool_size(size);
         info!(
             self.logger,
-            "resize apply pool (the ultimate pool size will be clamped between 1 and max-pool-size)";
+            "resize apply pool";
             "from" => current_pool_size,
             "to" => size
         );
