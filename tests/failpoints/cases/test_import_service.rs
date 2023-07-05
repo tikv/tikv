@@ -253,7 +253,6 @@ fn test_ingest_file_twice_and_conflict() {
 
 #[test]
 fn test_delete_sst_v2_after_epoch_stale() {
-    let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
     let mut config = TikvConfig::default();
     config.server.addr = "127.0.0.1:0".to_owned();
     let cleanup_interval = Duration::from_millis(10);
@@ -263,7 +262,7 @@ fn test_delete_sst_v2_after_epoch_stale() {
     config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
     config.server.grpc_concurrency = 1;
 
-    let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config), &mut cluster);
+    let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
@@ -342,7 +341,7 @@ fn test_delete_sst_v2_after_epoch_stale() {
 
 #[test]
 fn test_delete_sst_after_applied_sst() {
-    let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
+    // let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
     let mut config = TikvConfig::default();
     config.server.addr = "127.0.0.1:0".to_owned();
     let cleanup_interval = Duration::from_millis(10);
@@ -352,7 +351,7 @@ fn test_delete_sst_after_applied_sst() {
     config.server.grpc_concurrency = 1;
     // disable data flushed
     fail::cfg("on_flush_completed", "return()").unwrap();
-    let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config), &mut cluster);
+    let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);

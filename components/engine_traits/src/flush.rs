@@ -112,8 +112,7 @@ impl SstApplyState {
     }
 
     pub fn delete_ssts(&self, ssts: &Vec<SstMeta>) {
-        let mut map: std::sync::RwLockWriteGuard<'_, HashMap<usize, Vec<SstApplyEntry>>> =
-            self.sst_map.write().unwrap();
+        let mut map = self.sst_map.write().unwrap();
         for sst in ssts {
             let cf_index = data_cf_offset(sst.get_cf_name());
             if let Some(metas) = map.get_mut(&cf_index) {

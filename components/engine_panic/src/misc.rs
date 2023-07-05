@@ -37,7 +37,7 @@ impl MiscExt for PanicEngine {
         &self,
         wait: bool,
         age_threshold: Option<std::time::SystemTime>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         panic!()
     }
 
@@ -123,6 +123,10 @@ impl MiscExt for PanicEngine {
         &self,
         cf: &str,
     ) -> Result<Option<(u64, std::time::SystemTime)>> {
+        panic!()
+    }
+
+    fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64> {
         panic!()
     }
 }

@@ -44,7 +44,7 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raftstore::store::{
-    ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    util, ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{info, trace, Logger};
 use tikv_util::{box_err, slog_panic, worker::Scheduler};
@@ -510,6 +510,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         for cf in ALL_CFS {
             lb.put_flushed_index(region_id, cf, 0, 0).unwrap();
         }
+        write_task.flushed_epoch =
+            Some(self.region_state().get_region().get_region_epoch().clone());
     }
 
     pub fn record_apply_trace(&mut self, write_task: &mut WriteTask<EK, ER>) {
@@ -520,13 +522,18 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
         let region_id = self.region().get_id();
         let raft_engine = self.entry_storage().raft_engine();
-        let epoch = raft_engine
-            .get_region_state(region_id, trace.admin.flushed)
-            .unwrap()
-            .unwrap()
-            .get_region()
-            .get_region_epoch()
-            .clone();
+        let last_epoch = self.region().get_region_epoch();
+        if util::is_epoch_stale(self.flushed_epoch(), last_epoch) {
+            let epoch = raft_engine
+                .get_region_state(region_id, trace.admin.flushed)
+                .unwrap()
+                .unwrap()
+                .get_region()
+                .get_region_epoch()
+                .clone();
+            write_task.flushed_epoch = Some(epoch);
+        }
+
         let tablet_index = self.tablet_index();
         let lb = write_task
             .extra_write
@@ -537,8 +544,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             .unwrap();
         trace.try_persist = false;
         trace.persisted_applied = trace.admin.flushed;
-
-        self.set_flushed_epoch(epoch);
     }
 }
 
@@ -643,6 +648,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
                         .unwrap();
                     ctx.engine.consume(&mut lb, true).unwrap();
+                    let epoch = ctx
+                        .engine
+                        .get_region_state(region_id, admin_flush)
+                        .unwrap()
+                        .unwrap()
+                        .get_region()
+                        .get_region_epoch()
+                        .clone();
+                    self.storage_mut().set_flushed_epoch(epoch);
                     info!(
                         self.logger,
                         "flush before close flush admin for region";
