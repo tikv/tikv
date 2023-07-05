@@ -42,7 +42,7 @@ pub struct StoreMeta<EK> {
     /// to avoid end key conflict.
     pub(crate) region_ranges: BTreeMap<(Vec<u8>, u64), u64>,
     /// region_id -> (region, initialized)
-    pub(crate) regions: HashMap<u64, (Region, bool)>,
+    pub regions: HashMap<u64, (Region, bool)>,
 }
 
 impl<EK> StoreMeta<EK> {

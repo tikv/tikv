@@ -750,6 +750,7 @@ where
             import_path,
             self.core.encryption_key_manager.clone(),
             self.core.config.storage.api_version(),
+            true,
         )
         .unwrap();
         for (cf_name, compression_type) in &[
@@ -903,6 +904,7 @@ where
             engines.engine.clone(),
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             servers.importer.clone(),
+            Some(self.router.as_ref().unwrap().store_meta().clone()),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
