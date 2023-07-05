@@ -293,6 +293,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             None,
         );
 
+        let key_mgr_cloned = key_manager.clone();
         let (snap_mgr, snap_mgr_path) = if node_id == 0
             || !self
                 .trans
@@ -348,6 +349,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             snap_mgr.clone(),
             packed_envs,
             DebugStruct::default(),
+            key_mgr_cloned,
         );
         tiflash_ob.register_to(&mut coprocessor_host);
 

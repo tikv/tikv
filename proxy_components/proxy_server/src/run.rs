@@ -1178,6 +1178,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             snap_mgr.clone(),
             packed_envs,
             DebugStruct::default(),
+            self.core.encryption_key_manager.clone(),
         );
         tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 

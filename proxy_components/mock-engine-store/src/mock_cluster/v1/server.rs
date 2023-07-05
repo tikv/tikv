@@ -288,6 +288,7 @@ impl ServerCluster {
             }
         }
 
+        let key_mgr_cloned = key_manager.clone();
         let local_reader = LocalReader::new(
             engines.kv.clone(),
             StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
@@ -556,6 +557,7 @@ impl ServerCluster {
             snap_mgr.clone(),
             packed_envs,
             DebugStruct::default(),
+            key_mgr_cloned,
         );
         tiflash_ob.register_to(&mut coprocessor_host);
 

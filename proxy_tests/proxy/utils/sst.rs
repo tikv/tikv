@@ -1,5 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(unused)]
+
 use byteorder::{BigEndian, ByteOrder};
 use mock_engine_store::interfaces_ffi::BaseBuffView;
 use more_asserts::assert_gt;

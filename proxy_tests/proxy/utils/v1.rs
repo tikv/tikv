@@ -9,6 +9,7 @@ pub use mock_engine_store::mock_cluster::v1::{
     },
     Cluster, Simulator,
 };
+use rand::seq::SliceRandom;
 use sst_importer::SstImporter;
 use test_sst_importer::gen_sst_file_with_kvs;
 
@@ -97,6 +98,57 @@ pub fn create_tmp_importer(cfg: &MixedClusterConfig, kv_path: &str) -> (PathBuf,
         )
     };
     (dir, importer)
+}
+
+pub fn make_ssts(
+    cluster: &Cluster<NodeCluster>,
+    region_id: u64,
+    region_epoch: RegionEpoch,
+    keys: Vec<String>,
+    split_num: usize,
+) -> Vec<(PathBuf, SstMeta, PathBuf)> {
+    let path = cluster.engines.iter().last().unwrap().1.kv.path();
+    let (import_dir, importer) = create_tmp_importer(&cluster.cfg, path);
+
+    // Prepare data
+    let mut kvs: Vec<(&[u8], &[u8])> = Vec::new();
+    let mut keys = keys;
+    keys.sort();
+    for i in 0..keys.len() {
+        kvs.push((keys[i].as_bytes(), b"2"));
+    }
+
+    assert!(keys.len() > split_num);
+    let per_file_num = keys.len() / split_num;
+
+    // Make files
+    let mut res = vec![];
+    for i in 0..split_num {
+        let (import_dir, importer) = create_tmp_importer(cluster.get_config(), path);
+        let sst_path = import_dir.join(format!("test{}.sst", i));
+        let (mut meta, data) = if i == split_num - 1 {
+            gen_sst_file_with_kvs(&sst_path, &kvs[i * per_file_num..])
+        } else {
+            gen_sst_file_with_kvs(&sst_path, &kvs[i * per_file_num..(i + 1) * per_file_num])
+        };
+        assert!(Path::new(sst_path.to_str().unwrap()).exists());
+        meta.set_region_id(region_id);
+        meta.set_region_epoch(region_epoch.clone());
+        meta.set_cf_name("default".to_owned());
+        let mut file = importer.create(&meta).unwrap();
+        file.append(&data).unwrap();
+        file.finish().unwrap();
+
+        // copy file to save dir.
+        let src = sst_path.clone();
+        let dst = file.get_import_path().save.to_str().unwrap();
+        let _ = std::fs::copy(src.clone(), dst);
+        res.push((file.get_import_path().save.clone(), meta, sst_path));
+    }
+
+    let mut rnd = rand::thread_rng();
+    res.shuffle(&mut rnd);
+    res
 }
 
 pub fn make_sst(

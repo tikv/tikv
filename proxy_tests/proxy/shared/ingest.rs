@@ -1,3 +1,5 @@
+use proxy_ffi::interfaces_ffi::ColumnFamilyType;
+
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::utils::v1::*;
 
@@ -38,6 +40,55 @@ fn test_handle_ingest_sst() {
     assert!(sst_path.as_path().is_file());
     assert!(!file.as_path().is_file());
     std::fs::remove_file(sst_path.as_path()).unwrap();
+    cluster.shutdown();
+}
+
+#[test]
+fn test_handle_multiple_ingest_sst() {
+    let (mut cluster, _pd_client) = new_mock_cluster(0, 1);
+    let _ = cluster.run();
+
+    let key = "k";
+    cluster.must_put(key.as_bytes(), b"v");
+    let region = cluster.get_region(key.as_bytes());
+
+    let v = make_ssts(
+        &cluster,
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        (0..100).map(|i| format!("k{}", i)).collect::<Vec<_>>(),
+        5,
+    );
+
+    let mut ssts = vec![];
+    for (save, m, _) in v.iter() {
+        ssts.push((save.clone(), proxy_ffi::name_to_cf(m.get_cf_name())));
+    }
+    let sorted_ssts = engine_store_ffi::core::forward_raft::sort_sst_by_start_key(ssts, None);
+    for sl in sorted_ssts.windows(2) {
+        let a = &sl[0];
+        let b = &sl[1];
+        let fk1 =
+            engine_store_ffi::core::forward_raft::get_first_key(a.0.to_str().unwrap(), a.1, None);
+        let fk2 =
+            engine_store_ffi::core::forward_raft::get_first_key(b.0.to_str().unwrap(), b.1, None);
+        assert!(fk1 < fk2);
+    }
+
+    let mut reqs = vec![];
+    for (_, m, _) in v.iter() {
+        reqs.push(new_ingest_sst_cmd(m.clone()));
+    }
+
+    let _ = cluster.request(key.as_bytes(), reqs, false, Duration::from_secs(5), true);
+
+    check_key(&cluster, b"k66", b"2", Some(true), Some(true), None);
+
+    for (file, _, sst_path) in v.into_iter() {
+        assert!(sst_path.as_path().is_file());
+        assert!(!file.as_path().is_file());
+        std::fs::remove_file(sst_path.as_path()).unwrap();
+    }
     cluster.shutdown();
 }
 

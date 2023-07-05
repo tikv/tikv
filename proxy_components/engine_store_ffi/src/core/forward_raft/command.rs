@@ -1,5 +1,85 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+use encryption::DataKeyManager;
+use proxy_ffi::snapshot_reader_impls::{sst_file_reader::SSTFileReader, LockCFFileReader};
+
 use crate::core::{common::*, ProxyForwarder};
+
+pub fn get_first_key(
+    path: &str,
+    cf: ColumnFamilyType,
+    key_manager: Option<Arc<DataKeyManager>>,
+) -> Vec<u8> {
+    unsafe {
+        if cf == ColumnFamilyType::Lock {
+            let mut reader = LockCFFileReader::ffi_get_cf_file_reader(path, key_manager.as_ref());
+            reader.as_mut_sst_lock().ffi_key().to_slice().to_vec()
+        } else {
+            let mut reader = SSTFileReader::ffi_get_cf_file_reader(path, key_manager);
+            reader.as_mut_sst_other().ffi_key().to_slice().to_vec()
+        }
+    }
+}
+
+pub fn sort_sst_by_start_key(
+    ssts: Vec<(PathBuf, ColumnFamilyType)>,
+    key_manager: Option<Arc<DataKeyManager>>,
+) -> Vec<(PathBuf, ColumnFamilyType)> {
+    let mut sw: Vec<(PathBuf, ColumnFamilyType)> = vec![];
+    let mut sd: Vec<(PathBuf, ColumnFamilyType)> = vec![];
+    let mut sl: Vec<(PathBuf, ColumnFamilyType)> = vec![];
+
+    for (p, c) in ssts.into_iter() {
+        match c {
+            ColumnFamilyType::Default => sd.push((p, c)),
+            ColumnFamilyType::Write => sw.push((p, c)),
+            ColumnFamilyType::Lock => sl.push((p, c)),
+        };
+    }
+
+    sw.sort_by(|a, b| {
+        let fk1 = get_first_key(
+            a.0.to_str().unwrap(),
+            ColumnFamilyType::Write,
+            key_manager.clone(),
+        );
+        let fk2 = get_first_key(
+            b.0.to_str().unwrap(),
+            ColumnFamilyType::Write,
+            key_manager.clone(),
+        );
+        fk1.cmp(&fk2)
+    });
+    sd.sort_by(|a, b| {
+        let fk1 = get_first_key(
+            a.0.to_str().unwrap(),
+            ColumnFamilyType::Default,
+            key_manager.clone(),
+        );
+        let fk2 = get_first_key(
+            b.0.to_str().unwrap(),
+            ColumnFamilyType::Default,
+            key_manager.clone(),
+        );
+        fk1.cmp(&fk2)
+    });
+    sl.sort_by(|a, b| {
+        let fk1 = get_first_key(
+            a.0.to_str().unwrap(),
+            ColumnFamilyType::Lock,
+            key_manager.clone(),
+        );
+        let fk2 = get_first_key(
+            b.0.to_str().unwrap(),
+            ColumnFamilyType::Lock,
+            key_manager.clone(),
+        );
+        fk1.cmp(&fk2)
+    });
+
+    sw.append(&mut sd);
+    sw.append(&mut sl);
+    sw
+}
 
 impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     fn handle_ingest_sst_for_engine_store(
@@ -40,6 +120,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             ));
         }
 
+        let ssts_wrap = sort_sst_by_start_key(ssts_wrap, self.key_manager.clone());
         for (path, cf) in &ssts_wrap {
             sst_views.push((path.to_str().unwrap().as_bytes(), *cf));
         }

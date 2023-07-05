@@ -28,12 +28,12 @@ impl Clone for SSTReaderInterfaces {
 
 /// All impl of SST reader will be dispatched by this ptr.
 impl SSTReaderPtr {
-    unsafe fn as_mut_sst_lock(&mut self) -> &mut LockCFFileReader {
+    pub unsafe fn as_mut_sst_lock(&mut self) -> &mut LockCFFileReader {
         assert_eq!(self.kind, SSTFormatKind::KIND_SST);
         &mut *(self.inner as *mut LockCFFileReader)
     }
 
-    unsafe fn as_mut_sst_other(&mut self) -> &mut SSTFileReader {
+    pub unsafe fn as_mut_sst_other(&mut self) -> &mut SSTFileReader {
         assert_eq!(self.kind, SSTFormatKind::KIND_SST);
         &mut *(self.inner as *mut SSTFileReader)
     }

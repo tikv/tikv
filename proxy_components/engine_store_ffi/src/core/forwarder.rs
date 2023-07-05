@@ -1,5 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use encryption::DataKeyManager;
+
 use crate::core::common::*;
 
 pub struct PtrWrapper(pub RawCppPtr);
@@ -53,6 +55,7 @@ pub struct ProxyForwarder<T: Transport, ER: RaftEngine> {
     pub snap_mgr: Arc<SnapManager>,
     pub packed_envs: Arc<PackedEnvs>,
     pub debug_struct: Arc<DebugStruct>,
+    pub key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
@@ -84,6 +87,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         snap_mgr: SnapManager,
         packed_envs: PackedEnvs,
         debug_struct: DebugStruct,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Self {
         let engine_store_server_helper =
             gen_engine_store_server_helper(engine.proxy_ext.engine_store_server_helper);
@@ -106,6 +110,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             snap_mgr: Arc::new(snap_mgr),
             packed_envs: Arc::new(packed_envs),
             debug_struct: Arc::new(debug_struct),
+            key_manager,
         }
     }
 
@@ -130,6 +135,7 @@ impl<T: Transport + 'static, ER: RaftEngine> Clone for ProxyForwarder<T, ER> {
             snap_mgr: self.snap_mgr.clone(),
             packed_envs: self.packed_envs.clone(),
             debug_struct: self.debug_struct.clone(),
+            key_manager: self.key_manager.clone(),
         }
     }
 }

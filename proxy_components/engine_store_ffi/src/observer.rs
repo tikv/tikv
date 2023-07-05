@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use std::sync::Arc;
 
+use encryption::DataKeyManager;
 use engine_traits::RaftEngine;
 use kvproto::{
     raft_cmdpb::{AdminRequest, RaftCmdRequest},
@@ -42,6 +43,7 @@ impl<T: Transport + 'static, ER: RaftEngine> TiFlashObserver<T, ER> {
         snap_mgr: SnapManager,
         packed_envs: PackedEnvs,
         debug_struct: DebugStruct,
+        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Self {
         TiFlashObserver {
             forwarder: ProxyForwarder::new(
@@ -53,6 +55,7 @@ impl<T: Transport + 'static, ER: RaftEngine> TiFlashObserver<T, ER> {
                 snap_mgr,
                 packed_envs,
                 debug_struct,
+                key_manager,
             ),
         }
     }
