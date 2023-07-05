@@ -2754,6 +2754,13 @@ pub struct BackupStreamConfig {
     pub temp_path: String,
 
     pub file_size_limit: ReadableSize,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
+    // Let's hide this config for now.
+    pub temp_file_memory_quota: ReadableSize,
+
     #[online_config(skip)]
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
@@ -2793,7 +2800,14 @@ impl Default for BackupStreamConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::cpu_cores_quota();
         let total_mem = SysQuota::memory_limit_in_bytes();
+        let file_size_limit = ReadableSize::mb(256);
+        // Don't use too many memory.
+        let temp_file_quota = total_mem / 16;
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
+        // 2x of the max pending bytes. The extra buffer make us easier to keep all
+        // files in memory.
+        let preferred_cache_size = file_size_limit.0 * 2;
+        let cache_size = ReadableSize(temp_file_quota.min(preferred_cache_size));
         Self {
             min_ts_interval: ReadableDuration::secs(10),
             max_flush_interval: ReadableDuration::minutes(3),
@@ -2802,9 +2816,10 @@ impl Default for BackupStreamConfig {
             enable: true,
             // TODO: may be use raft store directory
             temp_path: String::new(),
-            file_size_limit: ReadableSize::mb(256),
+            file_size_limit,
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            temp_file_memory_quota: cache_size,
         }
     }
 }
