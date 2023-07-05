@@ -42,7 +42,7 @@ pub struct StoreMeta<EK> {
     /// to avoid end key conflict.
     pub(crate) region_ranges: BTreeMap<(Vec<u8>, u64), u64>,
     /// region_id -> (region, initialized)
-    pub(crate) regions: HashMap<u64, (Region, bool)>,
+    pub regions: HashMap<u64, (Region, bool)>,
 }
 
 impl<EK> StoreMeta<EK> {
@@ -310,6 +310,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 StoreMsg::WaitFlush { region_id, ch } => {
                     self.fsm.store.on_wait_flush(self.store_ctx, region_id, ch)
                 }
+                StoreMsg::LatencyInspect {
+                    send_time,
+                    inspector,
+                } => self.fsm.store.on_update_latency_inspectors(
+                    self.store_ctx,
+                    send_time,
+                    inspector,
+                ),
             }
         }
     }

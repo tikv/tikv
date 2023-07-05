@@ -4,7 +4,7 @@ use std::{error::Error, io::Write};
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CachedTablet, CfOptionsExt, DbOptions, DbOptionsExt, TabletRegistry, CF_DEFAULT,
+    CachedTablet, CfOptions, CfOptionsExt, DbOptions, DbOptionsExt, TabletRegistry, CF_DEFAULT,
 };
 
 pub type ConfigRes = Result<(), Box<dyn Error>>;
@@ -84,7 +84,7 @@ impl ConfigurableDb for RocksEngine {
     }
 }
 
-fn loop_registry(
+pub fn loop_registry(
     registry: &TabletRegistry<RocksEngine>,
     mut f: impl FnMut(&mut CachedTablet<RocksEngine>) -> std::result::Result<bool, Box<dyn Error>>,
 ) -> ConfigRes {

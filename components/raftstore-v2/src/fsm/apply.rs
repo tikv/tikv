@@ -21,13 +21,13 @@ use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
+    yatp_pool::FuturePool,
 };
 
 use crate::{
     operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
-    worker::checkpoint,
     TabletTask,
 };
 
@@ -79,8 +79,8 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
-        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         tablet_scheduler: Scheduler<TabletTask<EK>>,
+        high_priority_pool: FuturePool,
         flush_state: Arc<FlushState>,
         sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
@@ -105,8 +105,8 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             buckets,
             sst_importer,
             coprocessor_host,
-            checkpoint_scheduler,
             tablet_scheduler,
+            high_priority_pool,
             logger,
         );
         (
