@@ -49,7 +49,7 @@ pub mod test_util {
     pub fn create_tmp_importer() -> (TempDir, Arc<SstImporter>) {
         let dir = TempDir::new().unwrap();
         let importer = Arc::new(
-            SstImporter::new(&Default::default(), dir.path(), None, ApiVersion::V1).unwrap(),
+            SstImporter::new(&Default::default(), dir.path(), None, ApiVersion::V1, true).unwrap(),
         );
         (dir, importer)
     }

@@ -169,8 +169,7 @@ where
                 RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
                     .worker_threads(cfg.value().stats_concurrency)
-                    .after_start_wrapper(|| {})
-                    .before_stop_wrapper(|| {})
+                    .with_sys_hooks()
                     .build()
                     .unwrap(),
             )
@@ -645,8 +644,7 @@ mod tests {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap(),
         );
