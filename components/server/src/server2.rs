@@ -447,10 +447,9 @@ where
                 .worker_threads(1)
                 .with_sys_and_custom_hooks(
                     move || {
-                        tikv_alloc::add_thread_memory_accessor();
                         tikv_util::thread_group::set_properties(props.clone());
                     },
-                    tikv_alloc::remove_thread_memory_accessor,
+                    || {},
                 )
                 .build()
                 .unwrap(),
@@ -751,6 +750,7 @@ where
             import_path,
             self.core.encryption_key_manager.clone(),
             self.core.config.storage.api_version(),
+            true,
         )
         .unwrap();
         for (cf_name, compression_type) in &[
@@ -904,6 +904,7 @@ where
             engines.engine.clone(),
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             servers.importer.clone(),
+            Some(self.router.as_ref().unwrap().store_meta().clone()),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1400,6 +1401,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         raft_engine.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
+            &self.core.config,
             registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
@@ -1533,7 +1535,7 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

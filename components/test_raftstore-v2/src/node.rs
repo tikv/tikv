@@ -293,6 +293,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                     dir,
                     key_manager.clone(),
                     cfg.storage.api_version(),
+                    true,
                 )
                 .unwrap(),
             )

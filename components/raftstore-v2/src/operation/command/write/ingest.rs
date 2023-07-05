@@ -9,6 +9,7 @@ use raftstore::{
     Result,
 };
 use slog::error;
+use sst_importer::range_overlaps;
 use tikv_util::{box_try, slog_panic};
 
 use crate::{
@@ -42,6 +43,7 @@ impl Store {
         if ssts.is_empty() {
             return Ok(());
         }
+
         let mut region_ssts: HashMap<_, Vec<_>> = HashMap::default();
         for sst in ssts {
             region_ssts
@@ -49,11 +51,22 @@ impl Store {
                 .or_default()
                 .push(sst);
         }
+
+        let ranges = ctx.sst_importer.ranges_in_import();
         for (region_id, ssts) in region_ssts {
             if let Err(TrySendError::Disconnected(msg)) = ctx.router.send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
                 && !ctx.router.is_shutdown() {
-                let PeerMsg::CleanupImportSst(ssts) = msg else { unreachable!() };
-                let _ = ctx.schedulers.tablet.schedule(tablet::Task::CleanupImportSst(ssts));
+                let PeerMsg::CleanupImportSst( ssts) = msg else { unreachable!() };
+                let mut ssts = ssts.into_vec();
+                ssts.retain(|sst| {
+                    for range in &ranges {
+                        if range_overlaps(range, sst.get_range()) {
+                            return false;
+                        }
+                    }
+                    true
+                });
+                let _ = ctx.schedulers.tablet.schedule(tablet::Task::CleanupImportSst(ssts.into()));
             }
         }
 

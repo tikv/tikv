@@ -290,6 +290,7 @@ impl<E: KvEngine> Initializer<E> {
             self.sink_scan_events(entries, done).await?;
         }
 
+        fail_point!("before_post_incremental_scan");
         if !post_init_downstream(&self.downstream_state) {
             return on_cancel();
         }
@@ -493,9 +494,10 @@ impl<E: KvEngine> Initializer<E> {
             }
         } else {
             Deregister::Downstream {
+                conn_id: self.conn_id,
+                request_id: self.request_id,
                 region_id: self.region_id,
                 downstream_id: self.downstream_id,
-                conn_id: self.conn_id,
                 err: Some(err),
             }
         };
