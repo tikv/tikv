@@ -219,6 +219,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         self.poll_ctx.has_ready = false;
         self.poll_ctx.current_time = None;
         self.timer = tikv_util::time::Instant::now();
+        // update store writers if necessary
+        self.poll_ctx.schedulers.write.refresh();
     }
 
     fn handle_control(&mut self, fsm: &mut StoreFsm) -> Option<usize> {
