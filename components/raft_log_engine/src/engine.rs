@@ -23,7 +23,7 @@ use kvproto::{
 };
 use raft::eraftpb::Entry;
 use raft_engine::{
-    env::{DefaultFileSystem, FileSystem, Handle, Permission, WriteExt},
+    env::{DoubleWriteFileSystem, FileSystem, Handle, Permission, WriteExt},
     Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
@@ -47,8 +47,8 @@ impl MessageExt for MessageExtTyped {
 
 pub struct ManagedReader {
     inner: Either<
-        <DefaultFileSystem as FileSystem>::Reader,
-        DecrypterReader<<DefaultFileSystem as FileSystem>::Reader>,
+        <DoubleWriteFileSystem as FileSystem>::Reader,
+        DecrypterReader<<DoubleWriteFileSystem as FileSystem>::Reader>,
     >,
     rate_limiter: Option<Arc<IoRateLimiter>>,
 }
@@ -78,8 +78,8 @@ impl Read for ManagedReader {
 
 pub struct ManagedWriter {
     inner: Either<
-        <DefaultFileSystem as FileSystem>::Writer,
-        EncrypterWriter<<DefaultFileSystem as FileSystem>::Writer>,
+        <DoubleWriteFileSystem as FileSystem>::Writer,
+        EncrypterWriter<<DoubleWriteFileSystem as FileSystem>::Writer>,
     >,
     rate_limiter: Option<Arc<IoRateLimiter>>,
 }
@@ -129,7 +129,7 @@ impl WriteExt for ManagedWriter {
 }
 
 pub struct ManagedFileSystem {
-    base_file_system: DefaultFileSystem,
+    base_file_system: DoubleWriteFileSystem,
     key_manager: Option<Arc<DataKeyManager>>,
     rate_limiter: Option<Arc<IoRateLimiter>>,
 }
@@ -138,9 +138,10 @@ impl ManagedFileSystem {
     pub fn new(
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
+        base_file_system: DoubleWriteFileSystem,
     ) -> Self {
         Self {
-            base_file_system: DefaultFileSystem,
+            base_file_system,
             key_manager,
             rate_limiter,
         }
@@ -149,7 +150,7 @@ impl ManagedFileSystem {
 
 pub struct ManagedHandle {
     path: PathBuf,
-    base: Arc<<DefaultFileSystem as FileSystem>::Handle>,
+    base: Arc<<DoubleWriteFileSystem as FileSystem>::Handle>,
 }
 
 impl Handle for ManagedHandle {
@@ -330,11 +331,21 @@ pub struct RaftLogEngine(Arc<RawRaftEngine<ManagedFileSystem>>);
 
 impl RaftLogEngine {
     pub fn new(
-        config: RaftEngineConfig,
+        mut config: RaftEngineConfig,
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<Self> {
-        let file_system = Arc::new(ManagedFileSystem::new(key_manager, rate_limiter));
+        let base_file_system = if let Some(second_dir) = &config.spill_dir {
+            DoubleWriteFileSystem::new(config.dir.as_str().into(), second_dir.into())
+        } else {
+            panic!("spill_dir is required");
+        };
+        config.spill_dir = None;
+        let file_system = Arc::new(ManagedFileSystem::new(
+            key_manager,
+            rate_limiter,
+            base_file_system,
+        ));
         Ok(RaftLogEngine(Arc::new(
             RawRaftEngine::open_with_file_system(config, file_system).map_err(transfer_error)?,
         )))
