@@ -3095,7 +3095,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489b049dc974f9b164b7e6150ee5d9466847f74f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0a57dd2e2c3d1be9679a9ad6a3ed70dcb4b87eff"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3114,7 +3114,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489b049dc974f9b164b7e6150ee5d9466847f74f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0a57dd2e2c3d1be9679a9ad6a3ed70dcb4b87eff"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5086,7 +5086,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489b049dc974f9b164b7e6150ee5d9466847f74f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0a57dd2e2c3d1be9679a9ad6a3ed70dcb4b87eff"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -7866,7 +7866,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#5523a9a6a4d0d6242bdb02b0a344f7ee1477b39b"
+source = "git+https://github.com/tikv/yatp.git?branch=master#5572a78702572087cab8ddcdd1fe30e5bf76ae42"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",

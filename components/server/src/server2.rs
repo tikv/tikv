@@ -1401,6 +1401,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         raft_engine.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
+            &self.core.config,
             registry,
             raft_engine.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
@@ -1534,7 +1535,7 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

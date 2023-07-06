@@ -38,7 +38,7 @@ pub use self::{
     },
     refresh_config::{
         BatchComponent as RaftStoreBatchComponent, BatchComponent, Runner as RefreshConfigRunner,
-        Task as RefreshConfigTask,
+        Task as RefreshConfigTask, WriterContoller,
     },
     region::{Runner as RegionRunner, Task as RegionTask},
     split_check::{
