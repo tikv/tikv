@@ -13,7 +13,7 @@
 //! be used as the start state.
 
 use std::{
-    collections::{HashMap, LinkedList},
+    collections::LinkedList,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock,
@@ -62,14 +62,18 @@ struct FlushProgress {
 /// if the flushed index greater than it .
 #[derive(Debug, Clone)]
 pub struct SstApplyState {
-    // Map from cf to SstApplyEntry.
-    sst_map: Arc<RwLock<HashMap<usize, Vec<SstApplyEntry>>>>,
+    // vec from cf to Vec<SstApplyEntry>.
+    ssts: Arc<RwLock<Vec<Vec<SstApplyEntry>>>>,
 }
 
 impl Default for SstApplyState {
     fn default() -> Self {
+        let mut ssts = Vec::with_capacity(DATA_CFS_LEN);
+        for _ in 0..DATA_CFS_LEN {
+            ssts.push(Vec::new());
+        }
         Self {
-            sst_map: Arc::new(RwLock::new(HashMap::new())),
+            ssts: Arc::new(RwLock::new(ssts)),
         }
     }
 }
@@ -89,19 +93,20 @@ impl SstApplyEntry {
 impl SstApplyState {
     #[inline]
     pub fn register_ssts(&self, applied_index: u64, ssts: Vec<SstMeta>) {
-        let mut map = self.sst_map.write().unwrap();
+        let mut sst_list = self.ssts.write().unwrap();
         for sst in ssts {
             let cf_index = data_cf_offset(sst.get_cf_name());
             let entry = SstApplyEntry::new(applied_index, sst);
-            map.entry(cf_index).or_default().push(entry);
+            sst_list.get_mut(cf_index).unwrap().push(entry);
         }
     }
 
     #[inline]
     pub fn stale_ssts(&self, cf: &str, flushed_index: u64) -> Vec<SstMeta> {
-        let map = self.sst_map.read().unwrap();
+        let sst_list: std::sync::RwLockReadGuard<'_, Vec<Vec<SstApplyEntry>>> =
+            self.ssts.read().unwrap();
         let cf_index = data_cf_offset(cf);
-        if let Some(ssts) = map.get(&cf_index) {
+        if let Some(ssts) = sst_list.get(cf_index) {
             return ssts
                 .iter()
                 .filter(|entry| entry.applied_index <= flushed_index)
@@ -112,10 +117,10 @@ impl SstApplyState {
     }
 
     pub fn delete_ssts(&self, ssts: &Vec<SstMeta>) {
-        let mut map = self.sst_map.write().unwrap();
+        let mut sst_list = self.ssts.write().unwrap();
         for sst in ssts {
             let cf_index = data_cf_offset(sst.get_cf_name());
-            if let Some(metas) = map.get_mut(&cf_index) {
+            if let Some(metas) = sst_list.get_mut(cf_index) {
                 metas.drain_filter(|entry| entry.sst.get_uuid() == sst.get_uuid());
             }
         }

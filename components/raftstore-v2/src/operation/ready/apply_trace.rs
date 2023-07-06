@@ -522,15 +522,14 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
         let region_id = self.region().get_id();
         let raft_engine = self.entry_storage().raft_engine();
-        let last_epoch = self.region().get_region_epoch();
-        if util::is_epoch_stale(self.flushed_epoch(), last_epoch) {
-            let epoch = raft_engine
-                .get_region_state(region_id, trace.admin.flushed)
-                .unwrap()
-                .unwrap()
-                .get_region()
-                .get_region_epoch()
-                .clone();
+        let epoch = raft_engine
+            .get_region_state(region_id, trace.admin.flushed)
+            .unwrap()
+            .unwrap()
+            .get_region()
+            .get_region_epoch()
+            .clone();
+        if util::is_epoch_stale(self.flushed_epoch(), &epoch) {
             write_task.flushed_epoch = Some(epoch);
         }
 
