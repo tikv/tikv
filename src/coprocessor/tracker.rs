@@ -342,8 +342,8 @@ impl<E: Engine> Tracker<E> {
 
         let peer = self.req_ctx.context.get_peer();
         let region_id = self.req_ctx.context.get_region_id();
-        let start_key = &self.req_ctx.lower_bound;
-        let end_key = &self.req_ctx.upper_bound;
+        let start_key = Key::from_raw(&self.req_ctx.lower_bound);
+        let end_key = Key::from_raw(&self.req_ctx.upper_bound);
         let reverse_scan = if let Some(reverse_scan) = self.req_ctx.is_desc_scan {
             reverse_scan
         } else {
@@ -353,14 +353,14 @@ impl<E: Engine> Tracker<E> {
         tls_collect_query(
             region_id,
             peer,
-            Key::from_raw(start_key).as_encoded(),
-            Key::from_raw(end_key).as_encoded(),
+            start_key.as_encoded(),
+            end_key.as_encoded(),
             reverse_scan,
         );
         tls_collect_read_flow(
             self.req_ctx.context.get_region_id(),
-            Some(start_key),
-            Some(end_key),
+            Some(start_key.as_encoded()),
+            Some(end_key.as_encoded()),
             &total_storage_stats,
             self.buckets.as_ref(),
         );
@@ -427,5 +427,84 @@ impl<E: Engine> Drop for Tracker<E> {
         if let TrackerState::ItemFinished(_) = self.current_stage {
             self.on_finish_all_items();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration, vec};
+
+    use kvproto::kvrpcpb;
+    use pd_client::BucketMeta;
+    use tikv_kv::RocksEngine;
+
+    use super::{PerfLevel, ReqContext, ReqTag, TimeStamp, Tracker, TLS_COP_METRICS};
+    use crate::storage::Statistics;
+
+    #[test]
+    fn test_track() {
+        let mut context = kvrpcpb::Context::default();
+        context.set_region_id(1);
+
+        let mut req_ctx = ReqContext::new(
+            ReqTag::test,
+            context,
+            vec![],
+            Duration::from_secs(0),
+            None,
+            None,
+            TimeStamp::max(),
+            None,
+            PerfLevel::EnableCount,
+        );
+        req_ctx.lower_bound = vec![
+            116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 67,
+        ];
+        req_ctx.upper_bound = vec![
+            116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 167,
+        ];
+        let mut track: Tracker<RocksEngine> = Tracker::new(req_ctx, Duration::default());
+        let mut bucket = BucketMeta::default();
+        bucket.region_id = 1;
+        bucket.version = 1;
+        bucket.keys = vec![
+            vec![
+                116, 128, 0, 0, 0, 0, 0, 0, 255, 179, 95, 114, 128, 0, 0, 0, 0, 255, 0, 175, 155,
+                0, 0, 0, 0, 0, 250,
+            ],
+            vec![
+                116, 128, 0, 255, 255, 255, 255, 255, 255, 254, 0, 0, 0, 0, 0, 0, 0, 248,
+            ],
+        ];
+        track.buckets = Some(Arc::new(bucket));
+
+        let mut stat = Statistics::default();
+        stat.write.flow_stats.read_keys = 10;
+        track.total_storage_stats = stat;
+
+        track.track();
+        drop(track);
+        TLS_COP_METRICS.with(|m| {
+            assert_eq!(
+                10,
+                m.borrow()
+                    .local_read_stats()
+                    .region_infos
+                    .get(&1)
+                    .unwrap()
+                    .flow
+                    .read_keys
+            );
+            assert_eq!(
+                vec![10],
+                m.borrow()
+                    .local_read_stats()
+                    .region_buckets
+                    .get(&1)
+                    .unwrap()
+                    .stats
+                    .read_keys
+            );
+        });
     }
 }
