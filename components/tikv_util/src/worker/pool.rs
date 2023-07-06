@@ -279,7 +279,6 @@ pub struct Builder<S: Into<String>> {
     name: S,
     thread_count: usize,
     pending_capacity: usize,
-    max_thread_count: Option<usize>,
 }
 
 impl<S: Into<String>> Builder<S> {
@@ -288,7 +287,6 @@ impl<S: Into<String>> Builder<S> {
             name,
             thread_count: 1,
             pending_capacity: usize::MAX,
-            max_thread_count: None,
         }
     }
 
@@ -305,20 +303,10 @@ impl<S: Into<String>> Builder<S> {
         self
     }
 
-    /// set a max_thread_count so that the worker threads can be adjusted at
-    /// runtime.
-    pub fn max_thread_count(mut self, thread_count: usize) -> Self {
-        self.max_thread_count = Some(thread_count);
-        self
-    }
-
     pub fn create(self) -> Worker {
-        let max_thread_count = self
-            .max_thread_count
-            .unwrap_or_else(|| usize::max(self.thread_count, self.thread_count));
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
-            .thread_count(1, self.thread_count, max_thread_count)
+            .thread_count(self.thread_count, self.thread_count, self.thread_count)
             .build_single_level_pool();
         let remote = pool.remote().clone();
         let pool = Arc::new(Mutex::new(Some(pool)));

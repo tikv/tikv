@@ -32,6 +32,7 @@ use tikv_util::{
     time::{Instant, UnixSecs},
     warn,
     worker::{Runnable, RunnableWithTimer},
+    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
 };
 use yatp::{
     pool::{Builder, ThreadPool},
@@ -54,6 +55,7 @@ use crate::{
 };
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
+const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 8;
 
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";
@@ -373,7 +375,7 @@ where
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
     pd_client: Option<Arc<T>>,
-    pool: Arc<ThreadPool<TaskCell>>,
+    pool: FuturePool,
 }
 
 impl<EK, R, T> Runner<EK, R, T>
@@ -407,15 +409,18 @@ where
             coprocessor_host,
             router,
             pd_client,
-            pool: Arc::new(
-                Builder::new(thd_name!("snap-generator"))
-                    .max_thread_count(cfg.value().snap_generator_pool_size)
-                    .build_future_pool(),
-            ),
+            pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("snap-generator")
+                .thread_count(
+                    1,
+                    cfg.value().snap_generator_pool_size,
+                    SNAP_GENERATOR_MAX_POOL_SIZE,
+                )
+                .build_future_pool(),
         }
     }
 
-    pub fn snap_generator_pool(&self) -> Arc<ThreadPool<TaskCell>> {
+    pub fn snap_generator_pool(&self) -> FuturePool {
         self.pool.clone()
     }
 
@@ -850,7 +855,14 @@ where
                     start: UnixSecs::now(),
                 };
                 let scheduled_time = Instant::now_coarse();
-                self.pool.spawn(async move {
+                let res = self.pool.spawn(async move {
+                    let current = std::thread::current();
+                    let tid = current.id();
+                    let name = current.name();
+                    println!("on snap gen: {:?}, {:?}", tid, name);
+                    fail_point!("on_snap_generate");
+                    println!("after snap gen: {:?}", tid);
+
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
                         .observe(scheduled_time.saturating_elapsed_secs());
 
@@ -865,6 +877,7 @@ where
                         allow_multi_files_snapshot,
                     );
                 });
+                println!("spawn res {:?}", res);
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
@@ -892,10 +905,6 @@ where
                 self.clean_stale_ranges();
             }
         }
-    }
-
-    fn shutdown(&mut self) {
-        self.pool.shutdown();
     }
 }
 

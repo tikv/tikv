@@ -9,7 +9,7 @@ use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState
 use file_system::{set_io_type, IoType};
 use tikv_util::{
     debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, warn,
-    worker::Runnable,
+    worker::Runnable, yatp_pool::FuturePool,
 };
 use yatp::{task::future::TaskCell, ThreadPool};
 
@@ -222,7 +222,7 @@ where
     writer_ctrl: WriterContoller<EK, ER, T, RaftRouter<EK, ER>>,
     apply_pool: PoolController<ApplyFsm<EK>, ControlFsm, AH>,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
-    snap_generator_pool: Arc<ThreadPool<TaskCell>>,
+    snap_generator_pool: FuturePool,
 }
 
 impl<EK, ER, AH, RH, T> Runner<EK, ER, AH, RH, T>
@@ -240,7 +240,7 @@ where
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
         apply_pool_state: PoolState<ApplyFsm<EK>, ControlFsm, AH>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
-        snap_generator_pool: Arc<ThreadPool<TaskCell>>,
+        snap_generator_pool: FuturePool,
     ) -> Self {
         let writer_ctrl = WriterContoller::new(writer_meta, store_writers);
         let apply_pool = PoolController::new(apply_router, apply_pool_state);
@@ -317,6 +317,30 @@ where
             "to" => size
         );
     }
+
+    fn resize_snap_generator_read_pool(&mut self, size: usize) {
+        // It may not take effect immediately. See comments of
+        // ThreadPool::scale_workers.
+        // Also, the size will be clamped between min_thread_count and the max_pool_size
+        // set when the pool is initialized. This is fine as max_pool_size
+        // is relatively a large value.
+        let pool_size = self.snap_generator_pool.get_pool_size();
+        self.snap_generator_pool.scale_pool_size(size);
+        let (min_thread_count, max_thread_count) = self.snap_generator_pool.thread_count_limit();
+        if size > max_thread_count || size < min_thread_count {
+            warn!(
+                "apply pool scale size is out of bound, and the size is clamped";
+                "size" => size,
+                "min_thread_limit" => min_thread_count,
+                "max_thread_count" => max_thread_count,
+            );
+        } else {
+            info!(
+                "resize apply pool";
+                "size" => size
+            );
+        }
+    }
 }
 
 impl<EK, ER, AH, RH, T> Runnable for Runner<EK, ER, AH, RH, T>
@@ -344,11 +368,8 @@ where
                 }
             },
             Task::ScaleWriters(size) => self.resize_store_writers(size),
-            Task::ScaleAsyncReader(_) => {
-                warn!(
-                    "only partitioned raft kv supports scale async reader";
-                );
-                return;
+            Task::ScaleAsyncReader(size) => {
+                self.resize_snap_generator_read_pool(size);
             }
         }
     }

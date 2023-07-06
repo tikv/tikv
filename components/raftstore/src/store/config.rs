@@ -218,7 +218,6 @@ pub struct Config {
     #[online_config(hidden)]
     pub use_delete_range: bool,
 
-    #[online_config(skip)]
     pub snap_generator_pool_size: usize,
 
     pub cleanup_import_sst_interval: ReadableDuration,

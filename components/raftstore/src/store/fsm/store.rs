@@ -62,10 +62,11 @@ use tikv_util::{
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
+    yatp_pool::FuturePool,
     Either, RingQueue,
 };
 use time::{self, Timespec};
-use yatp::{ThreadPool, task::future::TaskCell};
+use yatp::{task::future::TaskCell, ThreadPool};
 
 use crate::{
     bytes_capacity,
@@ -1701,7 +1702,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        snap_generator_pool: Arc<ThreadPool<TaskCell>>,
+        snap_generator_pool: FuturePool,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
