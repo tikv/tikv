@@ -26,14 +26,11 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
     box_err, box_try,
     config::VersionTrack,
-    defer, error, info, thd_name,
+    defer, error, info,
     time::{Instant, UnixSecs},
     warn,
     worker::{Runnable, RunnableWithTimer},
-};
-use yatp::{
-    pool::{Builder, ThreadPool},
-    task::future::TaskCell,
+    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
 };
 
 use super::metrics::*;
@@ -370,7 +367,7 @@ where
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
     pd_client: Option<Arc<T>>,
-    pool: ThreadPool<TaskCell>,
+    pool: FuturePool,
 }
 
 impl<EK, R, T> Runner<EK, R, T>
@@ -403,8 +400,13 @@ where
             coprocessor_host,
             router,
             pd_client,
-            pool: Builder::new(thd_name!("snap-generator"))
-                .max_thread_count(cfg.value().snap_generator_pool_size)
+            pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("snap-generator")
+                .thread_count(
+                    1,
+                    cfg.value().snap_generator_pool_size,
+                    cfg.value().snap_generator_pool_size,
+                )
                 .build_future_pool(),
         }
     }
@@ -835,7 +837,12 @@ where
                         allow_multi_files_snapshot,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
-                });
+                }).unwrap_or_else(
+                    |e| {
+                        error!("failed to generate snapshot"; "region_id" => region_id, "err" => ?e);
+                        SNAP_COUNTER.generate.fail.inc();
+                    },
+                );
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
@@ -863,10 +870,6 @@ where
                 self.clean_stale_ranges();
             }
         }
-    }
-
-    fn shutdown(&mut self) {
-        self.pool.shutdown();
     }
 }
 
@@ -938,7 +941,7 @@ pub(crate) mod tests {
         store_cfg.region_worker_tick_interval = ReadableDuration(PENDING_APPLY_CHECK_INTERVAL);
         store_cfg.clean_stale_ranges_tick = STALE_PEER_CHECK_TICK;
         store_cfg.use_delete_range = use_delete_range;
-        store_cfg.snap_generator_pool_size = 2;
+        store_cfg.snap_generator_pool_size = 4;
         Arc::new(VersionTrack::new(store_cfg))
     }
 
