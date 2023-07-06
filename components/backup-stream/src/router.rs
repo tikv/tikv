@@ -22,7 +22,6 @@ use kvproto::{
         CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
         StreamBackupTaskInfo,
     },
-    encryptionpb::EncryptionMethod,
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
