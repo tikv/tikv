@@ -37,8 +37,13 @@ pub use self::{
         StoreMetaDelegate, TrackVer,
     },
     refresh_config::{
+<<<<<<< HEAD
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,
         Task as RefreshConfigTask,
+=======
+        BatchComponent as RaftStoreBatchComponent, BatchComponent, Runner as RefreshConfigRunner,
+        Task as RefreshConfigTask, WriterContoller,
+>>>>>>> f69f721e71 (raftstore-v2:  support dynamic change apply pool size and store io size (#15060))
     },
     region::{Runner as RegionRunner, Task as RegionTask},
     split_check::{

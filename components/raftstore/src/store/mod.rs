@@ -33,8 +33,8 @@ pub use self::{
     async_io::{
         read::{AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask},
         write::{
-            write_to_db_for_test, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
-            WriteTask,
+            write_to_db_for_test, PersistedNotifier, StoreWriters, StoreWritersContext,
+            Worker as WriteWorker, WriteMsg, WriteTask,
         },
         write_router::{WriteRouter, WriteRouterContext, WriteSenders},
     },
@@ -78,6 +78,7 @@ pub use self::{
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
+<<<<<<< HEAD
         metrics as worker_metrics, AutoSplitController, Bucket, BucketRange, CachedReadDelegate,
         CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry,
         LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate,
@@ -87,5 +88,17 @@ pub use self::{
         BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
         DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
         NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+=======
+        metrics as worker_metrics, AutoSplitController, BatchComponent, Bucket, BucketRange,
+        CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter,
+        KeyEntry, LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask,
+        ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats,
+        RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
+        SplitConfigManager, SplitInfo, StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
+        WriterContoller, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+        DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
+        DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+        REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+>>>>>>> f69f721e71 (raftstore-v2:  support dynamic change apply pool size and store io size (#15060))
     },
 };

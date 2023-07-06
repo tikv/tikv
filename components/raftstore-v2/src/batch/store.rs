@@ -32,8 +32,15 @@ use raftstore::{
             GlobalStoreStat, LocalStoreStat,
         },
         local_metrics::RaftMetrics,
+<<<<<<< HEAD
         AutoSplitController, Config, ReadRunner, ReadTask, SplitCheckRunner, SplitCheckTask,
         StoreWriters, TabletSnapManager, Transport, WriteSenders,
+=======
+        util::LatencyInspector,
+        AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
+        SplitCheckTask, StoreWriters, StoreWritersContext, TabletSnapManager, Transport,
+        WriteRouterContext, WriteSenders, WriterContoller,
+>>>>>>> f69f721e71 (raftstore-v2:  support dynamic change apply pool size and store io size (#15060))
     },
 };
 use resource_metering::CollectorRegHandle;
@@ -207,6 +214,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         self.poll_ctx.has_ready = false;
         self.poll_ctx.current_time = None;
         self.timer = tikv_util::time::Instant::now();
+        // update store writers if necessary
+        self.poll_ctx.schedulers.write.refresh();
     }
 
     fn handle_control(&mut self, fsm: &mut StoreFsm) -> Option<usize> {
@@ -704,9 +713,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
-            raft_engine,
+            raft_engine.clone(),
             tablet_registry,
-            trans,
+            trans.clone(),
             router.clone(),
             schedulers.clone(),
             self.logger.clone(),
@@ -723,7 +732,33 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
         let tag = format!("rs-{}", store_id);
+<<<<<<< HEAD
         self.system.spawn(tag, builder);
+=======
+        self.system.spawn(tag, builder.clone());
+
+        let writer_control = WriterContoller::new(
+            StoreWritersContext {
+                store_id,
+                raft_engine,
+                kv_engine: None,
+                transfer: trans,
+                notifier: router.clone(),
+                cfg: cfg.clone(),
+            },
+            workers.async_write.clone(),
+        );
+        let apply_pool = builder.apply_pool.clone();
+        let refresh_config_runner = refresh_config::Runner::new(
+            self.logger.clone(),
+            router.router().clone(),
+            self.system.build_pool_state(builder),
+            writer_control,
+            apply_pool,
+        );
+        assert!(workers.refresh_config_worker.start(refresh_config_runner));
+        self.workers = Some(workers);
+>>>>>>> f69f721e71 (raftstore-v2:  support dynamic change apply pool size and store io size (#15060))
 
         let mut mailboxes = Vec::with_capacity(peers.len());
         let mut address = Vec::with_capacity(peers.len());
