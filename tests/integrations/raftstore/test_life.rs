@@ -147,7 +147,6 @@ fn test_gc_removed_peer() {
     cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
-    let epoch = cluster.get_region_epoch(region_id);
     let (tx, rx) = channel();
     let tx = Mutex::new(tx);
     let factory = ForwardFactory {
@@ -161,25 +160,30 @@ fn test_gc_removed_peer() {
     };
     cluster.add_send_filter(factory);
 
-    // Mock gc a peer that has been removed before creation.
-    let mut msg = RaftMessage::default();
-    msg.set_is_tombstone(true);
-    msg.set_region_id(region_id);
-    msg.set_from_peer(new_peer(1, 1));
-    msg.set_to_peer(new_learner_peer(2, 5));
-    msg.set_region_epoch(epoch.clone());
-    let extra_msg = msg.mut_extra_msg();
-    extra_msg.set_type(ExtraMessageType::MsgGcPeerRequest);
-    let check_peer = extra_msg.mut_check_gc_peer();
-    check_peer.set_from_region_id(region_id);
-    check_peer.set_check_region_id(region_id);
-    check_peer.set_check_peer(new_learner_peer(2, 5));
-    check_peer.set_check_region_epoch(epoch);
+    let must_gc_peer = |to_peer: kvproto::metapb::Peer| {
+        let epoch = cluster.get_region_epoch(region_id);
+        let mut msg = RaftMessage::default();
+        msg.set_is_tombstone(true);
+        msg.set_region_id(region_id);
+        msg.set_from_peer(new_peer(1, 1));
+        msg.set_to_peer(to_peer.clone());
+        msg.set_region_epoch(epoch.clone());
+        let extra_msg = msg.mut_extra_msg();
+        extra_msg.set_type(ExtraMessageType::MsgGcPeerRequest);
+        let check_peer = extra_msg.mut_check_gc_peer();
+        check_peer.set_from_region_id(region_id);
+        check_peer.set_check_region_id(region_id);
+        check_peer.set_check_peer(to_peer.clone());
+        check_peer.set_check_region_epoch(epoch);
 
-    cluster.sim.wl().send_raft_msg(msg.clone()).unwrap();
-    let gc_resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(gc_resp.get_region_id(), region_id);
-    assert_eq!(*gc_resp.get_from_peer(), new_learner_peer(2, 5));
+        cluster.sim.wl().send_raft_msg(msg.clone()).unwrap();
+        let gc_resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(gc_resp.get_region_id(), region_id);
+        assert_eq!(*gc_resp.get_from_peer(), to_peer);
+    };
+
+    // Mock gc a peer that has been removed before creation.
+    must_gc_peer(new_learner_peer(2, 5));
 
     cluster
         .pd_client
@@ -192,45 +196,7 @@ fn test_gc_removed_peer() {
         .must_remove_peer(region_id, new_learner_peer(2, 4));
     // Make sure learner is removed.
     cluster.wait_peer_state(region_id, 2, PeerState::Tombstone);
-    let epoch = cluster.get_region_epoch(region_id);
 
     // Mock gc peer request. GC learner(2, 4).
-    let mut msg = RaftMessage::default();
-    msg.set_is_tombstone(true);
-    msg.set_region_id(region_id);
-    msg.set_from_peer(new_peer(1, 1));
-    msg.set_to_peer(new_learner_peer(2, 4));
-    msg.set_region_epoch(epoch.clone());
-    let extra_msg = msg.mut_extra_msg();
-    extra_msg.set_type(ExtraMessageType::MsgGcPeerRequest);
-    let check_peer = extra_msg.mut_check_gc_peer();
-    check_peer.set_from_region_id(region_id);
-    check_peer.set_check_region_id(region_id);
-    check_peer.set_check_peer(new_learner_peer(2, 4));
-    check_peer.set_check_region_epoch(epoch.clone());
-
-    cluster.sim.wl().send_raft_msg(msg).unwrap();
-    let gc_resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(gc_resp.get_region_id(), region_id);
-    assert_eq!(*gc_resp.get_from_peer(), new_learner_peer(2, 4));
-
-    // GC a peer that has been removed before creation.
-    let mut msg = RaftMessage::default();
-    msg.set_is_tombstone(true);
-    msg.set_region_id(region_id);
-    msg.set_from_peer(new_peer(1, 1));
-    msg.set_to_peer(new_learner_peer(2, 5));
-    msg.set_region_epoch(epoch.clone());
-    let extra_msg = msg.mut_extra_msg();
-    extra_msg.set_type(ExtraMessageType::MsgGcPeerRequest);
-    let check_peer = extra_msg.mut_check_gc_peer();
-    check_peer.set_from_region_id(region_id);
-    check_peer.set_check_region_id(region_id);
-    check_peer.set_check_peer(new_learner_peer(2, 5));
-    check_peer.set_check_region_epoch(epoch);
-
-    cluster.sim.wl().send_raft_msg(msg.clone()).unwrap();
-    let gc_resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(gc_resp.get_region_id(), region_id);
-    assert_eq!(*gc_resp.get_from_peer(), new_learner_peer(2, 5));
+    must_gc_peer(new_learner_peer(2, 4));
 }
