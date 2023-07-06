@@ -424,10 +424,10 @@ fn test_decrease_async_ios() {
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
+// v2 sets store_io_pool_size to 1 in `validate` if store_io_pool_size = 0.
 fn test_resize_async_ios_failed_1() {
-    let mut cluster = new_cluster(0, 1);
+    let mut cluster = new_node_cluster(0, 1);
     cluster.cfg.raft_store.store_io_pool_size = 2;
     cluster.pd_client.disable_default_operator();
     cluster.run();
@@ -468,7 +468,7 @@ fn test_resize_async_ios_failed_1() {
 }
 
 #[test]
-// v2 does not support store_io_pool_size = 0
+// v2 sets store_io_pool_size to 1 in `validate` if store_io_pool_size = 0.
 fn test_resize_async_ios_failed_2() {
     let mut cluster = new_node_cluster(0, 1);
     cluster.cfg.raft_store.store_io_pool_size = 0;
