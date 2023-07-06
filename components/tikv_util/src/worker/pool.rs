@@ -313,7 +313,9 @@ impl<S: Into<String>> Builder<S> {
     }
 
     pub fn create(self) -> Worker {
-        let max_thread_count = self.max_thread_count.unwrap_or_else(|| self.thread_count);
+        let max_thread_count = self
+            .max_thread_count
+            .unwrap_or_else(|| usize::max(self.thread_count, self.thread_count));
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
             .thread_count(1, self.thread_count, max_thread_count)

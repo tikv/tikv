@@ -1178,6 +1178,13 @@ impl ConfigManager for RaftstoreConfigManager {
                 error!("raftstore configuration manager schedule to resize store-io-pool-size work task failed"; "err"=> ?e);
             }
         }
+        if let Some(ConfigValue::Usize(resize_reader_size)) = change.get("snap_generator_pool_size")
+        {
+            let resize_reader_task = RefreshConfigTask::ScaleAsyncReader(*resize_reader_size);
+            if let Err(e) = self.scheduler.schedule(resize_reader_task) {
+                error!("raftstore configuration manager schedule to resize snap-generator-pool-size work task failed"; "err"=> ?e);
+            }
+        }
         info!(
             "raftstore config changed";
             "change" => ?change,

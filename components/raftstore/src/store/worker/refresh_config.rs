@@ -11,6 +11,7 @@ use tikv_util::{
     debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, warn,
     worker::Runnable,
 };
+use yatp::{queue::TaskCell, ThreadPool};
 
 use crate::store::{
     async_io::write::{StoreWriters, StoreWritersContext},
@@ -188,7 +189,7 @@ impl Display for Task {
                 write!(f, "Scale store_io_pool_size adjusts {} ", size)
             }
             Task::ScaleAsyncReader(size) => {
-                unimplemented!()
+                write!(f, "Scale snap_generator_pool_size adjusts {} ", size)
             }
         }
     }
@@ -205,6 +206,7 @@ where
     writer_ctrl: WriterContoller<EK, ER, T, RaftRouter<EK, ER>>,
     apply_pool: PoolController<ApplyFsm<EK>, ControlFsm, AH>,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
+    snap_generator_pool: Arc<ThreadPool<TaskCell>>,
 }
 
 impl<EK, ER, AH, RH, T> Runner<EK, ER, AH, RH, T>
@@ -222,6 +224,7 @@ where
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
         apply_pool_state: PoolState<ApplyFsm<EK>, ControlFsm, AH>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
+        snap_generator_pool: Arc<ThreadPool<TaskCell>>,
     ) -> Self {
         let writer_ctrl = WriterContoller::new(writer_meta, store_writers);
         let apply_pool = PoolController::new(apply_router, apply_pool_state);
@@ -231,6 +234,7 @@ where
             writer_ctrl,
             apply_pool,
             raft_pool,
+            snap_generator_pool,
         }
     }
 

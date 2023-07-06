@@ -373,7 +373,7 @@ where
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
     pd_client: Option<Arc<T>>,
-    pool: ThreadPool<TaskCell>,
+    pool: Arc<ThreadPool<TaskCell>>,
 }
 
 impl<EK, R, T> Runner<EK, R, T>
@@ -407,10 +407,16 @@ where
             coprocessor_host,
             router,
             pd_client,
-            pool: Builder::new(thd_name!("snap-generator"))
-                .max_thread_count(cfg.value().snap_generator_pool_size)
-                .build_future_pool(),
+            pool: Arc::new(
+                Builder::new(thd_name!("snap-generator"))
+                    .max_thread_count(cfg.value().snap_generator_pool_size)
+                    .build_future_pool(),
+            ),
         }
+    }
+
+    pub fn snap_generator_pool(&self) -> Arc<ThreadPool<TaskCell>> {
+        self.pool.clone()
     }
 
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
