@@ -570,7 +570,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         info!(
             self.logger,
-            "delete stale ssts after flush";
+            "schedule delete stale ssts after flush";
             "stale_ssts" => ?stale_ssts,
             "apply_index" => apply_index,
             "cf" => cf,
@@ -647,16 +647,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let mut lb = ctx.engine.log_batch(1);
                     lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
                         .unwrap();
-                    ctx.engine.consume(&mut lb, true).unwrap();
-                    let epoch = ctx
-                        .engine
-                        .get_region_state(region_id, admin_flush)
-                        .unwrap()
-                        .unwrap()
-                        .get_region()
-                        .get_region_epoch()
-                        .clone();
-                    self.storage_mut().set_flushed_epoch(epoch);
                     info!(
                         self.logger,
                         "flush before close flush admin for region";

@@ -866,7 +866,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         if let Some(flushed_epoch) = flushed_epoch {
-            self.storage_mut().set_flushed_epoch(flushed_epoch);
+            self.storage_mut().set_flushed_epoch(&flushed_epoch);
         }
 
         self.storage_mut()

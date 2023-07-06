@@ -134,9 +134,9 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     }
 
     #[inline]
-    pub fn set_flushed_epoch(&mut self, epoch: RegionEpoch) {
-        if util::is_epoch_stale(&self.flushed_epoch, &epoch) {
-            self.flushed_epoch = epoch;
+    pub fn set_flushed_epoch(&mut self, epoch: &RegionEpoch) {
+        if util::is_epoch_stale(&self.flushed_epoch, epoch) {
+            self.flushed_epoch = epoch.clone();
         }
     }
 

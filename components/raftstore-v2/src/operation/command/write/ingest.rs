@@ -90,7 +90,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         info!(
             self.logger,
-            "clean up import sst file";
+            "clean up import sst file by interval task";
             "flushed_epoch" => ?flushed_epoch,
             "stale_ssts" => ?stale_ssts);
 
