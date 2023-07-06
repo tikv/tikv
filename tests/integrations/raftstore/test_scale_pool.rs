@@ -223,7 +223,7 @@ fn test_increase_apply_pool_v2() {
         let cfg_controller = sim.get_cfg_controller().unwrap();
         let change = {
             let mut change = HashMap::new();
-            change.insert("raftstore.apply-pool-size".to_owned(), "4".to_owned());
+            change.insert("raftstore.apply-pool-size".to_owned(), "2".to_owned());
             change
         };
 
