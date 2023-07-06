@@ -65,7 +65,7 @@ use tikv_util::{
     Either, RingQueue,
 };
 use time::{self, Timespec};
-use yatp::{queue::TaskCell, ThreadPool};
+use yatp::{ThreadPool, task::future::TaskCell};
 
 use crate::{
     bytes_capacity,
