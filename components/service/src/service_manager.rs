@@ -9,6 +9,7 @@ use crate::service_event::ServiceEvent;
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum GrpcServiceStatus {
+    Init,
     Serving,
     NotServing,
 }
@@ -20,18 +21,23 @@ pub struct GrpcServiceManager {
 }
 
 impl GrpcServiceManager {
-    pub fn new(router: mpsc::Sender<ServiceEvent>) -> Self {
+    fn build(router: mpsc::Sender<ServiceEvent>, status: GrpcServiceStatus) -> Self {
         Self {
-            status: Arc::new(Atomic::new(GrpcServiceStatus::Serving)),
+            status: Arc::new(Atomic::new(status)),
             service_router: router,
         }
+    }
+
+    /// Generate a formal GrpcServiceManager.
+    pub fn new(router: mpsc::Sender<ServiceEvent>) -> Self {
+        Self::build(router, GrpcServiceStatus::Serving)
     }
 
     /// Only for test.
     /// Generate a dummy GrpcServiceManager.
     pub fn dummy() -> Self {
-        let (sender, _) = mpsc::unbounded();
-        GrpcServiceManager::new(sender)
+        let (router, _) = mpsc::unbounded();
+        Self::build(router, GrpcServiceStatus::Init)
     }
 
     /// Send message to outer handler to notify PAUSE grpc server.
@@ -50,7 +56,7 @@ impl GrpcServiceManager {
 
     /// Send message to outer handler to notify RESUME grpc server.
     pub fn resume(&mut self) -> Result<(), SendError<ServiceEvent>> {
-        if self.status.load(Ordering::Relaxed) == GrpcServiceStatus::Serving {
+        if self.is_serving() {
             // Already in RESUME.
             return Ok(());
         }
@@ -65,5 +71,10 @@ impl GrpcServiceManager {
     #[inline]
     pub fn is_paused(&self) -> bool {
         self.status.load(Ordering::Relaxed) == GrpcServiceStatus::NotServing
+    }
+
+    #[inline]
+    fn is_serving(&self) -> bool {
+        self.status.load(Ordering::Relaxed) == GrpcServiceStatus::Serving
     }
 }

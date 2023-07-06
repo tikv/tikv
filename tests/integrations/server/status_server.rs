@@ -8,7 +8,6 @@ use security::SecurityConfig;
 use service::service_manager::GrpcServiceManager;
 use test_raftstore::new_server_cluster;
 use tikv::{config::ConfigController, server::status_server::StatusServer};
-use tikv_util::mpsc;
 
 async fn check(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Error>> {
     let client = Client::new();
@@ -41,7 +40,6 @@ fn test_region_meta_endpoint() {
     assert!(peer.is_some());
     let store_id = peer.unwrap().get_store_id();
     let router = cluster.raft_extension(store_id);
-    let (sender, _) = mpsc::unbounded();
     let mut status_server = StatusServer::new(
         1,
         ConfigController::default(),
@@ -49,7 +47,7 @@ fn test_region_meta_endpoint() {
         router,
         std::env::temp_dir(),
         None,
-        GrpcServiceManager::new(sender),
+        GrpcServiceManager::dummy(),
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());
