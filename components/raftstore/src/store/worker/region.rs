@@ -847,7 +847,7 @@ where
                 self.pool.spawn(async move {
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
                         .observe(scheduled_time.saturating_elapsed_secs());
-                    tikv_alloc::add_thread_memory_accessor();
+
                     ctx.handle_gen(
                         region_id,
                         last_applied_term,
@@ -858,7 +858,6 @@ where
                         for_balance,
                         allow_multi_files_snapshot,
                     );
-                    tikv_alloc::remove_thread_memory_accessor();
                 });
             }
             task @ Task::Apply { .. } => {

@@ -416,11 +416,19 @@ pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
 ) -> Result<RaftCmdResponse> {
     let mut region = cluster.get_region(key);
     let region_id = region.get_id();
-    let req = new_request(
+    let mut req = new_request(
         region_id,
         region.take_region_epoch(),
         vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
         false,
+    );
+    req.mut_header().set_peer(
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == node_id)
+            .unwrap()
+            .clone(),
     );
     cluster.call_command_on_node(node_id, req, timeout)
 }

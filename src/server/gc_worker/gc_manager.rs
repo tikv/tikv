@@ -289,9 +289,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             .name(thd_name!("gc-manager"))
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
+
                 self.run();
-                tikv_alloc::remove_thread_memory_accessor();
             })
             .map_err(|e| box_err!("failed to start gc manager: {:?}", e));
         res.map(|join_handle| GcManagerHandle {
