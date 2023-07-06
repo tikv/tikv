@@ -403,31 +403,23 @@ impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
             }
         };
 
-        if crypter.buffer().is_empty() {
-            crypter.do_crypter(buf)?;
-        }
+        // All encrypted content must be written. So we are using a buffered write.
+        // Generally, a write will be "committed" to the buffer firstly if it is ready.
+        // "Commit" here means the content will eventually written, so once it is
+        // "committed", we return `Ok(buf.len())` to the caller, and we will flush the
+        // content to the underlying stream at next call to `poll_write` or `flush`.
+        loop {
+            // If the buffer is ready, commit the current write and hint our caller.
+            if crypter.buffer().is_empty() {
+                crypter.do_crypter(buf)?;
+                return Ok(buf.len()).into();
+            }
 
-        let mut total = 0;
-        while !crypter.buffer().is_empty() {
+            // If the last committed write isn't fully written, block the new write until
+            // buffer is ready.
             let n = ready!(writer.as_mut().poll_write(cx, crypter.buffer()))?;
             crypter.advance_buffer(n);
-            total += n;
         }
-        // For now, for making things simple, we encrypted the content at the very
-        // early. Which means, the caller to `poll_write` must make sure the
-        // content of the current buffer has been written before writing other things.
-        // This is true for futures created by `AsyncWriteExt::write` (if they are not
-        // canceled.).
-        // A simple way for solving this is wrapping the writer with a extra buffer,
-        // which saves the content to write into the buffer at first call, then returns
-        // `Pending` and wakes up itself immediately until the all contents in
-        // buffer are written.
-        assert_eq!(
-            total,
-            buf.len(),
-            "the total written bytes mismatches the origin buffer, the write might be canceled."
-        );
-        Ok(total).into()
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
