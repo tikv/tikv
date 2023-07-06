@@ -1957,6 +1957,21 @@ where
                 }
                 self.should_wake_up = state == LeaseState::Expired;
             }
+        } else if msg_type == MessageType::MsgRequestVote
+            || msg_type == MessageType::MsgRequestPreVote
+        {
+            // Only by passing an election timeout can peers handle request vote safely.
+            // See https://github.com/tikv/tikv/issues/15035
+            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
+                debug!("drop request vote for one election timeout after node start";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "from_peer_id" => m.get_from(),
+                    "remain_duration" => ?remain,
+                );
+                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
+                return Ok(());
+            }
         }
 
         let from_id = m.get_from();
