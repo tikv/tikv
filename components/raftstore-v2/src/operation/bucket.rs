@@ -6,9 +6,8 @@ use std::sync::Arc;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    metapb::{self, PeerRole, RegionEpoch},
-    raft_cmdpb::{AdminCmdType, RaftCmdRequest},
-    raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
+    metapb::{self, RegionEpoch},
+    raft_serverpb::{ExtraMessageType, RaftMessage, RefreshBuckets},
 };
 use pd_client::{BucketMeta, BucketStat};
 use raftstore::{
@@ -133,7 +132,7 @@ impl BucketStatsInfo {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
-    pub fn on_refresh_region_buckets<T>(
+    pub fn on_refresh_region_buckets<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         region_epoch: RegionEpoch,
@@ -276,7 +275,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 continue;
             }
             let mut msg = RaftMessage::default();
-            msg.set_region_id(region_id);
+            msg.set_region_id(self.region_id());
             msg.set_from_peer(self.peer().clone());
             msg.set_to_peer(p.clone());
             msg.set_region_epoch(self.region().get_region_epoch().clone());
@@ -289,7 +288,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn on_refresh_buckets(
+    pub fn on_refresh_buckets<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         msg: &RaftMessage,
@@ -299,22 +298,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let extra_msg = msg.get_extra_msg();
-        let version = extra_msg.get_version();
+        let version = extra_msg.get_refresh_buckets().get_version();
         let region_epoch = msg.get_region_epoch();
 
-        let mut meta = BucketMeta {
+        let meta = BucketMeta {
             region_id: self.region_id(),
             version,
-            region_epoch,
+            region_epoch: region_epoch.clone(),
             keys: vec![],
             sizes: vec![],
         };
 
         let mut store_meta = store_ctx.store_meta.lock().unwrap();
         if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
-            reader.0.update(ReadProgress::region_buckets(meta.clone()));
+            reader
+                .0
+                .update(ReadProgress::region_buckets(Arc::new(meta.clone())));
         }
-
     }
 
     #[inline]

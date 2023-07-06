@@ -25,6 +25,27 @@ pub fn new_raft_engine(
     (cluster, engine, ctx)
 }
 
+pub fn follower_raft_engine(
+    cluster: &mut Cluster<ServerCluster>,
+    key: &str,
+) -> Vec<(SimulateEngine, Context)> {
+    let mut ret = vec![];
+    let region = cluster.get_region(key.as_bytes());
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    for peer in &region.peers {
+        if peer.get_id() != leader.get_id() {
+            let mut ctx = Context::default();
+            ctx.set_stale_read(true);
+            ctx.set_region_id(region.get_id());
+            ctx.set_region_epoch(region.get_region_epoch().clone());
+            ctx.set_peer(peer.clone());
+            let engine = cluster.sim.rl().storages[&peer.get_id()].clone();
+            ret.push((engine, ctx));
+        }
+    }
+    return ret;
+}
+
 pub fn new_raft_storage_with_store_count<F: KvFormat>(
     count: usize,
     key: &str,

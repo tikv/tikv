@@ -2020,13 +2020,20 @@ fn test_rc_read() {
 
 #[test]
 fn test_buckets() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+        (9, Some("name:8"), 7),
+        (10, Some("name:6"), 8),
+    ];
     let product = ProductTable::new();
-    let (mut cluster, raft_engine, ctx) = new_raft_engine(1, "");
-
+    let (mut cluster, raft_engine, ctx) = new_raft_engine(3, "");
     let (_, endpoint, _) =
-        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
-    let req = DagSelect::from(&product).build_with(ctx, &[0]);
+    let mut req: Request = DagSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req.clone());
     assert_eq!(resp.get_latest_buckets_version(), 0);
 
@@ -2037,12 +2044,14 @@ fn test_buckets() {
         keys: vec![bucket_key],
         size: 1024,
     };
-    cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
 
-    let wait_refresh_buckets = |old_buckets_ver| {
+    cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
+    thread::sleep(Duration::from_millis(1000));
+    let wait_refresh_buckets = |endpoint, req: Request, old_buckets_ver| {
         let mut resp = Default::default();
         for _ in 0..10 {
             resp = handle_request(&endpoint, req.clone());
+            println!("resp: {:?},req:{:?}", resp,req);
             if resp.get_latest_buckets_version() != old_buckets_ver {
                 break;
             }
@@ -2050,8 +2059,14 @@ fn test_buckets() {
         }
         assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
     };
-
-    wait_refresh_buckets(0);
+    wait_refresh_buckets(endpoint, req.clone(), 0);
+    for (engine, ctx) in follower_raft_engine(&mut cluster, "") {
+        req.set_context(ctx.clone());
+        println!("follower read");
+        let (_, endpoint, _) =
+            init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
+        wait_refresh_buckets(endpoint, req.clone(), 0);
+    }
 }
 
 #[test]
