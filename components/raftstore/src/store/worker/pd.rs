@@ -2001,12 +2001,16 @@ where
                 if let Err(e) = self.grpc_service_manager.pause() {
                     warn!("failed to send service event to PAUSE grpc server";
                             "err" => ?e);
+                } else {
+                    self.update_health_status(ServingStatus::NotServing);
                 }
             }
             pdpb::ControlGrpcEvent::Resume => {
                 if let Err(e) = self.grpc_service_manager.resume() {
                     warn!("failed to send service event to RESUME grpc server";
                             "err" => ?e);
+                } else {
+                    self.update_health_status(ServingStatus::Serving);
                 }
             }
         }
