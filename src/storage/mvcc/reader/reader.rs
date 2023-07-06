@@ -5,11 +5,12 @@ use std::ops::Bound;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
-    errorpb::{self, EpochNotMatch, StaleCommand},
+    errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
 };
+use raftstore::store::LocksStatus;
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
-use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
+use txn_types::{Key, LastChange, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use crate::storage::{
     kv::{
@@ -146,6 +147,8 @@ pub struct MvccReader<S: EngineSnapshot> {
     term: u64,
     #[allow(dead_code)]
     version: u64,
+
+    allow_in_flashback: bool,
 }
 
 impl<S: EngineSnapshot> MvccReader<S> {
@@ -164,6 +167,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             fill_cache,
             term: 0,
             version: 0,
+            allow_in_flashback: false,
         }
     }
 
@@ -182,6 +186,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             fill_cache: !ctx.get_not_fill_cache(),
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
+            allow_in_flashback: false,
         }
     }
 
@@ -265,6 +270,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     let mut err = errorpb::Error::default();
                     // We don't know the current regions. Just return an empty EpochNotMatch error.
                     err.set_epoch_not_match(EpochNotMatch::default());
+                    return Some(Err(KvError::from(err).into()));
+                }
+                // If the region is in the flashback state, it should not be allowed to read the
+                // locks.
+                if locks.status == LocksStatus::IsInFlashback && !self.allow_in_flashback {
+                    let mut err = errorpb::Error::default();
+                    err.set_flashback_in_progress(FlashbackInProgress::default());
                     return Some(Err(KvError::from(err).into()));
                 }
 
@@ -397,22 +409,18 @@ impl<S: EngineSnapshot> MvccReader<S> {
                         WriteType::Delete => {
                             return Ok(None);
                         }
-                        WriteType::Lock | WriteType::Rollback => {
-                            if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
+                        WriteType::Lock | WriteType::Rollback => match write.last_change {
+                            LastChange::NotExist => {
                                 return Ok(None);
                             }
-                            if write.versions_to_last_change < SEEK_BOUND {
-                                if ts.is_zero() {
-                                    // this should only happen in tests
-                                    return Ok(None);
-                                }
-                                ts = commit_ts.prev();
-                            } else {
-                                let commit_ts = write.last_change_ts;
+                            LastChange::Exist {
+                                last_change_ts: commit_ts,
+                                estimated_versions_to_last_change,
+                            } if estimated_versions_to_last_change >= SEEK_BOUND => {
                                 let key_with_ts = key.clone().append_ts(commit_ts);
                                 let Some(value) = self
-                                    .snapshot
-                                    .get_cf(CF_WRITE, &key_with_ts)? else {
+                                        .snapshot
+                                        .get_cf(CF_WRITE, &key_with_ts)? else {
                                         return Ok(None);
                                     };
                                 self.statistics.write.get += 1;
@@ -427,7 +435,14 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                 seek_res = Some((commit_ts, write));
                                 continue;
                             }
-                        }
+                            _ => {
+                                if ts.is_zero() {
+                                    // this should only happen in tests
+                                    return Ok(None);
+                                }
+                                ts = commit_ts.prev();
+                            }
+                        },
                     }
                 }
                 None => return Ok(None),
@@ -768,6 +783,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
     pub fn snapshot(&self) -> &S {
         &self.snapshot
     }
+
+    pub fn set_allow_in_flashback(&mut self, set_allow_in_flashback: bool) {
+        self.allow_in_flashback = set_allow_in_flashback;
+    }
 }
 
 #[cfg(test)]
@@ -789,7 +808,7 @@ pub mod tests {
     };
     use pd_client::FeatureGate;
     use raftstore::store::RegionSnapshot;
-    use txn_types::{LockType, Mutation};
+    use txn_types::{LastChange, LockType, Mutation};
 
     use super::*;
     use crate::storage::{
@@ -1674,11 +1693,12 @@ pub mod tests {
                     for_update_ts,
                     0,
                     TimeStamp::zero(),
+                    false,
                 )
-                .set_last_change(
+                .set_last_change(LastChange::from_parts(
                     TimeStamp::zero(),
                     (lock_type == LockType::Lock || lock_type == LockType::Pessimistic) as u64,
-                ),
+                )),
             )
         })
         .collect();
@@ -2404,8 +2424,9 @@ pub mod tests {
             .unwrap();
         assert_eq!(commit_ts, 2.into());
         assert_eq!(write, w2);
-        // versions_to_last_change should be large enough to trigger a second get
-        // instead of calling a series of next, so the count of next should be 0 instead
+        // estimated_versions_to_last_change should be large enough to trigger a second
+        // get instead of calling a series of next, so the count of next should
+        // be 0 instead
         assert_eq!(reader.statistics.write.next, 0);
         assert_eq!(reader.statistics.write.get, 1);
 
@@ -2416,8 +2437,9 @@ pub mod tests {
             .unwrap();
         // If the type is Delete, get_write_with_commit_ts should return None.
         assert!(res.is_none());
-        // versions_to_last_change should be large enough to trigger a second get
-        // instead of calling a series of next, so the count of next should be 0 instead
+        // estimated_versions_to_last_change should be large enough to trigger a second
+        // get instead of calling a series of next, so the count of next should
+        // be 0 instead
         assert_eq!(reader.statistics.write.next, 0);
         assert_eq!(reader.statistics.write.get, 1);
     }
@@ -2446,7 +2468,7 @@ pub mod tests {
             .get_write_with_commit_ts(&Key::from_raw(k), 40.into(), None)
             .unwrap();
         // We can know the key doesn't exist without skipping all these locks according
-        // to last_change_ts and versions_to_last_change.
+        // to last_change_ts and estimated_versions_to_last_change.
         assert!(res.is_none());
         assert_eq!(reader.statistics.write.seek, 1);
         assert_eq!(reader.statistics.write.next, 0);
@@ -2547,6 +2569,7 @@ pub mod tests {
         assert_eq!(res.0.write_type, WriteType::Put);
         assert_eq!(res.1, 2.into());
         assert_eq!(reader.statistics.write.seek, 1);
-        assert_eq!(reader.statistics.write.next, 0);
+        assert_eq!(reader.statistics.write.next, 2);
+        assert_eq!(reader.statistics.write.get, 1);
     }
 }

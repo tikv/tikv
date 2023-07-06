@@ -942,7 +942,7 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_debug_client)]
-// #[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
 fn test_debug_store() {
     let (mut cluster, debug_client, store_id) = new_cluster();
     let cluster_id = cluster.id();
@@ -989,7 +989,6 @@ fn test_debug_store() {
 
     let mut req = debugpb::GetRangePropertiesRequest::default();
     req.set_start_key(b"d".to_vec());
-    req.set_end_key(b"".to_vec());
     let resp = debug_client.get_range_properties(&req).unwrap();
     resp.get_properties()
         .iter()
@@ -1152,6 +1151,7 @@ fn test_debug_region_info_v2() {
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     lb.put_region_state(region_id, 42, &region_state).unwrap();
 
+    lb.put_flushed_index(region_id, CF_RAFT, 5, 42).unwrap();
     raft_engine.consume(&mut lb, false).unwrap();
     assert_eq!(
         raft_engine.get_raft_state(region_id).unwrap().unwrap(),
@@ -1349,6 +1349,7 @@ fn test_debug_scan_mvcc() {
             TimeStamp::zero(),
             0,
             TimeStamp::zero(),
+            false,
         )
         .to_bytes();
         engine.put_cf(CF_LOCK, k.as_slice(), &v).unwrap();
@@ -1387,7 +1388,9 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(MiscExt::path(&engines.kv)).join("import-sst");
-        Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
+        Arc::new(
+            SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1, false).unwrap(),
+        )
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -1925,6 +1928,7 @@ fn test_with_memory_lock_cluster(
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     guard.with_lock(|l| {

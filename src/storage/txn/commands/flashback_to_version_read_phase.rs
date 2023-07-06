@@ -153,6 +153,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        reader.set_allow_in_flashback(true);
         // Filter out the SST that does not have a newer version than `self.version` in
         // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
         // scan. By doing this, we can only flashback those keys that have version

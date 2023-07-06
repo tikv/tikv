@@ -5,7 +5,7 @@
 use std::fmt::Debug;
 
 use kvproto::kvrpcpb;
-use txn_types::{Key, Value};
+use txn_types::{Key, LastChange, Value};
 
 use crate::storage::{
     errors::SharedError,
@@ -53,9 +53,13 @@ impl MvccInfo {
                     write_info.set_start_ts(write.start_ts.into_inner());
                     write_info.set_commit_ts(commit_ts.into_inner());
                     write_info.set_short_value(write.short_value.unwrap_or_default());
-                    if !write.last_change_ts.is_zero() {
-                        write_info.set_last_change_ts(write.last_change_ts.into_inner());
-                        write_info.set_versions_to_last_change(write.versions_to_last_change);
+                    if !matches!(
+                        write.last_change,
+                        LastChange::NotExist | LastChange::Exist { .. }
+                    ) {
+                        let (last_change_ts, versions) = write.last_change.to_parts();
+                        write_info.set_last_change_ts(last_change_ts.into_inner());
+                        write_info.set_versions_to_last_change(versions);
                     }
                     write_info
                 })
@@ -75,9 +79,13 @@ impl MvccInfo {
             lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);
             lock_info.set_short_value(lock.short_value.unwrap_or_default());
-            if !lock.last_change_ts.is_zero() {
-                lock_info.set_last_change_ts(lock.last_change_ts.into_inner());
-                lock_info.set_versions_to_last_change(lock.versions_to_last_change);
+            if matches!(
+                lock.last_change,
+                LastChange::NotExist | LastChange::Exist { .. }
+            ) {
+                let (last_change_ts, versions) = lock.last_change.to_parts();
+                lock_info.set_last_change_ts(last_change_ts.into_inner());
+                lock_info.set_versions_to_last_change(versions);
             }
             mvcc_info.set_lock(lock_info);
         }
@@ -121,6 +129,14 @@ impl TxnStatus {
 
     pub fn committed(commit_ts: TimeStamp) -> Self {
         Self::Committed { commit_ts }
+    }
+
+    // Returns if the transaction is already committed or rolled back.
+    pub fn is_decided(&self) -> bool {
+        matches!(
+            self,
+            TxnStatus::RolledBack | TxnStatus::TtlExpire | TxnStatus::Committed { .. }
+        )
     }
 }
 

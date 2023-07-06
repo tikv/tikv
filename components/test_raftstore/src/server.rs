@@ -8,7 +8,7 @@ use std::{
     usize,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{dispatch_api_version, ApiV1, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -66,7 +66,8 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, LocalTablets, SnapContext},
+        kv::{FakeExtension, LocalTablets, MockEngine, SnapContext},
+        lock_manager::MockLockManager,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
@@ -436,6 +437,7 @@ impl ServerCluster {
                     dir,
                     key_manager.clone(),
                     cfg.storage.api_version(),
+                    false,
                 )
                 .unwrap(),
             )
@@ -446,6 +448,7 @@ impl ServerCluster {
             engine,
             LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
+            None,
         );
 
         // Create deadlock service.
@@ -483,13 +486,16 @@ impl ServerCluster {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap(),
         );
 
-        let debugger = DebuggerImpl::new(engines.clone(), ConfigController::default());
+        let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> = DebuggerImpl::new(
+            engines.clone(),
+            ConfigController::new(cfg.tikv.clone()),
+            None,
+        );
         let debug_thread_handle = debug_thread_pool.handle().clone();
         let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
 
@@ -502,6 +508,7 @@ impl ServerCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap();
         let health_service = HealthService::default();
@@ -788,6 +795,14 @@ impl Simulator for ServerCluster {
 
 impl Cluster<ServerCluster> {
     pub fn must_get_snapshot_of_region(&mut self, region_id: u64) -> RegionSnapshot<RocksSnapshot> {
+        self.must_get_snapshot_of_region_with_ctx(region_id, Default::default())
+    }
+
+    pub fn must_get_snapshot_of_region_with_ctx(
+        &mut self,
+        region_id: u64,
+        snap_ctx: SnapContext<'_>,
+    ) -> RegionSnapshot<RocksSnapshot> {
         let mut try_snapshot = || -> Option<RegionSnapshot<RocksSnapshot>> {
             let leader = self.leader_of_region(region_id)?;
             let store_id = leader.store_id;
@@ -800,7 +815,7 @@ impl Cluster<ServerCluster> {
             let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
-                ..Default::default()
+                ..snap_ctx.clone()
             };
             storage.snapshot(snap_ctx).ok()
         };

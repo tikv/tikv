@@ -71,8 +71,7 @@ impl AdvanceTsWorker {
             .thread_name("advance-ts")
             .worker_threads(1)
             .enable_time()
-            .after_start_wrapper(|| {})
-            .before_stop_wrapper(|| {})
+            .with_sys_hooks()
             .build()
             .unwrap();
         Self {

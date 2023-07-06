@@ -20,23 +20,25 @@
 //!   parent peer, then send to the store the relevant info needed to create and
 //!   initialize the split regions.
 //!
-//! Split peer creation and initlization:
+//! Split peer creation and initialization:
 //! - on_split_init: In normal cases, the uninitialized split region will be
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{any::Any, borrow::Cow, cmp, path::PathBuf, time::Duration};
+use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry};
+use engine_traits::{
+    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
+};
 use fail::fail_point;
 use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
     pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
-    raft_serverpb::RaftSnapshotData,
+    raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
 use protobuf::Message;
 use raft::{prelude::Snapshot, INVALID_ID};
@@ -53,7 +55,7 @@ use raftstore::{
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::{log::SlogFormat, slog_panic, time::Instant, worker::Scheduler};
+use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -61,7 +63,7 @@ use crate::{
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
-    worker::{checkpoint, tablet},
+    worker::tablet,
     Error,
 };
 
@@ -175,6 +177,32 @@ impl SplitFlowControl {
     #[inline]
     pub fn approximate_keys(&self) -> Option<u64> {
         self.approximate_keys
+    }
+}
+
+pub struct SplitPendingAppend {
+    append_msg: Option<(Box<RaftMessage>, Instant)>,
+    range_overlapped: bool,
+}
+
+impl SplitPendingAppend {
+    pub fn set_range_overlapped(&mut self, range_overlapped: bool) {
+        if self.range_overlapped {
+            self.range_overlapped = range_overlapped;
+        }
+    }
+
+    pub fn take_append_message(&mut self) -> Option<Box<RaftMessage>> {
+        self.append_msg.take().map(|(msg, _)| msg)
+    }
+}
+
+impl Default for SplitPendingAppend {
+    fn default() -> SplitPendingAppend {
+        SplitPendingAppend {
+            append_msg: None,
+            range_overlapped: true,
+        }
     }
 }
 
@@ -480,11 +508,61 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .map(|r| r.get_id())
             .filter(|id| id != &region_id)
             .collect::<Vec<_>>();
-        let scheduler: _ = self.checkpoint_scheduler().clone();
+        let (tx, rx) = oneshot::channel();
         let tablet = self.tablet().clone();
-        let checkpoint_duration =
-            async_checkpoint(tablet, &scheduler, region_id, split_region_ids, log_index).await;
+        let logger = self.logger.clone();
+        let tablet_registry = self.tablet_registry().clone();
+        self.high_priority_pool()
+            .spawn(async move {
+                let checkpoint_start = Instant::now();
+                let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
+                    slog_panic!(
+                        logger,
+                        "fails to create checkpoint object";
+                        "region_id" => region_id,
+                        "error" => ?e
+                    )
+                });
 
+                for id in split_region_ids {
+                    let split_temp_path = temp_split_path(&tablet_registry, id);
+                    checkpointer
+                        .create_at(&split_temp_path, None, 0)
+                        .unwrap_or_else(|e| {
+                            slog_panic!(
+                                logger,
+                                "fails to create checkpoint";
+                                "region_id" => region_id,
+                                "path" => %split_temp_path.display(),
+                                "error" => ?e
+                            )
+                        });
+                }
+
+                let derived_path = tablet_registry.tablet_path(region_id, log_index);
+
+                // If it's recovered from restart, it's possible the target path exists already.
+                // And because checkpoint is atomic, so we don't need to worry about corruption.
+                // And it's also wrong to delete it and remake as it may has applied and flushed
+                // some data to the new checkpoint before being restarted.
+                if !derived_path.exists() {
+                    checkpointer
+                        .create_at(&derived_path, None, 0)
+                        .unwrap_or_else(|e| {
+                            slog_panic!(
+                                logger,
+                                "fails to create checkpoint";
+                                "region_id" => region_id,
+                                "path" => %derived_path.display(),
+                                "error" => ?e
+                            )
+                        });
+                }
+
+                tx.send(checkpoint_start.saturating_elapsed()).unwrap();
+            })
+            .unwrap();
+        let checkpoint_duration = rx.await.unwrap();
         // It should equal to checkpoint_duration + the duration of rescheduling current
         // apply peer
         let elapsed = now.saturating_elapsed();
@@ -527,28 +605,43 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 }
 
-// asynchronously execute the checkpoint creation and return the duration spent
-// by it
-async fn async_checkpoint<EK: KvEngine>(
-    tablet: EK,
-    scheduler: &Scheduler<checkpoint::Task<EK>>,
-    parent_region: u64,
-    split_regions: Vec<u64>,
-    log_index: u64,
-) -> Duration {
-    let (tx, rx) = oneshot::channel();
-    let task = checkpoint::Task::Checkpoint {
-        tablet,
-        log_index,
-        parent_region,
-        split_regions,
-        sender: tx,
-    };
-    scheduler.schedule_force(task).unwrap();
-    rx.await.unwrap()
-}
-
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn ready_to_handle_first_append_message<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        msg: &RaftMessage,
+    ) -> bool {
+        // The peer does not overlap with other regions. It means the parent
+        // region in this node might be stale and has been removed, so there is
+        // no split init and messages need to be handled immediately.
+        if !self.split_pending_append_mut().range_overlapped {
+            return true;
+        }
+
+        if self.split_pending_append_mut().append_msg.is_none() {
+            self.split_pending_append_mut()
+                .append_msg
+                .replace((msg.clone().into(), Instant::now_coarse()));
+            return false;
+        }
+        let logger = self.logger.clone();
+        let append_msg = &mut self.split_pending_append_mut().append_msg;
+        let dur = append_msg.as_ref().unwrap().1.saturating_elapsed();
+        if dur < store_ctx.cfg.snap_wait_split_duration.0 {
+            append_msg.as_mut().unwrap().0 = msg.clone().into();
+            // We consider a message is too early if it is replaced.
+            store_ctx
+                .raft_metrics
+                .message_dropped
+                .region_nonexistent
+                .inc();
+            return false;
+        }
+        append_msg.take();
+        warn!(logger, "handle first message now, split may be slow"; "duration" => ?dur);
+        true
+    }
+
     pub fn on_apply_res_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -843,10 +936,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{
-        mpsc::{channel, Receiver, Sender},
-        Arc,
-    };
+    use std::sync::Arc;
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -869,37 +959,16 @@ mod test {
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
-        defer,
         store::{new_learner_peer, new_peer},
-        worker::{dummy_scheduler, Worker},
+        worker::dummy_scheduler,
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
 
     use super::*;
     use crate::{
-        fsm::ApplyResReporter,
-        operation::{test_util::create_tmp_importer, CatchUpLogs},
+        operation::test_util::{create_tmp_importer, MockReporter},
         raft::Apply,
-        router::ApplyRes,
     };
-
-    struct MockReporter {
-        sender: Sender<ApplyRes>,
-    }
-
-    impl MockReporter {
-        fn new() -> (Self, Receiver<ApplyRes>) {
-            let (tx, rx) = channel();
-            (MockReporter { sender: tx }, rx)
-        }
-    }
-
-    impl ApplyResReporter for MockReporter {
-        fn report(&self, apply_res: ApplyRes) {
-            let _ = self.sender.send(apply_res);
-        }
-
-        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
-    }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {
         let mut req = SplitRequest::default();
@@ -1017,13 +1086,8 @@ mod test {
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
 
-        let checkpoint_worker = Worker::new("checkpoint-worker");
-        let checkpoint_scheduler = checkpoint_worker.start(
-            "checkpoint-worker",
-            checkpoint::Runner::new(logger.clone(), reg.clone()),
-        );
-        defer!(checkpoint_worker.stop());
-
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+        let (tablet_scheduler, _) = dummy_scheduler();
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let (_tmp_dir, importer) = create_tmp_importer();
@@ -1047,7 +1111,8 @@ mod test {
             None,
             importer,
             host,
-            checkpoint_scheduler,
+            tablet_scheduler,
+            high_priority_pool,
             logger.clone(),
         );
 

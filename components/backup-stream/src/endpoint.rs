@@ -1,8 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
-};
+use std::{collections::HashSet, fmt, marker::PhantomData, sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
@@ -50,7 +48,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{ApplyEvents, Router, TaskSelector},
+    router::{self, ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
@@ -118,12 +116,7 @@ where
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
-        let range_router = Router::new(
-            PathBuf::from(config.temp_path.clone()),
-            scheduler.clone(),
-            config.file_size_limit.0,
-            config.max_flush_interval.0,
-        );
+        let range_router = Router::new(scheduler.clone(), router::Config::from(config.clone()));
 
         // spawn a worker to watch task changes from etcd periodically.
         let meta_client_clone = meta_client.clone();
@@ -1025,14 +1018,9 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         // (`File` API in `tokio::io` would use this pool.)
         .max_blocking_threads(thread_count * 8)
         .worker_threads(thread_count)
+        .with_sys_hooks()
         .enable_io()
         .enable_time()
-        .after_start_wrapper(|| {
-            tikv_alloc::add_thread_memory_accessor();
-        })
-        .before_stop_wrapper(|| {
-            tikv_alloc::remove_thread_memory_accessor();
-        })
         .build()
 }
 

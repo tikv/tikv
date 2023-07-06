@@ -37,7 +37,11 @@ use kvproto::{
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage},
 };
 use raftstore::store::{
-    fsm::life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
+    fsm::{
+        apply,
+        life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
+        Proposal,
+    },
     metrics::RAFT_PEER_PENDING_DURATION,
     util, Transport, WriteTask,
 };
@@ -456,7 +460,7 @@ impl Store {
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
         if ctx
             .router
-            .send_and_register(region_id, mailbox, PeerMsg::Start)
+            .send_and_register(region_id, mailbox, PeerMsg::Start(None))
             .is_err()
         {
             panic!(
@@ -471,6 +475,24 @@ impl Store {
             // handling its first readiness.
             let _ = ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
         }
+    }
+
+    pub fn on_update_latency_inspectors<EK, ER, T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        start_ts: Instant,
+        mut inspector: util::LatencyInspector,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+        T: Transport,
+    {
+        // Record the last statistics of commit-log-duration and store-write-duration.
+        inspector.record_store_wait(start_ts.saturating_elapsed());
+        inspector.record_store_commit(ctx.raft_metrics.stat_commit_log.avg());
+        // Reset the stat_commit_log and wait it to be refreshed in the next tick.
+        ctx.raft_metrics.stat_commit_log.reset();
+        ctx.pending_latency_inspect.push(inspector);
     }
 }
 
@@ -777,6 +799,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let _ = ctx.router.send_raft_message(msg);
         }
         self.pending_reads_mut().clear_all(Some(region_id));
+        for Proposal { cb, .. } in self.proposals_mut().queue_mut().drain(..) {
+            apply::notify_req_region_removed(region_id, cb);
+        }
+
         self.clear_apply_scheduler();
     }
 }

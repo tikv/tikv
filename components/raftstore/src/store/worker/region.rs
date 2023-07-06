@@ -17,7 +17,9 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
+use engine_traits::{
+    DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
+};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -344,6 +346,7 @@ where
 {
     batch_size: usize,
     use_delete_range: bool,
+    ingest_copy_symlink: bool,
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
     clean_stale_ranges_tick: usize,
@@ -387,6 +390,7 @@ where
         Runner {
             batch_size: cfg.value().snap_apply_batch_size.0 as usize,
             use_delete_range: cfg.value().use_delete_range,
+            ingest_copy_symlink: cfg.value().snap_apply_copy_symlink,
             clean_stale_tick: 0,
             clean_stale_check_interval: Duration::from_millis(
                 cfg.value().region_worker_tick_interval.as_millis(),
@@ -477,6 +481,7 @@ where
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
             coprocessor_host: self.coprocessor_host.clone(),
+            ingest_copy_symlink: self.ingest_copy_symlink,
         };
         s.apply(options)?;
         self.coprocessor_host
@@ -582,10 +587,15 @@ where
             })
             .collect();
         self.engine
-            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &df_ranges)
-            .unwrap_or_else(|e| {
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteFiles,
+                &df_ranges,
+            )
+            .map_err(|e| {
                 error!("failed to delete files in range"; "err" => %e);
-            });
+            })
+            .unwrap();
         (start_key, end_key)
     }
 
@@ -646,19 +656,29 @@ where
             .collect();
 
         self.engine
-            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges)
-            .unwrap_or_else(|e| {
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteFiles,
+                &ranges,
+            )
+            .map_err(|e| {
                 error!("failed to delete files in range"; "err" => %e);
-            });
+            })
+            .unwrap();
         if let Err(e) = self.delete_all_in_range(&ranges) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
         self.engine
-            .delete_ranges_cfs(DeleteStrategy::DeleteBlobs, &ranges)
-            .unwrap_or_else(|e| {
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteBlobs,
+                &ranges,
+            )
+            .map_err(|e| {
                 error!("failed to delete blobs in range"; "err" => %e);
-            });
+            })
+            .unwrap();
 
         for (_, key, _) in region_ranges {
             assert!(
@@ -685,6 +705,7 @@ where
     }
 
     fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
+        let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
@@ -696,7 +717,7 @@ where
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
+            box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
         }
 
         Ok(())
@@ -824,8 +845,11 @@ where
                     router: self.router.clone(),
                     start: UnixSecs::now(),
                 };
+                let scheduled_time = Instant::now_coarse();
                 self.pool.spawn(async move {
-                    tikv_alloc::add_thread_memory_accessor();
+                    SNAP_GEN_WAIT_DURATION_HISTOGRAM
+                        .observe(scheduled_time.saturating_elapsed_secs());
+
                     ctx.handle_gen(
                         region_id,
                         last_applied_term,
@@ -836,7 +860,6 @@ where
                         for_balance,
                         allow_multi_files_snapshot,
                     );
-                    tikv_alloc::remove_thread_memory_accessor();
                 }).unwrap_or_else(
                     |e| {
                         error!("failed to generate snapshot"; "region_id" => region_id, "err" => ?e);

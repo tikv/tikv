@@ -185,6 +185,7 @@ pub fn prewrite_flashback_key(
             TimeStamp::zero(),
             1,
             TimeStamp::zero(),
+            false,
         ),
         false, // Assuming flashback transactions won't participate any lock conflicts.
     );
@@ -207,7 +208,7 @@ pub fn commit_flashback_key(
                 flashback_start_ts,
                 lock.short_value.take(),
             )
-            .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+            .set_last_change(lock.last_change.clone())
             .set_txn_source(lock.txn_source)
             .as_ref()
             .to_bytes(),

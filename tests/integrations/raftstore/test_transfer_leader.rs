@@ -10,7 +10,7 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::Snapshot;
 use tikv_util::config::*;
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -271,8 +271,8 @@ fn test_propose_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     {
@@ -314,8 +314,8 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     txn_ext

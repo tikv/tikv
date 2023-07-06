@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::sync::{mpsc::SyncSender, Arc};
 
 use kvproto::{
     import_sstpb::SstMeta,
@@ -11,7 +12,7 @@ use kvproto::{
 };
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
-    FetchedLogs, GenSnapRes,
+    util::LatencyInspector, FetchedLogs, GenSnapRes, TabletSnapKey,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
@@ -21,7 +22,7 @@ use super::response_channel::{
     QueryResSubscriber,
 };
 use crate::{
-    operation::{CatchUpLogs, RequestHalfSplit, RequestSplit, SplitInit},
+    operation::{CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit},
     router::ApplyRes,
 };
 
@@ -169,7 +170,7 @@ pub enum PeerMsg {
     LogsFetched(FetchedLogs),
     SnapshotGenerated(GenSnapRes),
     /// Start the FSM.
-    Start,
+    Start(Option<Arc<ReplayWatch>>),
     /// Messages from peer to peer in the same store
     SplitInit(Box<SplitInit>),
     SplitInitFinish(u64),
@@ -240,6 +241,11 @@ pub enum PeerMsg {
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
+    FlushBeforeClose {
+        tx: SyncSender<()>,
+    },
+    /// A message that used to check if a snapshot gc is happened.
+    SnapGc(Box<[TabletSnapKey]>),
 }
 
 impl ResourceMetered for PeerMsg {}
@@ -334,6 +340,11 @@ pub enum StoreMsg {
     WaitFlush {
         region_id: u64,
         ch: super::FlushChannel,
+    },
+    /// Inspect the latency of raftstore.
+    LatencyInspect {
+        send_time: Instant,
+        inspector: LatencyInspector,
     },
 }
 
