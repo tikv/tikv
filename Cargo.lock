@@ -2926,7 +2926,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#0a57dd2e2c3d1be9679a9ad6a3ed70dcb4b87eff"
+>>>>>>> a5f1a26d3b (raftstore-v2, coprocessor: use snapshot sequence number for cache (#14997))
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2945,7 +2949,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#0a57dd2e2c3d1be9679a9ad6a3ed70dcb4b87eff"
+>>>>>>> a5f1a26d3b (raftstore-v2, coprocessor: use snapshot sequence number for cache (#14997))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4873,7 +4881,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#0a57dd2e2c3d1be9679a9ad6a3ed70dcb4b87eff"
+>>>>>>> a5f1a26d3b (raftstore-v2, coprocessor: use snapshot sequence number for cache (#14997))
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
