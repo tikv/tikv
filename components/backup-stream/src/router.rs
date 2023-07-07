@@ -476,6 +476,7 @@ impl RouterInner {
             content_compression: task.info.get_compression_type(),
             minimal_swap_out_file_size: ReadableSize::mb(1).0 as _,
             write_buffer_size: ReadableSize::kb(4).0 as _,
+            encryption: None,
         }
     }
 
@@ -1534,6 +1535,7 @@ mod tests {
             content_compression: CompressionType::Zstd,
             minimal_swap_out_file_size: 0,
             write_buffer_size: 0,
+            encryption: None
         }
     }
 
