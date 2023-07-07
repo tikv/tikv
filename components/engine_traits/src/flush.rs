@@ -63,17 +63,13 @@ struct FlushProgress {
 #[derive(Debug, Clone)]
 pub struct SstApplyState {
     // vec from cf to Vec<SstApplyEntry>.
-    ssts: Arc<RwLock<Vec<Vec<SstApplyEntry>>>>,
+    ssts: Arc<RwLock<[Vec<SstApplyEntry>; DATA_CFS_LEN]>>,
 }
 
 impl Default for SstApplyState {
     fn default() -> Self {
-        let mut ssts = Vec::with_capacity(DATA_CFS_LEN);
-        for _ in 0..DATA_CFS_LEN {
-            ssts.push(Vec::new());
-        }
         Self {
-            ssts: Arc::new(RwLock::new(ssts)),
+            ssts: Arc::new(RwLock::new(Default::default())),
         }
     }
 }
@@ -103,8 +99,7 @@ impl SstApplyState {
 
     #[inline]
     pub fn stale_ssts(&self, cf: &str, flushed_index: u64) -> Vec<SstMeta> {
-        let sst_list: std::sync::RwLockReadGuard<'_, Vec<Vec<SstApplyEntry>>> =
-            self.ssts.read().unwrap();
+        let sst_list = self.ssts.read().unwrap();
         let cf_index = data_cf_offset(cf);
         if let Some(ssts) = sst_list.get(cf_index) {
             return ssts
