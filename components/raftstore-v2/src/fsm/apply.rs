@@ -8,6 +8,7 @@ use std::{
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{FlushState, KvEngine, SstApplyState, TabletRegistry};
+use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
@@ -141,6 +142,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                 }
             };
             loop {
+                fail_point!("before_handle_tasks");
                 match task {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,

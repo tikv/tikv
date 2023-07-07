@@ -506,56 +506,59 @@ where
         self.schedule_txn_extra(txn_extra);
 
         let (tx, rx) = WriteResFeed::pair();
-        let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
-            None
-        } else {
-            let tx = tx.clone();
-            Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
-        };
-        let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
-            None
-        } else {
-            let tx = tx.clone();
-            Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
-        };
-        let applied_tx = tx.clone();
-        let applied_cb = must_call(
-            Box::new(move |resp: WriteResponse| {
-                fail_point!("applied_cb_return_undetermined_err", |_| {
-                    applied_tx.notify(Err(kv::Error::from(Error::Undetermined(
-                        ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string(),
-                    ))));
-                });
-                let mut res = match on_write_result::<E::Snapshot>(resp) {
-                    Ok(CmdRes::Resp(_)) => {
-                        fail_point!("raftkv_async_write_finish");
-                        Ok(())
-                    }
-                    Ok(CmdRes::Snap(_)) => {
-                        Err(box_err!("unexpect snapshot, should mutate instead."))
-                    }
-                    Err(e) => Err(kv::Error::from(e)),
-                };
-                if let Some(cb) = on_applied {
-                    cb(&mut res);
-                }
-                applied_tx.notify(res);
-            }),
-            drop_on_applied_callback,
-        );
-
-        let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
-        let extra_opts = RaftCmdExtraOpts {
-            deadline: batch.deadline,
-            disk_full_opt: batch.disk_full_opt,
-        };
         if res.is_ok() {
+            let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
+                None
+            } else {
+                let tx = tx.clone();
+                Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
+            };
+            let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
+                None
+            } else {
+                let tx = tx.clone();
+                Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
+            };
+            let applied_tx = tx.clone();
+            let applied_cb = must_call(
+                Box::new(move |resp: WriteResponse| {
+                    fail_point!("applied_cb_return_undetermined_err", |_| {
+                        applied_tx.notify(Err(kv::Error::from(Error::Undetermined(
+                            ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string(),
+                        ))));
+                    });
+                    let mut res = match on_write_result::<E::Snapshot>(resp) {
+                        Ok(CmdRes::Resp(_)) => {
+                            fail_point!("raftkv_async_write_finish");
+                            Ok(())
+                        }
+                        Ok(CmdRes::Snap(_)) => {
+                            Err(box_err!("unexpect snapshot, should mutate instead."))
+                        }
+                        Err(e) => Err(kv::Error::from(e)),
+                    };
+                    if let Some(cb) = on_applied {
+                        cb(&mut res);
+                    }
+                    applied_tx.notify(res);
+                }),
+                drop_on_applied_callback,
+            );
+
+            let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
+            let extra_opts = RaftCmdExtraOpts {
+                deadline: batch.deadline,
+                disk_full_opt: batch.disk_full_opt,
+            };
             res = self
                 .router
                 .send_command(cmd, cb, extra_opts)
                 .map_err(kv::Error::from);
         }
         if res.is_err() {
+            // Note that `on_applied` is not called in this case. We send message to the
+            // channel here to notify the caller that the writing ended, like
+            // how the `applied_cb` does.
             tx.notify(res);
         }
         rx.inspect(move |ev| {
