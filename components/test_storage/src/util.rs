@@ -13,6 +13,14 @@ pub fn new_raft_engine(
 ) -> (Cluster<ServerCluster>, SimulateEngine, Context) {
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
+    let (engine, ctx) = leader_raft_engine(&mut cluster, key);
+    (cluster, engine, ctx)
+}
+
+pub fn leader_raft_engine(
+    cluster: &mut Cluster<ServerCluster>,
+    key: &str,
+) -> (SimulateEngine, Context) {
     // make sure leader has been elected.
     assert_eq!(cluster.must_get(b""), None);
     let region = cluster.get_region(key.as_bytes());
@@ -22,7 +30,8 @@ pub fn new_raft_engine(
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
-    (cluster, engine, ctx)
+
+    (engine, ctx)
 }
 
 pub fn follower_raft_engine(

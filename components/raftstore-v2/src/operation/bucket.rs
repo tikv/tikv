@@ -313,7 +313,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
             reader
                 .0
-                .update(ReadProgress::region_buckets(Arc::new(meta.clone())));
+                .update(ReadProgress::region_buckets(Arc::new(meta)));
         }
     }
 

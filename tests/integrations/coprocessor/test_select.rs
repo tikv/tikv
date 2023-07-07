@@ -10,7 +10,8 @@ use kvproto::{
 use protobuf::Message;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
-use test_raftstore::{Cluster, ServerCluster};
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
+use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
     codec::{datum, Datum},
@@ -2018,12 +2019,15 @@ fn test_rc_read() {
     assert_eq!(row_count, expected_data.len());
 }
 
-#[test]
 #[cfg(feature = "failpoints")]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_buckets() {
-    let product = ProductTable::new();
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
     fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
-    let (mut cluster, raft_engine, ctx) = new_raft_engine(3, "");
+    let product = ProductTable::new();
+    let (raft_engine, ctx) = leader_raft_engine(&mut cluster, "");
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
 
