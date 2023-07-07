@@ -192,7 +192,7 @@ impl FileSystem for ManagedFileSystem {
     fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
         self.base_file_system.delete(path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
-            manager.delete_file(path.as_ref().to_str().unwrap())?;
+            manager.delete_file(path.as_ref().to_str().unwrap(), None)?;
         }
         Ok(())
     }
@@ -206,8 +206,11 @@ impl FileSystem for ManagedFileSystem {
             let r = self
                 .base_file_system
                 .rename(src_path.as_ref(), dst_path.as_ref());
-            let del_file = if r.is_ok() { src_str } else { dst_str };
-            if let Err(e) = manager.delete_file(del_file) {
+            if r.is_ok() {
+                if let Err(e) = manager.delete_file(src_str, Some(dst_str)) {
+                    warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+                }
+            } else if let Err(e) = manager.delete_file(dst_str, Some(src_str)) {
                 warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
             }
             r
@@ -216,6 +219,7 @@ impl FileSystem for ManagedFileSystem {
         }
     }
 
+    // TODO: distinguish reuse to trash and from trash.
     fn reuse<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
         if let Some(ref manager) = self.key_manager {
             // Note: In contrast to `rename`, `reuse` will make sure the encryption
@@ -229,9 +233,12 @@ impl FileSystem for ManagedFileSystem {
             let r = self
                 .base_file_system
                 .rename(src_path.as_ref(), dst_path.as_ref());
-            let del_file = if r.is_ok() { src_str } else { dst_str };
-            if let Err(e) = manager.delete_file(del_file) {
-                warn!("fail to remove encryption metadata during 'reuse'"; "err" => ?e);
+            if r.is_ok() {
+                if let Err(e) = manager.delete_file(src_str, Some(dst_str)) {
+                    warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+                }
+            } else if let Err(e) = manager.delete_file(dst_str, Some(src_str)) {
+                warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
             }
             r
         } else {
@@ -253,7 +260,7 @@ impl FileSystem for ManagedFileSystem {
     fn delete_metadata<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
         if let Some(ref manager) = self.key_manager {
             // Note: no error if the file doesn't exist.
-            manager.delete_file(path.as_ref().to_str().unwrap())?;
+            manager.delete_file(path.as_ref().to_str().unwrap(), None)?;
         }
         self.base_file_system.delete_metadata(path)
     }
