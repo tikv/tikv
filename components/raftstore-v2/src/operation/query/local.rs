@@ -276,7 +276,8 @@ where
                     }
                 };
 
-                snap.set_from_v2();
+                // FIXME: Tests show it causing TiDB failed to start.
+                // snap.set_from_v2();
                 snap.txn_ext = Some(delegate.txn_ext.clone());
                 snap.term = NonZeroU64::new(delegate.term);
                 snap.txn_extra_op = delegate.txn_extra_op.load();
