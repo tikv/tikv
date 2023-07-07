@@ -649,8 +649,8 @@ pub fn create_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder =
-        KvEngineFactoryBuilder::new(env, &cfg, cache).sst_recovery_sender(Some(scheduler));
+    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, cache, key_manager.clone())
+        .sst_recovery_sender(Some(scheduler));
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),

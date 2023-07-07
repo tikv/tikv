@@ -2980,7 +2980,7 @@
               "expr": "sum(rate(tikv_server_raft_append_rejects{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type!=\"kv_gc\"}[1m])) by (instance)",
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}-existed",
+              "legendFormat": "{{instance}}-memory",
               "queryType": "randomWalk",
               "refId": "A"
             }

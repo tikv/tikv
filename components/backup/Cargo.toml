@@ -58,7 +58,7 @@ log_wrappers = { workspace = true }
 online_config = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raftstore = { workspace = true }
 security = { workspace = true }
 serde = "1.0"

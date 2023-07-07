@@ -633,7 +633,28 @@ impl Cluster {
                     let gen_path = from_snap_mgr.tablet_gen_path(&key);
                     let recv_path = to_snap_mgr.final_recv_path(&key);
                     assert!(gen_path.exists());
+<<<<<<< HEAD
                     std::fs::rename(gen_path, recv_path.clone()).unwrap();
+=======
+                    if let Some(m) = from_snap_mgr.key_manager() {
+                        let mut importer =
+                            DataKeyImporter::new(to_snap_mgr.key_manager().as_deref().unwrap());
+                        for e in walkdir::WalkDir::new(&gen_path).into_iter() {
+                            let e = e.unwrap();
+                            let new_path = recv_path.join(e.path().file_name().unwrap());
+                            if let Some((iv, key)) =
+                                m.get_file_internal(e.path().to_str().unwrap()).unwrap()
+                            {
+                                importer.add(new_path.to_str().unwrap(), iv, key).unwrap();
+                            }
+                        }
+                        importer.commit().unwrap();
+                    }
+                    std::fs::rename(&gen_path, &recv_path).unwrap();
+                    if let Some(m) = from_snap_mgr.key_manager() {
+                        m.remove_dir(&gen_path, Some(&recv_path)).unwrap();
+                    }
+>>>>>>> 993eb2f610 (raftstore-v2: fix issues of encryption and merge (#14820))
                     assert!(recv_path.exists());
                 }
                 regions.insert(msg.get_region_id());

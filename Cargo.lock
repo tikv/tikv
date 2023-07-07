@@ -2926,7 +2926,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+>>>>>>> 993eb2f610 (raftstore-v2: fix issues of encryption and merge (#14820))
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2945,7 +2949,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+>>>>>>> 993eb2f610 (raftstore-v2: fix issues of encryption and merge (#14820))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4873,7 +4881,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+>>>>>>> 993eb2f610 (raftstore-v2: fix issues of encryption and merge (#14820))
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

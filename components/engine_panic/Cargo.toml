@@ -11,7 +11,7 @@ testexport = []
 [dependencies]
 engine_traits = { workspace = true }
 kvproto = { workspace = true }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { workspace = true }

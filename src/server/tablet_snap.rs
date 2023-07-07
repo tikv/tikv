@@ -408,7 +408,12 @@ pub(crate) async fn recv_snap_files<'a>(
         ));
     }
     let path = snap_mgr.tmp_recv_path(&context.key);
-    info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
+    info!(
+        "begin to receive tablet snapshot files";
+        "file" => %path.display(),
+        "region_id" => region_id,
+        "temp_exists" => path.exists(),
+    );
     if path.exists() {
         // TODO(tabokie)
         fs::remove_dir_all(&path)?;
@@ -427,9 +432,31 @@ pub(crate) async fn recv_snap_files<'a>(
     let received = accept_missing(&path, missing_ssts, &mut stream, &limiter).await?;
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
+<<<<<<< HEAD
     // TODO(tabokie)
     fs::rename(&path, final_path)?;
 
+=======
+    if let Some(m) = snap_mgr.key_manager() {
+        m.link_file(path.to_str().unwrap(), final_path.to_str().unwrap())?;
+    }
+    fs::rename(&path, &final_path).map_err(|e| {
+        if let Some(m) = snap_mgr.key_manager() {
+            if let Err(e) = m.remove_dir(&final_path, Some(&path)) {
+                error!(
+                    "failed to clean up encryption keys after rename fails";
+                    "src" => %path.display(),
+                    "dst" => %final_path.display(),
+                    "err" => ?e,
+                );
+            }
+        }
+        e
+    })?;
+    if let Some(m) = snap_mgr.key_manager() {
+        m.remove_dir(&path, Some(&final_path))?;
+    }
+>>>>>>> 993eb2f610 (raftstore-v2: fix issues of encryption and merge (#14820))
     Ok(context)
 }
 
@@ -462,6 +489,7 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
     match res {
         Ok(()) => sink.close().await.map_err(Error::from),
         Err(e) => {
+            info!("receive tablet snapshot aborted"; "err" => ?e);
             let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
             sink.fail(status).await.map_err(Error::from)
         }
@@ -929,6 +957,22 @@ pub fn copy_tablet_snapshot(
     }
 
     let final_path = recver_snap_mgr.final_recv_path(&recv_context.key);
+<<<<<<< HEAD
     fs::rename(&recv_path, final_path)?;
+=======
+    if let Some(m) = recver_snap_mgr.key_manager() {
+        m.link_file(recv_path.to_str().unwrap(), final_path.to_str().unwrap())?;
+    }
+    fs::rename(&recv_path, &final_path).map_err(|e| {
+        if let Some(m) = recver_snap_mgr.key_manager() {
+            let _ = m.remove_dir(&final_path, Some(&recv_path));
+        }
+        e
+    })?;
+    if let Some(m) = recver_snap_mgr.key_manager() {
+        m.remove_dir(&recv_path, Some(&final_path))?;
+    }
+
+>>>>>>> 993eb2f610 (raftstore-v2: fix issues of encryption and merge (#14820))
     Ok(())
 }

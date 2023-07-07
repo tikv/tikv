@@ -1086,7 +1086,7 @@ pub fn check_conf_change(
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         let first_index = node.raft.raft_log.first_index();
         if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
-                || promoted_commit_index + 1 >= first_index
+            || promoted_commit_index + 1 >= first_index
         {
             return Ok(());
         }
@@ -1096,10 +1096,12 @@ pub fn check_conf_change(
             .inc();
 
         Err(box_err!(
-            "{:?}: before: {:?}, after: {:?}, first index {}, promoted commit index {}",
+            "{:?}: before: {:?}, {:?}; after: {:?}, {:?}; first index {}; promoted commit index {}",
             change_peers,
-            current_progress.conf().to_conf_state(),
-            after_progress.conf().to_conf_state(),
+            current_progress.conf(),
+            current_progress.iter().collect::<Vec<_>>(),
+            after_progress.conf(),
+            current_progress.iter().collect::<Vec<_>>(),
             first_index,
             promoted_commit_index
         ))
