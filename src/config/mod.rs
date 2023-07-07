@@ -3472,6 +3472,11 @@ impl TikvConfig {
                     enable-partitioned-raft-kv-compatible-learner, overwrite to false"
                 );
             }
+            if self.raft_store.use_delete_range {
+                return Err(
+                    "partitioned-raft-kv doesn't support raftstore.use-delete-range=true.".into(),
+                );
+            }
         }
 
         // Validate raftstore with other components.
