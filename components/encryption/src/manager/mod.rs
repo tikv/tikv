@@ -821,6 +821,12 @@ impl DataKeyManager {
             .peekable();
         while let Some(e) = iter.next() {
             let e = e?;
+            if e.path().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("unexpected symbolic link: {}", e.path().display()),
+                ));
+            }
             let fname = e.path().to_str().unwrap();
             let sync = iter.peek().is_none();
             if let Some(p) = physical {
@@ -924,6 +930,12 @@ impl EncryptionKeyManager for DataKeyManager {
                 .peekable();
             while let Some(e) = iter.next() {
                 let e = e?;
+                if e.path().is_symlink() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("unexpected symbolic link: {}", e.path().display()),
+                    ));
+                }
                 let sub_path = e.path().strip_prefix(src_path).unwrap();
                 let src = e.path().to_str().unwrap();
                 let dst_path = dst_path.join(sub_path);

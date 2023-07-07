@@ -525,7 +525,14 @@ async fn recv_snap_imp<'a>(
     }
     fs::rename(&path, &final_path).map_err(|e| {
         if let Some(m) = snap_mgr.key_manager() {
-            let _ = m.remove_dir(&final_path, Some(&path));
+            if let Err(e) = m.remove_dir(&final_path, Some(&path)) {
+                error!(
+                    "failed to clean up encryption keys after rename fails";
+                    "src" => %path.display(),
+                    "dst" => %final_path.display(),
+                    "err" => ?e,
+                );
+            }
         }
         e
     })?;
