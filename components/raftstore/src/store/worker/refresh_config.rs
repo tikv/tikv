@@ -11,7 +11,6 @@ use tikv_util::{
     debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, warn,
     worker::Runnable, yatp_pool::FuturePool,
 };
-use yatp::{task::future::TaskCell, ThreadPool};
 
 use crate::store::{
     async_io::write::{StoreWriters, StoreWritersContext},
@@ -319,12 +318,12 @@ where
     }
 
     fn resize_snap_generator_read_pool(&mut self, size: usize) {
+        let current_pool_size = self.snap_generator_pool.get_pool_size();
         // It may not take effect immediately. See comments of
         // ThreadPool::scale_workers.
         // Also, the size will be clamped between min_thread_count and the max_pool_size
         // set when the pool is initialized. This is fine as max_pool_size
         // is relatively a large value.
-        let pool_size = self.snap_generator_pool.get_pool_size();
         self.snap_generator_pool.scale_pool_size(size);
         let (min_thread_count, max_thread_count) = self.snap_generator_pool.thread_count_limit();
         if size > max_thread_count || size < min_thread_count {
@@ -337,7 +336,8 @@ where
         } else {
             info!(
                 "resize apply pool";
-                "size" => size
+                "from" => current_pool_size,
+                "to" => size,
             );
         }
     }

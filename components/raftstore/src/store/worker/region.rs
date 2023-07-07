@@ -28,15 +28,11 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
     box_err, box_try,
     config::VersionTrack,
-    defer, error, info, thd_name,
+    defer, error, info,
     time::{Instant, UnixSecs},
     warn,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
-};
-use yatp::{
-    pool::{Builder, ThreadPool},
-    task::future::TaskCell,
 };
 
 use super::metrics::*;
@@ -410,7 +406,7 @@ where
             router,
             pd_client,
             pool: YatpPoolBuilder::new(DefaultTicker::default())
-                .name_prefix("snap-generator")
+                .name_prefix("snap-gen")
                 .thread_count(
                     1,
                     cfg.value().snap_generator_pool_size,
@@ -855,14 +851,7 @@ where
                     start: UnixSecs::now(),
                 };
                 let scheduled_time = Instant::now_coarse();
-                let res = self.pool.spawn(async move {
-                    let current = std::thread::current();
-                    let tid = current.id();
-                    let name = current.name();
-                    println!("on snap gen: {:?}, {:?}", tid, name);
-                    fail_point!("on_snap_generate");
-                    println!("after snap gen: {:?}", tid);
-
+                let _ = self.pool.spawn(async move {
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
                         .observe(scheduled_time.saturating_elapsed_secs());
 
@@ -877,7 +866,6 @@ where
                         allow_multi_files_snapshot,
                     );
                 });
-                println!("spawn res {:?}", res);
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
