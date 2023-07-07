@@ -11,7 +11,7 @@ use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
 };
-use slog::{error, warn};
+use slog::{error, info, warn};
 
 use crate::{
     batch::StoreContext,

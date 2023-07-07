@@ -271,10 +271,10 @@ pub struct Config {
     /// `evict_cache_on_memory_ratio` * total.
     ///
     /// Set it to 0 can disable cache evict.
-    // By default it's 0.2. So for different system memory capacity, cache evict happens:
-    // * system=8G,  memory_usage_limit=6G,  evict=1.2G
-    // * system=16G, memory_usage_limit=12G, evict=2.4G
-    // * system=32G, memory_usage_limit=24G, evict=4.8G
+    // By default it's 0.1. So for different system memory capacity, cache evict happens:
+    // * system=8G,  memory_usage_limit=6G,  evict=0.6G
+    // * system=16G, memory_usage_limit=12G, evict=1.2G
+    // * system=32G, memory_usage_limit=24G, evict=2.4G
     pub evict_cache_on_memory_ratio: f64,
 
     pub cmd_batch: bool,
@@ -452,7 +452,7 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
-            evict_cache_on_memory_ratio: 0.0,
+            evict_cache_on_memory_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
