@@ -246,6 +246,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         let buckets_count = region_buckets.meta.keys.len() - 1;
+        info!(self.logger, "refreshed region bucket info"; "buckets_count" => buckets_count);
         store_ctx.coprocessor_host.on_region_changed(
             region,
             RegionChangeEvent::UpdateBuckets(buckets_count),
