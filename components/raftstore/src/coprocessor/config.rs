@@ -76,7 +76,7 @@ pub const RAFTSTORE_V2_SPLIT_SIZE: ReadableSize = ReadableSize::gb(10);
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
-pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(48);
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(50);
 
 pub const DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO: f64 = 0.33;
 
