@@ -487,7 +487,12 @@ async fn recv_snap_imp<'a>(
         ));
     }
     let path = snap_mgr.tmp_recv_path(&context.key);
-    info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
+    info!(
+        "begin to receive tablet snapshot files";
+        "file" => %path.display(),
+        "region_id" => region_id,
+        "temp_exists" => path.exists(),
+    );
     if path.exists() {
         if let Some(m) = snap_mgr.key_manager() {
             m.remove_dir(&path, None)?;
@@ -520,12 +525,19 @@ async fn recv_snap_imp<'a>(
     }
     fs::rename(&path, &final_path).map_err(|e| {
         if let Some(m) = snap_mgr.key_manager() {
-            let _ = m.delete_file(final_path.to_str().unwrap());
+            if let Err(e) = m.remove_dir(&final_path, Some(&path)) {
+                error!(
+                    "failed to clean up encryption keys after rename fails";
+                    "src" => %path.display(),
+                    "dst" => %final_path.display(),
+                    "err" => ?e,
+                );
+            }
         }
         e
     })?;
     if let Some(m) = snap_mgr.key_manager() {
-        m.delete_file(path.to_str().unwrap())?;
+        m.remove_dir(&path, Some(&final_path))?;
     }
     Ok(context)
 }
@@ -558,6 +570,7 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
     match res {
         Ok(()) => sink.close().await?,
         Err(e) => {
+            info!("receive tablet snapshot aborted"; "err" => ?e);
             let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
             sink.fail(status).await?;
         }
@@ -1020,12 +1033,12 @@ pub fn copy_tablet_snapshot(
     }
     fs::rename(&recv_path, &final_path).map_err(|e| {
         if let Some(m) = recver_snap_mgr.key_manager() {
-            let _ = m.delete_file(final_path.to_str().unwrap());
+            let _ = m.remove_dir(&final_path, Some(&recv_path));
         }
         e
     })?;
     if let Some(m) = recver_snap_mgr.key_manager() {
-        m.delete_file(recv_path.to_str().unwrap())?;
+        m.remove_dir(&recv_path, Some(&final_path))?;
     }
 
     Ok(())

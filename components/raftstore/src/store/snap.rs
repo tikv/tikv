@@ -900,7 +900,7 @@ impl Snapshot {
                 }
                 if let Some(ref mgr) = self.mgr.encryption_key_manager {
                     for tmp_file_path in cf_file.tmp_file_paths() {
-                        mgr.delete_file(&tmp_file_path)?;
+                        mgr.delete_file(&tmp_file_path, None)?;
                     }
                 }
             }
@@ -948,7 +948,7 @@ impl Snapshot {
                     if file_exists(&file_path) {
                         delete_file_if_exist(&file_path).unwrap();
                         if let Some(ref mgr) = self.mgr.encryption_key_manager {
-                            mgr.delete_file(file_path.to_str().unwrap()).unwrap();
+                            mgr.delete_file(file_path.to_str().unwrap(), None).unwrap();
                         }
                         file_id += 1;
                     } else {
@@ -998,7 +998,7 @@ impl Snapshot {
                 }
                 if let Some(ref mgr) = self.mgr.encryption_key_manager {
                     for file_path in &file_paths {
-                        mgr.delete_file(file_path).unwrap();
+                        mgr.delete_file(file_path, None).unwrap();
                     }
                 }
             }
@@ -1916,14 +1916,14 @@ impl SnapManagerCore {
                 // because without metadata file, saved cf files are nothing.
                 while let Err(e) = mgr.link_file(src, dst) {
                     if e.kind() == ErrorKind::AlreadyExists {
-                        mgr.delete_file(dst)?;
+                        mgr.delete_file(dst, None)?;
                         continue;
                     }
                     return Err(e.into());
                 }
                 let r = file_system::rename(src, dst);
                 let del_file = if r.is_ok() { src } else { dst };
-                if let Err(e) = mgr.delete_file(del_file) {
+                if let Err(e) = mgr.delete_file(del_file, None) {
                     warn!("fail to remove encryption metadata during 'rename_tmp_cf_file_for_send'";
                           "err" => ?e);
                 }
