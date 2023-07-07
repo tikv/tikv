@@ -251,7 +251,11 @@ impl<R: Read> Read for CrypterReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let count = self.reader.read(buf)?;
         if let Some(crypter) = self.crypter.as_mut() {
-            crypter.do_crypter_in_place(&mut buf[..count])?;
+            if let Err(e) = crypter.do_crypter_in_place(&mut buf[..count]) {
+                // FIXME: We can't recover from this without rollback `reader` to old offset.
+                // But that requires `Seek` which requires a wider refactor of user code.
+                panic!("`do_crypter_in_place` failed: {:?}", e);
+            }
         }
         Ok(count)
     }
@@ -283,7 +287,9 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
         };
         if let Some(crypter) = inner.crypter.as_mut() {
             if let Err(e) = crypter.do_crypter_in_place(&mut buf[..read_count]) {
-                return Poll::Ready(Err(e));
+                // FIXME: We can't recover from this without rollback `reader` to old offset.
+                // But that requires `Seek` which requires a wider refactor of user code.
+                panic!("`do_crypter_in_place` failed: {:?}", e);
             }
         }
         Poll::Ready(Ok(read_count))
@@ -330,7 +336,10 @@ impl<W: Write> Write for CrypterWriter<W> {
         if let Some(crypter) = self.crypter.as_mut() {
             let crypted = crypter.do_crypter(buf)?;
             debug_assert!(crypted.len() == buf.len());
-            self.writer.write(crypted)
+            let r = self.writer.write(crypted);
+            let missing = buf.len() - r.as_ref().unwrap_or(&0);
+            crypter.lazy_reset_crypter(crypter.offset - missing as u64);
+            r
         } else {
             self.writer.write(buf)
         }
@@ -388,6 +397,8 @@ struct CrypterCore {
     key: Vec<u8>,
     mode: Mode,
     initial_iv: Iv,
+
+    offset: u64,
     crypter: Option<OCrypter>,
     block_size: usize,
 
@@ -401,9 +412,10 @@ impl CrypterCore {
             method,
             key: key.to_owned(),
             mode,
+            initial_iv: iv,
+            offset: 0,
             crypter: None,
             block_size: 0,
-            initial_iv: iv,
             buffer: Vec::new(),
         })
     }
@@ -414,6 +426,17 @@ impl CrypterCore {
         self.buffer.resize(size + self.block_size, 0);
     }
 
+    // Delay the reset to future operations that use crypter. Guarantees those
+    // operations can only succeed after crypter is properly reset.
+    pub fn lazy_reset_crypter(&mut self, offset: u64) {
+        if self.offset != offset {
+            self.crypter.take();
+            self.offset = offset;
+        }
+    }
+
+    // It has the same guarantee as `lazy_reset_crypter`. In addition, it attempts
+    // to reset immediately and returns any error.
     pub fn reset_crypter(&mut self, offset: u64) -> IoResult<()> {
         let mut iv = self.initial_iv;
         iv.add_offset(offset / AES_BLOCK_SIZE as u64)?;
@@ -424,6 +447,7 @@ impl CrypterCore {
         self.reset_buffer(partial_offset);
         let crypter_count = crypter.update(&partial_block, &mut self.buffer)?;
         if crypter_count != partial_offset {
+            self.lazy_reset_crypter(offset);
             return Err(IoError::new(
                 ErrorKind::Other,
                 format!(
@@ -432,6 +456,7 @@ impl CrypterCore {
                 ),
             ));
         }
+        self.offset = offset;
         self.crypter = Some(crypter);
         self.block_size = cipher.block_size();
         Ok(())
@@ -443,7 +468,7 @@ impl CrypterCore {
     /// this code needs to be updated.
     pub fn do_crypter_in_place(&mut self, buf: &mut [u8]) -> IoResult<()> {
         if self.crypter.is_none() {
-            self.reset_crypter(0)?;
+            self.reset_crypter(self.offset)?;
         }
         let count = buf.len();
         self.reset_buffer(std::cmp::min(count, MAX_INPLACE_CRYPTION_SIZE));
@@ -454,6 +479,7 @@ impl CrypterCore {
             debug_assert!(self.buffer.len() >= target - encrypted);
             let crypter_count = crypter.update(&buf[encrypted..target], &mut self.buffer)?;
             if crypter_count != target - encrypted {
+                self.crypter.take();
                 return Err(IoError::new(
                     ErrorKind::Other,
                     format!(
@@ -466,18 +492,20 @@ impl CrypterCore {
             buf[encrypted..target].copy_from_slice(&self.buffer[..crypter_count]);
             encrypted += crypter_count;
         }
+        self.offset += count as u64;
         Ok(())
     }
 
     pub fn do_crypter(&mut self, buf: &[u8]) -> IoResult<&[u8]> {
         if self.crypter.is_none() {
-            self.reset_crypter(0)?;
+            self.reset_crypter(self.offset)?;
         }
         let count = buf.len();
         self.reset_buffer(count);
         let crypter = self.crypter.as_mut().unwrap();
         let crypter_count = crypter.update(buf, &mut self.buffer)?;
         if crypter_count != count {
+            self.crypter.take();
             return Err(IoError::new(
                 ErrorKind::Other,
                 format!(
@@ -486,6 +514,7 @@ impl CrypterCore {
                 ),
             ));
         }
+        self.offset += count as u64;
         Ok(&self.buffer[..count])
     }
 
