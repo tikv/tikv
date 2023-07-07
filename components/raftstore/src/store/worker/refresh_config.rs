@@ -115,7 +115,7 @@ where
     }
 }
 
-struct WriterContoller<EK, ER, T, N>
+pub struct WriterContoller<EK, ER, T, N>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
@@ -144,6 +144,22 @@ where
             store_writers,
             expected_writers_size: writers_size,
         }
+    }
+
+    pub fn expected_writers_size(&self) -> usize {
+        self.expected_writers_size
+    }
+
+    pub fn set_expected_writers_size(&mut self, size: usize) {
+        self.expected_writers_size = size;
+    }
+
+    pub fn mut_store_writers(&mut self) -> &mut StoreWriters<EK, ER> {
+        &mut self.store_writers
+    }
+
+    pub fn writer_meta(&self) -> &StoreWritersContext<EK, ER, T, N> {
+        &self.writer_meta
     }
 }
 
