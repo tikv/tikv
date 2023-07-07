@@ -42,7 +42,12 @@ pub struct KvEngineFactoryBuilder {
 }
 
 impl KvEngineFactoryBuilder {
-    pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
+    pub fn new(
+        env: Arc<Env>,
+        config: &TikvConfig,
+        cache: Cache,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Self {
         Self {
             inner: FactoryInner {
                 region_info_accessor: None,
@@ -50,7 +55,7 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                encryption_key_manager: None,
+                encryption_key_manager: key_manager,
                 db_resources: config.rocksdb.build_resources(env),
                 cf_resources: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
@@ -80,11 +85,6 @@ impl KvEngineFactoryBuilder {
         sender: Arc<dyn CompactedEventSender + Send + Sync>,
     ) -> Self {
         self.compact_event_sender = Some(sender);
-        self
-    }
-
-    pub fn encryption_key_manager(mut self, m: Option<Arc<DataKeyManager>>) -> Self {
-        self.inner.encryption_key_manager = m;
         self
     }
 
@@ -290,7 +290,7 @@ mod tests {
         let dir = test_util::temp_dir(name, false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache).build();
+        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), dir.path()).unwrap();
         (dir, reg)
     }
