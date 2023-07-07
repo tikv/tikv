@@ -1508,7 +1508,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // sent to the raftstore.
         //
         // If some in-memory pessimistic locks need to be proposed, we will propose
-        // another TransferLeader command. Then, we can guarentee even if the proposed
+        // another TransferLeader command. Then, we can guarantee even if the proposed
         // locks don't include the locks deleted here, the response message of the
         // transfer leader command must be later than this write command because this
         // write command has been sent to the raftstore. Then, we don't need to worry
