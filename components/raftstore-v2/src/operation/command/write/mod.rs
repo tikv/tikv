@@ -248,16 +248,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 end_key
             ));
         }
-        // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(start_key, self.region())?;
-        let end_key = keys::data_end_key(end_key);
-        let region_end_key = keys::data_end_key(self.region().get_end_key());
-        if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(
-                end_key.to_vec(),
-                self.region().clone(),
-            ));
-        }
+        util::check_key_in_region_inclusive(end_key, self.region())?;
 
         if cf.is_empty() {
             cf = CF_DEFAULT;
@@ -268,6 +260,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
 
         let start_key = keys::data_key(start_key);
+        let end_key = keys::data_end_key(end_key);
 
         let start = Instant::now_coarse();
         // Use delete_files_in_range to drop as many sst files as possible, this

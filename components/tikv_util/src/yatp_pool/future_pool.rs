@@ -108,6 +108,12 @@ impl FuturePool {
     {
         self.inner.spawn_handle(TrackedFuture::new(future))
     }
+
+    /// Return the min thread count and the max thread count that this pool can
+    /// scale to.
+    pub fn thread_count_limit(&self) -> (usize, usize) {
+        self.inner.pool.thread_count_limit()
+    }
 }
 
 struct PoolInner {
