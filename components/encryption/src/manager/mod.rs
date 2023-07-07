@@ -642,7 +642,7 @@ impl DataKeyManager {
         self.open_file_with_writer(path, file_writer, true /* create */)
     }
 
-    pub fn open_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
+    pub fn open_file_with_writer<P: AsRef<Path>, W: io::Write>(
         &self,
         path: P,
         writer: W,
@@ -821,12 +821,6 @@ impl DataKeyManager {
             .peekable();
         while let Some(e) = iter.next() {
             let e = e?;
-            if e.path().is_symlink() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("unexpected symbolic link: {}", e.path().display()),
-                ));
-            }
             let fname = e.path().to_str().unwrap();
             let sync = iter.peek().is_none();
             if let Some(p) = physical {
@@ -901,7 +895,7 @@ impl EncryptionKeyManager for DataKeyManager {
     // directory.
     fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
-            std::io::ErrorKind::Other.into()
+            io::ErrorKind::Other.into()
         ));
         if let Some(physical) = physical_fname {
             let physical_path = Path::new(physical);
@@ -930,12 +924,6 @@ impl EncryptionKeyManager for DataKeyManager {
                 .peekable();
             while let Some(e) = iter.next() {
                 let e = e?;
-                if e.path().is_symlink() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("unexpected symbolic link: {}", e.path().display()),
-                    ));
-                }
                 let sub_path = e.path().strip_prefix(src_path).unwrap();
                 let src = e.path().to_str().unwrap();
                 let dst_path = dst_path.join(sub_path);
@@ -1626,7 +1614,7 @@ mod tests {
 
     #[test]
     fn test_plaintext_encrypter_writer() {
-        use std::io::{Read, Write};
+        use io::{Read, Write};
 
         let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
@@ -1660,7 +1648,7 @@ mod tests {
     }
 
     fn generate_mock_file<P: AsRef<Path>>(dkm: Option<&DataKeyManager>, path: P, content: &String) {
-        use std::io::Write;
+        use io::Write;
         match dkm {
             Some(manager) => {
                 // Encryption enabled. Use DataKeyManager to manage file.
@@ -1682,7 +1670,7 @@ mod tests {
         path: P,
         expected: &String,
     ) {
-        use std::io::Read;
+        use io::Read;
 
         match dkm {
             Some(manager) => {

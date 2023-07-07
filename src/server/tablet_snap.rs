@@ -487,7 +487,12 @@ async fn recv_snap_imp<'a>(
         ));
     }
     let path = snap_mgr.tmp_recv_path(&context.key);
-    info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
+    info!(
+        "begin to receive tablet snapshot files";
+        "file" => %path.display(),
+        "region_id" => region_id,
+        "temp_exists" => path.exists(),
+    );
     if path.exists() {
         if let Some(m) = snap_mgr.key_manager() {
             m.remove_dir(&path, None)?;
@@ -558,6 +563,7 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
     match res {
         Ok(()) => sink.close().await?,
         Err(e) => {
+            info!("receive tablet snapshot aborted"; "err" => ?e);
             let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
             sink.fail(status).await?;
         }
