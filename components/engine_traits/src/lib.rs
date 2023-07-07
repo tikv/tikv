@@ -288,6 +288,8 @@ mod misc;
 pub use misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
+mod snapshot_misc;
+pub use crate::snapshot_misc::SnapshotMiscExt;
 mod sst;
 pub use crate::sst::*;
 mod write_batch;

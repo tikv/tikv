@@ -35,8 +35,8 @@ use raftstore::{
         local_metrics::RaftMetrics,
         util::LatencyInspector,
         AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
-        SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteRouterContext,
-        WriteSenders,
+        SplitCheckTask, StoreWriters, StoreWritersContext, TabletSnapManager, Transport,
+        WriteRouterContext, WriteSenders, WriterContoller,
     },
 };
 use resource_metering::CollectorRegHandle;
@@ -220,6 +220,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         self.poll_ctx.has_ready = false;
         self.poll_ctx.current_time = None;
         self.timer = tikv_util::time::Instant::now();
+        // update store writers if necessary
+        self.poll_ctx.schedulers.write.refresh();
     }
 
     fn handle_control(&mut self, fsm: &mut StoreFsm) -> Option<usize> {
@@ -805,9 +807,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
-            raft_engine,
+            raft_engine.clone(),
             tablet_registry,
-            trans,
+            trans.clone(),
             router.clone(),
             schedulers.clone(),
             self.logger.clone(),
@@ -826,10 +828,24 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let tag = format!("rs-{}", store_id);
         self.system.spawn(tag, builder.clone());
 
+        let writer_control = WriterContoller::new(
+            StoreWritersContext {
+                store_id,
+                raft_engine,
+                kv_engine: None,
+                transfer: trans,
+                notifier: router.clone(),
+                cfg: cfg.clone(),
+            },
+            workers.async_write.clone(),
+        );
+        let apply_pool = builder.apply_pool.clone();
         let refresh_config_runner = refresh_config::Runner::new(
             self.logger.clone(),
             router.router().clone(),
             self.system.build_pool_state(builder),
+            writer_control,
+            apply_pool,
         );
         assert!(workers.refresh_config_worker.start(refresh_config_runner));
         self.workers = Some(workers);
