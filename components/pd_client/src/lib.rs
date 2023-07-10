@@ -125,6 +125,11 @@ impl BucketMeta {
         self.keys.remove(idx);
         self.sizes.remove(idx);
     }
+
+    // total size of the whole buckets
+    pub fn total_size(&self) -> u64 {
+        self.sizes.iter().sum()
+    }
 }
 
 #[derive(Debug, Clone)]
