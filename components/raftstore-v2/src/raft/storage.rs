@@ -333,9 +333,10 @@ mod tests {
         DATA_CFS,
     };
     use kvproto::{
-        metapb::{Peer, Region},
-        raft_serverpb::PeerState,
+        metapb::Region,
+        raft_serverpb::{PeerState, RaftSnapshotData},
     };
+    use protobuf::Message;
     use raft::{Error as RaftError, StorageError};
     use raftstore::{
         coprocessor::CoprocessorHost,
@@ -348,6 +349,7 @@ mod tests {
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
+        store::new_peer,
         worker::{dummy_scheduler, Worker},
         yatp_pool::{DefaultTicker, YatpPoolBuilder},
     };
@@ -390,10 +392,8 @@ mod tests {
     fn new_region() -> Region {
         let mut region = Region::default();
         region.set_id(4);
-        let mut p = Peer::default();
-        p.set_id(5);
-        p.set_store_id(6);
-        region.mut_peers().push(p);
+        region.mut_peers().push(new_peer(6, 5));
+        region.mut_peers().push(new_peer(8, 7));
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(4);
         region
@@ -548,7 +548,7 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.on_snapshot_generated(res);
+        s.on_snapshot_generated(res, 10);
         assert_eq!(s.snapshot(0, 8).unwrap_err(), unavailable);
         assert!(s.snap_states.borrow().get(&8).is_some());
         let snap = match *s.snap_states.borrow().get(&to_peer_id).unwrap() {
@@ -558,6 +558,9 @@ mod tests {
         assert_eq!(snap.get_metadata().get_index(), 5);
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert_eq!(snap.get_data().is_empty(), false);
+        let mut snapshot_data = RaftSnapshotData::default();
+        snapshot_data.merge_from_bytes(snap.get_data()).unwrap();
+        assert_eq!(snapshot_data.get_meta().get_commit_index_hint(), 0);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
@@ -586,8 +589,8 @@ mod tests {
         apply.set_apply_progress(10, 5);
         apply.schedule_gen_snapshot(gen_task_b);
         // on snapshot a and b
-        assert_eq!(s.on_snapshot_generated(res), false);
+        assert_eq!(s.on_snapshot_generated(res, 0), false);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(s.on_snapshot_generated(res), true);
+        assert_eq!(s.on_snapshot_generated(res, 0), true);
     }
 }
