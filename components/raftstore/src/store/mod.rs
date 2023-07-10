@@ -33,8 +33,8 @@ pub use self::{
     async_io::{
         read::{AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask},
         write::{
-            write_to_db_for_test, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
-            WriteTask,
+            write_to_db_for_test, PersistedNotifier, StoreWriters, StoreWritersContext,
+            Worker as WriteWorker, WriteMsg, WriteTask,
         },
         write_router::{WriteRouter, WriteRouterContext, WriteSenders},
     },
@@ -84,8 +84,9 @@ pub use self::{
         ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats,
         RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
         SplitConfigManager, SplitInfo, StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
-        BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
-        DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
-        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+        WriterContoller, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+        DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
+        DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+        REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
     },
 };

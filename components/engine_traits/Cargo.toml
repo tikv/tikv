@@ -19,7 +19,7 @@ kvproto = { workspace = true }
 lazy_static = "1.0"
 log_wrappers = { workspace = true }
 protobuf = "2"
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 serde = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }

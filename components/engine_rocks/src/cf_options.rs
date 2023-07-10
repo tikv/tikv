@@ -121,4 +121,13 @@ impl CfOptions for RocksCfOptions {
         self.0
             .set_sst_partitioner_factory(RocksSstPartitionerFactory(factory));
     }
+
+    fn set_max_compactions(&self, n: u32) -> Result<()> {
+        if let Some(limiter) = self.0.get_compaction_thread_limiter() {
+            limiter.set_limit(n);
+        } else {
+            return Err(box_err!("compaction thread limiter not found"));
+        }
+        Ok(())
+    }
 }
