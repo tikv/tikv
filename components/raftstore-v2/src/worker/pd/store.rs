@@ -323,8 +323,10 @@ where
     pub fn is_store_heartbeat_delayed(&self) -> bool {
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
-        (interval_second >= self.store_heartbeat_interval.as_secs())
+        let store_heartbeat_interval = std::cmp::max(self.store_heartbeat_interval.as_secs(), 1);
+        (interval_second >= store_heartbeat_interval)
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
+            && (interval_second % store_heartbeat_interval == 0)
     }
 
     pub fn handle_inspect_latency(&self, send_time: TiInstant, inspector: LatencyInspector) {
