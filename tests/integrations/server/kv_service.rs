@@ -943,6 +943,63 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
 
 #[test_case(test_raftstore::must_new_cluster_and_debug_client)]
 #[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
+fn test_debug_store() {
+    let (mut cluster, debug_client, store_id) = new_cluster();
+    let cluster_id = cluster.id();
+    let req = debugpb::GetClusterInfoRequest::default();
+    let resp = debug_client.get_cluster_info(&req).unwrap();
+    assert_eq!(resp.get_cluster_id(), cluster_id);
+
+    let req = debugpb::GetStoreInfoRequest::default();
+    let resp = debug_client.get_store_info(&req).unwrap();
+    assert_eq!(store_id, resp.get_store_id());
+
+    cluster.must_put(b"a", b"val");
+    cluster.must_put(b"c", b"val");
+    cluster.flush_data();
+    thread::sleep(Duration::from_millis(25));
+    assert_eq!(b"val".to_vec(), cluster.must_get(b"a").unwrap());
+    assert_eq!(b"val".to_vec(), cluster.must_get(b"c").unwrap());
+
+    let mut req = debugpb::GetMetricsRequest::default();
+    req.set_all(true);
+    let resp = debug_client.get_metrics(&req).unwrap();
+    assert_eq!(store_id, resp.get_store_id());
+    assert!(!resp.get_rocksdb_kv().is_empty());
+    assert!(resp.get_rocksdb_raft().is_empty());
+
+    let mut req = debugpb::GetRegionPropertiesRequest::default();
+    req.set_region_id(1);
+    let resp = debug_client.get_region_properties(&req).unwrap();
+    resp.get_props()
+        .iter()
+        .find(|p| {
+            p.get_name() == "defaultcf.num_entries" && p.get_value().parse::<i32>().unwrap() >= 2
+        })
+        .unwrap();
+
+    let req = debugpb::GetRangePropertiesRequest::default();
+    let resp = debug_client.get_range_properties(&req).unwrap();
+    resp.get_properties()
+        .iter()
+        .find(|p| {
+            p.get_key() == "defaultcf.num_entries" && p.get_value().parse::<i32>().unwrap() >= 2
+        })
+        .unwrap();
+
+    let mut req = debugpb::GetRangePropertiesRequest::default();
+    req.set_start_key(b"d".to_vec());
+    let resp = debug_client.get_range_properties(&req).unwrap();
+    resp.get_properties()
+        .iter()
+        .find(|p| {
+            p.get_key() == "defaultcf.num_entries" && p.get_value().parse::<i32>().unwrap() < 2
+        })
+        .unwrap();
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_debug_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_debug_client)]
 fn test_debug_get() {
     let (cluster, debug_client, store_id) = new_cluster();
     let (k, v) = (b"key", b"value");
@@ -1094,6 +1151,7 @@ fn test_debug_region_info_v2() {
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     lb.put_region_state(region_id, 42, &region_state).unwrap();
 
+    lb.put_flushed_index(region_id, CF_RAFT, 5, 42).unwrap();
     raft_engine.consume(&mut lb, false).unwrap();
     assert_eq!(
         raft_engine.get_raft_state(region_id).unwrap().unwrap(),
@@ -1291,6 +1349,7 @@ fn test_debug_scan_mvcc() {
             TimeStamp::zero(),
             0,
             TimeStamp::zero(),
+            false,
         )
         .to_bytes();
         engine.put_cf(CF_LOCK, k.as_slice(), &v).unwrap();
@@ -1329,7 +1388,9 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(MiscExt::path(&engines.kv)).join("import-sst");
-        Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
+        Arc::new(
+            SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1, false).unwrap(),
+        )
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -1867,6 +1928,7 @@ fn test_with_memory_lock_cluster(
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     guard.with_lock(|l| {
@@ -2488,7 +2550,6 @@ fn test_commands_write_detail() {
         assert!(sc.get_get_snapshot_nanos() > 0);
     };
     let check_write_detail = |wd: &WriteDetail| {
-        assert!(wd.get_store_batch_wait_nanos() > 0);
         assert!(wd.get_persist_log_nanos() > 0);
         assert!(wd.get_raft_db_write_leader_wait_nanos() > 0);
         assert!(wd.get_raft_db_sync_log_nanos() > 0);
@@ -2546,13 +2607,51 @@ fn test_commands_write_detail() {
     check_write_detail(prewrite_resp.get_exec_details_v2().get_write_detail());
 
     let mut commit_req = CommitRequest::default();
-    commit_req.set_context(ctx);
-    commit_req.set_keys(vec![k].into());
+    commit_req.set_context(ctx.clone());
+    commit_req.set_keys(vec![k.clone()].into());
     commit_req.set_start_version(20);
     commit_req.set_commit_version(30);
     let commit_resp = client.kv_commit(&commit_req).unwrap();
     check_scan_detail(commit_resp.get_exec_details_v2().get_scan_detail_v2());
     check_write_detail(commit_resp.get_exec_details_v2().get_write_detail());
+
+    let mut txn_heartbeat_req = TxnHeartBeatRequest::default();
+    txn_heartbeat_req.set_context(ctx.clone());
+    txn_heartbeat_req.set_primary_lock(k.clone());
+    txn_heartbeat_req.set_start_version(20);
+    txn_heartbeat_req.set_advise_lock_ttl(1000);
+    let txn_heartbeat_resp = client.kv_txn_heart_beat(&txn_heartbeat_req).unwrap();
+    check_scan_detail(
+        txn_heartbeat_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    assert!(
+        txn_heartbeat_resp
+            .get_exec_details_v2()
+            .get_write_detail()
+            .get_process_nanos()
+            > 0
+    );
+
+    let mut check_txn_status_req = CheckTxnStatusRequest::default();
+    check_txn_status_req.set_context(ctx);
+    check_txn_status_req.set_primary_key(k);
+    check_txn_status_req.set_lock_ts(20);
+    check_txn_status_req.set_rollback_if_not_exist(true);
+    let check_txn_status_resp = client.kv_check_txn_status(&check_txn_status_req).unwrap();
+    check_scan_detail(
+        check_txn_status_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    assert!(
+        check_txn_status_resp
+            .get_exec_details_v2()
+            .get_write_detail()
+            .get_process_nanos()
+            > 0
+    );
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]

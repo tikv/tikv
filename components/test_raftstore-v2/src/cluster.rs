@@ -37,13 +37,14 @@ use kvproto::{
 use pd_client::PdClient;
 use raftstore::{
     store::{
-        cmd_resp, initial_region, util::check_key_in_region, Bucket, BucketRange, Callback,
-        RegionSnapshot, TabletSnapManager, WriteResponse, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        cmd_resp, initial_region, region_meta::RegionMeta, util::check_key_in_region, Bucket,
+        BucketRange, Callback, RegionSnapshot, TabletSnapManager, WriteResponse,
+        INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
 };
 use raftstore_v2::{
-    router::{PeerMsg, QueryResult},
+    router::{DebugInfoChannel, PeerMsg, QueryResult},
     write_initial_states, SimpleWriteEncoder, StoreMeta, StoreRouter,
 };
 use resource_control::ResourceGroupManager;
@@ -85,7 +86,7 @@ pub trait Simulator<EK: KvEngine> {
         node_id: u64,
         cfg: Config,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
-        key_mgr: Option<Arc<DataKeyManager>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<EK>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
@@ -536,6 +537,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         debug!("starting node {}", node_id);
         let tablet_registry = self.tablet_registries[&node_id].clone();
         let raft_engine = self.raft_engines[&node_id].clone();
+        let key_mgr = self.key_managers_map[&node_id].clone();
         let cfg = self.cfg.clone();
 
         // if let Some(labels) = self.labels.get(&node_id) {
@@ -557,7 +559,6 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         tikv_util::thread_group::set_properties(Some(props));
 
         debug!("calling run node"; "node_id" => node_id);
-        let key_mgr = self.key_managers_map.get(&node_id).unwrap().clone();
         self.sim.wl().run_node(
             node_id,
             cfg,
@@ -698,6 +699,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             self.raft_engines[&node_id].clone(),
             self.tablet_registries[&node_id].clone(),
         )
+    }
+
+    pub fn add_new_engine(&mut self) -> u64 {
+        self.count += 1;
+        let node_id = self.count as u64;
+        self.create_engine(Some((self.id(), node_id)));
+
+        let key_mgr = self.key_managers.last().unwrap().clone();
+        self.key_managers_map.insert(node_id, key_mgr);
+        let (tablet_registry, raft_engine) = self.engines.last().unwrap().clone();
+        self.raft_engines.insert(node_id, raft_engine);
+        self.tablet_registries.insert(node_id, tablet_registry);
+        self.sst_workers_map
+            .insert(node_id, self.sst_workers.len() - 1);
+
+        self.run_node(node_id).unwrap();
+        node_id
     }
 
     pub fn read(
@@ -1149,6 +1167,52 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn wait_last_index(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        expected: u64,
+        timeout: Duration,
+    ) {
+        let timer = Instant::now();
+        loop {
+            let raft_state = self.raft_local_state(region_id, store_id);
+            let cur_index = raft_state.get_last_index();
+            if cur_index >= expected {
+                return;
+            }
+            if timer.saturating_elapsed() >= timeout {
+                panic!(
+                    "[region {}] last index still not reach {}: {:?}",
+                    region_id, expected, raft_state
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub fn wait_applied_index(&mut self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let applied_index = self.apply_state(region_id, store_id).applied_index;
+            if applied_index >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not applied to {}: {} on store {}",
+                    region_id, index, applied_index, store_id,
+                );
+            }
+            let _ = self
+                .get_engine(store_id)
+                .get_tablet_by_id(region_id)
+                .unwrap()
+                .flush_cfs(&[], true);
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         self.get_impl(CF_DEFAULT, key, false)
     }
@@ -1276,11 +1340,47 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn must_query_debug_info(
+        &self,
+        store_id: u64,
+        region_id: u64,
+        timeout: Duration,
+    ) -> Option<RegionMeta> {
+        let timer = Instant::now();
+        while timer.saturating_elapsed() < timeout {
+            let (ch, sub) = DebugInfoChannel::pair();
+            let msg = PeerMsg::QueryDebugInfo(ch);
+            let res = self.get_router(store_id).unwrap().send(region_id, msg);
+            if res.is_err() {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            let res = block_on(sub.result());
+            if res.is_some() {
+                return res;
+            }
+        }
+        None
+    }
+
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
-        self.get_engine(store_id)
-            .raft_apply_state(region_id)
+        // In raftstore v2, RaftApplyState is persisted infrequently,
+        // just return in memory RaftApplySate to mimic this API in test_raftstore.
+        let apply_state = self
+            .must_query_debug_info(store_id, region_id, Duration::from_secs(5))
             .unwrap()
-            .unwrap()
+            .raft_apply;
+        let mut state = RaftApplyState::default();
+        state.set_applied_index(apply_state.applied_index);
+        state.set_commit_index(apply_state.commit_index);
+        state.set_commit_term(apply_state.commit_term);
+        state
+            .mut_truncated_state()
+            .set_index(apply_state.truncated_state.index);
+        state
+            .mut_truncated_state()
+            .set_term(apply_state.truncated_state.term);
+        state
     }
 
     pub fn add_send_filter_on_node(&mut self, node_id: u64, filter: Box<dyn Filter>) {
@@ -1325,7 +1425,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
         // todo(SpadeA): modify
         let resp = self
-            .call_command_on_leader(transfer_leader, Duration::from_secs(500))
+            .call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
         assert_eq!(
             resp.get_admin_response().get_cmd_type(),
@@ -1371,29 +1471,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         &mut self,
         region: &metapb::Region,
         split_key: &[u8],
-        mut cb: Callback<RocksSnapshot>,
+        cb: Callback<RocksSnapshot>,
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let split_key = split_key.to_vec();
-        let (split_region_req, mut sub) = PeerMsg::request_split(
+        let (split_region_req, _) = PeerMsg::request_split_with_callback(
             region.get_region_epoch().clone(),
             vec![split_key],
             "test".into(),
+            Box::new(move |resp| {
+                cb.invoke_with_response(resp.clone());
+            }),
         );
 
         router
             .check_send(region.get_id(), split_region_req)
             .unwrap();
-
-        block_on(async {
-            sub.wait_proposed().await;
-            cb.invoke_proposed();
-            sub.wait_committed().await;
-            cb.invoke_committed();
-            let res = sub.result().await.unwrap();
-            cb.invoke_with_response(res)
-        });
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {

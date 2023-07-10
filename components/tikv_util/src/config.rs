@@ -131,28 +131,35 @@ impl Mul<u64> for ReadableSize {
     }
 }
 
+impl fmt::Display for ReadableSize {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let size = self.0;
+        if size == 0 {
+            write!(f, "{}KiB", size)
+        } else if size % PIB == 0 {
+            write!(f, "{}PiB", size / PIB)
+        } else if size % TIB == 0 {
+            write!(f, "{}TiB", size / TIB)
+        } else if size % GIB == 0 {
+            write!(f, "{}GiB", size / GIB)
+        } else if size % MIB == 0 {
+            write!(f, "{}MiB", size / MIB)
+        } else if size % KIB == 0 {
+            write!(f, "{}KiB", size / KIB)
+        } else {
+            write!(f, "{}B", size)
+        }
+    }
+}
+
 impl Serialize for ReadableSize {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let size = self.0;
         let mut buffer = String::new();
-        if size == 0 {
-            write!(buffer, "{}KiB", size).unwrap();
-        } else if size % PIB == 0 {
-            write!(buffer, "{}PiB", size / PIB).unwrap();
-        } else if size % TIB == 0 {
-            write!(buffer, "{}TiB", size / TIB).unwrap();
-        } else if size % GIB == 0 {
-            write!(buffer, "{}GiB", size / GIB).unwrap();
-        } else if size % MIB == 0 {
-            write!(buffer, "{}MiB", size / MIB).unwrap();
-        } else if size % KIB == 0 {
-            write!(buffer, "{}KiB", size / KIB).unwrap();
-        } else {
-            write!(buffer, "{}B", size).unwrap();
-        }
+        write!(buffer, "{}", self).unwrap();
         serializer.serialize_str(&buffer)
     }
 }
@@ -164,11 +171,11 @@ impl FromStr for ReadableSize {
     fn from_str(s: &str) -> Result<ReadableSize, String> {
         let size_str = s.trim();
         if size_str.is_empty() {
-            return Err(format!("{:?} is not a valid size.", s));
+            return Err(format!("{s:?} is not a valid size."));
         }
 
         if !size_str.is_ascii() {
-            return Err(format!("ASCII string is expected, but got {:?}", s));
+            return Err(format!("ASCII string is expected, but got {s:?}"));
         }
 
         // size: digits and '.' as decimal separator
@@ -198,15 +205,14 @@ impl FromStr for ReadableSize {
             }
             _ => {
                 return Err(format!(
-                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
-                    s
+                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {s:?}"
                 ));
             }
         };
 
         match size.parse::<f64>() {
             Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
-            Err(_) => Err(format!("invalid size string: {:?}", s)),
+            Err(_) => Err(format!("invalid size string: {s:?}")),
         }
     }
 }
@@ -255,7 +261,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub struct ReadableDuration(pub Duration);
 
 impl Add for ReadableDuration {
@@ -641,6 +647,9 @@ pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    #[cfg(target_os = "freebsd")]
+    let expect = expect as i64;
+
     use std::mem;
 
     unsafe {

@@ -14,12 +14,22 @@ use pd_client::{
     PdClient,
 };
 use prometheus::local::LocalHistogram;
-use slog::{error, warn};
-use tikv_util::{metrics::RecordPairVec, store::QueryStats, time::UnixSecs, topn::TopN};
+use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyInspector};
+use slog::{error, info, warn};
+use tikv_util::{
+    metrics::RecordPairVec,
+    store::QueryStats,
+    time::{Duration, Instant as TiInstant, UnixSecs},
+    topn::TopN,
+};
 
 use super::Runner;
+use crate::router::StoreMsg;
 
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
+
+/// Max limitation of delayed store heartbeat.
+const STORE_HEARTBEAT_DELAY_LIMIT: u64 = Duration::from_secs(5 * 60).as_secs();
 
 fn hotspot_key_report_threshold() -> u64 {
     const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
@@ -165,7 +175,7 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
-    pub fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats) {
+    pub fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, is_fake_hb: bool) {
         let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
@@ -215,6 +225,7 @@ where
             .store_stat
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
+        let last_query_sum = res.get_all_query_num();
         stats.set_query_stats(res.0);
 
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
@@ -229,7 +240,14 @@ where
         self.store_stat
             .engine_last_query_num
             .fill_query_stats(&self.store_stat.engine_total_query_num);
-        self.store_stat.last_report_ts = UnixSecs::now();
+        self.store_stat.last_report_ts = if is_fake_hb {
+            // The given Task::StoreHeartbeat should be a fake heartbeat to PD, we won't
+            // update the last_report_ts to avoid incorrectly marking current TiKV node in
+            // normal state.
+            self.store_stat.last_report_ts
+        } else {
+            UnixSecs::now()
+        };
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
@@ -245,16 +263,79 @@ where
             .with_label_values(&["used"])
             .set(used_size as i64);
 
-        // TODO: slow score
+        // Update slowness statistics
+        self.update_slowness_in_store_stats(&mut stats, last_query_sum);
 
         let resp = self.pd_client.store_heartbeat(stats, None, None);
         let logger = self.logger.clone();
         let f = async move {
-            if let Err(e) = resp.await {
-                error!(logger, "store heartbeat failed"; "err" => ?e);
+            match resp.await {
+                Ok(mut resp) => {
+                    // TODO: unsafe recovery
+
+                    // Attention, as Hibernate Region is eliminated in
+                    // raftstore-v2, followings just mock the awaken
+                    // operation.
+                    if resp.awaken_regions.take().is_some() {
+                        info!(
+                            logger,
+                            "Ignored AwakenRegions in raftstore-v2 as no hibernated regions in raftstore-v2"
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!(logger, "store heartbeat failed"; "err" => ?e);
+                }
             }
         };
         self.remote.spawn(f);
+    }
+
+    /// Force to send a special heartbeat to pd when current store is hung on
+    /// some special circumstances, i.e. disk busy, handler busy and others.
+    pub fn handle_fake_store_heartbeat(&mut self) {
+        let mut stats = pdpb::StoreStats::default();
+        stats.set_store_id(self.store_id);
+        stats.set_region_count(self.region_peers.len() as u32);
+
+        let snap_stats = self.snap_mgr.stats();
+        stats.set_sending_snap_count(snap_stats.sending_count as u32);
+        stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["sending"])
+            .set(snap_stats.sending_count as i64);
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["receiving"])
+            .set(snap_stats.receiving_count as i64);
+
+        // This calling means that the current node cannot report heartbeat in normaly
+        // scheduler. That is, the current node must in `busy` state.
+        stats.set_is_busy(true);
+
+        // And here, the `is_fake_hb` should be marked with `True` to represent that
+        // this heartbeat message is a fake one.
+        self.handle_store_heartbeat(stats, true);
+        warn!(self.logger, "scheduling store_heartbeat timeout, force report store slow score to pd.";
+            "store_id" => self.store_id,
+        );
+    }
+
+    pub fn is_store_heartbeat_delayed(&self) -> bool {
+        let now = UnixSecs::now();
+        let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
+        (interval_second >= self.store_heartbeat_interval.as_secs())
+            && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
+    }
+
+    pub fn handle_inspect_latency(&self, send_time: TiInstant, inspector: LatencyInspector) {
+        let msg = StoreMsg::LatencyInspect {
+            send_time,
+            inspector,
+        };
+        if let Err(e) = self.router.send_control(msg) {
+            warn!(self.logger, "pd worker send latency inspecter failed";
+                    "err" => ?e);
+        }
     }
 
     pub fn handle_update_store_infos(

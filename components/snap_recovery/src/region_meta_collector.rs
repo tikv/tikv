@@ -55,13 +55,10 @@ impl<ER: RaftEngine> RegionMetaCollector<ER> {
                 .name("collector_region_meta".to_string())
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
 
                     worker
                         .collect_report()
                         .expect("collect region meta and report to br failure.");
-
-                    tikv_alloc::remove_thread_memory_accessor();
                 })
                 .expect("failed to spawn collector_region_meta thread"),
         );

@@ -133,8 +133,6 @@ pub trait ConfigManager: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
-
     use serde::Serialize;
 
     use super::*;

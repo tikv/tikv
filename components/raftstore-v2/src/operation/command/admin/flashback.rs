@@ -7,7 +7,14 @@ use kvproto::{
     raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
-use raftstore::{coprocessor::RegionChangeReason, store::metrics::PEER_ADMIN_CMD_COUNTER, Result};
+use raftstore::{
+    coprocessor::RegionChangeReason,
+    store::{
+        metrics::{PEER_ADMIN_CMD_COUNTER, PEER_IN_FLASHBACK_STATE},
+        LocksStatus,
+    },
+    Result,
+};
 
 use super::AdminCmdResult;
 use crate::{
@@ -46,12 +53,20 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         match req.get_cmd_type() {
             AdminCmdType::PrepareFlashback => {
                 PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+                // First time enter into the flashback state, inc the counter.
+                if !region.is_in_flashback {
+                    PEER_IN_FLASHBACK_STATE.inc()
+                }
 
                 region.set_is_in_flashback(true);
                 region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
             }
             AdminCmdType::FinishFlashback => {
                 PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+                // Leave the flashback state, dec the counter.
+                if region.is_in_flashback {
+                    PEER_IN_FLASHBACK_STATE.dec()
+                }
 
                 region.set_is_in_flashback(false);
                 region.clear_flashback_start_ts();
@@ -73,16 +88,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_apply_res_flashback<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        mut res: FlashbackResult,
+        #[allow(unused_mut)] mut res: FlashbackResult,
     ) {
         (|| {
             fail_point!("keep_peer_fsm_flashback_state_false", |_| {
                 res.region_state.mut_region().set_is_in_flashback(false);
             })
         })();
-        slog::debug!(self.logger,
+        slog::debug!(
+            self.logger,
             "flashback update region";
-            "region" => ?res.region_state.get_region());
+            "region" => ?res.region_state.get_region()
+        );
         let region_id = self.region_id();
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
@@ -101,6 +118,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .put_region_state(region_id, res.index, &res.region_state)
             .unwrap();
         self.set_has_extra_write();
+
+        let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
+        pessimistic_locks.status = if res.region_state.get_region().is_in_flashback {
+            // To prevent the insertion of any new pessimistic locks, set the lock status
+            // to `LocksStatus::IsInFlashback` and clear all the existing locks.
+            pessimistic_locks.clear();
+            LocksStatus::IsInFlashback
+        } else if self.is_leader() {
+            // If the region is not in flashback, the leader can continue to insert
+            // pessimistic locks.
+            LocksStatus::Normal
+        } else {
+            // If the region is not in flashback and the peer is not the leader, it
+            // cannot insert pessimistic locks.
+            LocksStatus::NotLeader
+        }
 
         // Compares to v1, v2 does not expire remote lease, because only
         // local reader can serve read requests.

@@ -2,7 +2,7 @@
 name = "engine_traits_tests"
 version = "0.0.1"
 description = "Engine-agnostic tests for the engine_traits interface"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [lib]

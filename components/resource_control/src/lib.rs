@@ -1,12 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(test)]
+#![feature(local_key_cell_methods)]
 
 use online_config::OnlineConfig;
 use serde::{Deserialize, Serialize};
 
 mod resource_group;
 pub use resource_group::{
-    ResourceConsumeType, ResourceController, ResourceGroupManager, MIN_PRIORITY_UPDATE_INTERVAL,
+    ResourceConsumeType, ResourceController, ResourceGroupManager, TaskMetadata,
+    MIN_PRIORITY_UPDATE_INTERVAL,
 };
 
 mod future;
@@ -20,6 +22,8 @@ pub use service::ResourceManagerService;
 
 pub mod channel;
 pub use channel::ResourceMetered;
+
+mod resource_limiter;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
