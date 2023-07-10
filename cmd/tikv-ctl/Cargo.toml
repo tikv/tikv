@@ -70,7 +70,7 @@ log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raft-engine = { git = "https://github.com/tikv/raft-engine.git" }
 raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
 raft_log_engine = { workspace = true }

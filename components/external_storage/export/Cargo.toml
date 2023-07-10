@@ -70,7 +70,7 @@ lazy_static = { optional = true, version = "1.3" }
 libloading = { optional = true, version = "0.7.0" }
 once_cell = { optional = true, version = "1.3.1" }
 protobuf = { optional = true, version = "2" }
-slog-global = { optional = true, version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog-global = { optional = true, workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "rt", "net"], optional = true }
 tokio-util = { version = "0.7", features = ["compat"], optional = true }

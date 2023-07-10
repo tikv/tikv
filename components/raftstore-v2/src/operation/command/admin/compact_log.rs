@@ -97,6 +97,8 @@ impl CompactLogContext {
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     pub fn on_compact_log_tick(&mut self, force: bool) {
+        // Might read raft logs.
+        debug_assert!(self.fsm.peer().serving());
         if !self.fsm.peer().is_leader() {
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
@@ -229,9 +231,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Create a compact log request and notify directly.
-        // TODO: move this into a function
-        let term = self.raft_group().raft.raft_log.term(compact_idx).unwrap();
-
+        let term = self.index_term(compact_idx);
         let mut req = new_admin_request(self.region_id(), self.peer().clone());
         let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::CompactLog);
