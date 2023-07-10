@@ -10,7 +10,8 @@ use kvproto::{
 use protobuf::Message;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
-use test_raftstore::{Cluster, ServerCluster};
+use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
     codec::{datum, Datum},
@@ -1762,7 +1763,8 @@ fn test_snapshot_failed() {
     assert!(resp.get_region_error().has_store_not_match());
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_cache() {
     let data = vec![
         (1, Some("name:0"), 2),
@@ -1772,7 +1774,8 @@ fn test_cache() {
     ];
 
     let product = ProductTable::new();
-    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
+    let mut cluster = new_cluster(0, 1);
+    let (raft_engine, ctx) = new_raft_engine_m!(cluster, "");
 
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);

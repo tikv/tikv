@@ -6337,11 +6337,13 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "collections",
+ "engine_rocks",
  "futures 0.3.15",
  "kvproto",
  "pd_client",
  "raftstore",
  "test_raftstore",
+ "test_raftstore-v2",
  "tikv",
  "tikv_util",
  "tracker",
