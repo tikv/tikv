@@ -118,11 +118,11 @@ fn main() {
             let key_manager =
                 data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .expect("data_key_manager_from_config should success");
-            let file_system = Arc::new(ManagedFileSystem::new(
-                key_manager.map(|m| Arc::new(m)),
-                None,
-            ));
-            raft_engine_ctl::run_command(args, file_system);
+            // let file_system = Arc::new(ManagedFileSystem::new(
+            //     key_manager.map(|m| Arc::new(m)),
+            //     None,
+            // ));
+            // raft_engine_ctl::run_command(args, file_system);
         }
         Cmd::BadSsts { manifest, pd } => {
             let data_dir = opt.data_dir.as_deref();
