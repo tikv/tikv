@@ -215,6 +215,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_tick(&mut self, tick: PeerTick) {
         self.fsm.tick_registry[tick as usize] = false;
+        if !self.fsm.peer().serving() {
+            return;
+        }
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
