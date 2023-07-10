@@ -723,8 +723,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 },
                 LocalTablets::Registry(_) => {
                     if req.get_mode() == SwitchMode::Import {
-                        if req.has_range() {
-                            let range = req.take_range();
+                        if !req.get_ranges().is_empty() {
+                            let range = req.take_ranges().into_vec().swap_remove(0);
                             self.importer.range_enter_import_mode(range);
                             Ok(true)
                         } else {
@@ -735,8 +735,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         }
                     } else {
                         // case SwitchMode::Normal
-                        if req.has_range() {
-                            let range = req.take_range();
+                        if !req.get_ranges().is_empty() {
+                            let range = req.take_ranges().into_vec().swap_remove(0);
                             self.importer.clear_import_mode_regions(range);
                             Ok(true)
                         } else {
@@ -1245,7 +1245,7 @@ fn write_needs_restore(write: &[u8]) -> bool {
             false
         }
         Err(err) => {
-            warn!("write cannot be parsed, skipping"; "err" => %err, 
+            warn!("write cannot be parsed, skipping"; "err" => %err,
                         "write" => %log_wrappers::Value::key(write));
             false
         }
