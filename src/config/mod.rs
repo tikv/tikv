@@ -3433,6 +3433,8 @@ impl TikvConfig {
             .optimize_for(self.coprocessor.region_split_size());
         self.raft_store
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
+        self.server
+            .optimize_for(self.coprocessor.region_split_size());
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
         }
@@ -3468,6 +3470,11 @@ impl TikvConfig {
                     "raftstore.enable-partitioned-raft-kv-compatible-learner was true but \
                     storage.engine was partitioned-raft-kv, no need to enable \
                     enable-partitioned-raft-kv-compatible-learner, overwrite to false"
+                );
+            }
+            if self.raft_store.use_delete_range {
+                return Err(
+                    "partitioned-raft-kv doesn't support raftstore.use-delete-range=true.".into(),
                 );
             }
         }
@@ -5431,6 +5438,35 @@ mod tests {
     }
 
     #[test]
+    fn test_endpoint_config() {
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.storage.engine = EngineType::RaftKv;
+        default_cfg.validate().unwrap();
+        assert_eq!(
+            default_cfg.server.end_point_request_max_handle_duration(),
+            ReadableDuration::secs(60)
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.storage.engine = EngineType::RaftKv2;
+        default_cfg.validate().unwrap();
+        assert_eq!(
+            default_cfg.server.end_point_request_max_handle_duration(),
+            ReadableDuration::secs(1800)
+        );
+
+        let mut default_cfg = TikvConfig::default();
+        default_cfg.storage.engine = EngineType::RaftKv2;
+        default_cfg.server.end_point_request_max_handle_duration =
+            Some(ReadableDuration::secs(900));
+        default_cfg.validate().unwrap();
+        assert_eq!(
+            default_cfg.server.end_point_request_max_handle_duration(),
+            ReadableDuration::secs(900)
+        );
+    }
+
+    #[test]
     fn test_compatible_adjust_validate_equal() {
         // After calling many time of `compatible_adjust` and `validate` should has
         // the same effect as calling `compatible_adjust` and `validate` one time
@@ -5910,6 +5946,9 @@ mod tests {
         default_cfg
             .coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        default_cfg
+            .server
+            .optimize_for(default_cfg.coprocessor.region_split_size());
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());

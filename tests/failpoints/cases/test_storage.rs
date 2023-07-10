@@ -26,7 +26,6 @@ use resource_control::ResourceGroupManager;
 use test_raftstore::*;
 use tikv::{
     config::{ConfigController, Module},
-    server::raftkv::ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG,
     storage::{
         self,
         config_manager::StorageConfigManger,
@@ -42,7 +41,6 @@ use tikv::{
         Error as StorageError, ErrorInner as StorageErrorInner, *,
     },
 };
-use tikv_kv::ErrorInner::Undetermined;
 use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -114,9 +112,6 @@ fn test_scheduler_leader_change_twice() {
 fn test_server_catching_api_error() {
     let raftkv_fp = "raftkv_early_error_report";
     let mut cluster = new_server_cluster(0, 1);
-    // One scheduler worker thread would panic after processing the prewrite
-    // request because of undetermined error.
-    cluster.cfg.storage.scheduler_worker_pool_size = 2;
     cluster.run();
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
@@ -145,10 +140,12 @@ fn test_server_catching_api_error() {
     prewrite_req.primary_lock = b"k3".to_vec();
     prewrite_req.start_version = 1;
     prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-    let prewrite_err = client.kv_prewrite(&prewrite_req).unwrap_err();
-    assert_eq!(
-        prewrite_err.to_string(),
-        "RpcFailure: 1-CANCELLED CANCELLED"
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(prewrite_resp.has_region_error(), "{:?}", prewrite_resp);
+    assert!(
+        prewrite_resp.get_region_error().has_region_not_found(),
+        "{:?}",
+        prewrite_resp
     );
     must_get_none(&cluster.get_engine(1), b"k3");
 
@@ -157,9 +154,11 @@ fn test_server_catching_api_error() {
     put_req.key = b"k3".to_vec();
     put_req.value = b"v3".to_vec();
     let put_resp = client.raw_put(&put_req).unwrap();
-    assert_eq!(
-        put_resp.get_error(),
-        Undetermined(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string()).to_string()
+    assert!(put_resp.has_region_error(), "{:?}", put_resp);
+    assert!(
+        put_resp.get_region_error().has_region_not_found(),
+        "{:?}",
+        put_resp
     );
     must_get_none(&cluster.get_engine(1), b"k3");
 
@@ -199,9 +198,11 @@ fn test_raftkv_early_error_report() {
         put_req.key = k.to_vec();
         put_req.value = b"v".to_vec();
         let put_resp = client.raw_put(&put_req).unwrap();
-        assert_eq!(
-            put_resp.get_error(),
-            Undetermined(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string()).to_string()
+        assert!(put_resp.has_region_error(), "{:?}", put_resp);
+        assert!(
+            put_resp.get_region_error().has_region_not_found(),
+            "{:?}",
+            put_resp
         );
         must_get_none(&cluster.get_engine(1), k);
     }
@@ -217,12 +218,15 @@ fn test_raftkv_early_error_report() {
         put_req.value = b"v".to_vec();
         let put_resp = client.raw_put(&put_req).unwrap();
         if ctx.get_region_id() == injected_region_id {
-            assert_eq!(
-                put_resp.get_error(),
-                Undetermined(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string()).to_string()
+            assert!(put_resp.has_region_error(), "{:?}", put_resp);
+            assert!(
+                put_resp.get_region_error().has_region_not_found(),
+                "{:?}",
+                put_resp
             );
             must_get_none(&cluster.get_engine(1), k);
         } else {
+            assert!(!put_resp.has_region_error(), "{:?}", put_resp);
             must_get_equal(&cluster.get_engine(1), k, b"v");
         }
     }
