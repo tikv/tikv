@@ -499,7 +499,9 @@ impl ReadDelegate {
                 self.leader_lease = leader_lease;
             }
             Progress::RegionBuckets(bucket_meta) => {
-                self.bucket_meta = Some(bucket_meta);
+                if self.bucket_meta.version < bucket_meta.version {
+                    self.bucket_meta = Some(bucket_meta);
+                }
             }
             Progress::WaitData(wait_data) => {
                 self.wait_data = wait_data;
