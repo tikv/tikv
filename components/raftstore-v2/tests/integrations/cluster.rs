@@ -21,7 +21,7 @@ use engine_test::{
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{EncryptionKeyManager, TabletContext, TabletRegistry, DATA_CFS};
+use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::ApiVersion,
@@ -664,7 +664,7 @@ impl Cluster {
                     }
                     std::fs::rename(&gen_path, &recv_path).unwrap();
                     if let Some(m) = from_snap_mgr.key_manager() {
-                        m.delete_file(gen_path.to_str().unwrap()).unwrap();
+                        m.remove_dir(&gen_path, Some(&recv_path)).unwrap();
                     }
                     assert!(recv_path.exists());
                 }

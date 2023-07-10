@@ -1431,9 +1431,14 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         self.raft_statistics = raft_statistics;
 
         // Create kv engine.
-        let builder = KvEngineFactoryBuilder::new(env, &self.core.config, block_cache)
-            .sst_recovery_sender(self.init_sst_recovery_sender())
-            .flow_listener(flow_listener);
+        let builder = KvEngineFactoryBuilder::new(
+            env,
+            &self.core.config,
+            block_cache,
+            self.core.encryption_key_manager.clone(),
+        )
+        .sst_recovery_sender(self.init_sst_recovery_sender())
+        .flow_listener(flow_listener);
 
         let mut node = NodeV2::new(&self.core.config.server, self.pd_client.clone(), None);
         node.try_bootstrap_store(&self.core.config.raft_store, &raft_engine)
@@ -1554,7 +1559,7 @@ mod test {
             .block_cache
             .build_shared_cache(config.storage.engine);
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
+        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {
