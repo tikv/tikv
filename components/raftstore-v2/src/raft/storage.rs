@@ -48,6 +48,7 @@ pub struct Storage<EK: KvEngine, ER> {
     /// The flushed index of all CFs.
     apply_trace: ApplyTrace,
     // The flushed epoch means that the epoch has persisted into the raft engine.
+    // raft epoch >= engine epoch >= flushed epoch
     flushed_epoch: RegionEpoch,
 }
 

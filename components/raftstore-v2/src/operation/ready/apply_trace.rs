@@ -522,6 +522,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
         let region_id = self.region().get_id();
         let raft_engine = self.entry_storage().raft_engine();
+        // must use the persistent epoch to avoid epoch rollback, the restart
+        // logic can see ApplyTrace::recover. self.epoch is not reliable because
+        // it maybe too newest, so the epoch maybe rollback after the node restarted.
         let epoch = raft_engine
             .get_region_state(region_id, trace.admin.flushed)
             .unwrap()
@@ -646,6 +649,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let mut lb = ctx.engine.log_batch(1);
                     lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
                         .unwrap();
+                    ctx.engine.consume(&mut lb, true).unwrap();
                     info!(
                         self.logger,
                         "flush before close flush admin for region";
