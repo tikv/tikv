@@ -7,15 +7,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::CausalTsProviderImpl;
-use collections::{HashMap, HashSet};
-use concurrency_manager::ConcurrencyManager;
-use encryption_export::DataKeyManager;
-use engine_rocks::RocksEngine;
-use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use futures::{executor::block_on, future::BoxFuture, Future};
+use futures::{executor::block_on, Future, future::BoxFuture};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use kvproto::{
@@ -29,57 +21,66 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     tikvpb_grpc::TikvClient,
 };
+use slog_global::debug;
+use tempfile::TempDir;
+use tokio::runtime::{Builder as TokioBuilder, Handle};
+
+use api_version::{dispatch_api_version, KvFormat};
+use causal_ts::CausalTsProviderImpl;
+use collections::{HashMap, HashSet};
+use concurrency_manager::ConcurrencyManager;
+use encryption_export::DataKeyManager;
+use engine_rocks::RocksEngine;
+use engine_test::raft::RaftTestEngine;
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use pd_client::PdClient;
 use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
+    RegionInfoAccessor,
     store::{
-        region_meta, AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats,
+        AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats, region_meta,
         RegionSnapshot, TabletSnapManager, WriteStats,
     },
-    RegionInfoAccessor,
 };
 use raftstore_v2::{router::RaftRouter, StateStorage, StoreMeta, StoreRouter};
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
-use slog_global::debug;
-use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{filter_send, AddressMap, Config, Filter};
+use test_raftstore::{AddressMap, Config, Filter, filter_send};
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
+        ConnectionBuilder,
         debug2::DebuggerImplV2,
+        Error,
+        Extension,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
-        raftkv::ReplicaReadLockChecker,
-        resolve,
-        service::{DebugService, DiagnosticsService},
-        ConnectionBuilder, Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2,
-        Result as ServerResult, Server, ServerTransport,
+        NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2, raftkv::ReplicaReadLockChecker, resolve, Result as ServerResult,
+        Server, ServerTransport, service::{DebugService, DiagnosticsService},
     },
     storage::{
         self,
+        Engine,
         kv::{FakeExtension, LocalTablets, RaftExtension, SnapContext},
-        txn::flow_controller::{EngineFlowController, FlowController},
-        Engine, Storage,
+        Storage, txn::flow_controller::{EngineFlowController, FlowController},
     },
 };
 use tikv_util::{
     box_err,
     config::VersionTrack,
+    Either,
+    HandyRwLock,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
-    thd_name,
-    worker::{Builder as WorkerBuilder, LazyWorker},
-    Either, HandyRwLock,
+    thd_name, worker::{Builder as WorkerBuilder, LazyWorker},
 };
-use tokio::runtime::{Builder as TokioBuilder, Handle};
 use txn_types::TxnExtraScheduler;
 
 use crate::{Cluster, RaftStoreRouter, SimulateTransport, Simulator, SnapshotRouter};
@@ -1076,12 +1077,14 @@ pub fn must_new_cluster_and_debug_client() -> (
             DebuggerImplV2::new(tablet_registry, raft_engine, ConfigController::default());
 
         sim.pending_debug_service = Some(Box::new(move |cluster, debug_thread_handle| {
-            let raft_extension = cluster.storages.get(&1).unwrap().raft_extension();
+            let raftkv = cluster.storages.get(&1).unwrap();
+            let raft_extension = raftkv.raft_extension();
 
             create_debug(DebugService::new(
                 debugger.clone(),
                 debug_thread_handle,
                 raft_extension,
+                raftkv.raftkv.router().store_meta().clone(),
             ))
         }));
     }

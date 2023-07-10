@@ -6,11 +6,6 @@
 #[macro_use]
 extern crate log;
 
-mod cmd;
-mod executor;
-mod fork_readonly_tikv;
-mod util;
-
 use std::{
     borrow::ToOwned,
     fs::{self, File, OpenOptions},
@@ -24,32 +19,33 @@ use std::{
     u64,
 };
 
-use collections::HashMap;
-use encryption_export::{
-    create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
-    DecrypterReader, Iv,
-};
-use engine_rocks::get_env;
-use engine_traits::{EncryptionKeyManager, Peekable};
-use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
-    debugpb::{Db as DbType, *},
+    debugpb::{*, Db as DbType},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
     raft_serverpb::{SnapshotMeta, StoreIdent},
     tikvpb::TikvClient,
 };
-use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft_engine::RecoveryMode;
+use regex::Regex;
+use structopt::{clap::ErrorKind, StructOpt};
+
+use collections::HashMap;
+use encryption_export::{
+    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader,
+    from_engine_encryption_method, Iv,
+};
+use engine_rocks::get_env;
+use engine_traits::{EncryptionKeyManager, Peekable};
+use file_system::calc_crc32;
+use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft_log_engine::ManagedFileSystem;
 use raftstore::store::util::build_key_range;
-use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
-use structopt::{clap::ErrorKind, StructOpt};
 use tikv::{
     config::TikvConfig,
     server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
@@ -59,6 +55,11 @@ use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildW
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
+
+mod cmd;
+mod executor;
+mod fork_readonly_tikv;
+mod util;
 
 fn main() {
     let opt = Opt::from_args();
@@ -653,6 +654,9 @@ fn main() {
                     debug_executor.dump_cluster_info();
                 }
                 Cmd::ResetToVersion { version } => debug_executor.reset_to_version(version),
+                Cmd::GetRegionReadProgress { region, log } => {
+                    debug_executor.get_region_read_progress(region, log);
+                }
                 _ => {
                     unreachable!()
                 }

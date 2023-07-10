@@ -5,32 +5,33 @@ use std::{
     time::Duration, u64,
 };
 
-use api_version::{ApiV1, KvFormat};
-use encryption_export::data_key_manager_from_config;
-use engine_rocks::util::{db_exist, new_engine_opt};
-use engine_traits::{
-    Engines, Error as EngineError, RaftEngine, TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK,
-    CF_WRITE, DATA_CFS,
-};
-use file_system::read_dir;
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    debugpb::{Db as DbType, *},
+    debugpb::{*, Db as DbType},
     kvrpcpb::{KeyRange, MvccInfo},
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::PeerState,
 };
-use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
-use raft_log_engine::RaftLogEngine;
-use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
-use security::SecurityManager;
 use serde_json::json;
-use server::fatal;
 use slog_global::crit;
+
+use api_version::{ApiV1, KvFormat};
+use encryption_export::data_key_manager_from_config;
+use engine_rocks::util::{db_exist, new_engine_opt};
+use engine_traits::{
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, Engines, Error as EngineError,
+    RaftEngine, TabletRegistry,
+};
+use file_system::read_dir;
+use pd_client::{Config as PdConfig, PdClient, RpcClient};
+use raft_log_engine::RaftLogEngine;
+use raftstore::store::{INIT_EPOCH_CONF_VER, util::build_key_range};
+use security::SecurityManager;
+use server::fatal;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
@@ -40,9 +41,9 @@ use tikv::{
     },
     storage::{
         config::EngineType,
+        Engine,
         kv::MockEngine,
         lock_manager::{LockManager, MockLockManager},
-        Engine,
     },
 };
 use tikv_util::escape;
@@ -716,6 +717,8 @@ pub trait DebugExecutor {
         _start_ts: u64,
         _commit_ts: u64,
     ) -> Result<(), KeyRange>;
+
+    fn get_region_read_progress(&self, region_id: u64, log: bool);
 }
 
 impl DebugExecutor for DebugClient {
@@ -964,6 +967,16 @@ impl DebugExecutor for DebugClient {
                 Err(key_range)
             }
         }
+    }
+
+    fn get_region_read_progress(&self, region_id: u64, log: bool) {
+        let mut req = GetRegionReadProgressRequest::default();
+        req.set_region_id(region_id);
+        req.set_log_locks(log);
+        let resp = self
+            .get_region_read_progress(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_read_progress", e));
+        println!("resp: {:?}", resp);
     }
 }
 
@@ -1217,6 +1230,11 @@ where
     ) -> Result<(), KeyRange> {
         unimplemented!("only available for remote mode");
     }
+
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
+    }
 }
 
 fn handle_engine_error(err: EngineError) -> ! {
@@ -1413,5 +1431,10 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         _commit_ts: u64,
     ) -> Result<(), KeyRange> {
         unimplemented!("only available for remote mode");
+    }
+
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 }

@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{Arc, Mutex};
+
 use futures::{
     future::{Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -10,9 +12,11 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::debugpb::{self, *};
+use tokio::runtime::Handle;
+
+use raftstore::store::fsm::store::StoreRegionMeta;
 use tikv_kv::RaftExtension;
 use tikv_util::metrics;
-use tokio::runtime::Handle;
 
 use crate::server::debug::{Debugger, Error, Result};
 
@@ -39,29 +43,48 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 }
 
 /// Service handles the RPC messages for the `Debug` service.
-#[derive(Clone)]
-pub struct Service<T, D>
-where
-    T: RaftExtension,
-    D: Debugger,
+pub struct Service<T, D, S>
+    where
+        T: RaftExtension + Clone,
+        D: Debugger + Clone,
+        S: StoreRegionMeta,
 {
     pool: Handle,
     debugger: D,
     raft_router: T,
+    store_meta: Arc<Mutex<S>>,
 }
 
-impl<T, D> Service<T, D>
-where
-    T: RaftExtension,
-    D: Debugger,
+impl<T, D, S> Clone for Service<T, D, S>
+    where
+        T: RaftExtension + Clone,
+        D: Debugger + Clone,
+        S: StoreRegionMeta,
+{
+    fn clone(&self) -> Self {
+        Service {
+            pool: self.pool.clone(),
+            debugger: self.debugger.clone(),
+            raft_router: self.raft_router.clone(),
+            store_meta: self.store_meta.clone(),
+        }
+    }
+}
+
+impl<T, D, S> Service<T, D, S>
+    where
+        T: RaftExtension + Clone,
+        D: Debugger + Clone,
+        S: StoreRegionMeta,
 {
     /// Constructs a new `Service` with `Engines`, a `RaftExtension`, a
     /// `GcWorker` and a `RegionInfoAccessor`.
-    pub fn new(debugger: D, pool: Handle, raft_router: T) -> Self {
+    pub fn new(debugger: D, pool: Handle, raft_router: T, store_meta: Arc<Mutex<S>>) -> Self {
         Service {
             pool,
             debugger,
             raft_router,
+            store_meta,
         }
     }
 
@@ -86,10 +109,11 @@ where
     }
 }
 
-impl<T, D> debugpb::Debug for Service<T, D>
-where
-    T: RaftExtension + 'static,
-    D: Debugger + Clone + Send + 'static,
+impl<T, D, S> debugpb::Debug for Service<T, D, S>
+    where
+        T: RaftExtension + 'static,
+        D: Debugger + Clone + Send + 'static,
+        S: StoreRegionMeta,
 {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
@@ -575,6 +599,34 @@ where
             .map(|res| res.unwrap());
 
         self.handle_response(ctx, sink, f, "debug_flashback_to_version");
+    }
+
+    fn get_region_read_progress(&mut self, ctx: RpcContext<'_>, req: GetRegionReadProgressRequest, sink: UnarySink<GetRegionReadProgressResponse>) {
+        let store_meta = self.store_meta.lock().unwrap();
+        let rrp = store_meta.region_read_progress();
+        let mut resp = GetRegionReadProgressResponse::default();
+        rrp.with(|registry| {
+            let region = registry.get(&req.get_region_id());
+            if let Some(r) = region {
+                resp.set_safe_ts(r.safe_ts());
+                let core = r.get_core();
+                resp.set_applied_index(core.applied_index);
+                resp.set_region_read_progress_paused(core.pause);
+                if let Some(back) = core.pending_items.back() {
+                    resp.set_pending_back_ts(back.ts);
+                    resp.set_pending_back_applied_index(back.idx);
+                }
+                if let Some(front) = core.pending_items.front() {
+                    resp.set_pending_front_ts(front.ts);
+                    resp.set_pending_back_applied_index(front.idx)
+                }
+                // todo: set durations
+                // resp.set_duration_to_last_consume_leader_ms();
+                // resp.set_duration_to_last_update_safe_ts_ms();
+            }
+        });
+        let f = async move { Ok(resp) };
+        self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
     }
 }
 

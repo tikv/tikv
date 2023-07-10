@@ -8,14 +8,6 @@ use std::{
     usize,
 };
 
-use api_version::{dispatch_api_version, ApiV1, KvFormat};
-use causal_ts::CausalTsProviderImpl;
-use collections::{HashMap, HashSet};
-use concurrency_manager::ConcurrencyManager;
-use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
@@ -29,23 +21,33 @@ use kvproto::{
     raft_serverpb,
     tikvpb::TikvClient,
 };
+use tempfile::TempDir;
+use tokio::runtime::Builder as TokioBuilder;
+
+use api_version::{ApiV1, dispatch_api_version, KvFormat};
+use causal_ts::CausalTsProviderImpl;
+use collections::{HashMap, HashSet};
+use concurrency_manager::ConcurrencyManager;
+use encryption_export::DataKeyManager;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_test::raft::RaftTestEngine;
+use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
+    Result,
     router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
-        msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
+        AutoSplitController,
+        Callback,
+        CheckLeaderRunner, fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, store::StoreMeta}, LocalReader, msg::RaftCmdExtraOpts, RegionSnapshot, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
-    Result,
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
-use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
     config::ConfigController,
@@ -53,45 +55,45 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
+        ConnectionBuilder,
         debug::DebuggerImpl,
+        Error,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
-        raftkv::ReplicaReadLockChecker,
-        resolve::{self, StoreAddrResolver},
-        service::DebugService,
-        tablet_snap::NoSnapshotCache,
-        ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
-        Result as ServerResult, Server, ServerTransport,
+        Node,
+        PdStoreAddrResolver,
+        RaftClient, RaftKv, raftkv::ReplicaReadLockChecker, resolve::{self, StoreAddrResolver}, Result as ServerResult, Server,
+        ServerTransport, service::DebugService, tablet_snap::NoSnapshotCache,
     },
     storage::{
         self,
+        Engine,
         kv::{FakeExtension, LocalTablets, MockEngine, SnapContext},
         lock_manager::MockLockManager,
-        txn::flow_controller::{EngineFlowController, FlowController},
-        Engine, Storage,
+        Storage, txn::flow_controller::{EngineFlowController, FlowController},
     },
 };
 use tikv_util::{
     config::VersionTrack,
+    HandyRwLock,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
-    HandyRwLock,
 };
-use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
 
-use super::*;
 use crate::Config;
+
+use super::*;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>;
 
 pub type SimulateEngine = RaftKv<RocksEngine, SimulateStoreTransport>;
 type SimulateRaftExtension = <SimulateEngine as Engine>::RaftExtension;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateRaftExtension, PdStoreAddrResolver>>;
+SimulateTransport<ServerTransport<SimulateRaftExtension, PdStoreAddrResolver>>;
 
 #[derive(Default, Clone)]
 pub struct AddressMap {
@@ -496,7 +498,7 @@ impl ServerCluster {
             None,
         );
         let debug_thread_handle = debug_thread_pool.handle().clone();
-        let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
+        let debug_service = DebugService::new(debugger, debug_thread_handle, extension, store_meta.clone());
 
         let apply_router = system.apply_router();
         // Create node.

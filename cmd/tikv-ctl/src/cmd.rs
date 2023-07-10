@@ -2,9 +2,10 @@
 
 use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock, u64};
 
-use clap::{crate_authors, AppSettings};
-use engine_traits::CF_DEFAULT;
+use clap::{AppSettings, crate_authors};
 use structopt::StructOpt;
+
+use engine_traits::CF_DEFAULT;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
 static VERSION_INFO: LazyLock<String> = LazyLock::new(|| {
@@ -14,12 +15,12 @@ static VERSION_INFO: LazyLock<String> = LazyLock::new(|| {
 
 #[derive(StructOpt)]
 #[structopt(
-    name = "TiKV Control (tikv-ctl)",
-    about = "A tool for interacting with TiKV deployments.",
-    author = crate_authors!(),
-    version = &**VERSION_INFO,
-    long_version = &**VERSION_INFO,
-    setting = AppSettings::DontCollapseArgsInUsage,
+name = "TiKV Control (tikv-ctl)",
+about = "A tool for interacting with TiKV deployments.",
+author = crate_authors ! (),
+version = & * * VERSION_INFO,
+long_version = & * * VERSION_INFO,
+setting = AppSettings::DontCollapseArgsInUsage,
 )]
 pub struct Opt {
     #[structopt(long)]
@@ -626,6 +627,15 @@ pub enum Cmd {
         #[structopt(long, default_value = "")]
         /// hex end key
         end: String,
+    },
+    GetRegionReadProgress {
+        #[structopt(short = "r")]
+        /// The target region id
+        region: u64,
+
+        #[structopt(long)]
+        /// whether to print extra info in TiKV logs for regions of interest
+        log: bool,
     },
 }
 
