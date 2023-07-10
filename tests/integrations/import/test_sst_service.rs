@@ -123,7 +123,7 @@ fn test_ingest_sst() {
 fn switch_mode(import: &ImportSstClient, range: Range, mode: SwitchMode) {
     let mut switch_req = SwitchModeRequest::default();
     switch_req.set_mode(mode);
-    switch_req.set_range(range);
+    switch_req.set_ranges(vec![range].into());
     let _ = import.switch_mode(&switch_req).unwrap();
 }
 
