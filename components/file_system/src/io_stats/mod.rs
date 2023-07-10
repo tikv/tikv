@@ -29,6 +29,10 @@ mod stub {
     pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
         Default::default()
     }
+
+    pub fn get_thread_io_bytes_total() -> Result<IoBytes, String> {
+        Err("unimplemented".into())
+    }
 }
 #[cfg(not(any(target_os = "linux", feature = "bcc-iosnoop")))]
 pub use stub::*;

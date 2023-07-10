@@ -1328,9 +1328,21 @@ impl TestPdClient {
     }
 
     pub fn must_merge(&self, from: u64, target: u64) {
+        let epoch = self.get_region_epoch(target);
         self.merge_region(from, target);
 
-        self.check_merged_timeout(from, Duration::from_secs(5));
+        self.check_merged_timeout(from, Duration::from_secs(10));
+        let timer = Instant::now();
+        loop {
+            if epoch.get_version() == self.get_region_epoch(target).get_version() {
+                if timer.saturating_elapsed() > Duration::from_secs(1) {
+                    panic!("region {:?} is still not merged.", target);
+                }
+            } else {
+                return;
+            }
+            sleep_ms(10);
+        }
     }
 
     pub fn check_merged(&self, from: u64) -> bool {

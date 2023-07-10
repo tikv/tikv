@@ -52,14 +52,24 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     pub fn on_capture_change(&mut self, capture_change: CaptureChange) {
         fail_point!("raft_on_capture_change");
 
-        let apply_router = self.fsm.peer().apply_scheduler().unwrap().clone();
+        let apply_scheduler = self.fsm.peer().apply_scheduler().cloned();
+        let id = self.fsm.peer().region_id();
+        let term = self.fsm.peer().term();
         let (ch, _) = QueryResChannel::with_callback(Box::new(move |res| {
             if let QueryResult::Response(resp) = res && resp.get_header().has_error() {
                 // Return error
                 capture_change.snap_cb.report_error(resp.clone());
                 return;
             }
-            apply_router.send(ApplyTask::CaptureApply(capture_change))
+            if let Some(scheduler) = apply_scheduler {
+                scheduler.send(ApplyTask::CaptureApply(capture_change))
+            } else {
+                let mut resp = cmd_resp::err_resp(raftstore::Error::RegionNotFound(id), term);
+                resp.mut_header()
+                    .mut_error()
+                    .set_message("apply scheduler is None".to_owned());
+                capture_change.snap_cb.report_error(resp);
+            }
         }));
         self.on_leader_callback(ch);
     }
@@ -196,7 +206,11 @@ mod test {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::{store::new_peer, worker::dummy_scheduler};
+    use tikv_util::{
+        store::new_peer,
+        worker::dummy_scheduler,
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
+    };
 
     use super::*;
     use crate::{
@@ -271,7 +285,7 @@ mod test {
             .register_cmd_observer(0, BoxCmdObserver::new(ob));
 
         let (dummy_scheduler1, _) = dummy_scheduler();
-        let (dummy_scheduler2, _) = dummy_scheduler();
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
         let mut apply = Apply::new(
             &Config::default(),
             region
@@ -292,7 +306,7 @@ mod test {
             importer,
             host,
             dummy_scheduler1,
-            dummy_scheduler2,
+            high_priority_pool,
             logger.clone(),
         );
 

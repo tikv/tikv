@@ -803,6 +803,7 @@ where
                 "check term";
                 "delegate_term" => delegate.term,
                 "header_term" => req.get_header().get_term(),
+                "tag" => &delegate.tag,
             );
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.term_mismatch.inc());
             return Err(e);

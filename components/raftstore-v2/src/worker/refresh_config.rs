@@ -4,11 +4,16 @@ use std::{sync::Arc, thread};
 
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
 use file_system::{set_io_type, IoType};
-use raftstore::store::{BatchComponent, RefreshConfigTask};
+use raftstore::store::{BatchComponent, RefreshConfigTask, Transport, WriterContoller};
 use slog::{error, info, warn, Logger};
-use tikv_util::{sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable};
+use tikv_util::{
+    sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable, yatp_pool::FuturePool,
+};
 
-use crate::fsm::{PeerFsm, StoreFsm};
+use crate::{
+    fsm::{PeerFsm, StoreFsm},
+    StoreRouter,
+};
 
 pub struct PoolController<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub logger: Logger,
@@ -76,29 +81,40 @@ where
     }
 }
 
-pub struct Runner<EK, ER, H>
+pub struct Runner<EK, ER, H, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     H: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm>,
+    T: Transport + 'static,
 {
     logger: Logger,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm, H>,
+    writer_ctrl: WriterContoller<EK, ER, T, StoreRouter<EK, ER>>,
+    apply_pool: FuturePool,
 }
 
-impl<EK, ER, H> Runner<EK, ER, H>
+impl<EK, ER, H, T> Runner<EK, ER, H, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     H: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm>,
+    T: Transport + 'static,
 {
     pub fn new(
         logger: Logger,
         router: BatchRouter<PeerFsm<EK, ER>, StoreFsm>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm, H>,
+        writer_ctrl: WriterContoller<EK, ER, T, StoreRouter<EK, ER>>,
+        apply_pool: FuturePool,
     ) -> Self {
         let raft_pool = PoolController::new(logger.clone(), router, raft_pool_state);
-        Runner { logger, raft_pool }
+        Runner {
+            logger,
+            raft_pool,
+            writer_ctrl,
+            apply_pool,
+        }
     }
 
     fn resize_raft_pool(&mut self, size: usize) {
@@ -117,13 +133,88 @@ where
             "to" => self.raft_pool.state.expected_pool_size
         );
     }
+
+    fn resize_apply_pool(&mut self, size: usize) {
+        let current_pool_size = self.apply_pool.get_pool_size();
+        if current_pool_size == size {
+            return;
+        }
+
+        // It may not take effect immediately. See comments of
+        // ThreadPool::scale_workers.
+        // Also, the size will be clamped between min_thread_count and the max_pool_size
+        // set when the apply_pool is initialized. This is fine as max_pool_size
+        // is relatively a large value and there's no use case to set a value
+        // larger than that.
+        self.apply_pool.scale_pool_size(size);
+        let (min_thread_count, max_thread_count) = self.apply_pool.thread_count_limit();
+        if size > max_thread_count || size < min_thread_count {
+            warn!(
+                self.logger,
+                "apply pool scale size is out of bound, and the size is clamped";
+                "size" => size,
+                "min_thread_limit" => min_thread_count,
+                "max_thread_count" => max_thread_count,
+            );
+        } else {
+            info!(
+                self.logger,
+                "resize apply pool";
+                "from" => current_pool_size,
+                "to" => size
+            );
+        }
+    }
+
+    /// Resizes the count of background threads in store_writers.
+    fn resize_store_writers(&mut self, size: usize) {
+        // The resizing of store writers will not directly update the local
+        // cached store writers in each poller. Each poller will timely
+        // correct its local cached in its next `poller.begin()` after
+        // the resize operation completed.
+        let current_size = self.writer_ctrl.expected_writers_size();
+        self.writer_ctrl.set_expected_writers_size(size);
+        match current_size.cmp(&size) {
+            std::cmp::Ordering::Greater => {
+                if let Err(e) = self.writer_ctrl.mut_store_writers().decrease_to(size) {
+                    error!(
+                        self.logger,
+                        "failed to decrease store writers size";
+                        "err_msg" => ?e
+                    );
+                }
+            }
+            std::cmp::Ordering::Less => {
+                let writer_meta = self.writer_ctrl.writer_meta().clone();
+                if let Err(e) = self
+                    .writer_ctrl
+                    .mut_store_writers()
+                    .increase_to(size, writer_meta)
+                {
+                    error!(
+                        self.logger,
+                        "failed to increase store writers size";
+                        "err_msg" => ?e
+                    );
+                }
+            }
+            std::cmp::Ordering::Equal => return,
+        }
+        info!(
+            self.logger,
+            "resize store writers pool";
+            "from" => current_size,
+            "to" => size
+        );
+    }
 }
 
-impl<EK, ER, H> Runnable for Runner<EK, ER, H>
+impl<EK, ER, H, T> Runnable for Runner<EK, ER, H, T>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
     H: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm> + std::marker::Send,
+    T: Transport + 'static,
 {
     type Task = RefreshConfigTask;
 
@@ -131,13 +222,11 @@ where
         match task {
             RefreshConfigTask::ScalePool(component, size) => {
                 match component {
-                    BatchComponent::Store => {}
-                    BatchComponent::Apply => {
-                        unreachable!("v2 does not have apply batch system")
-                    }
+                    BatchComponent::Store => self.resize_raft_pool(size),
+                    BatchComponent::Apply => self.resize_apply_pool(size),
                 };
-                self.resize_raft_pool(size);
             }
+            RefreshConfigTask::ScaleWriters(size) => self.resize_store_writers(size),
             _ => {
                 warn!(
                     self.logger,

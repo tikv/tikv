@@ -215,6 +215,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_tick(&mut self, tick: PeerTick) {
         self.fsm.tick_registry[tick as usize] = false;
+        if !self.fsm.peer().serving() {
+            return;
+        }
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
@@ -353,6 +356,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::LeaderCallback(ch) => self.on_leader_callback(ch),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
+                PeerMsg::FlushBeforeClose { tx } => {
+                    self.fsm.peer_mut().flush_before_close(self.store_ctx, tx)
+                }
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

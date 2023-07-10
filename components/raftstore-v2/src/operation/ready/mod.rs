@@ -298,6 +298,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .tablet
                         .schedule(crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
+                            reason: "unknown",
+                            threshold: Some(std::time::Duration::from_secs(10)),
                             cb: None,
                         });
                     return;
@@ -488,7 +490,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
-                warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to, "message_type" => ?msg.msg_type);
+                warn!(
+                    self.logger,
+                    "failed to look up recipient peer";
+                    "to_peer" => msg.to,
+                    "message_type" => ?msg.msg_type
+                );
                 return None;
             }
         };

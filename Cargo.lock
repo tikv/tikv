@@ -2966,7 +2966,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#971c6f2217153da745d51886f94d7b701dec9799"
+source = "git+https://github.com/pingcap/kvproto.git#cd6769a15c69b48fd65ecb6d813b861156be4d61"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3095,7 +3095,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489b049dc974f9b164b7e6150ee5d9466847f74f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3114,7 +3114,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489b049dc974f9b164b7e6150ee5d9466847f74f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4981,6 +4981,7 @@ dependencies = [
  "crossbeam-skiplist",
  "dashmap",
  "fail",
+ "file_system",
  "futures 0.3.15",
  "kvproto",
  "lazy_static",
@@ -4997,6 +4998,7 @@ dependencies = [
  "test_pd",
  "test_pd_client",
  "tikv_util",
+ "tokio-timer",
  "yatp",
 ]
 
@@ -5084,7 +5086,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#489b049dc974f9b164b7e6150ee5d9466847f74f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -5813,6 +5815,7 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "api_version",
+ "collections",
  "crc32fast",
  "dashmap",
  "encryption",
@@ -6010,9 +6013,8 @@ checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
 
 [[package]]
 name = "sysinfo"
-version = "0.26.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ade661fa5e048ada64ad7901713301c21d2dbc5b65ee7967de8826c111452960"
+version = "0.26.9"
+source = "git+https://github.com/tikv/sysinfo?branch=0.26-fix-cpu#5a1bcf08816979624ef2ad79cfb896de432a9501"
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
@@ -7864,7 +7866,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#5523a9a6a4d0d6242bdb02b0a344f7ee1477b39b"
+source = "git+https://github.com/tikv/yatp.git?branch=master#5572a78702572087cab8ddcdd1fe30e5bf76ae42"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",
