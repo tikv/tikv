@@ -18,7 +18,7 @@ use keys::DATA_PREFIX_KEY;
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_serverpb::RaftApplyState};
 use pd_client::BucketMeta;
 use tikv_util::{
-    box_err, error, info, keybuilder::KeyBuilder, metrics::CRITICAL_ERROR,
+    box_err, error, keybuilder::KeyBuilder, metrics::CRITICAL_ERROR,
     panic_when_unexpected_key_or_data, set_panic_mark,
 };
 
@@ -93,17 +93,11 @@ where
 
     pub fn get_data_version(&self) -> Result<u64> {
         if self.from_v2 {
-            info!("dbg get_data_version";
-                "region_id" => self.region.id,
-                "seq_number" => self.snap.sequence_number(),
-                "backtrace" => ?std::backtrace::Backtrace::force_capture(),
-            );
-            // if self.snap.sequence_number() != 0 {
-            //     Ok(self.snap.sequence_number())
-            // } else {
-            //     Err(box_err!("Snapshot sequence number 0"))
-            // }
-            Ok(self.snap.sequence_number())
+            if self.snap.sequence_number() != 0 {
+                Ok(self.snap.sequence_number())
+            } else {
+                Err(box_err!("Snapshot sequence number 0"))
+            }
         } else {
             self.get_apply_index()
         }
