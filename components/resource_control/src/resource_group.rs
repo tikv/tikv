@@ -118,20 +118,27 @@ impl ResourceGroupManager {
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
         info!("add resource group"; "name"=> &rg.name, "ru" => rg.get_r_u_settings().get_r_u().get_settings().get_fill_rate());
-        let limiter = match self.resource_groups.get(&rg.name) {
-            Some(g) => g.limiter.clone(),
-            None => Self::build_resource_limiter(&rg),
-        };
+        // try to reuse the quota limit when update resource group settings.
+        let prev_limiter = self
+            .resource_groups
+            .get(&rg.name)
+            .and_then(|g| g.limiter.clone());
+        let limiter = Self::build_resource_limiter(&rg, prev_limiter);
 
         self.resource_groups
             .insert(group_name, ResourceGroup::new(rg, limiter));
     }
 
-    fn build_resource_limiter(rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
+    fn build_resource_limiter(
+        rg: &PbResourceGroup,
+        old_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> Option<Arc<ResourceLimiter>> {
         if !rg.get_background_settings().get_job_types().is_empty() {
-            return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
+            old_limiter
+                .or_else(|| Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY))))
+        } else {
+            None
         }
-        None
     }
 
     pub fn remove_resource_group(&self, name: &str) {
@@ -782,6 +789,18 @@ pub(crate) mod tests {
         // test resource gorup resource limiter.
         let group1 = resource_manager.get_resource_group("test").unwrap();
         assert!(group1.limiter.is_none());
+        assert!(
+            resource_manager
+                .get_resource_group("default")
+                .unwrap()
+                .limiter
+                .is_none()
+        );
+        let mut new_default = new_resource_group_ru("default".into(), 10000, MEDIUM_PRIORITY);
+        new_default
+            .mut_background_settings()
+            .set_job_types(vec!["br".into()].into());
+        resource_manager.add_resource_group(new_default);
         let default_group = resource_manager.get_resource_group("default").unwrap();
         let limiter = default_group.limiter.as_ref().unwrap().clone();
         assert!(limiter.cpu_limiter.get_rate_limit().is_infinite());
@@ -791,9 +810,11 @@ pub(crate) mod tests {
         drop(group1);
         drop(default_group);
 
-        let new_default = new_resource_group_ru("default".into(), 100, LOW_PRIORITY);
+        let mut new_default = new_resource_group_ru("default".into(), 100, LOW_PRIORITY);
+        new_default
+            .mut_background_settings()
+            .set_job_types(vec!["lightning".into()].into());
         resource_manager.add_resource_group(new_default);
-
         let default_group = resource_manager.get_resource_group("default").unwrap();
         assert_eq!(default_group.get_ru_quota(), 100);
         let new_limiter = default_group.limiter.as_ref().unwrap().clone();
@@ -801,6 +822,18 @@ pub(crate) mod tests {
         assert_eq!(new_limiter.cpu_limiter.get_rate_limit(), 100.0);
         assert_eq!(new_limiter.io_limiter.get_rate_limit(), 200.0);
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
+        drop(default_group);
+
+        // remove background setting, quota limiter should be none.
+        let new_default = new_resource_group_ru("default".into(), 100, LOW_PRIORITY);
+        resource_manager.add_resource_group(new_default);
+        assert!(
+            resource_manager
+                .get_resource_group("default")
+                .unwrap()
+                .limiter
+                .is_none()
+        );
     }
 
     #[test]
