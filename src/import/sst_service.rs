@@ -1245,7 +1245,7 @@ fn write_needs_restore(write: &[u8]) -> bool {
             false
         }
         Err(err) => {
-            warn!("write cannot be parsed, skipping"; "err" => %err, 
+            warn!("write cannot be parsed, skipping"; "err" => %err,
                         "write" => %log_wrappers::Value::key(write));
             false
         }
