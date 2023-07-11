@@ -3,7 +3,6 @@
 use std::{
     array,
     collections::hash_map::{Entry, HashMap},
-    fmt,
     io::Result as IoResult,
     sync::Arc,
     time::Duration,
@@ -19,28 +18,12 @@ use tikv_util::{
 
 use crate::{
     resource_group::ResourceGroupManager,
-    resource_limiter::{GroupStatistics, QuotaLimiter, ResourceLimiter},
+    resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
 };
 
 pub const BACKGROUND_LIMIT_ADJUST_DURATION: Duration = Duration::from_secs(10);
 
 const MICROS_PER_SEC: f64 = 1_000_000.0;
-
-#[derive(Clone, Copy, Eq, PartialEq, EnumCount)]
-#[repr(usize)]
-pub enum ResourceType {
-    Cpu,
-    Io,
-}
-
-impl fmt::Debug for ResourceType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            ResourceType::Cpu => write!(f, "cpu"),
-            ResourceType::Io => write!(f, "io"),
-        }
-    }
-}
 
 pub struct ResourceUsageStats {
     total_quota: f64,
@@ -139,6 +122,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let dur_secs = now
             .saturating_duration_since(self.last_adjust_time)
             .as_secs_f64();
+        // a conservative check, skip adjustment if the duration is too short.
         if dur_secs < 1.0 {
             return;
         }
@@ -154,8 +138,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                     name: g.group.name.clone(),
                     ru_quota: g.get_ru_quota() as f64,
                     limiter: limiter.clone(),
-                    stats: GroupStatistics::default(),
-                    expect_cost_per_ru: 0.0,
+                    stats_per_sec: GroupStatistics::default(),
+                    expect_cost_rate: 0.0,
                 })
             })
             .collect();
@@ -163,13 +147,8 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             return;
         }
 
-        self.do_adjust(ResourceType::Cpu, dur_secs, &mut background_groups, |l| {
-            &l.cpu_limiter
-        });
-
-        self.do_adjust(ResourceType::Io, dur_secs, &mut background_groups, |l| {
-            &l.io_limiter
-        });
+        self.do_adjust(ResourceType::Cpu, dur_secs, &mut background_groups);
+        self.do_adjust(ResourceType::Io, dur_secs, &mut background_groups);
     }
 
     fn do_adjust(
@@ -177,7 +156,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         resource_type: ResourceType,
         dur_secs: f64,
         bg_group_stats: &mut [GroupStats],
-        mut limiter_fn: impl FnMut(&Arc<ResourceLimiter>) -> &QuotaLimiter,
     ) {
         let resource_stats = match self.resource_quota_getter.get_current_stats(resource_type) {
             Ok(r) => r,
@@ -189,7 +167,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         // if total resource quota is unlimited, set all groups' limit to unlimited.
         if resource_stats.total_quota <= f64::EPSILON {
             for g in bg_group_stats {
-                limiter_fn(&g.limiter).set_rate_limit(f64::INFINITY);
+                g.limiter
+                    .get_limiter(resource_type)
+                    .set_rate_limit(f64::INFINITY);
             }
             return;
         }
@@ -199,7 +179,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let mut has_wait = false;
         for g in bg_group_stats.iter_mut() {
             total_ru_quota += g.ru_quota;
-            let total_stats = limiter_fn(&g.limiter).get_statistics();
+            let total_stats = g.limiter.get_limiter(resource_type).get_statistics();
             let mut stats_delta =
                 match self.prev_stats_by_group[resource_type as usize].entry(g.name.clone()) {
                     Entry::Occupied(mut s) => total_stats - s.insert(total_stats),
@@ -210,7 +190,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 };
             stats_delta = stats_delta / dur_secs;
             background_consumed_total += stats_delta.total_consumed as f64;
-            g.stats = stats_delta;
+            g.stats_per_sec = stats_delta;
             if stats_delta.total_wait_dur_us > 0 {
                 has_wait = true;
             }
@@ -223,53 +203,59 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.is_last_time_low_load[resource_type as usize] = is_low_load;
 
-        let mut available_quota = ((resource_stats.total_quota - resource_stats.current_used
+        let mut available_resource_rate = ((resource_stats.total_quota
+            - resource_stats.current_used
             + background_consumed_total)
             * 0.9)
             .max(resource_stats.total_quota * 0.1);
         let mut total_expected_cost = 0.0;
         for g in bg_group_stats.iter_mut() {
-            let mut rate_limit = limiter_fn(&g.limiter).get_rate_limit();
+            let mut rate_limit = g.limiter.get_limiter(resource_type).get_rate_limit();
             if rate_limit.is_infinite() {
                 rate_limit = 0.0;
             }
-            let group_expected_cost = g.stats.total_consumed as f64
-                + g.stats.total_wait_dur_us as f64 / MICROS_PER_SEC * rate_limit;
-            g.expect_cost_per_ru = group_expected_cost / g.ru_quota;
+            let group_expected_cost = g.stats_per_sec.total_consumed as f64
+                + g.stats_per_sec.total_wait_dur_us as f64 / MICROS_PER_SEC * rate_limit;
+            g.expect_cost_rate = group_expected_cost;
             total_expected_cost += group_expected_cost;
         }
+        // sort groups by the expect_cost_rate per ru
         bg_group_stats.sort_by(|g1, g2| {
-            g1.expect_cost_per_ru
-                .partial_cmp(&g2.expect_cost_per_ru)
+            (g1.expect_cost_rate / g1.ru_quota)
+                .partial_cmp(&(g2.expect_cost_rate / g2.ru_quota))
                 .unwrap()
         });
 
-        // quota is enough
-        if total_expected_cost <= available_quota {
+        // quota is enough, group is allowed to got more resource then its share by ru.
+        // e.g. Given a totol resource of 10000, and ("name", ru_quota, expected_rate)
+        // of:  (rg1, 2000, 3000), (rg2, 3000, 1000), (rg3, 5000, 5000)
+        // then after the previous sort, the order is rg2, rg3, rg1 and the handle order
+        // is rg1, rg3, rg2 so the final rate limit assigned is: (rg1, 3000),
+        // (rg3, 5833(7000/6*5)), (rg2, 1166(7000/6*1))
+        if total_expected_cost <= available_resource_rate {
             for g in bg_group_stats.iter().rev() {
-                let expected = g.expect_cost_per_ru * g.ru_quota;
-                let limit = if g.expect_cost_per_ru > available_quota / total_ru_quota {
-                    expected
-                } else {
-                    available_quota / total_ru_quota * g.ru_quota
-                };
-                limiter_fn(&g.limiter).set_rate_limit(limit);
-                available_quota -= limit;
+                let limit = g
+                    .expect_cost_rate
+                    .max(available_resource_rate / total_ru_quota * g.ru_quota);
+                g.limiter.get_limiter(resource_type).set_rate_limit(limit);
+                available_resource_rate -= limit;
                 total_ru_quota -= g.ru_quota;
             }
             return;
         }
 
-        // quota is not enough
+        // quota is not enough, assign by share
+        // e.g. Given a totol resource of 10000, and ("name", ru_quota, expected_rate)
+        // of:  (rg1, 2000, 1000), (rg2, 3000, 5000), (rg3, 5000, 7000)
+        // then after the previous sort, the order is rg1, rg3, rg2, and handle order is
+        // rg1, rg3, rg2 so the final rate limit assigned is: (rg1, 1000), (rg3,
+        // 5250(9000/12*7)), (rg2, 3750(9000/12*5))
         for g in bg_group_stats {
-            let expected = g.expect_cost_per_ru * g.ru_quota;
-            let limit = if g.expect_cost_per_ru < available_quota / total_ru_quota {
-                expected
-            } else {
-                available_quota / total_ru_quota * g.ru_quota
-            };
-            limiter_fn(&g.limiter).set_rate_limit(limit);
-            available_quota -= limit;
+            let limit = g
+                .expect_cost_rate
+                .min(available_resource_rate / total_ru_quota * g.ru_quota);
+            g.limiter.get_limiter(resource_type).set_rate_limit(limit);
+            available_resource_rate -= limit;
             total_ru_quota -= g.ru_quota;
         }
     }
@@ -279,8 +265,8 @@ struct GroupStats {
     name: String,
     limiter: Arc<ResourceLimiter>,
     ru_quota: f64,
-    stats: GroupStatistics,
-    expect_cost_per_ru: f64,
+    stats_per_sec: GroupStatistics,
+    expect_cost_rate: f64,
 }
 
 #[cfg(test)]
@@ -288,7 +274,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::resource_group::tests::new_resource_group_ru;
+    use crate::{resource_group::tests::new_resource_group_ru, resource_limiter::QuotaLimiter};
 
     struct TestResourceStatsProvider {
         cpu_total: f64,
@@ -335,8 +321,18 @@ mod tests {
             GroupQuotaAdjustWorker::with_quota_getter(resource_ctl.clone(), test_provider);
 
         let limiter = resource_ctl.get_resource_limiter("default").unwrap();
-        assert!(limiter.cpu_limiter.get_rate_limit().is_infinite());
-        assert!(limiter.io_limiter.get_rate_limit().is_infinite());
+        assert!(
+            limiter
+                .get_limiter(ResourceType::Cpu)
+                .get_rate_limit()
+                .is_infinite()
+        );
+        assert!(
+            limiter
+                .get_limiter(ResourceType::Io)
+                .get_rate_limit()
+                .is_infinite()
+        );
 
         fn reset_quota_limiter(limiter: &QuotaLimiter) {
             let limit = limiter.get_rate_limit();
@@ -347,8 +343,8 @@ mod tests {
         }
 
         fn reset_limiter(limiter: &Arc<ResourceLimiter>) {
-            reset_quota_limiter(&limiter.cpu_limiter);
-            reset_quota_limiter(&limiter.io_limiter);
+            reset_quota_limiter(&limiter.get_limiter(ResourceType::Cpu));
+            reset_quota_limiter(&limiter.get_limiter(ResourceType::Io));
         }
 
         let reset_quota = |worker: &mut GroupQuotaAdjustWorker<TestResourceStatsProvider>,
@@ -371,8 +367,11 @@ mod tests {
         }
 
         fn check_limiter(limiter: &Arc<ResourceLimiter>, cpu: f64, io: f64) {
-            check(limiter.cpu_limiter.get_rate_limit(), cpu * 1_000_000.0);
-            check(limiter.io_limiter.get_rate_limit(), io);
+            check(
+                limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
+                cpu * 1_000_000.0,
+            );
+            check(limiter.get_limiter(ResourceType::Io).get_rate_limit(), io);
             reset_limiter(limiter);
         }
 

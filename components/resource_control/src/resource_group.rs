@@ -223,6 +223,7 @@ impl ResourceGroupManager {
             return g.limiter.clone();
         }
 
+        // fallback to the default resource group if target group doesn't exist.
         self.resource_groups
             .get(DEFAULT_RESOURCE_GROUP_NAME)
             .and_then(|g| g.limiter.clone())
@@ -634,10 +635,10 @@ impl GroupPriorityTracker {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use rand::{thread_rng, RngCore};
     use yatp::queue::Extras;
 
     use super::*;
+    use crate::resource_limiter::ResourceType::{Cpu, Io};
 
     pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> PbResourceGroup {
         new_resource_group(name, true, ru, ru, group_priority)
@@ -756,10 +757,10 @@ pub(crate) mod tests {
         assert!(group1.limiter.is_none());
         let default_group = resource_manager.get_resource_group("default").unwrap();
         let limiter = default_group.limiter.as_ref().unwrap().clone();
-        assert!(limiter.cpu_limiter.get_rate_limit().is_infinite());
-        assert!(limiter.io_limiter.get_rate_limit().is_infinite());
-        limiter.cpu_limiter.set_rate_limit(100.0);
-        limiter.io_limiter.set_rate_limit(200.0);
+        assert!(limiter.get_limiter(Cpu).get_rate_limit().is_infinite());
+        assert!(limiter.get_limiter(Io).get_rate_limit().is_infinite());
+        limiter.get_limiter(Cpu).set_rate_limit(100.0);
+        limiter.get_limiter(Io).set_rate_limit(200.0);
         drop(group1);
         drop(default_group);
 
@@ -770,8 +771,8 @@ pub(crate) mod tests {
         assert_eq!(default_group.get_ru_quota(), 100);
         let new_limiter = default_group.limiter.as_ref().unwrap().clone();
         // check rate_limiter is not changed.
-        assert_eq!(new_limiter.cpu_limiter.get_rate_limit(), 100.0);
-        assert_eq!(new_limiter.io_limiter.get_rate_limit(), 200.0);
+        assert_eq!(new_limiter.get_limiter(Cpu).get_rate_limit(), 100.0);
+        assert_eq!(new_limiter.get_limiter(Io).get_rate_limit(), 200.0);
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
     }
 
@@ -938,6 +939,7 @@ pub(crate) mod tests {
     #[cfg(feature = "failpoints")]
     #[test]
     fn test_reset_resource_group_vt_overflow() {
+        use rand::{thread_rng, RngCore};
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
         let mut rng = thread_rng();
