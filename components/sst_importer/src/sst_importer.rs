@@ -222,17 +222,17 @@ impl SstImporter {
         })
     }
 
-    pub fn range_enter_import_mode(&self, range: Range) {
+    pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
         if let Either::Right(ref switcher) = self.switcher {
-            switcher.range_enter_import_mode(range)
+            switcher.ranges_enter_import_mode(ranges)
         } else {
             unreachable!();
         }
     }
 
-    pub fn clear_import_mode_regions(&self, range: Range) {
+    pub fn clear_import_mode_regions(&self, ranges: Vec<Range>) {
         if let Either::Right(ref switcher) = self.switcher {
-            switcher.clear_import_mode_range(range);
+            switcher.clear_import_mode_range(ranges);
         } else {
             unreachable!();
         }
@@ -1215,7 +1215,7 @@ impl SstImporter {
                 key_manager.link_file(temp_str, save_str)?;
                 let r = file_system::rename(&path.temp, &path.save);
                 let del_file = if r.is_ok() { temp_str } else { save_str };
-                if let Err(e) = key_manager.delete_file(del_file) {
+                if let Err(e) = key_manager.delete_file(del_file, None) {
                     warn!("fail to remove encryption metadata during 'do_download'"; "err" => ?e);
                 }
                 r?;

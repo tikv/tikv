@@ -1221,7 +1221,7 @@ mod tests {
             .build_shared_cache(cfg.storage.engine);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache).build();
+        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), path).unwrap();
 
         let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
@@ -1487,7 +1487,7 @@ mod tests {
             .build_shared_cache(cfg.storage.engine);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache).build();
+        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), path).unwrap();
 
         let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
