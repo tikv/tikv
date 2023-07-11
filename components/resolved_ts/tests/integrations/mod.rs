@@ -54,6 +54,9 @@ fn test_resolved_ts_basic() {
     let current_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_get_rts_ge(r1.id, current_ts);
 
+    // region2 will destroy after merge. so cannot get resolved here.
+    suite.must_not_get_rts(r2.id);
+
     // ingest sst
     let temp_dir = Builder::new().prefix("test_resolved_ts").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
