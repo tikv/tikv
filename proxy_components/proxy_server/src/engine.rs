@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use engine_store_ffi::TiFlashEngine;
+use engine_tiflash::DB;
 use engine_traits::{CfOptionsExt, DbOptions, DbOptionsExt, CF_DEFAULT};
 use tikv::config::ConfigurableDb;
 
@@ -11,9 +14,24 @@ impl ProxyRocksEngine {
     pub(crate) fn new(engine: TiFlashEngine) -> ProxyRocksEngine {
         ProxyRocksEngine { inner: engine }
     }
+
+    pub fn as_inner(&self) -> &Arc<DB> {
+        &self.inner.as_inner()
+    }
 }
 
 pub type ConfigRes = std::result::Result<(), Box<dyn std::error::Error>>;
+
+impl DbOptionsExt for ProxyRocksEngine {
+    type DbOptions = engine_tiflash::RocksDbOptions;
+
+    fn get_db_options(&self) -> Self::DbOptions {
+        self.inner.get_db_options()
+    }
+    fn set_db_options(&self, options: &[(&str, &str)]) -> engine_traits::Result<()> {
+        self.inner.set_db_options(options)
+    }
+}
 
 impl ConfigurableDb for ProxyRocksEngine {
     fn set_db_config(&self, opts: &[(&str, &str)]) -> ConfigRes {
@@ -47,9 +65,34 @@ impl ConfigurableDb for ProxyRocksEngine {
         }
     }
 
+    fn set_flush_size(&self, f: usize) -> ConfigRes {
+        let mut opt = self.get_db_options();
+        opt.set_flush_size(f).map_err(Box::from)
+    }
+
+    fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
+        let mut opt = self.get_db_options();
+        opt.set_flush_oldest_first(f).map_err(Box::from)
+    }
+
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes {
         let opt = self.inner.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
         opt.set_block_cache_capacity(capacity as u64)
             .map_err(Box::from)
+    }
+
+    fn set_high_priority_background_threads(&self, n: i32, allow_reduce: bool) -> ConfigRes {
+        assert!(n > 0);
+        if let Some(env) = self.as_inner().as_ref().env() {
+            let origin_threads = env.get_high_priority_background_threads();
+            if n > origin_threads || allow_reduce {
+                env.set_high_priority_background_threads(n);
+            }
+            Ok(())
+        } else {
+            Err(Box::from(
+                "set high priority background threads failed as env is not set".to_string(),
+            ))
+        }
     }
 }

@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
-use engine_rocks::get_range_stats;
+use engine_rocks::{get_range_stats, STORE_ENGINE_EVENT_COUNTER_VEC};
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
+    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
+    WriteOptions, ALL_CFS,
 };
+use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
@@ -23,10 +24,12 @@ impl RocksEngine {
     // of region will never be larger than max-region-size.
     fn delete_all_in_range_cf_by_ingest(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         sst_path: String,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut written = false;
         let mut ranges = ranges.to_owned();
         ranges.sort_by(|a, b| a.start_key.cmp(b.start_key));
 
@@ -39,7 +42,7 @@ impl RocksEngine {
                 .as_ref()
                 .map_or(false, |key| key.as_slice() > r.start_key)
             {
-                self.delete_all_in_range_cf_by_key(cf, &r)?;
+                written |= self.delete_all_in_range_cf_by_key(wopts, cf, &r)?;
                 continue;
             }
             last_end_key = Some(r.end_key.to_owned());
@@ -84,20 +87,26 @@ impl RocksEngine {
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
-                wb.delete_cf(cf, key)?;
                 if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                    wb.write()?;
+                    wb.write_opt(wopts)?;
                     wb.clear();
                 }
+                wb.delete_cf(cf, key)?;
             }
             if wb.count() > 0 {
-                wb.write()?;
+                wb.write_opt(wopts)?;
+                written = true;
             }
         }
-        Ok(())
+        Ok(written)
     }
 
-    fn delete_all_in_range_cf_by_key(&self, cf: &str, range: &Range<'_>) -> Result<()> {
+    fn delete_all_in_range_cf_by_key(
+        &self,
+        wopts: &WriteOptions,
+        cf: &str,
+        range: &Range<'_>,
+    ) -> Result<bool> {
         let start = KeyBuilder::from_slice(range.start_key, 0, 0);
         let end = KeyBuilder::from_slice(range.end_key, 0, 0);
         let mut opts = IterOptions::new(Some(start), Some(end), false);
@@ -110,18 +119,22 @@ impl RocksEngine {
         let mut it_valid = it.seek(range.start_key)?;
         let mut wb = self.write_batch();
         while it_valid {
-            wb.delete_cf(cf, it.key())?;
             if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                wb.write()?;
+                wb.write_opt(wopts)?;
                 wb.clear();
             }
+            wb.delete_cf(cf, it.key())?;
             it_valid = it.next()?;
         }
         if wb.count() > 0 {
-            wb.write()?;
+            wb.write_opt(wopts)?;
+            if !wopts.disable_wal() {
+                self.sync_wal()?;
+            }
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        self.sync_wal()?;
-        Ok(())
     }
 }
 
@@ -138,46 +151,105 @@ impl MiscExt for RocksEngine {
                 handles.push(util::get_cf_handle(self.as_inner(), cf)?);
             }
         }
-        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(wait);
+        fopts.set_allow_write_stall(true);
+        self.as_inner().flush_cfs(&handles, &fopts).map_err(r2e)
     }
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        self.as_inner().flush_cf(handle, wait).map_err(r2e)
+        let mut fopts = FlushOptions::default();
+        fopts.set_wait(wait);
+        fopts.set_allow_write_stall(true);
+        self.as_inner().flush_cf(handle, &fopts).map_err(r2e)
+    }
+
+    // Don't flush if a memtable is just flushed within the threshold.
+    fn flush_oldest_cf(
+        &self,
+        wait: bool,
+        age_threshold: Option<std::time::SystemTime>,
+    ) -> Result<bool> {
+        let cfs = self.cf_names();
+        let mut handles = Vec::with_capacity(cfs.len());
+        for cf in cfs {
+            handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        }
+        if let Some((handle, time)) = handles
+            .into_iter()
+            .filter_map(|handle| {
+                self.as_inner()
+                    .get_approximate_active_memtable_stats_cf(handle)
+                    .map(|(_, time)| (handle, time))
+            })
+            .min_by(|(_, a), (_, b)| a.cmp(b))
+            && age_threshold.map_or(true, |threshold| time <= threshold)
+        {
+            let mut fopts = FlushOptions::default();
+            fopts.set_wait(wait);
+            fopts.set_allow_write_stall(true);
+            fopts.set_check_if_compaction_disabled(true);
+            fopts.set_expected_oldest_key_time(time);
+            self
+                .as_inner()
+                .flush_cf(handle, &fopts)
+                .map_err(r2e)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn delete_ranges_cf(
         &self,
+        wopts: &WriteOptions,
         cf: &str,
         strategy: DeleteStrategy,
         ranges: &[Range<'_>],
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut written = false;
         if ranges.is_empty() {
-            return Ok(());
+            return Ok(written);
         }
         match strategy {
             DeleteStrategy::DeleteFiles => {
                 let handle = util::get_cf_handle(self.as_inner(), cf)?;
-                for r in ranges {
-                    if r.start_key >= r.end_key {
-                        continue;
-                    }
-                    self.as_inner()
-                        .delete_files_in_range_cf(handle, r.start_key, r.end_key, false)
-                        .map_err(r2e)?;
+                let rocks_ranges: Vec<_> = ranges
+                    .iter()
+                    .filter_map(|r| {
+                        if r.start_key >= r.end_key {
+                            None
+                        } else {
+                            Some(RocksRange::new(r.start_key, r.end_key))
+                        }
+                    })
+                    .collect();
+                if rocks_ranges.is_empty() {
+                    return Ok(written);
                 }
+                self.as_inner()
+                    .delete_files_in_ranges_cf(handle, &rocks_ranges, false)
+                    .map_err(r2e)?;
             }
             DeleteStrategy::DeleteBlobs => {
                 let handle = util::get_cf_handle(self.as_inner(), cf)?;
                 if self.is_titan() {
-                    for r in ranges {
-                        if r.start_key >= r.end_key {
-                            continue;
-                        }
-                        self.as_inner()
-                            .delete_blob_files_in_range_cf(handle, r.start_key, r.end_key, false)
-                            .map_err(r2e)?;
+                    let rocks_ranges: Vec<_> = ranges
+                        .iter()
+                        .filter_map(|r| {
+                            if r.start_key >= r.end_key {
+                                None
+                            } else {
+                                Some(RocksRange::new(r.start_key, r.end_key))
+                            }
+                        })
+                        .collect();
+                    if rocks_ranges.is_empty() {
+                        return Ok(written);
                     }
+                    self.as_inner()
+                        .delete_blob_files_in_ranges_cf(handle, &rocks_ranges, false)
+                        .map_err(r2e)?;
                 }
             }
             DeleteStrategy::DeleteByRange => {
@@ -185,18 +257,19 @@ impl MiscExt for RocksEngine {
                 for r in ranges.iter() {
                     wb.delete_range_cf(cf, r.start_key, r.end_key)?;
                 }
-                wb.write()?;
+                wb.write_opt(wopts)?;
+                written = true;
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
-                    self.delete_all_in_range_cf_by_key(cf, r)?;
+                    written |= self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
                 }
             }
             DeleteStrategy::DeleteByWriter { sst_path } => {
-                self.delete_all_in_range_cf_by_ingest(cf, sst_path, ranges)?;
+                written |= self.delete_all_in_range_cf_by_ingest(wopts, cf, sst_path, ranges)?;
             }
         }
-        Ok(())
+        Ok(written)
     }
 
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)> {
@@ -353,6 +426,23 @@ impl MiscExt for RocksEngine {
                 .get_property_int(ROCKSDB_IS_WRITE_STOPPED)
                 .unwrap_or_default()
                 != 0
+    }
+
+    fn get_active_memtable_stats_cf(
+        &self,
+        cf: &str,
+    ) -> Result<Option<(u64, std::time::SystemTime)>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_approximate_active_memtable_stats_cf(handle))
+    }
+
+    fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64> {
+        let n = STORE_ENGINE_EVENT_COUNTER_VEC
+            .with_label_values(&["kv", cf, "flush"])
+            .get();
+        Ok(n)
     }
 }
 

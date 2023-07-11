@@ -453,31 +453,19 @@ impl RaftEngineReadOnly for PSLogEngine {
         // Here means we don't fetch enough entries.
         Err(Error::EntriesUnavailable)
     }
-
-    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
-        let start_key = keys::raft_log_key(region_id, 0);
-        let end_key = keys::raft_log_key(region_id, u64::MAX);
-        self.scan(&start_key, &end_key, |_, page| {
-            let mut entry = Entry::default();
-            entry.merge_from_bytes(page)?;
-            buf.push(entry);
-            Ok(true)
-        })?;
-        Ok(())
-    }
 }
 
 impl RaftEngineDebug for PSLogEngine {
     fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
     where
-        F: FnMut(&Entry) -> Result<bool>,
+        F: FnMut(Entry) -> Result<bool>,
     {
         let start_key = keys::raft_log_key(raft_group_id, 0);
         let end_key = keys::raft_log_key(raft_group_id, u64::MAX);
         self.scan(&start_key, &end_key, |_, value| {
             let mut entry = Entry::default();
             entry.merge_from_bytes(value)?;
-            f(&entry)
+            f(entry)
         })?;
         Ok(())
     }

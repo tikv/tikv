@@ -122,7 +122,7 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     engine_store_server_helper: &EngineStoreServerHelper,
 ) {
     let engine_store_server_helper_ptr = engine_store_server_helper as *const _ as isize;
-    let mut tikv = TiKvServer::<CER>::init(config, proxy_config, engine_store_server_helper_ptr);
+    let mut tikv = TiKvServer::<CER, F>::init(config, proxy_config, engine_store_server_helper_ptr);
 
     // Must be called after `TiKvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
@@ -194,7 +194,7 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
             engine_store_ffi::ffi::RaftStoreProxyEngine::from_tiflash_engine(engines.kv.clone()),
         );
     }
-    let server_config = tikv.init_servers::<F>();
+    let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_storage_stats_task(engines);
@@ -412,7 +412,7 @@ pub unsafe fn run_tikv_only_decryption(
     })
 }
 
-impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
+impl<CER: ConfiguredRaftEngine, F: KvFormat> TiKvServer<CER, F> {
     fn init_tiflash_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
@@ -450,7 +450,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         }
 
         // Create kv engine.
-        let builder = KvEngineFactoryBuilder::new(env, &self.core.config, block_cache)
+        let builder = KvEngineFactoryBuilder::new(env, &self.core.config, block_cache, self.core.encryption_key_manager.clone())
             // TODO(tiflash) check if we need a old version of RocksEngine, or if we need to upgrade
             // .compaction_filter_router(self.router.clone())
             .region_info_accessor(self.region_info_accessor.clone())
@@ -513,7 +513,7 @@ const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
-struct TiKvServer<ER: RaftEngine> {
+struct TiKvServer<ER: RaftEngine, F: KvFormat> {
     proxy_config: ProxyConfig,
     engine_store_server_helper_ptr: isize,
     core: TikvServerCore,
@@ -527,7 +527,7 @@ struct TiKvServer<ER: RaftEngine> {
     engines: Option<TiKvEngines<TiFlashEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
-    servers: Option<Servers<TiFlashEngine, ER>>,
+    servers: Option<Servers<TiFlashEngine, ER, F>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<TiFlashEngine>>,
     concurrency_manager: ConcurrencyManager,
@@ -544,22 +544,23 @@ struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
     engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
 }
 
-struct Servers<EK: KvEngine, ER: RaftEngine> {
+struct Servers<EK: KvEngine, ER: RaftEngine, F: KvFormat> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
     node: Node<RpcClient, EK, ER>,
     importer: Arc<SstImporter>,
+    debugger: DebuggerImpl<ER, RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, LockManager, F>,
 }
 
 type LocalServer<EK, ER> = Server<resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER: RaftEngine> TiKvServer<ER> {
+impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
     fn init(
         mut config: TikvConfig,
         proxy_config: ProxyConfig,
         engine_store_server_helper_ptr: isize,
-    ) -> TiKvServer<ER> {
+    ) -> TiKvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -761,7 +762,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         gc_worker
     }
 
-    fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+    fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.core.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
@@ -842,12 +843,14 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
+                .enable_time()
                 .worker_threads(1)
-                .after_start_wrapper(move || {
-                    tikv_alloc::add_thread_memory_accessor();
-                    tikv_util::thread_group::set_properties(props.clone());
-                })
-                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
+                .with_sys_and_custom_hooks(
+                    move || {
+                        tikv_util::thread_group::set_properties(props.clone());
+                    },
+                    || {},
+                )
                 .build()
                 .unwrap(),
         );
@@ -1051,6 +1054,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
                 self.core.config.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
@@ -1104,6 +1108,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             import_path,
             self.core.encryption_key_manager.clone(),
             self.core.config.storage.api_version(),
+            false,
         )
         .unwrap();
         for (cf_name, compression_type) in &[
@@ -1143,7 +1148,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             node.id(),
             &server_config,
             &self.security_mgr,
-            storage,
+            storage.clone(),
             coprocessor::Endpoint::new(
                 &server_config.value(),
                 cop_read_pool_handle,
@@ -1292,11 +1297,23 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             )),
         );
 
+        let mut debugger = DebuggerImpl::new(
+            Engines {
+                kv: engines.engines.kv.rocks.clone(),
+                raft: engines.engines.raft.clone(),
+            },
+            self.cfg_controller.as_ref().unwrap().clone(),
+            Some(storage),
+        );
+        debugger.set_kv_statistics(self.kv_statistics.clone());
+        debugger.set_raft_statistics(self.raft_statistics.clone());
+
         self.servers = Some(Servers {
             lock_mgr,
             server,
             node,
             importer,
+            debugger,
         });
 
         server_config
@@ -1305,7 +1322,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     fn register_services(&mut self) {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
-
         // Import SST service.
         let import_service = ImportSstService::new(
             self.core.config.import.clone(),
@@ -1313,6 +1329,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             engines.engine.clone(),
             LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
+            None,
         );
         if servers
             .server
@@ -1323,18 +1340,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
 
         // Debug service.
-        let mut debugger = DebuggerImpl::new(
-            Engines {
-                kv: engines.engines.kv.rocks.clone(),
-                raft: engines.engines.raft.clone(),
-            },
-            self.cfg_controller.as_ref().unwrap().clone(),
-        );
-        debugger.set_kv_statistics(self.kv_statistics.clone());
-        debugger.set_raft_statistics(self.raft_statistics.clone());
-
         let debug_service = DebugService::new(
-            debugger,
+            servers.debugger.clone(),
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
         );

@@ -2,6 +2,8 @@
 
 use std::sync::atomic::Ordering;
 
+use engine_traits::RaftEngineDebug;
+
 use super::{
     common::*, mock_core::*, mock_engine_store_server::into_engine_store_server_wrap, mock_ffi::*,
 };

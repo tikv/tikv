@@ -278,6 +278,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
@@ -324,7 +325,9 @@ impl Simulator<TiFlashEngine> for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
+            Arc::new(
+                SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version(), false).unwrap(),
+            )
         };
         self.importer = Some(importer.clone());
 
@@ -414,6 +417,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
