@@ -722,7 +722,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
-            if let Some(p) = meta.region_read_progress.get(&res.source.get_id()) {
+            if let Some(p) = meta.region_read_progress.remove(&res.source.get_id()) {
                 res.source_safe_ts = p.safe_ts();
             }
             meta.set_region(region, true, &self.logger);
