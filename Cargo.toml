@@ -112,7 +112,7 @@ pprof = { version = "0.11", default-features = false, features = ["flamegraph", 
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
@@ -202,6 +202,10 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 # [patch.'https://github.com/pingcap/kvproto']
 # kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
+#
+# After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
+# [patch.'https://github.com/tikv/rust-rocksdb']
+# rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
@@ -328,7 +332,7 @@ resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
 snap_recovery = { path = "components/snap_recovery" }
-sst_importer = { path = "components/sst_importer" }
+sst_importer = { path = "components/sst_importer", default-features = false }
 test_backup = { path = "components/test_backup" }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
 example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
@@ -354,6 +358,7 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }

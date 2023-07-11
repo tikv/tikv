@@ -63,7 +63,9 @@ fn test_deadline_3() {
     let (_, endpoint, _) = {
         let engine = tikv::storage::TestEngineBuilder::new().build().unwrap();
         let cfg = tikv::server::Config {
-            end_point_request_max_handle_duration: tikv_util::config::ReadableDuration::secs(1),
+            end_point_request_max_handle_duration: Some(tikv_util::config::ReadableDuration::secs(
+                1,
+            )),
             ..Default::default()
         };
         init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)

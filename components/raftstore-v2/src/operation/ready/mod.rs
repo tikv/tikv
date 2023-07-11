@@ -490,7 +490,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
-                warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to, "message_type" => ?msg.msg_type);
+                warn!(
+                    self.logger,
+                    "failed to look up recipient peer";
+                    "to_peer" => msg.to,
+                    "message_type" => ?msg.msg_type
+                );
                 return None;
             }
         };
@@ -508,9 +513,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
-        // Filling start and end key is only needed for being compatible with
-        // raftstore v1 learners (e.g. tiflash engine).
-        //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
         //   leader yet
@@ -839,7 +841,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        let (persisted_message, has_snapshot) =
+        let (persisted_message, flushed_epoch, has_snapshot) =
             self.async_writer
                 .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
@@ -863,6 +865,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
+        }
+
+        if let Some(flushed_epoch) = flushed_epoch {
+            self.storage_mut().set_flushed_epoch(&flushed_epoch);
         }
 
         self.storage_mut()
