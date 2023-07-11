@@ -19,33 +19,32 @@ use std::{
     u64,
 };
 
+use collections::HashMap;
+use encryption_export::{
+    create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
+    DecrypterReader, Iv,
+};
+use engine_rocks::get_env;
+use engine_traits::{EncryptionKeyManager, Peekable};
+use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
-    debugpb::{*, Db as DbType},
+    debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
     raft_serverpb::{SnapshotMeta, StoreIdent},
     tikvpb::TikvClient,
 };
+use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft_engine::RecoveryMode;
-use regex::Regex;
-use structopt::{clap::ErrorKind, StructOpt};
-
-use collections::HashMap;
-use encryption_export::{
-    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader,
-    from_engine_encryption_method, Iv,
-};
-use engine_rocks::get_env;
-use engine_traits::{EncryptionKeyManager, Peekable};
-use file_system::calc_crc32;
-use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft_log_engine::ManagedFileSystem;
 use raftstore::store::util::build_key_range;
+use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
+use structopt::{clap::ErrorKind, StructOpt};
 use tikv::{
     config::TikvConfig,
     server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},

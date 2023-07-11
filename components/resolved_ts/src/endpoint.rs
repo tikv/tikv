@@ -597,7 +597,26 @@ where
             self.store_id
         })
     }
+
+    fn handle_get_diagnosis_info(
+        &self,
+        region_id: u64,
+        callback: Callback<(bool, bool, u64, u64)>,
+    ) {
+        if let Some(r) = self.regions.get(&region_id) {
+            callback((
+                true,
+                r.resolver.stopped(),
+                r.resolver.resolved_ts().into_inner(),
+                r.resolver.tracked_index(),
+            ));
+        } else {
+            callback((false, false, 0u64, 0u64));
+        }
+    }
 }
+
+type Callback<T> = Box<dyn FnOnce(T) + Send>;
 
 pub enum Task {
     RegionUpdated(Region),
@@ -631,6 +650,10 @@ pub enum Task {
     },
     ChangeConfig {
         change: ConfigChange,
+    },
+    GetDiagnosisInfo {
+        region_id: u64,
+        callback: Callback<(bool, bool, u64, u64)>,
     },
 }
 
@@ -689,6 +712,11 @@ impl fmt::Debug for Task {
                 .field("name", &"change_config")
                 .field("change", &change)
                 .finish(),
+            Task::GetDiagnosisInfo { region_id, .. } => de
+                .field("name", &"get_diagnosis_info")
+                .field("region_id", &region_id)
+                .field("callback", &"callback")
+                .finish(),
         }
     }
 }
@@ -733,6 +761,10 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::ChangeConfig { change } => self.handle_change_config(change),
+            Task::GetDiagnosisInfo {
+                region_id,
+                callback,
+            } => self.handle_get_diagnosis_info(region_id, callback),
         }
     }
 }

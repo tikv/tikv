@@ -2,10 +2,9 @@
 
 use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock, u64};
 
-use clap::{AppSettings, crate_authors};
-use structopt::StructOpt;
-
+use clap::{crate_authors, AppSettings};
 use engine_traits::CF_DEFAULT;
+use structopt::StructOpt;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
 static VERSION_INFO: LazyLock<String> = LazyLock::new(|| {
@@ -15,12 +14,12 @@ static VERSION_INFO: LazyLock<String> = LazyLock::new(|| {
 
 #[derive(StructOpt)]
 #[structopt(
-name = "TiKV Control (tikv-ctl)",
-about = "A tool for interacting with TiKV deployments.",
-author = crate_authors ! (),
-version = & * * VERSION_INFO,
-long_version = & * * VERSION_INFO,
-setting = AppSettings::DontCollapseArgsInUsage,
+    name = "TiKV Control (tikv-ctl)",
+    about = "A tool for interacting with TiKV deployments.",
+    author = crate_authors!(),
+    version = &**VERSION_INFO,
+    long_version = &**VERSION_INFO,
+    setting = AppSettings::DontCollapseArgsInUsage,
 )]
 pub struct Opt {
     #[structopt(long)]

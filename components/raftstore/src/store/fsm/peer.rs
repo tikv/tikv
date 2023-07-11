@@ -16,13 +16,8 @@ use std::{
     u64,
 };
 
-use batch_system::{BasicMailbox, Fsm};
-use collections::{HashMap, HashSet};
-use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
-use error_code::ErrorCodeExt;
 use fail::fail_point;
 use futures::channel::mpsc::UnboundedSender;
-use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
     errorpb,
@@ -41,68 +36,76 @@ use kvproto::{
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
 use parking_lot::RwLockWriteGuard;
-use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::{
     self,
     eraftpb::{self, ConfChangeType, MessageType},
-    GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
+    GetEntriesContext, INVALID_INDEX, NO_LIMIT, Progress, ReadState, SnapshotStatus, StateRole,
 };
 use smallvec::SmallVec;
+
+use batch_system::{BasicMailbox, Fsm};
+use collections::{HashMap, HashSet};
+use engine_traits::{CF_LOCK, CF_RAFT, Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt};
+use error_code::ErrorCodeExt;
+use keys::{self, enc_end_key, enc_start_key};
+use pd_client::{BucketMeta, BucketStat, new_bucket_stats};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, debug, defer, error, escape, info, is_zero_duration,
+    box_err, debug, defer, Either, error, escape, info,
+    is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    trace, warn,
+    time::{Instant as TiInstant, monotonic_raw_now}, trace,
+    warn,
     worker::{ScheduleError, Scheduler},
-    Either,
 };
 use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 
-use self::memtrace::*;
-use super::life::forward_destroy_to_source_peer;
-#[cfg(any(test, feature = "testexport"))]
-use crate::store::PeerInternalStat;
 use crate::{
     coprocessor::{RegionChangeEvent, RegionChangeReason},
-    store::{
+    Error,
+    Result, store::{
+        CasualMessage,
         cmd_resp::{bind_term, new_error},
+        Config,
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
-            store::{PollContext, StoreMeta},
-            ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-            ExecResult, SwitchWitness,
+            ApplyMetrics,
+            ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer, ExecResult,
+            store::{PollContext, StoreMeta}, SwitchWitness,
         },
         hibernate_state::{GroupState, HibernateState},
         local_metrics::{RaftMetrics, TimeTracker},
+        LocksStatus,
         memory::*,
+        MergeResultKind,
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
+        PdTask,
         peer::{
             ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, SnapshotRecoveryState,
-            SnapshotRecoveryWaitApplySyncer, StaleState, UnsafeRecoveryExecutePlanSyncer,
-            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+            SnapshotRecoveryWaitApplySyncer, StaleState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
-        region_meta::RegionMeta,
-        transport::Transport,
-        util,
-        util::{KeysInfoFormatter, LeaseState},
-        worker::{
-            new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
-            GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
-        },
-        CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
-        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
-        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        PeerMsg, PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
+        ReadTask, region_meta::RegionMeta, SignificantMsg, SnapKey, StoreMsg, transport::Transport,
+        util, util::{KeysInfoFormatter, LeaseState}, worker::{
+            Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask,
+            new_change_peer_v2_request, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
+        }, WriteCallback,
     },
-    Error, Result,
 };
+#[cfg(any(test, feature = "testexport"))]
+use crate::store::PeerInternalStat;
+
+use super::life::forward_destroy_to_source_peer;
+
+use self::memtrace::*;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DelayDestroy {
@@ -2824,7 +2827,7 @@ where
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
-            _ => unimplemented!(),
+            ExtraMessageType::MsgRefreshBuckets => { unimplemented!("because of conflicting concurrent PR.. ") }
         }
     }
 
@@ -6885,23 +6888,25 @@ mod memtrace {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
-    use engine_test::kv::KvTestEngine;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
     };
     use protobuf::Message;
+
+    use engine_test::kv::KvTestEngine;
     use tikv_util::config::ReadableSize;
 
-    use super::*;
     use crate::store::{
         local_metrics::RaftMetrics,
         msg::{Callback, ExtCallback, RaftCommand},
     };
+
+    use super::*;
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {

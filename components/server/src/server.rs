@@ -17,26 +17,11 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
+    sync::{Arc, atomic::AtomicU64, mpsc, Mutex},
     time::Duration,
     u64,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
-use backup_stream::{
-    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
-    BackupStreamResolver,
-};
-use causal_ts::CausalTsProviderImpl;
-use cdc::{CdcConfigManager, MemoryQuota};
-use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
-use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
-use engine_traits::{
-    Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, TabletContext, TabletRegistry,
-    CF_DEFAULT, CF_WRITE,
-};
-use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
@@ -46,6 +31,23 @@ use kvproto::{
     kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
+use tokio::runtime::Builder;
+
+use api_version::{dispatch_api_version, KvFormat};
+use backup_stream::{
+    BackupStreamResolver, config::BackupStreamConfigManager, metadata::store::PdStore,
+    observer::BackupStreamObserver,
+};
+use causal_ts::CausalTsProviderImpl;
+use cdc::{CdcConfigManager, MemoryQuota};
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
+use engine_rocks_helper::sst_recovery::{DEFAULT_CHECK_INTERVAL, RecoveryRunner};
+use engine_traits::{
+    CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory,
+    TabletContext, TabletRegistry,
+};
+use file_system::{BytesFetcher, get_io_rate_limiter, MetricsManager as IoMetricsManager};
 use pd_client::{
     meta_storage::{Checked, Sourced},
     PdClient, RpcClient,
@@ -53,25 +55,25 @@ use pd_client::{
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
-        config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
+        BoxConsistencyCheckObserver, config::SplitCheckConfigManager, ConsistencyCheckMethod,
         CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
     },
+    RaftRouterCompactedEventSender,
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
+        AutoSplitController,
+        CheckLeaderRunner,
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{
-            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
-        },
-        memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
+            MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter, StoreMeta,
+        }, LocalReader, memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE, SnapManager, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
-    RaftRouterCompactedEventSender,
 };
-use resolved_ts::LeadershipResolver;
+use resolved_ts::{LeadershipResolver, Task};
 use resource_control::{
-    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
+    MIN_PRIORITY_UPDATE_INTERVAL, ResourceGroupManager, ResourceManagerService,
 };
 use security::SecurityManager;
 use snap_recovery::RecoveryService;
@@ -85,39 +87,38 @@ use tikv::{
     },
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
+        CPU_CORES_QUOTA_GAUGE,
         debug::{Debugger, DebuggerImpl},
         gc_worker::{AutoGcConfig, GcWorker},
+        GRPC_THREAD_PREFIX,
+        KvEngineFactoryBuilder,
         lock_manager::LockManager,
+        Node,
+        RaftKv,
         raftkv::ReplicaReadLockChecker,
-        resolve,
-        service::{DebugService, DiagnosticsService},
-        status_server::StatusServer,
-        tablet_snap::NoSnapshotCache,
-        ttl::TtlChecker,
-        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
+        resolve, Server, service::{DebugService, DiagnosticsService}, status_server::StatusServer, tablet_snap::NoSnapshotCache, ttl::TtlChecker,
     },
     storage::{
         self,
         config::EngineType,
         config_manager::StorageConfigManger,
+        Engine,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::{EngineFlowController, FlowController},
-        Engine, Storage,
+        Storage, txn::flow_controller::{EngineFlowController, FlowController},
     },
 };
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
+    Either,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::CleanupMethod,
-    Either,
 };
-use tokio::runtime::Builder;
 
 use crate::{
     common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
@@ -218,7 +219,8 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
-    br_snap_recovery_mode: bool, // use for br snapshot recovery
+    br_snap_recovery_mode: bool, // use for br snapshot recovery,
+    resolved_ts_scheduler: Option<Scheduler<Task>>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -400,6 +402,7 @@ where
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
+            resolved_ts_scheduler: None,
         }
     }
 
@@ -982,6 +985,7 @@ where
                 server.env(),
                 self.security_mgr.clone(),
             );
+            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
             self.core.to_stop.push(rts_worker);
         }
@@ -1046,11 +1050,23 @@ where
             .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
 
         // Debug service.
+        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
         let debug_service = DebugService::new(
             servers.debugger.clone(),
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
-            self.engines.as_ref().unwrap().store_meta.clone()
+            self.engines.as_ref().unwrap().store_meta.clone(),
+            Arc::new(move |region_id, callback| -> bool {
+                if let Some(s) = resolved_ts_scheduler.as_ref() {
+                    let res = s.schedule(Task::GetDiagnosisInfo {
+                        region_id,
+                        callback,
+                    });
+                    res.is_ok()
+                } else {
+                    false
+                }
+            }),
         );
         info!("start register debug service");
         if servers
@@ -1527,11 +1543,12 @@ fn pre_start() {
 mod test {
     use std::{collections::HashMap, sync::Arc};
 
+    use tempfile::Builder;
+
     use engine_rocks::raw::Env;
     use engine_traits::{
-        FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,
+        CF_DEFAULT, FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry,
     };
-    use tempfile::Builder;
     use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
     use tikv_util::{config::ReadableSize, time::Instant};
 

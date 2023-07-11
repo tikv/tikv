@@ -7,7 +7,15 @@ use std::{
     time::Duration,
 };
 
-use futures::{executor::block_on, Future, future::BoxFuture};
+use api_version::{dispatch_api_version, KvFormat};
+use causal_ts::CausalTsProviderImpl;
+use collections::{HashMap, HashSet};
+use concurrency_manager::ConcurrencyManager;
+use encryption_export::DataKeyManager;
+use engine_rocks::RocksEngine;
+use engine_test::raft::RaftTestEngine;
+use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use futures::{executor::block_on, future::BoxFuture, Future};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use kvproto::{
@@ -21,66 +29,57 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     tikvpb_grpc::TikvClient,
 };
-use slog_global::debug;
-use tempfile::TempDir;
-use tokio::runtime::{Builder as TokioBuilder, Handle};
-
-use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::CausalTsProviderImpl;
-use collections::{HashMap, HashSet};
-use concurrency_manager::ConcurrencyManager;
-use encryption_export::DataKeyManager;
-use engine_rocks::RocksEngine;
-use engine_test::raft::RaftTestEngine;
-use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use pd_client::PdClient;
 use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
-    RegionInfoAccessor,
     store::{
-        AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats, region_meta,
+        region_meta, AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats,
         RegionSnapshot, TabletSnapManager, WriteStats,
     },
+    RegionInfoAccessor,
 };
 use raftstore_v2::{router::RaftRouter, StateStorage, StoreMeta, StoreRouter};
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
+use slog_global::debug;
+use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{AddressMap, Config, Filter, filter_send};
+use test_raftstore::{filter_send, AddressMap, Config, Filter};
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
-        ConnectionBuilder,
         debug2::DebuggerImplV2,
-        Error,
-        Extension,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
-        NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2, raftkv::ReplicaReadLockChecker, resolve, Result as ServerResult,
-        Server, ServerTransport, service::{DebugService, DiagnosticsService},
+        raftkv::ReplicaReadLockChecker,
+        resolve,
+        service::{DebugService, DiagnosticsService},
+        ConnectionBuilder, Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2,
+        Result as ServerResult, Server, ServerTransport,
     },
     storage::{
         self,
-        Engine,
         kv::{FakeExtension, LocalTablets, RaftExtension, SnapContext},
-        Storage, txn::flow_controller::{EngineFlowController, FlowController},
+        txn::flow_controller::{EngineFlowController, FlowController},
+        Engine, Storage,
     },
 };
 use tikv_util::{
     box_err,
     config::VersionTrack,
-    Either,
-    HandyRwLock,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
-    thd_name, worker::{Builder as WorkerBuilder, LazyWorker},
+    thd_name,
+    worker::{Builder as WorkerBuilder, LazyWorker},
+    Either, HandyRwLock,
 };
+use tokio::runtime::{Builder as TokioBuilder, Handle};
 use txn_types::TxnExtraScheduler;
 
 use crate::{Cluster, RaftStoreRouter, SimulateTransport, Simulator, SnapshotRouter};
@@ -1085,6 +1084,7 @@ pub fn must_new_cluster_and_debug_client() -> (
                 debug_thread_handle,
                 raft_extension,
                 raftkv.raftkv.router().store_meta().clone(),
+                Arc::new(|_, _| false),
             ))
         }));
     }

@@ -5,33 +5,32 @@ use std::{
     time::Duration, u64,
 };
 
+use api_version::{ApiV1, KvFormat};
+use encryption_export::data_key_manager_from_config;
+use engine_rocks::util::{db_exist, new_engine_opt};
+use engine_traits::{
+    Engines, Error as EngineError, RaftEngine, TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK,
+    CF_WRITE, DATA_CFS,
+};
+use file_system::read_dir;
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    debugpb::{*, Db as DbType},
+    debugpb::{Db as DbType, *},
     kvrpcpb::{KeyRange, MvccInfo},
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::PeerState,
 };
+use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
-use serde_json::json;
-use slog_global::crit;
-
-use api_version::{ApiV1, KvFormat};
-use encryption_export::data_key_manager_from_config;
-use engine_rocks::util::{db_exist, new_engine_opt};
-use engine_traits::{
-    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, Engines, Error as EngineError,
-    RaftEngine, TabletRegistry,
-};
-use file_system::read_dir;
-use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
-use raftstore::store::{INIT_EPOCH_CONF_VER, util::build_key_range};
+use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
 use security::SecurityManager;
+use serde_json::json;
 use server::fatal;
+use slog_global::crit;
 use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
@@ -41,9 +40,9 @@ use tikv::{
     },
     storage::{
         config::EngineType,
-        Engine,
         kv::MockEngine,
         lock_manager::{LockManager, MockLockManager},
+        Engine,
     },
 };
 use tikv_util::escape;
@@ -973,9 +972,48 @@ impl DebugExecutor for DebugClient {
         let mut req = GetRegionReadProgressRequest::default();
         req.set_region_id(region_id);
         req.set_log_locks(log);
+        let opt = grpcio::CallOption::default().timeout(Duration::from_secs(10));
         let resp = self
-            .get_region_read_progress(&req)
+            .get_region_read_progress_opt(&req, opt)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_read_progress", e));
+        if !resp.get_error().is_empty() {
+            println!("error: {}", resp.get_error());
+        }
+        println!("Region read progress:");
+        println!("\texist: {}, ", resp.get_region_read_progress_exist());
+        println!("\tsafe_ts: {}, ", resp.get_safe_ts());
+        println!("\tapplied_index: {}, ", resp.get_applied_index());
+        println!(
+            "\tpending front item (oldest) ts: {}, ",
+            resp.get_pending_front_ts()
+        );
+        println!(
+            "\tpending front item (oldest) applied index: {}, ",
+            resp.get_pending_front_applied_index()
+        );
+        println!(
+            "\tpending back item (latest) ts: {}, ",
+            resp.get_pending_back_ts()
+        );
+        println!(
+            "\tpending back item (latest) applied index: {}, ",
+            resp.get_pending_back_applied_index()
+        );
+        println!("\tpaused: {}, ", resp.get_region_read_progress_paused());
+        println!(
+            "\tduration to last update_safe_ts: {} ms, ",
+            resp.get_duration_to_last_update_safe_ts_ms()
+        );
+        println!(
+            "\tduration to last consume_leader_info: {} ms, ",
+            resp.get_duration_to_last_consume_leader_ms()
+        );
+        println!("Resolver:");
+        println!("\texist: {}, ", resp.get_resolver_exist());
+        println!("\tresolved_ts: {}, ", resp.get_resolved_ts());
+        println!("\ttracked index: {}, ", resp.get_resolver_tracked_index());
+        println!("\tstopped: {}, ", resp.get_resolver_stopped());
+
         println!("resp: {:?}", resp);
     }
 }

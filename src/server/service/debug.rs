@@ -12,11 +12,10 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::debugpb::{self, *};
-use tokio::runtime::Handle;
-
 use raftstore::store::fsm::store::StoreRegionMeta;
 use tikv_kv::RaftExtension;
-use tikv_util::metrics;
+use tikv_util::{future::paired_future_callback, metrics};
+use tokio::runtime::Handle;
 
 use crate::server::debug::{Debugger, Error, Result};
 
@@ -42,24 +41,27 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
     e
 }
 
+pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
+
 /// Service handles the RPC messages for the `Debug` service.
 pub struct Service<T, D, S>
-    where
-        T: RaftExtension + Clone,
-        D: Debugger + Clone,
-        S: StoreRegionMeta,
+where
+    T: RaftExtension + Clone,
+    D: Debugger + Clone,
+    S: StoreRegionMeta,
 {
     pool: Handle,
     debugger: D,
     raft_router: T,
     store_meta: Arc<Mutex<S>>,
+    resolved_ts_scheduler: Arc<dyn Fn(u64, Callback<(bool, bool, u64, u64)>) -> bool + Send + Sync>,
 }
 
 impl<T, D, S> Clone for Service<T, D, S>
-    where
-        T: RaftExtension + Clone,
-        D: Debugger + Clone,
-        S: StoreRegionMeta,
+where
+    T: RaftExtension + Clone,
+    D: Debugger + Clone,
+    S: StoreRegionMeta,
 {
     fn clone(&self) -> Self {
         Service {
@@ -67,24 +69,34 @@ impl<T, D, S> Clone for Service<T, D, S>
             debugger: self.debugger.clone(),
             raft_router: self.raft_router.clone(),
             store_meta: self.store_meta.clone(),
+            resolved_ts_scheduler: self.resolved_ts_scheduler.clone(),
         }
     }
 }
 
 impl<T, D, S> Service<T, D, S>
-    where
-        T: RaftExtension + Clone,
-        D: Debugger + Clone,
-        S: StoreRegionMeta,
+where
+    T: RaftExtension + Clone,
+    D: Debugger + Clone,
+    S: StoreRegionMeta,
 {
     /// Constructs a new `Service` with `Engines`, a `RaftExtension`, a
     /// `GcWorker` and a `RegionInfoAccessor`.
-    pub fn new(debugger: D, pool: Handle, raft_router: T, store_meta: Arc<Mutex<S>>) -> Self {
+    pub fn new(
+        debugger: D,
+        pool: Handle,
+        raft_router: T,
+        store_meta: Arc<Mutex<S>>,
+        resolved_ts_scheduler: Arc<
+            dyn Fn(u64, Callback<(bool, bool, u64, u64)>) -> bool + Send + Sync,
+        >,
+    ) -> Self {
         Service {
             pool,
             debugger,
             raft_router,
             store_meta,
+            resolved_ts_scheduler,
         }
     }
 
@@ -110,10 +122,10 @@ impl<T, D, S> Service<T, D, S>
 }
 
 impl<T, D, S> debugpb::Debug for Service<T, D, S>
-    where
-        T: RaftExtension + 'static,
-        D: Debugger + Clone + Send + 'static,
-        S: StoreRegionMeta,
+where
+    T: RaftExtension + 'static,
+    D: Debugger + Clone + Send + 'static,
+    S: StoreRegionMeta,
 {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
@@ -601,13 +613,19 @@ impl<T, D, S> debugpb::Debug for Service<T, D, S>
         self.handle_response(ctx, sink, f, "debug_flashback_to_version");
     }
 
-    fn get_region_read_progress(&mut self, ctx: RpcContext<'_>, req: GetRegionReadProgressRequest, sink: UnarySink<GetRegionReadProgressResponse>) {
+    fn get_region_read_progress(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: GetRegionReadProgressRequest,
+        sink: UnarySink<GetRegionReadProgressResponse>,
+    ) {
         let store_meta = self.store_meta.lock().unwrap();
         let rrp = store_meta.region_read_progress();
         let mut resp = GetRegionReadProgressResponse::default();
         rrp.with(|registry| {
             let region = registry.get(&req.get_region_id());
             if let Some(r) = region {
+                resp.set_region_read_progress_exist(true);
                 resp.set_safe_ts(r.safe_ts());
                 let core = r.get_core();
                 resp.set_applied_index(core.applied_index);
@@ -618,15 +636,43 @@ impl<T, D, S> debugpb::Debug for Service<T, D, S>
                 }
                 if let Some(front) = core.pending_items.front() {
                     resp.set_pending_front_ts(front.ts);
-                    resp.set_pending_back_applied_index(front.idx)
+                    resp.set_pending_front_applied_index(front.idx)
                 }
-                // todo: set durations
+                // TODO: set durations
                 // resp.set_duration_to_last_consume_leader_ms();
                 // resp.set_duration_to_last_update_safe_ts_ms();
+            } else {
+                resp.set_region_read_progress_exist(false);
             }
         });
-        let f = async move { Ok(resp) };
-        self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+
+        // get from resolver
+        let (cb, f) = paired_future_callback();
+        if (*self.resolved_ts_scheduler)(req.get_region_id(), cb) {
+            // TODO: handle timeout?
+            let f = async move {
+                let res = f.await;
+                match res {
+                    Err(e) => {
+                        resp.set_error("get resolved-ts info failed".to_owned());
+                        error!("tikv-ctl get resolved-ts info failed"; "err" => ?e);
+                    }
+                    Ok((resolver_exist, stopped, resolved_ts, resolver_tracked_index)) => {
+                        resp.set_resolver_exist(resolver_exist);
+                        resp.set_resolver_stopped(stopped);
+                        resp.set_resolved_ts(resolved_ts);
+                        resp.set_resolver_tracked_index(resolver_tracked_index);
+                    }
+                }
+
+                Ok(resp)
+            };
+            self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+        } else {
+            resp.set_error("resolved-ts is not enabled".to_owned());
+            let f = async move { Ok(resp) };
+            self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+        }
     }
 }
 

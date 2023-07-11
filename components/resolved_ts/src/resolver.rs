@@ -74,6 +74,14 @@ impl Resolver {
         self.resolved_ts
     }
 
+    pub fn tracked_index(&self) -> u64 {
+        self.tracked_index
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stopped
+    }
+
     pub fn size(&self) -> usize {
         self.locks_by_key.keys().map(|k| k.len()).sum::<usize>()
             + self
