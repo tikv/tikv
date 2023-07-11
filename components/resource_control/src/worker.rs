@@ -343,8 +343,8 @@ mod tests {
         }
 
         fn reset_limiter(limiter: &Arc<ResourceLimiter>) {
-            reset_quota_limiter(&limiter.get_limiter(ResourceType::Cpu));
-            reset_quota_limiter(&limiter.get_limiter(ResourceType::Io));
+            reset_quota_limiter(limiter.get_limiter(ResourceType::Cpu));
+            reset_quota_limiter(limiter.get_limiter(ResourceType::Io));
         }
 
         let reset_quota = |worker: &mut GroupQuotaAdjustWorker<TestResourceStatsProvider>,
