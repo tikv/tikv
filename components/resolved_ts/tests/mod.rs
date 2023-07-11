@@ -382,7 +382,7 @@ impl TestSuite {
 
     pub fn must_not_get_rts(&mut self, region_id: u64) {
         for _ in 0..50 {
-            if let Some(ts) = self.region_resolved_ts(region_id) {
+            if let Some(_ts) = self.region_resolved_ts(region_id) {
                 sleep_ms(100)
             } else {
                 return;
