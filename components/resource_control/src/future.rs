@@ -213,6 +213,17 @@ impl<F: Future> Future for OptionalFuture<F> {
     }
 }
 
+pub async fn with_resource_limiter<F: Future>(
+    f: F,
+    limiter: Option<Arc<ResourceLimiter>>,
+) -> F::Output {
+    if let Some(limiter) = limiter {
+        LimitedFuture::new(f, limiter).await
+    } else {
+        f.await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc::{channel, Sender};

@@ -559,6 +559,7 @@ mod tests {
             storage.get_concurrency_manager(),
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(

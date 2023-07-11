@@ -758,6 +758,7 @@ where
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
                 self.quota_limiter.clone(),
+                self.resource_manager.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
@@ -1033,6 +1034,7 @@ where
             LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
             None,
+            self.resource_manager.clone(),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1120,6 +1122,7 @@ where
             self.concurrency_manager.clone(),
             self.core.config.storage.api_version(),
             self.causal_ts_provider.clone(),
+            self.resource_manager.clone(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,

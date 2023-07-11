@@ -14,6 +14,12 @@ pub struct ResourceLimiter {
     pub(crate) io_limiter: QuotaLimiter,
 }
 
+impl std::fmt::Debug for ResourceLimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ResourceLimiter(...)")
+    }
+}
+
 impl ResourceLimiter {
     pub fn new(cpu_limit: f64, io_limit: f64) -> Self {
         Self {

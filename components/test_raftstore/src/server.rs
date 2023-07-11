@@ -449,6 +449,7 @@ impl ServerCluster {
             LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
             None,
+            resource_manager.clone(),
         );
 
         // Create deadlock service.
@@ -478,6 +479,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             res_tag_factory,
             quota_limiter,
+            resource_manager.clone(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;

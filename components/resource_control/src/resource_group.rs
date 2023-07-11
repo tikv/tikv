@@ -4,6 +4,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     cmp::{max, min},
+    collections::HashSet,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -127,8 +128,7 @@ impl ResourceGroupManager {
     }
 
     fn build_resource_limiter(rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
-        // TODO: only the "default" resource group support background tasks currently.
-        if rg.name == DEFAULT_RESOURCE_GROUP_NAME {
+        if !rg.get_background_settings().get_job_types().is_empty() {
             return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
         }
         None
@@ -211,16 +211,44 @@ impl ResourceGroupManager {
             );
         }
     }
+
+    pub fn get_resource_limiter(
+        &self,
+        rg: &str,
+        request_source: &str,
+    ) -> Option<Arc<ResourceLimiter>> {
+        if let Some(group) = self.resource_groups.get(rg) {
+            if !group.fallback_default {
+                return group.get_resource_limiter(request_source);
+            }
+        }
+
+        self.resource_groups
+            .get(DEFAULT_RESOURCE_GROUP_NAME)
+            .and_then(|g| g.get_resource_limiter(request_source))
+    }
 }
 
 pub(crate) struct ResourceGroup {
     group: PbResourceGroup,
     limiter: Option<Arc<ResourceLimiter>>,
+    background_source_types: HashSet<String>,
+    // whether to fallback background resource control to `default` group.
+    fallback_default: bool,
 }
 
 impl ResourceGroup {
     fn new(group: PbResourceGroup, limiter: Option<Arc<ResourceLimiter>>) -> Self {
-        Self { group, limiter }
+        let background_source_types =
+            HashSet::from_iter(group.get_background_settings().get_job_types().to_owned());
+        let fallback_default =
+            !group.has_background_settings() && group.name != DEFAULT_RESOURCE_GROUP_NAME;
+        Self {
+            group,
+            limiter,
+            background_source_types,
+            fallback_default,
+        }
     }
 
     #[cfg(test)]
@@ -231,6 +259,22 @@ impl ResourceGroup {
             .get_r_u()
             .get_settings()
             .get_fill_rate()
+    }
+
+    fn get_resource_limiter(&self, request_source: &str) -> Option<Arc<ResourceLimiter>> {
+        self.limiter.as_ref().and_then(|limiter| {
+            // the source task name is the last part of `request_source` separated by "_"
+            // the request_source is
+            // {extrenal|internal}_{tidb_req_source}_{source_task_name}
+            let source_task_name = request_source.rsplit('_').next().unwrap_or("");
+            if !source_task_name.is_empty()
+                && self.background_source_types.contains(source_task_name)
+            {
+                Some(limiter.clone())
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -619,7 +663,6 @@ impl GroupPriorityTracker {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use rand::{thread_rng, RngCore};
     use yatp::queue::Extras;
 
     use super::*;
@@ -923,6 +966,8 @@ pub(crate) mod tests {
     #[cfg(feature = "failpoints")]
     #[test]
     fn test_reset_resource_group_vt_overflow() {
+        use rand::{thread_rng, RngCore};
+
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
         let mut rng = thread_rng();

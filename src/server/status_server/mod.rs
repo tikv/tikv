@@ -722,14 +722,20 @@ where
 }
 
 #[derive(Serialize)]
+struct BackgroundSetting {
+    task_names: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct ResourceGroupSetting {
     name: String,
     ru: u64,
     priority: u32,
     burst_limit: i64,
+    background: BackgroundSetting,
 }
 
-fn into_debug_request_group(rg: ResourceGroup) -> ResourceGroupSetting {
+fn into_debug_request_group(mut rg: ResourceGroup) -> ResourceGroupSetting {
     ResourceGroupSetting {
         name: rg.name,
         ru: rg
@@ -745,6 +751,12 @@ fn into_debug_request_group(rg: ResourceGroup) -> ResourceGroupSetting {
             .get_r_u()
             .get_settings()
             .get_burst_limit(),
+        background: BackgroundSetting {
+            task_names: rg
+                .background_settings
+                .as_mut()
+                .map_or(vec![], |s| s.take_job_types().into()),
+        },
     }
 }
 
