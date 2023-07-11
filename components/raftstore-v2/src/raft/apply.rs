@@ -298,8 +298,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn set_sst_applied_index(&mut self, uuid: Vec<Vec<u8>>, apply_index: u64) {
-        self.sst_apply_state.registe_ssts(uuid, apply_index);
+    pub fn sst_apply_state(&self) -> &SstApplyState {
+        &self.sst_apply_state
     }
 
     #[inline]
