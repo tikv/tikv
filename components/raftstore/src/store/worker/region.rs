@@ -51,7 +51,7 @@ use crate::{
 };
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
-const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 8;
+const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";
@@ -406,7 +406,7 @@ where
             router,
             pd_client,
             pool: YatpPoolBuilder::new(DefaultTicker::default())
-                .name_prefix("snap-gen")
+                .name_prefix("snap-generator")
                 .thread_count(
                     1,
                     cfg.value().snap_generator_pool_size,
@@ -851,7 +851,7 @@ where
                     start: UnixSecs::now(),
                 };
                 let scheduled_time = Instant::now_coarse();
-                let _ = self.pool.spawn(async move {
+                self.pool.spawn(async move {
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
                         .observe(scheduled_time.saturating_elapsed_secs());
 
@@ -865,7 +865,12 @@ where
                         for_balance,
                         allow_multi_files_snapshot,
                     );
-                });
+                }).unwrap_or_else(
+                    |e| {
+                        error!("failed to generate snapshot"; "region_id" => region_id, "err" => ?e);
+                        SNAP_COUNTER.generate.fail.inc();
+                    },
+                );
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
