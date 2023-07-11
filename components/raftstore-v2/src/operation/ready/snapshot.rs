@@ -716,6 +716,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             lb.put_flushed_index(region_id, cf, last_index, last_index)
                 .unwrap();
         }
+        task.flushed_epoch = Some(self.region_state().get_region().get_region_epoch().clone());
 
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.
