@@ -1013,8 +1013,6 @@ impl DebugExecutor for DebugClient {
         println!("\tresolved_ts: {}, ", resp.get_resolved_ts());
         println!("\ttracked index: {}, ", resp.get_resolver_tracked_index());
         println!("\tstopped: {}, ", resp.get_resolver_stopped());
-
-        println!("resp: {:?}", resp);
     }
 }
 
