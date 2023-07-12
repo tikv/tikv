@@ -1087,7 +1087,7 @@ pub fn must_new_cluster_and_debug_client() -> (
                 debug_thread_handle,
                 raft_extension,
                 raftkv.raftkv.router().store_meta().clone(),
-                Arc::new(|_, _| false),
+                Arc::new(|_, _, _| false),
             ))
         }));
     }

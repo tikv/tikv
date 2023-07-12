@@ -198,6 +198,22 @@ impl Resolver {
 
         self.resolved_ts
     }
+
+    pub(crate) fn log_locks(&self) {
+        // log lock with the minimum start_ts
+        if let Some((start_ts, keys)) = self.lock_ts_heap.iter().next() {
+            let keys_for_log = keys
+                .iter()
+                .map(|key| log_wrappers::Value::key(key))
+                .collect::<Vec<_>>();
+            info!(
+                "locks with the minimum start_ts in resolver";
+                "region_id" => self.region_id,
+                "start_ts" => start_ts,
+                "keys" => ?keys_for_log,
+            );
+        }
+    }
 }
 
 #[cfg(test)]

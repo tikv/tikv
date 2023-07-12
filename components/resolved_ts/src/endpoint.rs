@@ -601,9 +601,13 @@ where
     fn handle_get_diagnosis_info(
         &self,
         region_id: u64,
+        log_locks: bool,
         callback: Callback<(bool, bool, u64, u64)>,
     ) {
         if let Some(r) = self.regions.get(&region_id) {
+            if log_locks {
+                r.resolver.log_locks();
+            }
             callback((
                 true,
                 r.resolver.stopped(),
@@ -653,6 +657,7 @@ pub enum Task {
     },
     GetDiagnosisInfo {
         region_id: u64,
+        log_locks: bool,
         callback: Callback<(bool, bool, u64, u64)>,
     },
 }
@@ -763,8 +768,9 @@ where
             Task::ChangeConfig { change } => self.handle_change_config(change),
             Task::GetDiagnosisInfo {
                 region_id,
+                log_locks,
                 callback,
-            } => self.handle_get_diagnosis_info(region_id, callback),
+            } => self.handle_get_diagnosis_info(region_id, log_locks, callback),
         }
     }
 }
