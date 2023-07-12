@@ -1,12 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    array,
-    collections::HashMap,
-    io::Result as IoResult,
-    sync::Arc,
-    time::Duration,
-};
+use std::{array, collections::HashMap, io::Result as IoResult, sync::Arc, time::Duration};
 
 use file_system::{fetch_io_bytes, IoBytes, IoType};
 use strum::EnumCount;
