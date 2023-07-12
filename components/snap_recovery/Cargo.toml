@@ -30,3 +30,7 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 toml = "0.5"
 txn_types = { workspace = true }
+lazy_static = "1.4"
+prometheus = { version = "0.13", default_features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+
