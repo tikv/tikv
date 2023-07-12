@@ -101,7 +101,7 @@ pub fn new_debug_executor(
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
 
-    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache)
+    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache, key_manager.clone())
         .lite(true)
         .build();
 
@@ -1372,12 +1372,22 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         }
     }
 
-    fn recover_regions(&self, _regions: Vec<Region>, _read_only: bool) {
-        unimplemented!()
+    fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
+        let ret = self
+            .recover_regions(regions, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
+        if ret.is_empty() {
+            println!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            println!("region: {}, error: {}", region_id, error);
+        }
     }
 
-    fn recover_all(&self, _threads: usize, _read_only: bool) {
-        unimplemented!()
+    fn recover_all(&self, threads: usize, read_only: bool) {
+        DebuggerImplV2::recover_all(self, threads, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover all", e));
     }
 
     fn print_bad_regions(&self) {
@@ -1393,6 +1403,13 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         println!("all regions are healthy")
     }
 
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        println!("removing unapplied raftlog on region {:?} ...", region_ids);
+        self.drop_unapplied_raftlog(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
+        println!("success");
+    }
+
     fn remove_fail_stores(
         &self,
         _store_ids: Vec<u64>,
@@ -1401,8 +1418,6 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     ) {
         unimplemented!()
     }
-
-    fn drop_unapplied_raftlog(&self, _region_ids: Option<Vec<u64>>) {}
 
     fn recreate_region(&self, _mgr: Arc<SecurityManager>, _pd_cfg: &PdConfig, _region_id: u64) {
         unimplemented!()

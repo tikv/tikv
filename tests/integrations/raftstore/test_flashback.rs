@@ -17,7 +17,7 @@ use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::kv::SnapContext;
-use txn_types::{Key, PessimisticLock, WriteBatchFlags};
+use txn_types::{Key, LastChange, PessimisticLock, WriteBatchFlags};
 
 const TEST_KEY: &[u8] = b"k1";
 const TEST_VALUE: &[u8] = b"v1";
@@ -46,8 +46,7 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
                     ttl: 3000,
                     for_update_ts: 20.into(),
                     min_commit_ts: 30.into(),
-                    last_change_ts: 5.into(),
-                    versions_to_last_change: 3,
+                    last_change: LastChange::make_exist(5.into(), 3),
                     is_locked_with_conflict: false,
                 },
             )])
@@ -66,10 +65,15 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
             },
         );
         let txn_ext = snapshot.txn_ext.unwrap();
-        let pessimistic_locks = txn_ext.pessimistic_locks.read();
-        assert!(!pessimistic_locks.is_writable());
-        assert_eq!(pessimistic_locks.status, LocksStatus::IsInFlashback);
-        assert_eq!(pessimistic_locks.len(), 0);
+        eventually_meet(
+            Box::new(move || {
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                !pessimistic_locks.is_writable()
+                    && pessimistic_locks.status == LocksStatus::IsInFlashback
+                    && pessimistic_locks.is_empty()
+            }),
+            "pessimistic locks status should be LocksStatus::IsInFlashback",
+        );
     }
     // Finish flashback.
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
@@ -77,10 +81,24 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
     {
         let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
         let txn_ext = snapshot.txn_ext.unwrap();
-        let pessimistic_locks = txn_ext.pessimistic_locks.read();
-        assert!(pessimistic_locks.is_writable());
-        assert_eq!(pessimistic_locks.len(), 0);
+        eventually_meet(
+            Box::new(move || {
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                pessimistic_locks.is_writable() && pessimistic_locks.is_empty()
+            }),
+            "pessimistic locks should be writable again",
+        );
     }
+}
+
+fn eventually_meet(condition: Box<dyn Fn() -> bool>, purpose: &str) {
+    for _ in 0..30 {
+        if condition() {
+            return;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    panic!("condition never meet: {}", purpose);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]

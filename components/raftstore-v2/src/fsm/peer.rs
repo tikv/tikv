@@ -215,6 +215,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_tick(&mut self, tick: PeerTick) {
         self.fsm.tick_registry[tick as usize] = false;
+        if !self.fsm.peer().serving() {
+            return;
+        }
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
@@ -223,7 +226,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::CheckMerge => self.fsm.peer_mut().on_check_merge(self.store_ctx),
             PeerTick::CheckPeerStaleState => unimplemented!(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
-            PeerTick::CheckLeaderLease => unimplemented!(),
+            PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => {
                 self.fsm.peer.on_reactivate_memory_lock_tick(self.store_ctx)
             }
@@ -280,7 +283,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .peer_mut()
                     .on_persisted(self.store_ctx, peer_id, ready_number),
                 PeerMsg::LogsFetched(fetched_logs) => {
-                    self.fsm.peer_mut().on_logs_fetched(fetched_logs)
+                    self.fsm.peer_mut().on_raft_log_fetched(fetched_logs)
                 }
                 PeerMsg::SnapshotGenerated(snap_res) => {
                     self.fsm.peer_mut().on_snapshot_generated(snap_res)
@@ -291,9 +294,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     tablet_index,
                     flushed_index,
                 } => {
-                    self.fsm
-                        .peer_mut()
-                        .on_data_flushed(cf, tablet_index, flushed_index);
+                    self.fsm.peer_mut().on_data_flushed(
+                        self.store_ctx,
+                        cf,
+                        tablet_index,
+                        flushed_index,
+                    );
                 }
                 PeerMsg::PeerUnreachable { to_peer_id } => {
                     self.fsm.peer_mut().on_peer_unreachable(to_peer_id)
@@ -333,6 +339,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_cleanup_import_sst(self.store_ctx, ssts),
+                PeerMsg::SnapGc(keys) => self.fsm.peer_mut().on_snap_gc(self.store_ctx, keys),
                 PeerMsg::AskCommitMerge(req) => {
                     self.fsm.peer_mut().on_ask_commit_merge(self.store_ctx, req)
                 }
@@ -352,6 +359,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::LeaderCallback(ch) => self.on_leader_callback(ch),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
+                PeerMsg::FlushBeforeClose { tx } => {
+                    self.fsm.peer_mut().flush_before_close(self.store_ctx, tx)
+                }
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

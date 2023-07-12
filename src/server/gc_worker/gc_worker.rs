@@ -736,6 +736,7 @@ impl<E: Engine> GcRunner<E> {
             for cf in cfs {
                 local_storage
                 .delete_ranges_cf(
+                    &WriteOptions::default(),
                     cf,
                     DeleteStrategy::DeleteFiles,
                     &[Range::new(&start_data_key, &end_data_key)],
@@ -759,6 +760,7 @@ impl<E: Engine> GcRunner<E> {
                 // TODO: set use_delete_range with config here.
                 local_storage
                     .delete_ranges_cf(
+                        &WriteOptions::default(),
                         cf,
                         DeleteStrategy::DeleteByKey,
                         &[Range::new(&start_data_key, &end_data_key)],
@@ -770,6 +772,7 @@ impl<E: Engine> GcRunner<E> {
                     })?;
                 local_storage
                 .delete_ranges_cf(
+                    &WriteOptions::default(),
                     cf,
                     DeleteStrategy::DeleteBlobs,
                     &[Range::new(&start_data_key, &end_data_key)],

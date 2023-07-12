@@ -17,11 +17,26 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, atomic::AtomicU64, mpsc, Mutex},
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
     u64,
 };
 
+use api_version::{dispatch_api_version, KvFormat};
+use backup_stream::{
+    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
+    BackupStreamResolver,
+};
+use causal_ts::CausalTsProviderImpl;
+use cdc::{CdcConfigManager, MemoryQuota};
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
+use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
+use engine_traits::{
+    Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, TabletContext, TabletRegistry,
+    CF_DEFAULT, CF_WRITE,
+};
+use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
@@ -31,23 +46,6 @@ use kvproto::{
     kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
-use tokio::runtime::Builder;
-
-use api_version::{dispatch_api_version, KvFormat};
-use backup_stream::{
-    BackupStreamResolver, config::BackupStreamConfigManager, metadata::store::PdStore,
-    observer::BackupStreamObserver,
-};
-use causal_ts::CausalTsProviderImpl;
-use cdc::{CdcConfigManager, MemoryQuota};
-use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
-use engine_rocks_helper::sst_recovery::{DEFAULT_CHECK_INTERVAL, RecoveryRunner};
-use engine_traits::{
-    CF_DEFAULT, CF_WRITE, Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory,
-    TabletContext, TabletRegistry,
-};
-use file_system::{BytesFetcher, get_io_rate_limiter, MetricsManager as IoMetricsManager};
 use pd_client::{
     meta_storage::{Checked, Sourced},
     PdClient, RpcClient,
@@ -55,25 +53,25 @@ use pd_client::{
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
-        BoxConsistencyCheckObserver, config::SplitCheckConfigManager, ConsistencyCheckMethod,
+        config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
         CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
     },
-    RaftRouterCompactedEventSender,
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     store::{
-        AutoSplitController,
-        CheckLeaderRunner,
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{
-            MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP, RaftBatchSystem, RaftRouter, StoreMeta,
-        }, LocalReader, memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE, SnapManager, SnapManagerBuilder,
+            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
+        },
+        memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
+        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
+    RaftRouterCompactedEventSender,
 };
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::{
-    MIN_PRIORITY_UPDATE_INTERVAL, ResourceGroupManager, ResourceManagerService,
+    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
 use snap_recovery::RecoveryService;
@@ -87,38 +85,39 @@ use tikv::{
     },
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
-        CPU_CORES_QUOTA_GAUGE,
         debug::{Debugger, DebuggerImpl},
         gc_worker::{AutoGcConfig, GcWorker},
-        GRPC_THREAD_PREFIX,
-        KvEngineFactoryBuilder,
         lock_manager::LockManager,
-        Node,
-        RaftKv,
         raftkv::ReplicaReadLockChecker,
-        resolve, Server, service::{DebugService, DiagnosticsService}, status_server::StatusServer, tablet_snap::NoSnapshotCache, ttl::TtlChecker,
+        resolve,
+        service::{DebugService, DiagnosticsService},
+        status_server::StatusServer,
+        tablet_snap::NoSnapshotCache,
+        ttl::TtlChecker,
+        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
         config::EngineType,
         config_manager::StorageConfigManger,
-        Engine,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
-        Storage, txn::flow_controller::{EngineFlowController, FlowController},
+        txn::flow_controller::{EngineFlowController, FlowController},
+        Engine, Storage,
     },
 };
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
-    Either,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::CleanupMethod,
+    Either,
 };
+use tokio::runtime::Builder;
 
 use crate::{
     common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
@@ -539,11 +538,12 @@ where
                 .thread_name(thd_name!("debugger"))
                 .enable_time()
                 .worker_threads(1)
-                .after_start_wrapper(move || {
-                    tikv_alloc::add_thread_memory_accessor();
-                    tikv_util::thread_group::set_properties(props.clone());
-                })
-                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
+                .with_sys_and_custom_hooks(
+                    move || {
+                        tikv_util::thread_group::set_properties(props.clone());
+                    },
+                    || {},
+                )
                 .build()
                 .unwrap(),
         );
@@ -728,6 +728,7 @@ where
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
                 self.core.config.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
@@ -842,6 +843,7 @@ where
             import_path,
             self.core.encryption_key_manager.clone(),
             self.core.config.storage.api_version(),
+            false,
         )
         .unwrap();
         for (cf_name, compression_type) in &[
@@ -1033,6 +1035,7 @@ where
             engines.engine.clone(),
             LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
+            None,
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1470,13 +1473,18 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
         self.raft_statistics = raft_statistics;
 
         // Create kv engine.
-        let builder = KvEngineFactoryBuilder::new(env, &self.core.config, block_cache)
-            .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
-                router: Mutex::new(self.router.clone()),
-            }))
-            .region_info_accessor(self.region_info_accessor.clone())
-            .sst_recovery_sender(self.init_sst_recovery_sender())
-            .flow_listener(flow_listener);
+        let builder = KvEngineFactoryBuilder::new(
+            env,
+            &self.core.config,
+            block_cache,
+            self.core.encryption_key_manager.clone(),
+        )
+        .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
+            router: Mutex::new(self.router.clone()),
+        }))
+        .region_info_accessor(self.region_info_accessor.clone())
+        .sst_recovery_sender(self.init_sst_recovery_sender())
+        .flow_listener(flow_listener);
         let factory = Box::new(builder.build());
         let kv_engine = factory
             .create_shared_db(&self.core.store_path)
@@ -1501,6 +1509,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
         engines.raft.register_config(cfg_controller);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
+            &self.core.config,
             reg,
             engines.raft.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
@@ -1543,12 +1552,11 @@ fn pre_start() {
 mod test {
     use std::{collections::HashMap, sync::Arc};
 
-    use tempfile::Builder;
-
     use engine_rocks::raw::Env;
     use engine_traits::{
-        CF_DEFAULT, FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry,
+        FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,
     };
+    use tempfile::Builder;
     use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
     use tikv_util::{config::ReadableSize, time::Instant};
 
@@ -1568,7 +1576,7 @@ mod test {
             .block_cache
             .build_shared_cache(config.storage.engine);
 
-        let factory = KvEngineFactoryBuilder::new(env, &config, cache).build();
+        let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
 
         for i in 1..6 {
@@ -1608,7 +1616,7 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(reg, None, 10));
+        let engines_info = Arc::new(EnginesResourceInfo::new(&config, reg, None, 10));
 
         let mut cached_latest_tablets = HashMap::default();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);

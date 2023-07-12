@@ -9,7 +9,7 @@ use file_system::calc_crc32;
 use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
-use tempfile::Builder;
+use tempfile::{Builder, TempDir};
 use test_raftstore::Simulator;
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
@@ -252,8 +252,7 @@ fn test_ingest_file_twice_and_conflict() {
 }
 
 #[test]
-fn test_ingest_sst_v2() {
-    let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
+fn test_delete_sst_v2_after_epoch_stale() {
     let mut config = TikvConfig::default();
     config.server.addr = "127.0.0.1:0".to_owned();
     let cleanup_interval = Duration::from_millis(10);
@@ -263,13 +262,13 @@ fn test_ingest_sst_v2() {
     config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
     config.server.grpc_concurrency = 1;
 
-    let (ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config), &mut cluster);
+    let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-
-    // No region id and epoch.
+    // disable data flushed
+    fail::cfg("on_flush_completed", "return()").unwrap();
     send_upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx.clone());
@@ -281,7 +280,6 @@ fn test_ingest_sst_v2() {
 
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
-    fail::cfg("on_cleanup_import_sst", "return").unwrap();
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
     fail::cfg_callback("on_cleanup_import_sst_schedule", move || {
@@ -289,16 +287,7 @@ fn test_ingest_sst_v2() {
     })
     .unwrap();
     rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
-    let mut count = 0;
-    for path in &cluster.paths {
-        let sst_dir = path.path().join("import-sst");
-        for entry in std::fs::read_dir(sst_dir).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_file() {
-                count += 1;
-            }
-        }
-    }
+    assert_eq!(1, sst_file_count(&cluster.paths));
 
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
@@ -306,18 +295,127 @@ fn test_ingest_sst_v2() {
         tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
-    rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
-
-    fail::remove("on_update_region_keys");
-    fail::remove("on_cleanup_import_sst");
-    fail::remove("on_cleanup_import_sst_schedule");
-    assert_ne!(0, count);
-
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
+    rx.recv_timeout(std::time::Duration::from_millis(100))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
     let region_keys = cluster
         .pd_client
         .get_region_approximate_keys(ctx.get_region_id())
         .unwrap();
     assert_eq!(100, region_keys);
+    fail::remove("on_update_region_keys");
+
+    // test restart cluster
+    cluster.stop_node(1);
+    cluster.start().unwrap();
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(1, count);
+
+    // delete sts if the region epoch is stale.
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region = cluster.get_region(b"zk10");
+    pd_client.must_split_region(
+        region,
+        kvproto::pdpb::CheckPolicy::Usekey,
+        vec![b"random_key1".to_vec()],
+    );
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("on_cleanup_import_sst_schedule", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    rx.recv_timeout(std::time::Duration::from_millis(100))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert_eq!(0, sst_file_count(&cluster.paths));
+
+    // test restart cluster
+    cluster.stop_node(1);
+    cluster.start().unwrap();
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(0, count);
+    fail::remove("on_flush_completed");
+}
+
+#[test]
+fn test_delete_sst_after_applied_sst() {
+    // let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
+    let mut config = TikvConfig::default();
+    config.server.addr = "127.0.0.1:0".to_owned();
+    let cleanup_interval = Duration::from_millis(10);
+    config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
+    config.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
+    config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
+    config.server.grpc_concurrency = 1;
+    // disable data flushed
+    fail::cfg("on_flush_completed", "return()").unwrap();
+    let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    // No region id and epoch.
+    send_upload_sst(&import, &meta, &data).unwrap();
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx.clone());
+    ingest.set_sst(meta.clone());
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    send_upload_sst(&import, &meta, &data).unwrap();
+    ingest.set_sst(meta.clone());
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
+
+    // restart node
+    cluster.stop_node(1);
+    cluster.start().unwrap();
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(1, count);
+
+    // flush manual
+    fail::remove("on_flush_completed");
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("on_flush_completed", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    for i in 0..count {
+        cluster.must_put(format!("k-{}", i).as_bytes(), b"v");
+    }
+    cluster.flush_data();
+    rx.recv_timeout(std::time::Duration::from_millis(100))
+        .unwrap();
+    fail::remove("on_flush_completed");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(0, count);
+
+    cluster.stop_node(1);
+    cluster.start().unwrap();
+}
+
+fn sst_file_count(paths: &Vec<TempDir>) -> u64 {
+    let mut count = 0;
+    for path in paths {
+        let sst_dir = path.path().join("import-sst");
+        for entry in std::fs::read_dir(sst_dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry
+                .path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap()
+                .contains("0_0_0")
+            {
+                continue;
+            }
+            if entry.file_type().unwrap().is_file() {
+                count += 1;
+            }
+        }
+    }
+    count
 }

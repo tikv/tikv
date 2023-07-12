@@ -111,7 +111,7 @@ fn test_serde_custom_tikv_config() {
         end_point_batch_row_limit: 64,
         end_point_stream_batch_row_limit: 4096,
         end_point_enable_batch_if_possible: true,
-        end_point_request_max_handle_duration: ReadableDuration::secs(12),
+        end_point_request_max_handle_duration: Some(ReadableDuration::secs(12)),
         end_point_max_concurrency: 10,
         end_point_perf_level: PerfLevel::EnableTime,
         snap_io_max_bytes_per_sec: ReadableSize::mb(10),
@@ -295,7 +295,7 @@ fn test_serde_custom_tikv_config() {
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
         wal_size_limit: ReadableSize::kb(1),
-        max_total_wal_size: ReadableSize::gb(1),
+        max_total_wal_size: Some(ReadableSize::gb(1)),
         max_background_jobs: 12,
         max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
@@ -380,9 +380,11 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 1024,
             bottommost_zstd_compression_sample_size: 1024,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
-            max_compactions: 3,
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -451,9 +453,11 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
-            max_compactions: 3,
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -522,9 +526,11 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
-            max_compactions: 3,
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -593,9 +599,11 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
-            max_compactions: 3,
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config.clone(),
     };
@@ -679,9 +687,11 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
+            format_version: Some(0),
             checksum: ChecksumType::XXH3,
-            max_compactions: 3,
+            max_compactions: Some(3),
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config,
     };
@@ -695,6 +705,7 @@ fn test_serde_custom_tikv_config() {
     raft_engine_config.recovery_read_block_size.0 = ReadableSize::kb(1).0;
     raft_engine_config.recovery_threads = 2;
     raft_engine_config.memory_limit = Some(RaftEngineReadableSize::gb(1));
+    raft_engine_config.enable_log_recycle = false;
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         engine: EngineType::RaftKv2,
@@ -799,6 +810,7 @@ fn test_serde_custom_tikv_config() {
         initial_scan_pending_memory_quota: ReadableSize::kb(2),
         initial_scan_rate_limit: ReadableSize::mb(3),
         min_ts_interval: ReadableDuration::secs(2),
+        ..Default::default()
     };
     value.import = ImportConfig {
         num_threads: 123,

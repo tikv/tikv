@@ -2296,6 +2296,7 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
         if (raft_msg_usage + cached_entries + applying_entries) as f64
             > usage as f64 * reject_messages_on_memory_ratio
         {
+            // FIXME: this doesn't output to logfile.
             debug!("need reject log append on memory limit";
                 "raft messages" => raft_msg_usage,
                 "cached entries" => cached_entries,

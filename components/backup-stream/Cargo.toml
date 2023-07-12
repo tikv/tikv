@@ -15,7 +15,13 @@ metastore-etcd = ["tonic", "etcd-client"]
 
 [[test]]
 name = "integration"
-path = "tests/mod.rs"
+path = "tests/integration/mod.rs"
+test = true
+harness = true
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
 test = true
 harness = true
@@ -56,7 +62,7 @@ pin-project = "1.0"
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raftstore = { workspace = true }
 rand = "0.8.0"
 regex = "1"

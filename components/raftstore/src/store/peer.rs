@@ -224,7 +224,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
         }
     }
 
-    fn back(&self) -> Option<&Proposal<C>> {
+    pub fn back(&self) -> Option<&Proposal<C>> {
         self.queue.back()
     }
 }
@@ -3099,6 +3099,11 @@ where
 
     /// Check long uncommitted proposals and log some info to help find why.
     pub fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        fail_point!(
+            "on_check_long_uncommitted_proposals_1",
+            self.peer_id() == 1,
+            |_| {}
+        );
         if self.has_long_uncommitted_proposals(ctx) {
             let status = self.raft_group.status();
             let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
@@ -4691,7 +4696,7 @@ where
         if self.pending_merge_state.is_some() {
             return Err(Error::ProposalInMergingMode(self.region_id));
         }
-        if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
+        if self.raft_group.raft.has_pending_conf() {
             info!(
                 "there is a pending conf change, try later";
                 "region_id" => self.region_id,
@@ -5633,7 +5638,6 @@ pub trait RequestInspector {
         }
 
         // Local read should be performed, if and only if leader is in lease.
-        // None for now.
         match self.inspect_lease() {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {

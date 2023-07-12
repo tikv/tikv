@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{metapb::RegionEpoch, raft_serverpb::RaftMessage};
 use raftstore::store::{
     local_metrics::RaftMetrics, Config, PersistedNotifier, WriteRouter, WriteRouterContext,
     WriteSenders, WriteTask,
@@ -24,6 +24,7 @@ struct UnpersistedReady {
     max_empty_number: u64,
     raft_msgs: Vec<Vec<RaftMessage>>,
     has_snapshot: bool,
+    flushed_epoch: Option<RegionEpoch>,
 }
 
 /// A writer that handles asynchronous writes.
@@ -73,6 +74,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
     fn send(&mut self, ctx: &mut impl WriteRouterContext<EK, ER>, task: WriteTask<EK, ER>) {
         let ready_number = task.ready_number();
         let has_snapshot = task.has_snapshot;
+        let flushed_epoch = task.flushed_epoch.clone();
         self.write_router.send_write_msg(
             ctx,
             self.unpersisted_readies.back().map(|r| r.number),
@@ -83,6 +85,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
             max_empty_number: ready_number,
             raft_msgs: vec![],
             has_snapshot,
+            flushed_epoch,
         });
     }
 
@@ -111,9 +114,9 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         ctx: &mut impl WriteRouterContext<EK, ER>,
         ready_number: u64,
         logger: &Logger,
-    ) -> (Vec<Vec<RaftMessage>>, bool) {
+    ) -> (Vec<Vec<RaftMessage>>, Option<RegionEpoch>, bool) {
         if self.persisted_number >= ready_number {
-            return (vec![], false);
+            return (vec![], None, false);
         }
 
         let last_unpersisted = self.unpersisted_readies.back();
@@ -128,12 +131,14 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
 
         let mut raft_messages = vec![];
         let mut has_snapshot = false;
+        let mut flushed_epoch = None;
         // There must be a match in `self.unpersisted_readies`.
         loop {
             let Some(v) = self.unpersisted_readies.pop_front() else {
                 slog_panic!(logger, "ready number not found"; "ready_number" => ready_number);
             };
             has_snapshot |= v.has_snapshot;
+
             if v.number > ready_number {
                 slog_panic!(
                     logger,
@@ -141,6 +146,9 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
                     "ready" => ?v,
                     "ready_number" => ready_number
                 );
+            }
+            if let Some(epoch) = v.flushed_epoch {
+                flushed_epoch = Some(epoch.clone());
             }
             if raft_messages.is_empty() {
                 raft_messages = v.raft_msgs;
@@ -156,7 +164,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         self.write_router
             .check_new_persisted(ctx, self.persisted_number);
 
-        (raft_messages, has_snapshot)
+        (raft_messages, flushed_epoch, has_snapshot)
     }
 
     pub fn persisted_number(&self) -> u64 {
@@ -170,7 +178,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
 
 #[cfg(feature = "testexport")]
 impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
-    pub fn subscirbe_flush(&mut self, ch: crate::router::FlushChannel) {
+    pub fn subscribe_flush(&mut self, ch: crate::router::FlushChannel) {
         self.flush_subscribers
             .push_back((self.known_largest_number(), ch));
     }

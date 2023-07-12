@@ -5,7 +5,7 @@ use std::{
     cmp,
     collections::{HashMap, VecDeque},
     fmt,
-    fmt::Display,
+    fmt::{Debug, Display},
     option::Option,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -1086,7 +1086,7 @@ pub fn check_conf_change(
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         let first_index = node.raft.raft_log.first_index();
         if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
-                || promoted_commit_index + 1 >= first_index
+            || promoted_commit_index + 1 >= first_index
         {
             return Ok(());
         }
@@ -1096,10 +1096,12 @@ pub fn check_conf_change(
             .inc();
 
         Err(box_err!(
-            "{:?}: before: {:?}, after: {:?}, first index {}, promoted commit index {}",
+            "{:?}: before: {:?}, {:?}; after: {:?}, {:?}; first index {}; promoted commit index {}",
             change_peers,
-            current_progress.conf().to_conf_state(),
-            after_progress.conf().to_conf_state(),
+            current_progress.conf(),
+            current_progress.iter().collect::<Vec<_>>(),
+            after_progress.conf(),
+            current_progress.iter().collect::<Vec<_>>(),
             first_index,
             promoted_commit_index
         ))
@@ -1662,6 +1664,7 @@ pub struct RaftstoreDuration {
     pub store_wait_duration: Option<std::time::Duration>,
     pub store_process_duration: Option<std::time::Duration>,
     pub store_write_duration: Option<std::time::Duration>,
+    pub store_commit_duration: Option<std::time::Duration>,
     pub apply_wait_duration: Option<std::time::Duration>,
     pub apply_process_duration: Option<std::time::Duration>,
 }
@@ -1671,6 +1674,7 @@ impl RaftstoreDuration {
         self.store_wait_duration.unwrap_or_default()
             + self.store_process_duration.unwrap_or_default()
             + self.store_write_duration.unwrap_or_default()
+            + self.store_commit_duration.unwrap_or_default()
             + self.apply_wait_duration.unwrap_or_default()
             + self.apply_process_duration.unwrap_or_default()
     }
@@ -1681,6 +1685,16 @@ pub struct LatencyInspector {
     id: u64,
     duration: RaftstoreDuration,
     cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>,
+}
+
+impl Debug for LatencyInspector {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            fmt,
+            "LatencyInspector: id {} duration: {:?}",
+            self.id, self.duration
+        )
+    }
 }
 
 impl LatencyInspector {
@@ -1702,6 +1716,10 @@ impl LatencyInspector {
 
     pub fn record_store_write(&mut self, duration: std::time::Duration) {
         self.duration.store_write_duration = Some(duration);
+    }
+
+    pub fn record_store_commit(&mut self, duration: std::time::Duration) {
+        self.duration.store_commit_duration = Some(duration);
     }
 
     pub fn record_apply_wait(&mut self, duration: std::time::Duration) {
