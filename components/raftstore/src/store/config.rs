@@ -218,7 +218,6 @@ pub struct Config {
     #[online_config(hidden)]
     pub use_delete_range: bool,
 
-    #[online_config(skip)]
     pub snap_generator_pool_size: usize,
 
     pub cleanup_import_sst_interval: ReadableDuration,
@@ -1176,6 +1175,13 @@ impl ConfigManager for RaftstoreConfigManager {
             let resize_io_task = RefreshConfigTask::ScaleWriters(*resized_io_size);
             if let Err(e) = self.scheduler.schedule(resize_io_task) {
                 error!("raftstore configuration manager schedule to resize store-io-pool-size work task failed"; "err"=> ?e);
+            }
+        }
+        if let Some(ConfigValue::Usize(resize_reader_size)) = change.get("snap_generator_pool_size")
+        {
+            let resize_reader_task = RefreshConfigTask::ScaleAsyncReader(*resize_reader_size);
+            if let Err(e) = self.scheduler.schedule(resize_reader_task) {
+                error!("raftstore configuration manager schedule to resize snap-generator-pool-size work task failed"; "err"=> ?e);
             }
         }
         info!(
