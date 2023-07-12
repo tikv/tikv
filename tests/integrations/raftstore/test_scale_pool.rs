@@ -660,6 +660,16 @@ fn test_decrease_snap_generator_pool_size() {
             let mut change = HashMap::new();
             change.insert(
                 "raftstore.snap-generator-pool-size".to_owned(),
+                "0".to_owned(),
+            );
+            change
+        };
+        cfg_controller.update(change).unwrap_err();
+
+        let change = {
+            let mut change = HashMap::new();
+            change.insert(
+                "raftstore.snap-generator-pool-size".to_owned(),
                 "1".to_owned(),
             );
             change
