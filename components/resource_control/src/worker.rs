@@ -180,18 +180,14 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         for g in bg_group_stats.iter_mut() {
             total_ru_quota += g.ru_quota;
             let total_stats = g.limiter.get_limiter(resource_type).get_statistics();
-            let mut stats_delta =
-                match self.prev_stats_by_group[resource_type as usize].entry(g.name.clone()) {
-                    Entry::Occupied(mut s) => total_stats - s.insert(total_stats),
-                    Entry::Vacant(v) => {
-                        v.insert(total_stats);
-                        total_stats
-                    }
-                };
-            stats_delta = stats_delta / dur_secs;
-            background_consumed_total += stats_delta.total_consumed as f64;
-            g.stats_per_sec = stats_delta;
-            if stats_delta.total_wait_dur_us > 0 {
+            let stats_per_sec = (total_stats
+                - self.prev_stats_by_group[resource_type as usize]
+                    .insert(g.name.clone(), total_stats)
+                    .unwrap_or_default())
+                / dur_secs;
+            background_consumed_total += stats_per_sec.total_consumed as f64;
+            g.stats_per_sec = stats_per_sec;
+            if stats_per_sec.total_wait_dur_us > 0 {
                 has_wait = true;
             }
         }
@@ -203,6 +199,11 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.is_last_time_low_load[resource_type as usize] = is_low_load;
 
+        // the available resource for background tasks is defined as:
+        // (total_resource_quota - foreground_task_used). foreground_task_used
+        // resource is calculated by: (resource_current_total_used -
+        // background_consumed_total). We reserve 10% of the free resources for
+        // foreground tasks in case the fore ground traffics increases.
         let mut available_resource_rate = ((resource_stats.total_quota
             - resource_stats.current_used
             + background_consumed_total)
