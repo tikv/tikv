@@ -841,7 +841,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        let (persisted_message, has_snapshot) =
+        let (persisted_message, flushed_epoch, has_snapshot) =
             self.async_writer
                 .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
@@ -865,6 +865,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
+        }
+
+        if let Some(flushed_epoch) = flushed_epoch {
+            self.storage_mut().set_flushed_epoch(&flushed_epoch);
         }
 
         self.storage_mut()
