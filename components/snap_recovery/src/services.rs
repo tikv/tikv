@@ -207,7 +207,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         }
         .map(|res: Result<()>| match res {
             Ok(_) => {
-                info!("collect region meta done");
+                debug!("collect region meta done");
             }
             Err(e) => {
                 error!("rcollect region meta failure"; "error" => ?e);
@@ -249,7 +249,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                     "err" => ?e);
                     continue;
                 } else {
-                    info!("region starts to campaign"; "region_id" => region_id);
+                    debug!("region starts to campaign"; "region_id" => region_id);
                 }
 
                 let (tx, rx) = sync_channel(1);
@@ -274,7 +274,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                     CURRENT_WAIT_ELECTION_LEADER.set(*rid as _);
                     match rx.recv() {
                         Ok(id) => {
-                            info!("leader is assigned for region"; "region_id" => %id);
+                            debug!("leader is assigned for region"; "region_id" => %id);
                         }
                         Err(e) => {
                             error!("check leader failed"; "error" => ?e);
@@ -312,7 +312,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                     CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
                     match rx.recv() {
                         Ok(region_id) => {
-                            info!("leader apply to last log"; "region_id" => region_id);
+                            debug!("leader apply to last log"; "region_id" => region_id);
                         }
                         Err(e) => {
                             error!("leader failed to apply to last log"; "error" => ?e);
