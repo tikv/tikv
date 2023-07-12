@@ -13,13 +13,14 @@
 //! be used as the start state.
 
 use std::{
-    collections::{HashMap, LinkedList},
+    collections::LinkedList,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock,
     },
 };
 
+use kvproto::import_sstpb::SstMeta;
 use slog_global::info;
 use tikv_util::set_panic_mark;
 
@@ -61,36 +62,62 @@ struct FlushProgress {
 /// if the flushed index greater than it .
 #[derive(Debug, Clone)]
 pub struct SstApplyState {
-    sst_map: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
+    // vec from cf to Vec<SstApplyEntry>.
+    ssts: Arc<RwLock<[Vec<SstApplyEntry>; DATA_CFS_LEN]>>,
 }
 
 impl Default for SstApplyState {
     fn default() -> Self {
         Self {
-            sst_map: Arc::new(RwLock::new(HashMap::new())),
+            ssts: Arc::new(RwLock::new(Default::default())),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct SstApplyEntry {
+    pub applied_index: u64,
+    pub sst: SstMeta,
+}
+
+impl SstApplyEntry {
+    pub fn new(applied_index: u64, sst: SstMeta) -> Self {
+        Self { applied_index, sst }
     }
 }
 
 impl SstApplyState {
     #[inline]
-    pub fn registe_ssts(&self, uuids: Vec<Vec<u8>>, sst_applied_index: u64) {
-        let mut map = self.sst_map.write().unwrap();
-        for uuid in uuids {
-            map.insert(uuid, sst_applied_index);
+    pub fn register_ssts(&self, applied_index: u64, ssts: Vec<SstMeta>) {
+        let mut sst_list = self.ssts.write().unwrap();
+        for sst in ssts {
+            let cf_index = data_cf_offset(sst.get_cf_name());
+            let entry = SstApplyEntry::new(applied_index, sst);
+            sst_list.get_mut(cf_index).unwrap().push(entry);
         }
     }
 
-    /// Query the sst applied index.
     #[inline]
-    pub fn sst_applied_index(&self, uuid: &Vec<u8>) -> Option<u64> {
-        self.sst_map.read().unwrap().get(uuid).copied()
+    pub fn stale_ssts(&self, cf: &str, flushed_index: u64) -> Vec<SstMeta> {
+        let sst_list = self.ssts.read().unwrap();
+        let cf_index = data_cf_offset(cf);
+        if let Some(ssts) = sst_list.get(cf_index) {
+            return ssts
+                .iter()
+                .filter(|entry| entry.applied_index <= flushed_index)
+                .map(|entry| entry.sst.clone())
+                .collect();
+        }
+        vec![]
     }
 
-    pub fn delete_ssts(&self, uuids: Vec<Vec<u8>>) {
-        let mut map = self.sst_map.write().unwrap();
-        for uuid in uuids {
-            map.remove(&uuid);
+    pub fn delete_ssts(&self, ssts: &Vec<SstMeta>) {
+        let mut sst_list = self.ssts.write().unwrap();
+        for sst in ssts {
+            let cf_index = data_cf_offset(sst.get_cf_name());
+            if let Some(metas) = sst_list.get_mut(cf_index) {
+                metas.drain_filter(|entry| entry.sst.get_uuid() == sst.get_uuid());
+            }
         }
     }
 }
@@ -103,12 +130,18 @@ impl SstApplyState {
 #[derive(Debug)]
 pub struct FlushState {
     applied_index: AtomicU64,
+
+    // This is only used for flush before server stop.
+    // It provides a direct path for flush progress by letting raftstore directly know the current
+    // flush progress.
+    flushed_index: [AtomicU64; DATA_CFS_LEN],
 }
 
 impl FlushState {
     pub fn new(applied_index: u64) -> Self {
         Self {
             applied_index: AtomicU64::new(applied_index),
+            flushed_index: Default::default(),
         }
     }
 
@@ -122,6 +155,11 @@ impl FlushState {
     #[inline]
     pub fn applied_index(&self) -> u64 {
         self.applied_index.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    pub fn flushed_index(&self) -> &[AtomicU64; DATA_CFS_LEN] {
+        &self.flushed_index
     }
 }
 
@@ -234,8 +272,10 @@ impl PersistenceListener {
                 }
             }
         };
+        let apply_index = pr.apply_index;
         self.storage
             .persist_progress(self.region_id, self.tablet_index, pr);
+        self.state.flushed_index[offset].store(apply_index, Ordering::SeqCst);
     }
 }
 
@@ -255,5 +295,27 @@ impl<R: RaftEngine> StateStorage for R {
             .put_flushed_index(region_id, &pr.cf, tablet_index, pr.apply_index)
             .unwrap();
         self.consume(&mut batch, true).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::vec;
+
+    use kvproto::import_sstpb::SstMeta;
+
+    use super::SstApplyState;
+
+    #[test]
+    pub fn test_sst_apply_state() {
+        let stat = SstApplyState::default();
+        let mut sst = SstMeta::default();
+        sst.set_cf_name("write".to_owned());
+        sst.set_uuid(vec![1, 2, 3, 4]);
+        stat.register_ssts(10, vec![sst.clone()]);
+        assert!(stat.stale_ssts("default", 10).is_empty());
+        let sst = stat.stale_ssts("write", 10);
+        assert_eq!(sst[0].get_uuid(), vec![1, 2, 3, 4]);
+        stat.delete_ssts(&sst);
     }
 }

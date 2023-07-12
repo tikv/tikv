@@ -216,6 +216,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                true,
             )
             .unwrap();
 
@@ -292,6 +293,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                     dir,
                     key_manager.clone(),
                     cfg.storage.api_version(),
+                    true,
                 )
                 .unwrap(),
             )
@@ -332,7 +334,12 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg.optimize_for(true);
         raftstore_cfg
-            .validate(region_split_size, enable_region_bucket, region_bucket_size)
+            .validate(
+                region_split_size,
+                enable_region_bucket,
+                region_bucket_size,
+                true,
+            )
             .unwrap();
 
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));

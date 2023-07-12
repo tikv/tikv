@@ -8,6 +8,7 @@ use std::{
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{FlushState, KvEngine, SstApplyState, TabletRegistry};
+use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
@@ -21,13 +22,13 @@ use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
+    yatp_pool::FuturePool,
 };
 
 use crate::{
     operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
-    worker::checkpoint,
     TabletTask,
 };
 
@@ -79,8 +80,8 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
-        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         tablet_scheduler: Scheduler<TabletTask<EK>>,
+        high_priority_pool: FuturePool,
         flush_state: Arc<FlushState>,
         sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
@@ -105,8 +106,8 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             buckets,
             sst_importer,
             coprocessor_host,
-            checkpoint_scheduler,
             tablet_scheduler,
+            high_priority_pool,
             logger,
         );
         (
@@ -141,6 +142,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                 }
             };
             loop {
+                fail_point!("before_handle_tasks");
                 match task {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,

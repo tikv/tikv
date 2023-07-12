@@ -437,6 +437,7 @@ impl ServerCluster {
                     dir,
                     key_manager.clone(),
                     cfg.storage.api_version(),
+                    false,
                 )
                 .unwrap(),
             )
@@ -447,6 +448,7 @@ impl ServerCluster {
             engine,
             LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
+            None,
         );
 
         // Create deadlock service.
@@ -484,8 +486,7 @@ impl ServerCluster {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap(),
         );
@@ -507,6 +508,7 @@ impl ServerCluster {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                false,
             )
             .unwrap();
         let health_service = HealthService::default();

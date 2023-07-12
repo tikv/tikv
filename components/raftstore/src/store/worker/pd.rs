@@ -486,6 +486,7 @@ pub trait StoreStatsReporter: Send + Clone + Sync + 'static + Collector {
     );
     fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64);
     fn auto_split(&self, split_infos: Vec<SplitInfo>);
+    fn update_latency_stats(&self, timer_tick: u64);
 }
 
 impl<EK, ER> StoreStatsReporter for WrappedScheduler<EK, ER>
@@ -534,6 +535,11 @@ where
             );
         }
     }
+
+    fn update_latency_stats(&self, timer_tick: u64) {
+        debug!("update latency statistics not implemented for raftstore-v1";
+                "tick" => timer_tick);
+    }
 }
 
 pub struct StatsMonitor<T>
@@ -549,13 +555,19 @@ where
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
     report_min_resolved_ts_interval: Duration,
+    inspect_latency_interval: Duration,
 }
 
 impl<T> StatsMonitor<T>
 where
     T: StoreStatsReporter,
 {
-    pub fn new(interval: Duration, report_min_resolved_ts_interval: Duration, reporter: T) -> Self {
+    pub fn new(
+        interval: Duration,
+        report_min_resolved_ts_interval: Duration,
+        inspect_latency_interval: Duration,
+        reporter: T,
+    ) -> Self {
         StatsMonitor {
             reporter,
             handle: None,
@@ -568,7 +580,12 @@ where
                 interval,
             ),
             report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
-            collect_tick_interval: cmp::min(default_collect_tick_interval(), interval),
+            // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
+            collect_tick_interval: cmp::min(
+                inspect_latency_interval,
+                cmp::min(default_collect_tick_interval(), interval),
+            ),
+            inspect_latency_interval,
         }
     }
 
@@ -581,7 +598,12 @@ where
         collector_reg_handle: CollectorRegHandle,
         store_id: u64,
     ) -> Result<(), io::Error> {
-        if self.collect_tick_interval < default_collect_tick_interval() {
+        if self.collect_tick_interval
+            < cmp::min(
+                self.inspect_latency_interval,
+                default_collect_tick_interval(),
+            )
+        {
             info!(
                 "interval is too small, skip stats monitoring. If we are running tests, it is normal, otherwise a check is needed."
             );
@@ -597,6 +619,9 @@ where
             .div_duration_f64(tick_interval) as u64;
         let report_min_resolved_ts_interval = self
             .report_min_resolved_ts_interval
+            .div_duration_f64(tick_interval) as u64;
+        let update_latency_stats_interval = self
+            .inspect_latency_interval
             .div_duration_f64(tick_interval) as u64;
 
         let (timer_tx, timer_rx) = mpsc::channel();
@@ -618,7 +643,7 @@ where
             .name(thd_name!("stats-monitor"))
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
+
                 // Create different `ThreadInfoStatistics` for different purposes to
                 // make sure the record won't be disturbed.
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
@@ -659,9 +684,11 @@ where
                             region_read_progress.get_min_resolved_ts(),
                         );
                     }
+                    if is_enable_tick(timer_cnt, update_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt);
+                    }
                     timer_cnt += 1;
                 }
-                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);
@@ -952,6 +979,7 @@ where
         let mut stats_monitor = StatsMonitor::new(
             interval,
             cfg.report_min_resolved_ts_interval.0,
+            cfg.inspect_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(
@@ -1446,6 +1474,7 @@ where
         STORE_SLOW_TREND_L1_L2_GAUGE.set(self.slow_trend_cause.l1_l2_rate());
         STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l1_margin_error_base());
         STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE.set(self.slow_trend_cause.l2_margin_error_base());
+        // Report results of all slow Trends.
         STORE_SLOW_TREND_RESULT_L0_GAUGE.set(self.slow_trend_result.l0_avg());
         STORE_SLOW_TREND_RESULT_L1_GAUGE.set(self.slow_trend_result.l1_avg());
         STORE_SLOW_TREND_RESULT_L2_GAUGE.set(self.slow_trend_result.l2_avg());
@@ -1725,6 +1754,8 @@ where
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let causal_ts_provider = self.causal_ts_provider.clone();
+        let log_interval = Duration::from_secs(5);
+        let mut last_log_ts = Instant::now().checked_sub(log_interval).unwrap();
 
         let f = async move {
             let mut success = false;
@@ -1763,10 +1794,14 @@ where
                         break;
                     }
                     Err(e) => {
-                        warn!(
-                            "failed to update max timestamp for region {}: {:?}",
-                            region_id, e
-                        );
+                        if last_log_ts.elapsed() > log_interval {
+                            warn!(
+                                "failed to update max timestamp for region";
+                                "region_id" => region_id,
+                                "error" => ?e
+                            );
+                            last_log_ts = Instant::now();
+                        }
                     }
                 }
             }
@@ -2554,6 +2589,7 @@ mod tests {
                 let mut stats_monitor = StatsMonitor::new(
                     Duration::from_secs(interval),
                     Duration::from_secs(0),
+                    Duration::from_secs(interval),
                     WrappedScheduler(scheduler),
                 );
                 let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));

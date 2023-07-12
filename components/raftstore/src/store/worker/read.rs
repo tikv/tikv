@@ -499,9 +499,12 @@ impl ReadDelegate {
                 self.leader_lease = leader_lease;
             }
             Progress::RegionBuckets(bucket_meta) => {
-                if self.bucket_meta.version < bucket_meta.version {
-                    self.bucket_meta = Some(bucket_meta);
+                if let Some(meta)= &self.bucket_meta {
+                    if meta.version >= bucket_meta.version {
+                        return;
+                    }
                 }
+                self.bucket_meta = Some(bucket_meta);
             }
             Progress::WaitData(wait_data) => {
                 self.wait_data = wait_data;
@@ -806,6 +809,7 @@ where
                 "check term";
                 "delegate_term" => delegate.term,
                 "header_term" => req.get_header().get_term(),
+                "tag" => &delegate.tag,
             );
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.term_mismatch.inc());
             return Err(e);

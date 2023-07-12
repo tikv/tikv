@@ -68,6 +68,38 @@ impl RaftSendMessageMetrics {
     }
 }
 
+#[derive(Default)]
+pub struct RaftCommitLogStatistics {
+    pub last_commit_log_duration_sum: Duration,
+    pub last_commit_log_count_sum: u64,
+}
+
+impl RaftCommitLogStatistics {
+    #[inline]
+    pub fn record(&mut self, dur: Duration) {
+        self.last_commit_log_count_sum += 1;
+        self.last_commit_log_duration_sum += dur;
+    }
+
+    #[inline]
+    pub fn avg(&self) -> Duration {
+        if self.last_commit_log_count_sum > 0 {
+            Duration::from_micros(
+                self.last_commit_log_duration_sum.as_micros() as u64
+                    / self.last_commit_log_count_sum,
+            )
+        } else {
+            Duration::default()
+        }
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.last_commit_log_count_sum = 0;
+        self.last_commit_log_duration_sum = Duration::default();
+    }
+}
+
 /// The buffered metrics counters for raft.
 pub struct RaftMetrics {
     // local counter
@@ -96,6 +128,9 @@ pub struct RaftMetrics {
     pub wf_persist_log: LocalHistogram,
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
+
+    // local statistics for slowness
+    pub stat_commit_log: RaftCommitLogStatistics,
 
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
 
@@ -132,6 +167,7 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            stat_commit_log: RaftCommitLogStatistics::default(),
             leader_missing: Arc::default(),
             last_flush_time: Instant::now_coarse(),
         }

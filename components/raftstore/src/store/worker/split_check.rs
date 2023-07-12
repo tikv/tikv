@@ -479,7 +479,6 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 }
             },
             CheckPolicy::Usekey => vec![], // Handled by pd worker directly.
-            CheckPolicy::Loadsplit => vec![],
         };
 
         if !split_keys.is_empty() {

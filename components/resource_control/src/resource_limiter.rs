@@ -61,7 +61,7 @@ impl QuotaLimiter {
     }
 
     #[allow(dead_code)]
-    fn get_statistics(&self) -> GroupStatistics {
+    pub fn get_statistics(&self) -> GroupStatistics {
         GroupStatistics {
             total_consumed: self.limiter.total_bytes_consumed() as u64,
             total_wait_dur_us: self.total_wait_dur_us.load(Ordering::Relaxed),
@@ -82,8 +82,18 @@ impl QuotaLimiter {
     }
 }
 
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, PartialEq, Eq, Copy, Debug)]
 pub struct GroupStatistics {
     pub total_consumed: u64,
     pub total_wait_dur_us: u64,
+}
+
+impl std::ops::Sub for GroupStatistics {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            total_consumed: self.total_consumed.saturating_sub(rhs.total_consumed),
+            total_wait_dur_us: self.total_wait_dur_us.saturating_sub(rhs.total_wait_dur_us),
+        }
+    }
 }

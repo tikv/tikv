@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Duration;
+
 use futures::{executor::block_on, stream::StreamExt};
 use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
 use pd_client::PdClient;
@@ -116,6 +118,86 @@ fn test_ingest_sst() {
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
+}
+
+fn switch_mode(import: &ImportSstClient, range: Range, mode: SwitchMode) {
+    let mut switch_req = SwitchModeRequest::default();
+    switch_req.set_mode(mode);
+    switch_req.set_ranges(vec![range].into());
+    let _ = import.switch_mode(&switch_req).unwrap();
+}
+
+#[test]
+fn test_switch_mode_v2() {
+    let mut cfg = TikvConfig::default();
+    cfg.server.grpc_concurrency = 1;
+    cfg.rocksdb.writecf.disable_auto_compactions = true;
+    cfg.raft_store.right_derive_when_split = true;
+    // cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(2);
+    let (mut cluster, mut ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(cfg));
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, &[50]);
+    let region = cluster.get_region(&[50]);
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+
+    let mut key_range = Range::default();
+    key_range.set_start([50].to_vec());
+    switch_mode(&import, key_range.clone(), SwitchMode::Import);
+
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+
+    let upload_and_ingest =
+        |sst_range, import: &ImportSstClient, path_name, ctx: &Context| -> IngestResponse {
+            let sst_path = temp_dir.path().join(path_name);
+            let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+            meta.set_cf_name("write".to_string());
+            // Set region id and epoch.
+            meta.set_region_id(ctx.get_region_id());
+            meta.set_region_epoch(ctx.get_region_epoch().clone());
+            send_upload_sst(import, &meta, &data).unwrap();
+            let mut ingest = IngestRequest::default();
+            ingest.set_context(ctx.clone());
+            ingest.set_sst(meta);
+            import.ingest(&ingest).unwrap()
+        };
+
+    // The first one will be ingested at the bottom level. And as the following ssts
+    // are overlapped with the previous one, they will all be ingested at level 0.
+    for i in 0..10 {
+        let resp = upload_and_ingest((50, 100), &import, format!("test{}.sst", i), &ctx);
+        assert!(!resp.has_error());
+    }
+
+    // For this region, it is not in the key range, so it is normal mode.
+    let region = cluster.get_region(&[20]);
+    let mut ctx2 = ctx.clone();
+    ctx2.set_region_id(region.get_id());
+    ctx2.set_region_epoch(region.get_region_epoch().clone());
+    ctx2.set_peer(region.get_peers()[0].clone());
+    for i in 0..6 {
+        let resp = upload_and_ingest((0, 49), &import, format!("test-{}.sst", i), &ctx2);
+        if i < 5 {
+            assert!(!resp.has_error());
+        } else {
+            assert!(resp.get_error().has_server_is_busy());
+        }
+    }
+    // Propose another switch mode request to let this region to ingest.
+    let mut key_range2 = Range::default();
+    key_range2.set_end([50].to_vec());
+    switch_mode(&import, key_range2.clone(), SwitchMode::Import);
+    let resp = upload_and_ingest((0, 49), &import, "test-6.sst".to_string(), &ctx2);
+    assert!(!resp.has_error());
+    // switching back to normal should make further ingest be rejected
+    switch_mode(&import, key_range2, SwitchMode::Normal);
+    let resp = upload_and_ingest((0, 49), &import, "test-7.sst".to_string(), &ctx2);
+    assert!(resp.get_error().has_server_is_busy());
+
+    // switch back to normal, so region 1 also starts to reject
+    switch_mode(&import, key_range, SwitchMode::Normal);
+    let resp = upload_and_ingest((50, 100), &import, "test10".to_string(), &ctx);
+    assert!(resp.get_error().has_server_is_busy());
 }
 
 #[test]
@@ -267,6 +349,62 @@ fn test_cleanup_sst() {
     let res = block_on(cluster.pd_client.get_region_by_id(left.get_id()));
     assert_eq!(res.unwrap(), None);
 
+    check_sst_deleted(&import, &meta, &data);
+}
+
+#[test]
+fn test_cleanup_sst_v2() {
+    let (mut cluster, ctx, _, import) = open_cluster_and_tikv_import_client_v2(None);
+
+    let temp_dir = Builder::new().prefix("test_cleanup_sst").tempdir().unwrap();
+
+    let sst_path = temp_dir.path().join("test_split.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+    send_upload_sst(&import, &meta, &data).unwrap();
+
+    // Can not upload the same file when it exists.
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
+
+    // The uploaded SST should be deleted if the region split.
+    let region = cluster.get_region(&[]);
+    cluster.must_split(&region, &[100]);
+
+    check_sst_deleted(&import, &meta, &data);
+
+    // upload an SST of an unexisted region
+    let sst_path = temp_dir.path().join("test_non_exist.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(9999);
+    send_upload_sst(&import, &meta, &data).unwrap();
+    // This should be cleanuped
+    check_sst_deleted(&import, &meta, &data);
+
+    let mut key_range = Range::default();
+    key_range.set_start([50].to_vec());
+    key_range.set_start([70].to_vec());
+    // switch to import so that the overlapped sst will not be cleanuped
+    switch_mode(&import, key_range.clone(), SwitchMode::Import);
+    let sst_path = temp_dir.path().join("test_non_exist1.sst");
+    let sst_range = (60, 80);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(9999);
+    send_upload_sst(&import, &meta, &data).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
+
+    // switch back to normal mode
+    switch_mode(&import, key_range, SwitchMode::Normal);
     check_sst_deleted(&import, &meta, &data);
 }
 
