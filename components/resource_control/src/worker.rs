@@ -2,7 +2,7 @@
 
 use std::{
     array,
-    collections::hash_map::{Entry, HashMap},
+    collections::HashMap,
     io::Result as IoResult,
     sync::Arc,
     time::Duration,
