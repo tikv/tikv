@@ -830,17 +830,32 @@ fn test_node_local_read_renew_lease() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_lease_restart_during_isolation() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(500), Some(3));
     cluster.cfg.raft_store.allow_unsafe_vote_after_start = false;
     cluster.run();
     sleep_ms(election_timeout.as_millis() as _);
-
+    let mut region;
+    let start = Instant::now_coarse();
     let key = b"k";
+    loop {
+        region = cluster.get_region(key);
+        if region.get_peers().len() == 3
+            && region
+                .get_peers()
+                .iter()
+                .all(|p| p.get_role() == metapb::PeerRole::Voter)
+        {
+            break;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("timeout");
+        }
+    }
 
-    let region = cluster.get_region(key);
     let region_id = region.get_id();
     let peer1 = find_peer(&region, 1).unwrap();
     let peer2 = find_peer(&region, 2).unwrap();

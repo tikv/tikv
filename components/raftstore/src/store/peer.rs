@@ -1957,9 +1957,7 @@ where
                 }
                 self.should_wake_up = state == LeaseState::Expired;
             }
-        } else if msg_type == MessageType::MsgRequestVote
-            || msg_type == MessageType::MsgRequestPreVote
-        {
+        } else if util::is_vote_msg(&m) {
             // Only by passing an election timeout can peers handle request vote safely.
             // See https://github.com/tikv/tikv/issues/15035
             if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
