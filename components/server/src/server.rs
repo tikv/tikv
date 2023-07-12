@@ -131,7 +131,7 @@ use crate::{
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let (service_event_tx, service_event_rx) = mpsc::unbounded(); // pipe for controling service
+    let (service_event_tx, service_event_rx) = TikvMpsc::unbounded(); // pipe for controling service
     let mut tikv = TikvServer::<CER, F>::init(config, service_event_tx.clone());
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
