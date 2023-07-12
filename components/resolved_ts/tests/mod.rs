@@ -380,17 +380,6 @@ impl TestSuite {
         panic!("fail to get region tracked index after 50 trys");
     }
 
-    pub fn must_not_get_rts(&mut self, region_id: u64) {
-        for _ in 0..50 {
-            if let Some(_ts) = self.region_resolved_ts(region_id) {
-                sleep_ms(100)
-            } else {
-                return;
-            }
-        }
-        panic!("stil get resolved ts after 50 trys");
-    }
-
     pub fn must_get_rts(&mut self, region_id: u64, rts: TimeStamp) {
         for _ in 0..50 {
             if let Some(ts) = self.region_resolved_ts(region_id) {

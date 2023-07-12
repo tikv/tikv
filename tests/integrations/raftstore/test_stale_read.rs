@@ -131,3 +131,33 @@ fn test_stale_read_resolved_ts_advance() {
     must_resolved_ts_advance(&left);
     must_resolved_ts_advance(&right);
 }
+
+#[test_case(test_raftstore::new_server_cluster)]
+//#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_resolved_ts_after_destroy_peer() {
+    let mut cluster = new_server_cluster(0, 4);
+    cluster.cfg.resolved_ts.enable = true;
+    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(200);
+
+    cluster.run();
+
+    // Retry get region peers
+    let region = cluster.get_region(&[]);
+    // 4 peers on 4 stores.
+    assert_eq!(region.get_peers().len(), 4);
+
+    let last_index = cluster.apply_state(1, 1).get_applied_index();
+    // Remove the last peer, because this peer cannot be the leader
+    cluster
+        .async_remove_peer(1, region.peers[3].clone())
+        .unwrap();
+
+    // Wait all peers apply
+    for id in 1..5 {
+        cluster.wait_applied_index(1, id, last_index + 1);
+    }
+
+    // The last peer must not get destory peer's read progress
+    let meta = cluster.store_metas[&4].lock().unwrap();
+    assert_eq!(None, meta.region_read_progress.get_resolved_ts(&1),)
+}
