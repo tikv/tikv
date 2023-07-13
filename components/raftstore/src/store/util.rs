@@ -423,11 +423,10 @@ pub fn check_peer_id(header: &RaftRequestHeader, peer_id: u64) -> Result<()> {
     if header.get_peer().get_id() == peer_id {
         Ok(())
     } else {
-        Err(box_err!(
-            "mismatch peer id {} != {}",
-            header.get_peer().get_id(),
-            peer_id
-        ))
+        Err(Error::MismatchPeerId{
+            request_peer_id: header.get_peer().get_id(),
+            store_peer_id: peer_id,
+        })
     }
 }
 
