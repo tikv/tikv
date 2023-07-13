@@ -52,7 +52,9 @@ mod imp {
             }
         }
         if let Some(tx) = tx {
-            tx.send(ServiceEvent::Exit).unwrap();
+            if let Err(e) = tx.send(ServiceEvent::Exit) {
+                warn!("failed to notify grpc server exit, {:?}", e);
+            }
         }
     }
 }

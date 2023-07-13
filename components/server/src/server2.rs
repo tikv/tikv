@@ -152,17 +152,20 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.run_status_server();
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-    let kv_statistics = tikv.kv_statistics.clone();
-    let raft_statistics = tikv.raft_statistics.clone();
-    // TODO: support signal dump stats
-    std::thread::spawn(move || {
-        signal_handler::wait_for_signal(
-            None as Option<Engines<RocksEngine, CER>>,
-            kv_statistics,
-            raft_statistics,
-            Some(service_event_tx),
-        )
-    });
+    // Build a background worker for handling signals.
+    let handler = {
+        let kv_statistics = tikv.kv_statistics.clone();
+        let raft_statistics = tikv.raft_statistics.clone();
+        // TODO: support signal dump stats
+        std::thread::spawn(move || {
+            signal_handler::wait_for_signal(
+                None as Option<Engines<RocksEngine, CER>>,
+                kv_statistics,
+                raft_statistics,
+                Some(service_event_tx),
+            )
+        })
+    };
     loop {
         if let Ok(service_event) = service_event_rx.recv() {
             match service_event {
@@ -179,6 +182,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
         }
     }
     tikv.stop();
+    let _ = handler.join();
 }
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
