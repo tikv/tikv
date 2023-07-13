@@ -106,9 +106,10 @@ pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
 /// Maximum of 15% of system memory can be used by Raft Engine. Normally its
 /// memory usage is much smaller than that.
 const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
-/// Tentative value.
-const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.25;
-const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(15).0;
+
+const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
+// Too large will increase Raft Engine memory usage.
+const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
@@ -3438,6 +3439,15 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
         }
+        if self.storage.block_cache.capacity.is_none() {
+            let total_mem = SysQuota::memory_limit_in_bytes();
+            let capacity = if self.storage.engine == EngineType::RaftKv2 {
+                (total_mem as f64) * RAFTSTORE_V2_BLOCK_CACHE_RATE
+            } else {
+                (total_mem as f64) * BLOCK_CACHE_RATE
+            };
+            self.storage.block_cache.capacity = Some(ReadableSize(capacity as u64));
+        }
 
         // Validate for v2.
         if self.storage.engine == EngineType::RaftKv2 {
@@ -3575,42 +3585,47 @@ impl TikvConfig {
         fill_cf_opts!(self.rocksdb.raftcf, flow_control_cfg);
 
         // Validate memory usage limit.
+        let block_cache_cap = self.storage.block_cache.capacity.unwrap();
+        let write_buffer_cap = self.rocksdb.write_buffer_limit.unwrap_or(ReadableSize(0));
         if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
             if memory_usage_limit.0 > total {
                 // Explicitly exceeds system memory capacity is not allowed.
                 return Err(format!(
-                    "memory_usage_limit is greater than system memory capacity {}",
+                    "memory_usage_limit is greater than system memory capacity ({})",
                     total
                 )
                 .into());
             }
         } else {
-            // Adjust `memory_usage_limit` if necessary.
-            if let Some(cap) = self.storage.block_cache.capacity {
-                let limit = (cap.0 as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
-                self.memory_usage_limit = Some(ReadableSize(limit));
-            } else {
-                self.memory_usage_limit = Some(Self::suggested_memory_usage_limit());
+            let mut limit =
+                (block_cache_cap.0 as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
+            if self.storage.engine == EngineType::RaftKv2 {
+                limit = cmp::max(
+                    limit,
+                    (write_buffer_cap.0 as f64 / WRITE_BUFFER_MEMORY_LIMIT_RATE
+                        * MEMORY_USAGE_LIMIT_RATE) as u64,
+                );
             }
+            let limit = ReadableSize(cmp::min(limit, SysQuota::memory_limit_in_bytes()));
+            let default = Self::suggested_memory_usage_limit();
+            if limit > default {
+                warn!(
+                    "memory_usage_limit ({}) > recommanded ({}), maybe page cache isn't enough",
+                    limit, default,
+                );
+            }
+            self.memory_usage_limit = Some(limit);
         }
-        let mut limit = self.memory_usage_limit.unwrap();
-        let total = ReadableSize(SysQuota::memory_limit_in_bytes());
-        if limit.0 > total.0 {
-            warn!(
-                "memory_usage_limit:{:?} > total:{:?}, fallback to total",
-                limit, total,
-            );
-            self.memory_usage_limit = Some(total);
-            limit = total;
-        }
-
-        let default = Self::suggested_memory_usage_limit();
-        if limit.0 > default.0 {
-            warn!(
-                "memory_usage_limit:{:?} > recommanded:{:?}, maybe page cache isn't enough",
-                limit, default,
-            );
+        if block_cache_cap.0 + write_buffer_cap.0 > self.memory_usage_limit.unwrap().0 {
+            return Err(format!(
+                "The sum of `storage.block-cache.capacity` and `rocksdb.write-buffer-limit` \
+                is greater than memory-usage-limit: {} + {} > {}",
+                block_cache_cap,
+                write_buffer_cap,
+                self.memory_usage_limit.unwrap(),
+            )
+            .into());
         }
 
         // Validate sub-components.
@@ -4922,11 +4937,8 @@ mod tests {
             &cfg.storage.data_dir,
             Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
-                &cfg.rocksdb.build_cf_resources(
-                    cfg.storage
-                        .block_cache
-                        .build_shared_cache(cfg.storage.engine),
-                ),
+                &cfg.rocksdb
+                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
                 None,
                 cfg.storage.api_version(),
                 None,
