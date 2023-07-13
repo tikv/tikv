@@ -15,7 +15,13 @@ metastore-etcd = ["tonic", "etcd-client"]
 
 [[test]]
 name = "integration"
-path = "tests/mod.rs"
+path = "tests/integration/mod.rs"
+test = true
+harness = true
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
 test = true
 harness = true
