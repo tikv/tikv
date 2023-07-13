@@ -3682,6 +3682,12 @@ where
 
         // Remove `read_progress` and reset the `safe_ts` to zero to reject
         // incoming stale read request
+
+        info!(
+            "destroy read_progress";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
         meta.region_read_progress.remove(&region_id);
         self.fsm.peer.read_progress.pause();
 
