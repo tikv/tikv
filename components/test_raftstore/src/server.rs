@@ -502,7 +502,7 @@ impl ServerCluster {
             debug_thread_handle,
             extension,
             store_meta.clone(),
-            Arc::new(|_, _, _| false),
+            Arc::new(|_, _, _, _| false),
         );
 
         let apply_router = system.apply_router();

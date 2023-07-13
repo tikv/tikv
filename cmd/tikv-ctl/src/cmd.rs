@@ -633,8 +633,16 @@ pub enum Cmd {
         region: u64,
 
         #[structopt(long)]
-        /// whether to print extra info in TiKV logs for regions of interest
+        /// When specified, prints the locks associated with the transaction
+        /// that has the smallest 'start_ts' in the resolver, which is
+        /// preventing the 'resolved_ts' from advancing.
         log: bool,
+
+        #[structopt(long, requires = "log", default_value = "0")]
+        /// The smallest start_ts of the target transaction. Namely, only the
+        /// transaction whose start_ts is greater than or equal to this value
+        /// can be recorded in TiKV logs.
+        min_start_ts: u64,
     },
 }
 

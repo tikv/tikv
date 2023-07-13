@@ -653,8 +653,12 @@ fn main() {
                     debug_executor.dump_cluster_info();
                 }
                 Cmd::ResetToVersion { version } => debug_executor.reset_to_version(version),
-                Cmd::GetRegionReadProgress { region, log } => {
-                    debug_executor.get_region_read_progress(region, log);
+                Cmd::GetRegionReadProgress {
+                    region,
+                    log,
+                    min_start_ts,
+                } => {
+                    debug_executor.get_region_read_progress(region, log, min_start_ts);
                 }
                 _ => {
                     unreachable!()

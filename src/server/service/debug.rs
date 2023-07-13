@@ -55,7 +55,7 @@ where
     raft_router: T,
     store_meta: Arc<Mutex<S>>,
     resolved_ts_scheduler:
-        Arc<dyn Fn(u64, bool, Callback<(bool, bool, u64, u64)>) -> bool + Send + Sync>,
+        Arc<dyn Fn(u64, bool, u64, Callback<(bool, bool, u64, u64)>) -> bool + Send + Sync>,
 }
 
 impl<T, D, S> Clone for Service<T, D, S>
@@ -89,7 +89,7 @@ where
         raft_router: T,
         store_meta: Arc<Mutex<S>>,
         resolved_ts_scheduler: Arc<
-            dyn Fn(u64, bool, Callback<(bool, bool, u64, u64)>) -> bool + Send + Sync,
+            dyn Fn(u64, bool, u64, Callback<(bool, bool, u64, u64)>) -> bool + Send + Sync,
         >,
     ) -> Self {
         Service {
@@ -649,7 +649,12 @@ where
 
         // get from resolver
         let (cb, f) = paired_future_callback();
-        if (*self.resolved_ts_scheduler)(req.get_region_id(), req.get_log_locks(), cb) {
+        if (*self.resolved_ts_scheduler)(
+            req.get_region_id(),
+            req.get_log_locks(),
+            req.get_min_start_ts(),
+            cb,
+        ) {
             let f = async move {
                 let res = f.await;
                 match res {

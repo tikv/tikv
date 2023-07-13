@@ -951,18 +951,21 @@ where
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
             self.router.as_ref().unwrap().store_meta().clone(),
-            Arc::new(move |region_id, log_locks, callback| -> bool {
-                if let Some(s) = resolved_ts_scheduler.as_ref() {
-                    let res = s.schedule(Task::GetDiagnosisInfo {
-                        region_id,
-                        log_locks,
-                        callback,
-                    });
-                    res.is_ok()
-                } else {
-                    false
-                }
-            }),
+            Arc::new(
+                move |region_id, log_locks, min_start_ts, callback| -> bool {
+                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                        let res = s.schedule(Task::GetDiagnosisInfo {
+                            region_id,
+                            log_locks,
+                            min_start_ts,
+                            callback,
+                        });
+                        res.is_ok()
+                    } else {
+                        false
+                    }
+                },
+            ),
         );
         if servers
             .server

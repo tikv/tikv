@@ -717,7 +717,7 @@ pub trait DebugExecutor {
         _commit_ts: u64,
     ) -> Result<(), KeyRange>;
 
-    fn get_region_read_progress(&self, region_id: u64, log: bool);
+    fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64);
 }
 
 impl DebugExecutor for DebugClient {
@@ -968,10 +968,11 @@ impl DebugExecutor for DebugClient {
         }
     }
 
-    fn get_region_read_progress(&self, region_id: u64, log: bool) {
+    fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64) {
         let mut req = GetRegionReadProgressRequest::default();
         req.set_region_id(region_id);
         req.set_log_locks(log);
+        req.set_min_start_ts(min_start_ts);
         let opt = grpcio::CallOption::default().timeout(Duration::from_secs(10));
         let resp = self
             .get_region_read_progress_opt(&req, opt)
@@ -979,40 +980,58 @@ impl DebugExecutor for DebugClient {
         if !resp.get_error().is_empty() {
             println!("error: {}", resp.get_error());
         }
-        println!("Region read progress:");
-        println!("\texist: {}, ", resp.get_region_read_progress_exist());
-        println!("\tsafe_ts: {}, ", resp.get_safe_ts());
-        println!("\tapplied_index: {}, ", resp.get_applied_index());
-        println!(
-            "\tpending front item (oldest) ts: {}, ",
-            resp.get_pending_front_ts()
-        );
-        println!(
-            "\tpending front item (oldest) applied index: {}, ",
-            resp.get_pending_front_applied_index()
-        );
-        println!(
-            "\tpending back item (latest) ts: {}, ",
-            resp.get_pending_back_ts()
-        );
-        println!(
-            "\tpending back item (latest) applied index: {}, ",
-            resp.get_pending_back_applied_index()
-        );
-        println!("\tpaused: {}, ", resp.get_region_read_progress_paused());
-        println!(
-            "\tduration to last update_safe_ts: {} ms, ",
-            resp.get_duration_to_last_update_safe_ts_ms()
-        );
-        println!(
-            "\tduration to last consume_leader_info: {} ms, ",
-            resp.get_duration_to_last_consume_leader_ms()
-        );
-        println!("Resolver:");
-        println!("\texist: {}, ", resp.get_resolver_exist());
-        println!("\tresolved_ts: {}, ", resp.get_resolved_ts());
-        println!("\ttracked index: {}, ", resp.get_resolver_tracked_index());
-        println!("\tstopped: {}, ", resp.get_resolver_stopped());
+        let fields = [
+            ("Region read progress:", "".to_owned()),
+            (
+                "exist",
+                format!("{}", resp.get_region_read_progress_exist()),
+            ),
+            ("safe_ts", format!("{}", resp.get_safe_ts())),
+            ("applied_index", format!("{}", resp.get_applied_index())),
+            (
+                "pending front item (oldest) ts",
+                format!("{}", resp.get_pending_front_ts()),
+            ),
+            (
+                "pending front item (oldest) applied index",
+                format!("{}", resp.get_pending_front_applied_index()),
+            ),
+            (
+                "pending back item (latest) ts",
+                format!("{}", resp.get_pending_back_ts()),
+            ),
+            (
+                "pending back item (latest) applied index",
+                format!("{}", resp.get_pending_back_applied_index()),
+            ),
+            (
+                "paused",
+                format!("{}", resp.get_region_read_progress_paused()),
+            ),
+            (
+                "duration to last update_safe_ts",
+                format!("{} ms", resp.get_duration_to_last_update_safe_ts_ms()),
+            ),
+            (
+                "duration to last consume_leader_info",
+                format!("{} ms", resp.get_duration_to_last_consume_leader_ms()),
+            ),
+            ("Resolver:", "".to_owned()),
+            ("exist", format!("{}", resp.get_resolver_exist())),
+            ("resolved_ts", format!("{}", resp.get_resolved_ts())),
+            (
+                "tracked index",
+                format!("{}", resp.get_resolver_tracked_index()),
+            ),
+            ("stopped", format!("{}", resp.get_resolver_stopped())),
+        ];
+        for (name, value) in &fields {
+            if value.is_empty() {
+                println!("{}", name);
+            } else {
+                println!("    {}: {}, ", name, value);
+            }
+        }
     }
 }
 
@@ -1267,7 +1286,7 @@ where
         unimplemented!("only available for remote mode");
     }
 
-    fn get_region_read_progress(&self, _region_id: u64, _log: bool) {
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
         println!("only available for remote mode");
         tikv_util::logger::exit_process_gracefully(-1);
     }
@@ -1484,7 +1503,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         unimplemented!("only available for remote mode");
     }
 
-    fn get_region_read_progress(&self, _region_id: u64, _log: bool) {
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
         println!("only available for remote mode");
         tikv_util::logger::exit_process_gracefully(-1);
     }

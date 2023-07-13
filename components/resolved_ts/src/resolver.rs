@@ -199,9 +199,13 @@ impl Resolver {
         self.resolved_ts
     }
 
-    pub(crate) fn log_locks(&self) {
-        // log lock with the minimum start_ts
-        if let Some((start_ts, keys)) = self.lock_ts_heap.iter().next() {
+    pub(crate) fn log_locks(&self, min_start_ts: u64) {
+        // log lock with the minimum start_ts >= min_start_ts
+        if let Some((start_ts, keys)) = self
+            .lock_ts_heap
+            .iter()
+            .find(|(&ts, _)| ts.into_inner() >= min_start_ts)
+        {
             let keys_for_log = keys
                 .iter()
                 .map(|key| log_wrappers::Value::key(key))
