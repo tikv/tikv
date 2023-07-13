@@ -10,11 +10,24 @@ publish = false
 default = []
 failpoints = ["fail/failpoints"]
 testexport = []
+test-engine-kv-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "engine_test/test-engine-raft-raft-engine"
+]
+test-engines-rocksdb = [
+  "engine_test/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engines-panic",
+]
 
 [dependencies]
 encryption = { workspace = true, default-features = false }
 engine_rocks = { workspace = true, default-features = false }
 engine_traits = { workspace = true, default-features = false }
+engine_test = { workspace = true, default-features = false }
 fail = "0.5"
 file_system = { workspace = true, default-features = false }
 futures = "0.3"

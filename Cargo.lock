@@ -4654,6 +4654,7 @@ version = "0.0.1"
 dependencies = [
  "encryption",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "fail",
  "file_system",
