@@ -4997,6 +4997,7 @@ dependencies = [
  "serde",
  "slog",
  "slog-global",
+ "strum 0.20.0",
  "test_pd",
  "test_pd_client",
  "tikv_util",
