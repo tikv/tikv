@@ -203,8 +203,8 @@ impl Resolver {
         // log lock with the minimum start_ts >= min_start_ts
         if let Some((start_ts, keys)) = self
             .lock_ts_heap
-            .iter()
-            .find(|(&ts, _)| ts.into_inner() >= min_start_ts)
+            .range(TimeStamp::new(min_start_ts)..)
+            .next()
         {
             let keys_for_log = keys
                 .iter()
@@ -217,6 +217,14 @@ impl Resolver {
                 "keys" => ?keys_for_log,
             );
         }
+    }
+
+    pub(crate) fn num_locks(&self) -> u64 {
+        self.locks_by_key.len() as u64
+    }
+
+    pub(crate) fn num_transactions(&self) -> u64 {
+        self.lock_ts_heap.len() as u64
     }
 }
 

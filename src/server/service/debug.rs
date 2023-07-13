@@ -42,6 +42,24 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 }
 
 pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
+pub type ResolvedTsDiagnosisCallback = Callback<(
+    bool, // exist
+    bool, // stopped
+    u64,  // resolved_ts
+    u64,  // tracked index
+    u64,  // num_locks
+    u64,  // num_transactions
+)>;
+pub type ScheduleResolvedTsTask = Arc<
+    dyn Fn(
+            u64,  // region id
+            bool, // log_locks
+            u64,  // min_start_ts
+            ResolvedTsDiagnosisCallback,
+        ) -> bool
+        + Send
+        + Sync,
+>;
 
 /// Service handles the RPC messages for the `Debug` service.
 pub struct Service<T, D, S>
@@ -54,8 +72,7 @@ where
     debugger: D,
     raft_router: T,
     store_meta: Arc<Mutex<S>>,
-    resolved_ts_scheduler:
-        Arc<dyn Fn(u64, bool, u64, Callback<(bool, bool, u64, u64)>) -> bool + Send + Sync>,
+    resolved_ts_scheduler: ScheduleResolvedTsTask,
 }
 
 impl<T, D, S> Clone for Service<T, D, S>
@@ -88,9 +105,7 @@ where
         pool: Handle,
         raft_router: T,
         store_meta: Arc<Mutex<S>>,
-        resolved_ts_scheduler: Arc<
-            dyn Fn(u64, bool, u64, Callback<(bool, bool, u64, u64)>) -> bool + Send + Sync,
-        >,
+        resolved_ts_scheduler: ScheduleResolvedTsTask,
     ) -> Self {
         Service {
             pool,
@@ -662,11 +677,20 @@ where
                         resp.set_error("get resolved-ts info failed".to_owned());
                         error!("tikv-ctl get resolved-ts info failed"; "err" => ?e);
                     }
-                    Ok((resolver_exist, stopped, resolved_ts, resolver_tracked_index)) => {
+                    Ok((
+                        resolver_exist,
+                        stopped,
+                        resolved_ts,
+                        resolver_tracked_index,
+                        num_locks,
+                        num_transactions,
+                    )) => {
                         resp.set_resolver_exist(resolver_exist);
                         resp.set_resolver_stopped(stopped);
                         resp.set_resolved_ts(resolved_ts);
                         resp.set_resolver_tracked_index(resolver_tracked_index);
+                        resp.set_num_locks(num_locks);
+                        resp.set_num_transactions(num_transactions);
                     }
                 }
 

@@ -603,7 +603,7 @@ where
         region_id: u64,
         log_locks: bool,
         min_start_ts: u64,
-        callback: Callback<(bool, bool, u64, u64)>,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
     ) {
         if let Some(r) = self.regions.get(&region_id) {
             if log_locks {
@@ -614,9 +614,11 @@ where
                 r.resolver.stopped(),
                 r.resolver.resolved_ts().into_inner(),
                 r.resolver.tracked_index(),
+                r.resolver.num_locks(),
+                r.resolver.num_transactions(),
             ));
         } else {
-            callback((false, false, 0u64, 0u64));
+            callback((false, false, 0u64, 0u64, 0u64, 0u64));
         }
     }
 }
@@ -660,7 +662,7 @@ pub enum Task {
         region_id: u64,
         log_locks: bool,
         min_start_ts: u64,
-        callback: Callback<(bool, bool, u64, u64)>,
+        callback: Callback<(bool, bool, u64, u64, u64, u64)>,
     },
 }
 

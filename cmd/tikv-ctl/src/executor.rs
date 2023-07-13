@@ -982,54 +982,53 @@ impl DebugExecutor for DebugClient {
         }
         let fields = [
             ("Region read progress:", "".to_owned()),
-            (
-                "exist",
-                format!("{}", resp.get_region_read_progress_exist()),
-            ),
-            ("safe_ts", format!("{}", resp.get_safe_ts())),
-            ("applied_index", format!("{}", resp.get_applied_index())),
+            ("exist", resp.get_region_read_progress_exist().to_string()),
+            ("safe_ts", resp.get_safe_ts().to_string()),
+            ("applied_index", resp.get_applied_index().to_string()),
             (
                 "pending front item (oldest) ts",
-                format!("{}", resp.get_pending_front_ts()),
+                resp.get_pending_front_ts().to_string(),
             ),
             (
                 "pending front item (oldest) applied index",
-                format!("{}", resp.get_pending_front_applied_index()),
+                resp.get_pending_front_applied_index().to_string(),
             ),
             (
                 "pending back item (latest) ts",
-                format!("{}", resp.get_pending_back_ts()),
+                resp.get_pending_back_ts().to_string(),
             ),
             (
                 "pending back item (latest) applied index",
-                format!("{}", resp.get_pending_back_applied_index()),
+                resp.get_pending_back_applied_index().to_string(),
             ),
-            (
-                "paused",
-                format!("{}", resp.get_region_read_progress_paused()),
-            ),
-            (
-                "duration to last update_safe_ts",
-                format!("{} ms", resp.get_duration_to_last_update_safe_ts_ms()),
-            ),
-            (
-                "duration to last consume_leader_info",
-                format!("{} ms", resp.get_duration_to_last_consume_leader_ms()),
-            ),
+            ("paused", resp.get_region_read_progress_paused().to_string()),
+            // (
+            //     "duration to last update_safe_ts",
+            //     format!("{} ms", resp.get_duration_to_last_update_safe_ts_ms()),
+            // ),
+            // (
+            //     "duration to last consume_leader_info",
+            //     format!("{} ms", resp.get_duration_to_last_consume_leader_ms()),
+            // ),
             ("Resolver:", "".to_owned()),
-            ("exist", format!("{}", resp.get_resolver_exist())),
-            ("resolved_ts", format!("{}", resp.get_resolved_ts())),
+            ("exist", resp.get_resolver_exist().to_string()),
+            ("resolved_ts", resp.get_resolved_ts().to_string()),
             (
                 "tracked index",
-                format!("{}", resp.get_resolver_tracked_index()),
+                resp.get_resolver_tracked_index().to_string(),
             ),
-            ("stopped", format!("{}", resp.get_resolver_stopped())),
+            ("number of locks", resp.get_num_locks().to_string()),
+            (
+                "number of transactions",
+                resp.get_num_transactions().to_string(),
+            ),
+            ("stopped", resp.get_resolver_stopped().to_string()),
         ];
         for (name, value) in &fields {
             if value.is_empty() {
                 println!("{}", name);
             } else {
-                println!("    {}: {}, ", name, value);
+                println!("  {}: {}, ", name, value);
             }
         }
     }
