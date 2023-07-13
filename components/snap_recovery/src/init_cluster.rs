@@ -85,6 +85,9 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     config.raft_store.max_snapshot_file_raw_size = ReadableSize::gb(1);
     config.raft_store.hibernate_regions = false;
 
+    // Disable prevote so it is possible to regenerate leaders.
+    config.raft_store.prevote = false;
+
     // disable auto compactions during the restore
     config.rocksdb.defaultcf.disable_auto_compactions = true;
     config.rocksdb.writecf.disable_auto_compactions = true;

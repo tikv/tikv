@@ -35,7 +35,10 @@ use raftstore::{
 use thiserror::Error;
 use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
 
-use crate::{data_resolver::DataResolverManager, region_meta_collector::RegionMetaCollector};
+use crate::{
+    data_resolver::DataResolverManager, leader_keeper::LeaderKeeper,
+    region_meta_collector::RegionMetaCollector,
+};
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -275,6 +278,10 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             }
 
             info!("all region leader assigned done");
+
+            let lk = LeaderKeeper::new(raft_router.clone(), leaders.clone());
+            let cancel = lk.spawn_loop().await;
+            defer! { {cancel.map(|c| c.abort()); } };
 
             let now = Instant::now();
             // wait apply to the last log
