@@ -766,9 +766,18 @@ where
         let store_id = self.get_or_init_store_id();
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
         let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
+        let (mut oldest_safe_ts, mut oldest_safe_ts_region) = (u64::MAX, 0);
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
+                let safe_ts = read_progress.safe_ts();
+                if safe_ts > 0 && safe_ts < oldest_safe_ts {
+                    oldest_safe_ts = safe_ts;
+                    oldest_safe_ts_region = *region_id;
+                }
+
                 let (leader_info, leader_store_id) = read_progress.dump_leader_info();
+                // this is maximum resolved-ts pushed to region_read_progress, namely candidates
+                // of safe_ts. It may not be the safe_ts yet
                 let ts = leader_info.get_read_state().get_safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;
@@ -806,19 +815,21 @@ where
                 }
             }
         }
+        let now = TimeStamp::physical_now();
+        RTS_MIN_SAFE_TS.set(oldest_safe_ts as i64);
+        RTS_MIN_SAFE_TS_REGION.set(oldest_safe_ts_region as i64);
+        RTS_MIN_SAFE_TS_GAP
+            .set(now.saturating_sub(TimeStamp::from(oldest_safe_ts).physical()) as i64);
         RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
         RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
-        RTS_MIN_RESOLVED_TS_GAP.set(
-            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64,
-        );
+        RTS_MIN_RESOLVED_TS_GAP
+            .set(now.saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64);
 
         RTS_MIN_LEADER_RESOLVED_TS_REGION.set(oldest_leader_region as i64);
         RTS_MIN_LEADER_RESOLVED_TS.set(oldest_leader_ts as i64);
-        RTS_MIN_LEADER_RESOLVED_TS_GAP.set(
-            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_leader_ts).physical())
-                as i64,
-        );
+        RTS_MIN_LEADER_RESOLVED_TS_GAP
+            .set(now.saturating_sub(TimeStamp::from(oldest_leader_ts).physical()) as i64);
 
         RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
