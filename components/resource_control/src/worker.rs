@@ -409,7 +409,8 @@ mod tests {
         worker.adjust_quota();
         check_limiter(&limiter, 2.25, 2250.0);
 
-        let default = new_resource_group_ru("default".into(), 2000, 8);
+        let default =
+            new_background_resource_group_ru("default".into(), 2000, 8, vec!["br".into()]);
         resource_ctl.add_resource_group(default);
         let new_limiter = resource_ctl.get_resource_limiter("default", "br").unwrap();
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
