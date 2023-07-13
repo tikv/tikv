@@ -18,7 +18,7 @@ use std::{
     path::Path,
     process, str,
     string::ToString,
-    sync::Arc,
+    sync::{Arc, RwLock},
     thread,
     time::Duration,
     u64,
@@ -822,41 +822,62 @@ fn flashback_whole_cluster(
     block_on(runtime.spawn(async move {
         // Prepare all regions for flashback.
         let start_ts = pd_client.get_tso().await.unwrap();
-        let mut stores_leader = load_leaders_to_each_store(&pd_client, start_key, end_key);
+        let prepare_stores_leader = Arc::new(RwLock::new(load_leaders_to_each_store(
+            &pd_client, start_key, end_key,
+        )));
+        // Record regions that are prepared for flashback successful.
+        let mut need_finish_stores_leader = prepare_stores_leader.read().unwrap().clone();
         // Need to retry if all regions are not finish prepare.
         loop {
             let mut futures = Vec::default();
-            stores_leader
-                .clone()
-                .into_iter()
-                .for_each(|(store_id, leaders)| {
-                    let addr = pd_client.get_store(store_id).unwrap().address;
-                    leaders
-                        .into_iter()
-                        .filter(|(_, region_id)| {
-                            region_ids.is_empty() || region_ids.contains(region_id)
-                        })
-                        .for_each(|(key_range, region_id)| {
-                            // Prepare flashback region version by key range.
-                            let key_range = build_key_range(&key_range.0, &key_range.1, false);
+            let read_result = prepare_stores_leader.read().unwrap().clone();
+            read_result.into_iter().for_each(|(store_id, leaders)| {
+                let addr = pd_client.get_store(store_id).unwrap().address;
+                leaders
+                    .into_iter()
+                    .filter(|(_, region_id)| {
+                        region_ids.is_empty() || region_ids.contains(region_id)
+                    })
+                    .for_each(|(key_range, region_id)| {
+                        let key_range_var = key_range.clone();
+                        let prepare_stores_leader = prepare_stores_leader.clone();
+                        // Prepare flashback region version by key range.
+                        let key_range = build_key_range(&key_range.0, &key_range.1, false);
 
-                            let addr = addr.clone();
-                            let cfg_inner = cfg.clone();
-                            let mgr = Arc::clone(&mgr);
-                            let f = async move {
-                                let debug_executor =
-                                    new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
-                                debug_executor.flashback_to_version(
-                                    version,
-                                    region_id,
-                                    key_range,
-                                    start_ts.into_inner(),
-                                    0,
-                                )
-                            };
-                            futures.push(f);
-                        })
-                });
+                        let addr = addr.clone();
+                        let cfg_inner = cfg.clone();
+                        let mgr = Arc::clone(&mgr);
+                        let f = async move {
+                            let debug_executor =
+                                new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
+                            match debug_executor.flashback_to_version(
+                                version,
+                                region_id,
+                                key_range.clone(),
+                                start_ts.into_inner(),
+                                0,
+                            ) {
+                                Ok(_) => {
+                                    prepare_stores_leader
+                                        .write()
+                                        .unwrap()
+                                        .get_mut(&store_id)
+                                        .unwrap()
+                                        .remove(&key_range_var);
+                                    Ok(())
+                                }
+                                Err(err) => {
+                                    println!(
+                                        "prepare flashback region {} with start_ts {:?} to version {} failed, error: {:?}, start retry...",
+                                        region_id, start_ts, version, err
+                                    );
+                                    Err(err)
+                                },
+                            }
+                        };
+                        futures.push(f);
+                    });
+            });
 
             // Wait for finishing prepare flashback.
             match tokio::time::timeout(
@@ -875,9 +896,11 @@ fn flashback_whole_cluster(
                         );
                         // Need to update `stores_leader` to replace stale key range.
                         for (store_id, leaders) in retry_stores_leader {
-                            let regions = stores_leader
-                                .entry(store_id)
-                                .or_insert_with(HashMap::default);
+                            let mut check = prepare_stores_leader.write().unwrap();
+                            let regions = check.entry(store_id).or_insert_with(HashMap::default);
+                            regions.extend(leaders.clone());
+                            // Need to update stores_leader as well.
+                            let regions = need_finish_stores_leader.entry(store_id).or_insert_with(HashMap::default);
                             regions.extend(leaders);
                         }
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
@@ -897,39 +920,56 @@ fn flashback_whole_cluster(
 
         // Start flashback for all regions.
         let commit_ts = pd_client.get_tso().await.unwrap();
+        let need_finish_stores_leader = Arc::new(RwLock::new(need_finish_stores_leader));
         loop {
             let mut futures = Vec::default();
-            stores_leader
-                .clone()
-                .into_iter()
-                .for_each(|(store_id, leaders)| {
-                    let addr = pd_client.get_store(store_id).unwrap().address;
-                    leaders
-                        .into_iter()
-                        .filter(|(_, region_id)| {
-                            region_ids.is_empty() || region_ids.contains(region_id)
-                        })
-                        .for_each(|(key_range, region_id)| {
-                            // Flashback region version by key range.
-                            let key_range = build_key_range(&key_range.0, &key_range.1, false);
+            let read_result = need_finish_stores_leader.read().unwrap().clone();
+            read_result.into_iter().for_each(|(store_id, leaders)| {
+                let addr = pd_client.get_store(store_id).unwrap().address;
+                leaders
+                    .into_iter()
+                    .filter(|(_, region_id)| {
+                        region_ids.is_empty() || region_ids.contains(region_id)
+                    })
+                    .for_each(|(key_range, region_id)| {
+                        let need_finish_stores_leader = need_finish_stores_leader.clone();
+                        let key_range_var = key_range.clone();
+                        // Flashback region version by key range.
+                        let key_range = build_key_range(&key_range.0, &key_range.1, false);
 
-                            let addr = addr.clone();
-                            let cfg_inner = cfg.clone();
-                            let mgr = Arc::clone(&mgr);
-                            let f = async move {
-                                let debug_executor =
-                                    new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
-                                debug_executor.flashback_to_version(
-                                    version,
-                                    region_id,
-                                    key_range,
-                                    start_ts.into_inner(),
-                                    commit_ts.into_inner(),
-                                )
-                            };
-                            futures.push(f);
-                        })
-                });
+                        let addr = addr.clone();
+                        let cfg_inner = cfg.clone();
+                        let mgr = Arc::clone(&mgr);
+                        let f = async move {
+                            let debug_executor =
+                                new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
+                            match debug_executor.flashback_to_version(
+                                version,
+                                region_id,
+                                key_range.clone(),
+                                start_ts.into_inner(),
+                                commit_ts.into_inner(),
+                            ) {
+                                Ok(_) => {
+                                    need_finish_stores_leader
+                                        .write()
+                                        .unwrap()
+                                        .get_mut(&store_id)
+                                        .unwrap()
+                                        .remove(&key_range_var);
+                                    Ok(())
+                                }
+                                Err(err) => {
+                                    println!(
+                                        "flashback region {} with start_ts: {:?}, commit_ts: {:?} to version {} failed, error: {:?}, start retry...",
+                                        region_id, start_ts, commit_ts,version, err);
+                                    Err(err)
+                                }
+                            }
+                        };
+                        futures.push(f);
+                    })
+            });
 
             // Wait for finishing flashback to version.
             match tokio::time::timeout(
