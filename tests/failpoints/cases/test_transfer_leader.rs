@@ -17,6 +17,7 @@ use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::storage::Snapshot;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
