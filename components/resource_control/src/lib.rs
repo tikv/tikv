@@ -25,6 +25,7 @@ pub use channel::ResourceMetered;
 
 mod resource_limiter;
 pub use resource_limiter::ResourceLimiter;
+pub mod worker;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]

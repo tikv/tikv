@@ -155,7 +155,7 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RaftTestEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
-    cfg_controller: Option<ConfigController>,
+    cfg_controller: HashMap<u64, ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
@@ -169,7 +169,7 @@ impl NodeCluster {
             pd_client,
             nodes: HashMap::default(),
             snap_mgrs: HashMap::default(),
-            cfg_controller: None,
+            cfg_controller: HashMap::default(),
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             post_create_coprocessor_host: None,
@@ -215,8 +215,8 @@ impl NodeCluster {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 
-    pub fn get_cfg_controller(&self) -> Option<&ConfigController> {
-        self.cfg_controller.as_ref()
+    pub fn get_cfg_controller(&self, node_id: u64) -> Option<&ConfigController> {
+        self.cfg_controller.get(&node_id)
     }
 }
 
@@ -391,7 +391,7 @@ impl Simulator for NodeCluster {
             .routers
             .insert(node_id, SimulateTransport::new(router));
         self.nodes.insert(node_id, node);
-        self.cfg_controller = Some(cfg_controller);
+        self.cfg_controller.insert(node_id, cfg_controller);
         self.simulate_trans.insert(node_id, simulate_trans);
 
         Ok(node_id)
