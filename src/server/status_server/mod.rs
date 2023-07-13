@@ -723,7 +723,7 @@ where
 
 #[derive(Serialize)]
 struct BackgroundSetting {
-    task_names: Vec<String>,
+    task_types: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -752,7 +752,7 @@ fn into_debug_request_group(mut rg: ResourceGroup) -> ResourceGroupSetting {
             .get_settings()
             .get_burst_limit(),
         background: BackgroundSetting {
-            task_names: rg
+            task_types: rg
                 .background_settings
                 .as_mut()
                 .map_or(vec![], |s| s.take_job_types().into()),

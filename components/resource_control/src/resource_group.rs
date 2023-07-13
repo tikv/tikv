@@ -129,7 +129,6 @@ impl ResourceGroupManager {
             .insert(group_name, ResourceGroup::new(rg, limiter));
     }
 
-<<<<<<< HEAD
     fn build_resource_limiter(
         rg: &PbResourceGroup,
         old_limiter: Option<Arc<ResourceLimiter>>,
@@ -139,18 +138,6 @@ impl ResourceGroupManager {
                 .or_else(|| Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY))))
         } else {
             None
-=======
-    fn build_resource_limiter(rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
-        #[cfg(test)]
-        {
-            if rg.name.contains("background") {
-                return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
-            }
-        }
-        // TODO: only the "default" resource group support background tasks currently.
-        if rg.name == DEFAULT_RESOURCE_GROUP_NAME {
-            return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
->>>>>>> 372da724b85421adca55cdc6b9a18b5129945a10
         }
     }
 
@@ -691,6 +678,18 @@ pub(crate) mod tests {
         new_resource_group(name, true, ru, ru, group_priority)
     }
 
+    pub fn new_background_resource_group_ru(
+        name: String,
+        ru: u64,
+        group_priority: u32,
+        task_types: Vec<String>,
+    ) -> PbResourceGroup {
+        let mut rg = new_resource_group(name, true, ru, ru, group_priority);
+        rg.mut_background_settings()
+            .set_job_types(task_types.into());
+        rg
+    }
+
     pub fn new_resource_group(
         name: String,
         is_ru_mode: bool,
@@ -809,10 +808,12 @@ pub(crate) mod tests {
                 .limiter
                 .is_none()
         );
-        let mut new_default = new_resource_group_ru("default".into(), 10000, MEDIUM_PRIORITY);
-        new_default
-            .mut_background_settings()
-            .set_job_types(vec!["br".into()].into());
+        let new_default = new_background_resource_group_ru(
+            "default".into(),
+            10000,
+            MEDIUM_PRIORITY,
+            vec!["br".into()],
+        );
         resource_manager.add_resource_group(new_default);
         let default_group = resource_manager.get_resource_group("default").unwrap();
         let limiter = default_group.limiter.as_ref().unwrap().clone();
@@ -823,10 +824,12 @@ pub(crate) mod tests {
         drop(group1);
         drop(default_group);
 
-        let mut new_default = new_resource_group_ru("default".into(), 100, LOW_PRIORITY);
-        new_default
-            .mut_background_settings()
-            .set_job_types(vec!["lightning".into()].into());
+        let new_default = new_background_resource_group_ru(
+            "default".into(),
+            100,
+            LOW_PRIORITY,
+            vec!["lightning".into()],
+        );
         resource_manager.add_resource_group(new_default);
         let default_group = resource_manager.get_resource_group("default").unwrap();
         assert_eq!(default_group.get_ru_quota(), 100);
