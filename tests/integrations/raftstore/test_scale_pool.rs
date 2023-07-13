@@ -7,11 +7,14 @@ use std::{
 };
 
 use engine_traits::{MiscExt, Peekable};
+use raft::prelude::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::config::ConfigurableDb;
 use tikv_util::{
+    config::ReadableDuration,
     sys::thread::{self, Pid},
+    time::Instant,
     HandyRwLock,
 };
 
@@ -33,7 +36,7 @@ fn test_increase_pool() {
 
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
 
         let change = {
             let mut change = HashMap::new();
@@ -88,7 +91,7 @@ fn test_increase_pool_v2() {
 
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
 
         let change = {
             let mut change = HashMap::new();
@@ -155,7 +158,7 @@ fn test_decrease_pool() {
 
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
         let change = {
             let mut change = HashMap::new();
             change.insert("raftstore.store_pool_size".to_owned(), "1".to_owned());
@@ -220,7 +223,7 @@ fn test_increase_apply_pool_v2() {
 
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
         let change = {
             let mut change = HashMap::new();
             change.insert("raftstore.apply-pool-size".to_owned(), "2".to_owned());
@@ -248,7 +251,7 @@ fn test_decrease_apply_pool_v2() {
 
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
         let change = {
             let mut change = HashMap::new();
             change.insert("raftstore.apply-pool-size".to_owned(), "1".to_owned());
@@ -282,7 +285,7 @@ fn test_decrease_pool_v2() {
 
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
         let change = {
             let mut change = HashMap::new();
             change.insert("raftstore.store_pool_size".to_owned(), "1".to_owned());
@@ -350,7 +353,7 @@ fn test_increase_async_ios() {
     // Update config, expand from 1 to 2
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
 
         let change = {
             let mut change = HashMap::new();
@@ -394,7 +397,7 @@ fn test_decrease_async_ios() {
     // Update config, shrink from 4 to 1
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
         let change = {
             let mut change = HashMap::new();
             change.insert("raftstore.store-io-pool-size".to_owned(), "1".to_owned());
@@ -443,7 +446,7 @@ fn test_resize_async_ios_failed_1() {
     // sync-mode(async-ios == 0).
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
 
         let change = {
             let mut change = HashMap::new();
@@ -486,7 +489,7 @@ fn test_resize_async_ios_failed_2() {
     // async-mode(async-ios == 2).
     {
         let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller().unwrap();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
 
         let change = {
             let mut change = HashMap::new();
@@ -555,4 +558,135 @@ fn test_adjust_hight_priority_background_threads() {
     fail::remove("on_flush_completed");
     h.join().unwrap();
     h2.join().unwrap();
+}
+
+#[test]
+fn test_increase_snap_generator_pool_size() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.right_derive_when_split = false;
+    cluster.cfg.raft_store.snap_generator_pool_size = 1;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 20;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration(Duration::from_millis(50));
+    cluster.run();
+    // wait for yatp threads to sleep
+    std::thread::sleep(Duration::from_millis(200));
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"key0020");
+    let id1 = cluster.get_region(b"").get_id();
+    let id2 = cluster.get_region(b"key0020").get_id();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(id1, 2)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(id2, 2)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+
+    fail::cfg("before_region_gen_snap", "1*pause").unwrap();
+
+    for i in 0..20 {
+        let key = format!("key{:04}", i);
+        cluster.must_put(key.as_bytes(), b"val");
+    }
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
+        let change = {
+            let mut change = HashMap::new();
+            change.insert(
+                "raftstore.snap-generator-pool-size".to_owned(),
+                "2".to_owned(),
+            );
+            change
+        };
+
+        cfg_controller.update(change).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    let engine = cluster.get_engine(2);
+    assert!(engine.get_value(b"zkey0001").unwrap().is_none());
+
+    for i in 20..40 {
+        let key = format!("key{:04}", i);
+        cluster.must_put(key.as_bytes(), b"val");
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let t = Instant::now();
+    while t.saturating_elapsed() < Duration::from_secs(1) {
+        let val = engine.get_value(b"zkey0030").unwrap();
+        if val.is_some() {
+            assert_eq!(val.unwrap(), b"val");
+            break;
+        }
+    }
+    assert!(engine.get_value(b"zkey0001").unwrap().is_none());
+
+    fail::remove("before_region_gen_snap");
+}
+
+#[test]
+fn test_decrease_snap_generator_pool_size() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.right_derive_when_split = false;
+    cluster.cfg.raft_store.snap_generator_pool_size = 2;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 20;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration(Duration::from_millis(50));
+    cluster.run();
+    // wait for yatp threads to sleep
+    std::thread::sleep(Duration::from_millis(200));
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+    fail::cfg("before_region_gen_snap", "1*pause").unwrap();
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
+        let change = {
+            let mut change = HashMap::new();
+            change.insert(
+                "raftstore.snap-generator-pool-size".to_owned(),
+                "0".to_owned(),
+            );
+            change
+        };
+        cfg_controller.update(change).unwrap_err();
+
+        let change = {
+            let mut change = HashMap::new();
+            change.insert(
+                "raftstore.snap-generator-pool-size".to_owned(),
+                "1".to_owned(),
+            );
+            change
+        };
+
+        cfg_controller.update(change).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    for i in 0..20 {
+        let key = format!("key{:04}", i);
+        cluster.must_put(key.as_bytes(), b"val");
+    }
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let engine = cluster.get_engine(2);
+    assert!(engine.get_value(b"zkey0001").unwrap().is_none());
+
+    fail::remove("before_region_gen_snap");
 }
