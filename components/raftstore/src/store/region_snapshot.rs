@@ -93,7 +93,11 @@ where
 
     pub fn get_data_version(&self) -> Result<u64> {
         if self.from_v2 {
-            Ok(self.snap.sequence_number())
+            if self.snap.sequence_number() != 0 {
+                Ok(self.snap.sequence_number())
+            } else {
+                Err(box_err!("Snapshot sequence number 0"))
+            }
         } else {
             self.get_apply_index()
         }
