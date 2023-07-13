@@ -644,16 +644,19 @@ where
                 resp.set_region_read_progress_exist(true);
                 resp.set_safe_ts(r.safe_ts());
                 let core = r.get_core();
-                resp.set_applied_index(core.applied_index);
-                resp.set_region_read_progress_paused(core.pause);
-                if let Some(back) = core.pending_items.back() {
+                resp.set_applied_index(core.applied_index());
+                resp.set_region_read_progress_paused(core.paused());
+                if let Some(back) = core.pending_items().back() {
                     resp.set_pending_back_ts(back.ts);
                     resp.set_pending_back_applied_index(back.idx);
                 }
-                if let Some(front) = core.pending_items.front() {
+                if let Some(front) = core.pending_items().front() {
                     resp.set_pending_front_ts(front.ts);
                     resp.set_pending_front_applied_index(front.idx)
                 }
+                resp.set_read_state_ts(core.read_state().ts);
+                resp.set_read_state_apply_index(core.read_state().idx);
+                resp.set_discard(core.discarding());
                 // TODO: set durations
                 // resp.set_duration_to_last_consume_leader_ms();
                 // resp.set_duration_to_last_update_safe_ts_ms();

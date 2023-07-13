@@ -985,6 +985,11 @@ impl DebugExecutor for DebugClient {
             ("exist", resp.get_region_read_progress_exist().to_string()),
             ("safe_ts", resp.get_safe_ts().to_string()),
             ("applied_index", resp.get_applied_index().to_string()),
+            ("read_state.ts", resp.get_read_state_ts().to_string()),
+            (
+                "read_state.apply_index",
+                resp.get_read_state_apply_index().to_string(),
+            ),
             (
                 "pending front item (oldest) ts",
                 resp.get_pending_front_ts().to_string(),
@@ -1002,6 +1007,7 @@ impl DebugExecutor for DebugClient {
                 resp.get_pending_back_applied_index().to_string(),
             ),
             ("paused", resp.get_region_read_progress_paused().to_string()),
+            ("discarding", resp.get_discard().to_string()),
             // (
             //     "duration to last update_safe_ts",
             //     format!("{} ms", resp.get_duration_to_last_update_safe_ts_ms()),
@@ -1028,7 +1034,7 @@ impl DebugExecutor for DebugClient {
             if value.is_empty() {
                 println!("{}", name);
             } else {
-                println!("  {}: {}, ", name, value);
+                println!("    {}: {}, ", name, value);
             }
         }
     }

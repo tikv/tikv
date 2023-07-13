@@ -1437,23 +1437,23 @@ impl RegionReadProgress {
 
 #[derive(Debug)]
 pub struct RegionReadProgressCore {
-    pub peer_id: u64,
-    pub region_id: u64,
-    pub applied_index: u64,
+    peer_id: u64,
+    region_id: u64,
+    applied_index: u64,
     // A wrapper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
     // `safe_ts` and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
-    pub read_state: ReadState,
+    read_state: ReadState,
     // The local peer's acknowledge about the leader
     leader_info: LocalLeaderInfo,
     // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
-    pub pending_items: VecDeque<ReadState>,
+    pending_items: VecDeque<ReadState>,
     // After the region commit merged, the region's key range is extended and the region's
     // `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`, and start reject stale
     // `read_state` item with index smaller than `last_merge_index` to avoid `safe_ts` undo the
     // decrease
-    pub last_merge_index: u64,
+    last_merge_index: u64,
     // Stop update `safe_ts`
-    pub pause: bool,
+    pause: bool,
     // Discard incoming `(idx, ts)`
     discard: bool,
     // A notify to trigger advancing resolved ts immediately.
@@ -1654,6 +1654,26 @@ impl RegionReadProgressCore {
 
     pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
         &self.leader_info
+    }
+
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index
+    }
+
+    pub fn paused(&self) -> bool {
+        self.pause
+    }
+
+    pub fn pending_items(&self) -> &VecDeque<ReadState> {
+        &self.pending_items
+    }
+
+    pub fn read_state(&self) -> &ReadState {
+        &self.read_state
+    }
+
+    pub fn discarding(&self) -> bool {
+        self.discard
     }
 }
 

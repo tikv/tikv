@@ -2966,7 +2966,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/ekexium/kvproto?branch=tikv-ctl-safe-ts#8e816228f4140cd7c85bfc02c9f314b5a01e3a76"
+source = "git+https://github.com/ekexium/kvproto?branch=tikv-ctl-safe-ts#c8bfb3be7921b3e7b20dcb79315118fd1e651ea9"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
