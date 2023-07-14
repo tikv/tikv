@@ -1,24 +1,26 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    marker::PhantomData,
     sync::Mutex,
     time::{Duration, Instant},
 };
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::KvEngine;
 use futures::{compat::Future01CompatExt, stream::AbortHandle};
 use raftstore::{
     errors::{Error, Result},
-    router::RaftStoreRouter,
-    store::{Callback, CasualMessage, RaftRouter, SignificantMsg, SignificantRouter},
+    store::{Callback, CasualMessage, CasualRouter, SignificantMsg, SignificantRouter},
 };
 use tikv_util::{
     future::paired_future_callback, sys::thread::StdThreadBuildWrapper, timer::GLOBAL_TIMER_HANDLE,
 };
 
-pub struct LeaderKeeper<EK: KvEngine, ER: RaftEngine> {
-    router: RaftRouter<EK, ER>,
+pub struct LeaderKeeper<EK, Router> {
+    router: Router,
     to_keep: Vec<u64>,
+
+    _ek: PhantomData<EK>,
 }
 
 #[derive(Default)]
@@ -49,9 +51,17 @@ impl std::fmt::Debug for StepResult {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> LeaderKeeper<EK, ER> {
-    pub fn new(router: RaftRouter<EK, ER>, to_keep: Vec<u64>) -> Self {
-        Self { router, to_keep }
+impl<EK, Router> LeaderKeeper<EK, Router>
+where
+    EK: KvEngine,
+    Router: CasualRouter<EK> + SignificantRouter<EK> + 'static,
+{
+    pub fn new(router: Router, to_keep: Vec<u64>) -> Self {
+        Self {
+            router,
+            to_keep,
+            _ek: PhantomData,
+        }
     }
 
     pub async fn spawn_loop(self) -> Option<AbortHandle> {
@@ -68,7 +78,7 @@ impl<EK: KvEngine, ER: RaftEngine> LeaderKeeper<EK, ER> {
                                 .await
                                 .expect("wrong with global timer, cannot stepping.");
                             let res = self.step().await;
-                            info!("finished leader keeper stepping."; "result" => ?res, "take" => ?now.elapsed());
+                            info!("finished leader keeper stepping."; "result" => ?res, "take" => ?(now.elapsed() - Duration::from_secs(30)));
                         }
                     };
                     let (keep_loop, cancel) = futures::future::abortable(keep_loop);
@@ -85,7 +95,7 @@ impl<EK: KvEngine, ER: RaftEngine> LeaderKeeper<EK, ER> {
     }
 
     pub async fn step(&self) -> StepResult {
-        const CONCURRENCY: usize = 1024;
+        const CONCURRENCY: usize = 256;
         let r = Mutex::new(StepResult::default());
         for batch in self.to_keep.as_slice().chunks(CONCURRENCY) {
             let tasks = batch.iter().map(|region_id| async {
@@ -123,8 +133,133 @@ impl<EK: KvEngine, ER: RaftEngine> LeaderKeeper<EK, ER> {
 
     fn force_leader(&self, region_id: u64) -> Result<()> {
         let msg = CasualMessage::Campaign;
-        self.router.send_casual_msg(region_id, msg)?;
+        self.router.send(region_id, msg)?;
         // We have nothing to do...
         Ok(())
+    }
+}
+
+mod test {
+    use std::{cell::RefCell, collections::HashSet};
+
+    use engine_rocks::RocksEngine;
+    use engine_traits::KvEngine;
+    use futures::executor::block_on;
+    use kvproto::raft_cmdpb;
+    use raftstore::store::{CasualRouter, SignificantRouter};
+
+    use super::LeaderKeeper;
+
+    #[derive(Default)]
+    struct MockStore {
+        regions: HashSet<u64>,
+        leaders: RefCell<HashSet<u64>>,
+    }
+
+    impl<EK, Router> LeaderKeeper<EK, Router> {
+        fn mut_router(&mut self) -> &mut Router {
+            &mut self.router
+        }
+    }
+
+    // impl SignificantRouter for MockStore, which only handles `LeaderCallback`,
+    // return success when source region is leader, otherwise fill the error in
+    // header.
+    impl<EK: KvEngine> SignificantRouter<EK> for MockStore {
+        fn significant_send(
+            &self,
+            region_id: u64,
+            msg: raftstore::store::SignificantMsg<EK::Snapshot>,
+        ) -> raftstore::errors::Result<()> {
+            match msg {
+                raftstore::store::SignificantMsg::LeaderCallback(cb) => {
+                    let mut resp = raft_cmdpb::RaftCmdResponse::default();
+                    let mut header = raft_cmdpb::RaftResponseHeader::default();
+                    if !self.leaders.borrow().contains(&region_id) {
+                        let mut err = kvproto::errorpb::Error::new();
+                        err.set_not_leader(kvproto::errorpb::NotLeader::new());
+                        header.set_error(err);
+                    }
+                    resp.set_header(header);
+                    cb.invoke_with_response(resp);
+                    Ok(())
+                }
+                _ => panic!("unexpected msg"),
+            }
+        }
+    }
+
+    // impl CasualRouter for MockStore, which only handles `Campaign`,
+    // add the region to leaders list when handling it.
+    impl<EK: KvEngine> CasualRouter<EK> for MockStore {
+        fn send(
+            &self,
+            region_id: u64,
+            msg: raftstore::store::CasualMessage<EK>,
+        ) -> raftstore::errors::Result<()> {
+            match msg {
+                raftstore::store::CasualMessage::Campaign => {
+                    if !self.regions.contains(&region_id) {
+                        return Err(raftstore::Error::RegionNotFound(region_id));
+                    }
+                    self.leaders.borrow_mut().insert(region_id);
+                    Ok(())
+                }
+                _ => panic!("unexpected msg"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_basic() {
+        let leaders = vec![1, 2, 3];
+        let mut store = MockStore::default();
+        store.regions = leaders.iter().copied().collect();
+        let mut lk = LeaderKeeper::<RocksEngine, _>::new(store, leaders.clone());
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 3);
+        assert_eq!(res.campaign_failed.len(), 0);
+
+        lk.mut_router().leaders.get_mut().remove(&1);
+        lk.mut_router().leaders.get_mut().remove(&3);
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 2);
+        assert_eq!(res.campaign_failed.len(), 0);
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 0);
+        assert_eq!(res.campaign_failed.len(), 0);
+    }
+
+    #[test]
+    fn test_failure() {
+        let leaders = vec![1, 2, 3];
+        let mut store = MockStore::default();
+        store.regions = leaders.iter().copied().collect();
+        let lk = LeaderKeeper::<RocksEngine, _>::new(store, vec![1, 2, 3, 4]);
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 4);
+        assert_eq!(res.campaign_failed.len(), 1);
+    }
+
+    #[test]
+    fn test_many_regions() {
+        let leaders = std::iter::repeat_with({
+            let mut x = 0;
+            move || {
+                x += 1;
+                x
+            }
+        })
+        .take(2049)
+        .collect::<Vec<_>>();
+        let mut store = MockStore::default();
+        store.regions = leaders.iter().copied().collect();
+        let lk = LeaderKeeper::<RocksEngine, _>::new(store, leaders);
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 2049);
+        assert_eq!(res.campaign_failed.len(), 0);
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 0);
+        assert_eq!(res.campaign_failed.len(), 0);
     }
 }
