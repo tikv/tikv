@@ -67,6 +67,7 @@ use raftstore_v2::{
     StateStorage,
 };
 use resource_control::{
+    worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION},
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
@@ -299,6 +300,12 @@ where
             // spawn a task to watch all resource groups update.
             background_worker.spawn_async_task(async move {
                 resource_mgr_service.watch_resource_groups().await;
+            });
+            // spawn a task to auto adjust background quota limiter.
+            let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
+            let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
+            background_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
+                worker.adjust_quota();
             });
             Some(mgr)
         } else {

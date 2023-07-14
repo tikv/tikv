@@ -51,6 +51,7 @@ use crate::{
 };
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
+const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";
@@ -409,10 +410,14 @@ where
                 .thread_count(
                     1,
                     cfg.value().snap_generator_pool_size,
-                    cfg.value().snap_generator_pool_size,
+                    SNAP_GENERATOR_MAX_POOL_SIZE,
                 )
                 .build_future_pool(),
         }
+    }
+
+    pub fn snap_generator_pool(&self) -> FuturePool {
+        self.pool.clone()
     }
 
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
