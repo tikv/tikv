@@ -26,7 +26,7 @@ use crate::{
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
-const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(25);
+const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(100);
 
 pub type BeforeStartCallback = Box<dyn Fn() + Send>;
 pub type OnErrorCallback = Box<dyn Fn(ObserveId, Region, Error) + Send>;
@@ -183,7 +183,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
             if retry_times != 0 {
                 if let Err(e) = GLOBAL_TIMER_HANDLE
                     .delay(
-                        std::time::Instant::now() + retry_times * GET_SNAPSHOT_RETRY_BACKOFF_STEP,
+                        std::time::Instant::now()
+                            + GET_SNAPSHOT_RETRY_BACKOFF_STEP
+                                .mul_f64(10_f64.powi(retry_times as i32 - 1)),
                     )
                     .compat()
                     .await
