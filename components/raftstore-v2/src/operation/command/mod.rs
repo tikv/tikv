@@ -406,7 +406,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         self.region_buckets_info_mut()
             .add_bucket_flow(&apply_res.bucket_stat);
-        self.update_split_flow_control(&apply_res.metrics);
+        self.update_split_flow_control(
+            &apply_res.metrics,
+            ctx.cfg.region_split_check_diff().0 as i64,
+        );
         self.update_stat(&apply_res.metrics);
         ctx.store_stat.engine_total_bytes_written += apply_res.metrics.written_bytes;
         ctx.store_stat.engine_total_keys_written += apply_res.metrics.written_keys;

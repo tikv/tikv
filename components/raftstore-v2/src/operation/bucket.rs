@@ -11,7 +11,7 @@ use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
 };
-use slog::{error, warn};
+use slog::{error, info, warn};
 
 use crate::{
     batch::StoreContext,
@@ -29,6 +29,9 @@ pub struct BucketStatsInfo {
     // the report bucket stat records the increment stats after last report pd.
     // it will be reset after report pd.
     report_bucket_stat: Option<BucketStat>,
+    // last bucket count.
+    // BucketStat.meta is Arc so it cannot be used for last bucket count
+    last_bucket_count: usize,
 }
 
 impl BucketStatsInfo {
@@ -104,6 +107,10 @@ impl BucketStatsInfo {
         }
         self.report_bucket_stat = buckets.clone();
         self.bucket_stat = buckets;
+        self.last_bucket_count = self
+            .bucket_stat
+            .as_ref()
+            .map_or(0, |bucket_stat| bucket_stat.meta.keys.len() - 1);
     }
 
     #[inline]
@@ -124,6 +131,11 @@ impl BucketStatsInfo {
     #[inline]
     pub fn bucket_stat(&self) -> &Option<BucketStat> {
         &self.bucket_stat
+    }
+
+    #[inline]
+    pub fn last_bucket_count(&self) -> usize {
+        self.last_bucket_count
     }
 }
 
@@ -161,7 +173,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let region = self.region();
         let current_version = self.region_buckets_info().version();
+        let next_bucket_version = gen_bucket_version(self.term(), current_version);
+        let mut is_first_refresh = true;
+        let mut change_bucket_version = false;
         let mut region_buckets: BucketStat;
+
         // The region buckets reset after this region happened split or merge.
         // The message should be dropped if it's epoch is lower than the regions.
         // The bucket ranges is none when the region buckets is also none.
@@ -170,13 +186,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let (Some(bucket_ranges), Some(peer_region_buckets)) =
             (bucket_ranges, self.region_buckets_info().bucket_stat())
         {
+            is_first_refresh = false;
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut meta_idx = 0;
             region_buckets = peer_region_buckets.clone();
             let mut meta = (*region_buckets.meta).clone();
-            if !buckets.is_empty() {
-                meta.version = gen_bucket_version(self.term(), current_version);
-            }
             meta.region_epoch = region_epoch;
             for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
                 // the bucket ranges maybe need to split or merge not all the meta keys, so it
@@ -211,6 +225,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // bucket is too small
                         region_buckets.left_merge(meta_idx);
                         meta.left_merge(meta_idx);
+                        change_bucket_version = true;
                         continue;
                     }
                 } else {
@@ -221,21 +236,30 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         meta_idx += 1;
                         region_buckets.split(meta_idx);
                         meta.split(meta_idx, bucket_key);
+                        change_bucket_version = true;
                     }
                 }
                 meta_idx += 1;
+            }
+            if self.region_buckets_info().last_bucket_count() != region_buckets.meta.keys.len() - 1
+            {
+                change_bucket_version = true;
+            }
+            if change_bucket_version {
+                meta.version = next_bucket_version;
             }
             region_buckets.meta = Arc::new(meta);
         } else {
             // when the region buckets is none, the exclusive buckets includes all the
             // bucket keys.
             assert_eq!(buckets.len(), 1);
+            change_bucket_version = true;
             let bucket_keys = buckets.pop().unwrap().keys;
             let bucket_count = bucket_keys.len() + 1;
             let mut meta = BucketMeta {
                 region_id: self.region_id(),
                 region_epoch,
-                version: gen_bucket_version(self.term(), current_version),
+                version: next_bucket_version,
                 keys: bucket_keys,
                 sizes: vec![store_ctx.coprocessor_host.cfg.region_bucket_size.0; bucket_count],
             };
@@ -246,6 +270,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         let buckets_count = region_buckets.meta.keys.len() - 1;
+        if change_bucket_version {
+            // TODO: we may need to make it debug once the coprocessor timeout is resolved.
+            info!(
+                self.logger,
+                "refreshed region bucket info";
+                "bucket_version" => next_bucket_version,
+                "buckets_count" => buckets_count,
+                "estimated_region_size" => region_buckets.meta.total_size(),
+                "first_refresh" => is_first_refresh,
+            );
+        }
         store_ctx.coprocessor_host.on_region_changed(
             region,
             RegionChangeEvent::UpdateBuckets(buckets_count),
