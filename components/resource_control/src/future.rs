@@ -220,7 +220,7 @@ mod tests {
     use tikv_util::yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder};
 
     use super::*;
-    use crate::resource_limiter::GroupStatistics;
+    use crate::resource_limiter::{GroupStatistics, ResourceType::Io};
 
     #[pin_project]
     struct NotifyFuture<F> {
@@ -275,7 +275,7 @@ mod tests {
         loop {
             i += 1;
             spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            stats = resource_limiter.io_limiter.get_statistics();
+            stats = resource_limiter.get_limiter(Io).get_statistics();
             assert_eq!(stats.total_consumed, i * 150);
             if stats.total_wait_dur_us > 0 {
                 break;
@@ -284,7 +284,7 @@ mod tests {
 
         let start = Instant::now();
         spawn_and_wait(&pool, empty(), resource_limiter.clone());
-        let new_stats = resource_limiter.io_limiter.get_statistics();
+        let new_stats = resource_limiter.get_limiter(Io).get_statistics();
         let delta = new_stats - stats;
         let dur = start.saturating_elapsed();
         assert_eq!(delta.total_consumed, 150);
@@ -296,7 +296,7 @@ mod tests {
         {
             fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
             spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            assert_eq!(resource_limiter.io_limiter.get_statistics(), new_stats);
+            assert_eq!(resource_limiter.get_limiter(Io).get_statistics(), new_stats);
             fail::remove("failed_to_get_thread_io_bytes_stats");
         }
     }

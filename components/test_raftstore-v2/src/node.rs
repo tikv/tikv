@@ -151,7 +151,7 @@ pub struct NodeCluster<EK: KvEngine> {
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
-    cfg_controller: Option<ConfigController>,
+    cfg_controller: HashMap<u64, ConfigController>,
 }
 
 impl<EK: KvEngine> NodeCluster<EK> {
@@ -163,7 +163,7 @@ impl<EK: KvEngine> NodeCluster<EK> {
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             snap_mgrs: HashMap::default(),
-            cfg_controller: None,
+            cfg_controller: HashMap::default(),
         }
     }
 
@@ -171,8 +171,8 @@ impl<EK: KvEngine> NodeCluster<EK> {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 
-    pub fn get_cfg_controller(&self) -> Option<&ConfigController> {
-        self.cfg_controller.as_ref()
+    pub fn get_cfg_controller(&self, node_id: u64) -> Option<&ConfigController> {
+        self.cfg_controller.get(&node_id)
     }
 }
 
@@ -369,7 +369,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
-        self.cfg_controller = Some(cfg_controller);
+        self.cfg_controller.insert(node_id, cfg_controller);
         Ok(node_id)
     }
 

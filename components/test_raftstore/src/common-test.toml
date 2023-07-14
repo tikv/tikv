@@ -72,6 +72,7 @@ store-io-pool-size = 0
 
 apply-pool-size = 1
 store-pool-size = 1
+snap-generator-pool-size = 2
 [coprocessor]
 
 [rocksdb]
