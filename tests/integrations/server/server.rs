@@ -62,5 +62,5 @@ fn test_restart_grpc_service() {
     sender.send(ServiceEvent::ResumeGrpc).unwrap();
     check_heath_api(max_retry, &client);
     sender.send(ServiceEvent::Exit).unwrap();
-    let _res = tikv_thread.join().unwrap();
+    tikv_thread.join().unwrap();
 }
