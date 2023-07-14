@@ -24,13 +24,18 @@ mod imp {
         engines: Option<Engines<impl KvEngine, impl RaftEngine>>,
         kv_statistics: Option<Arc<RocksStatistics>>,
         raft_statistics: Option<Arc<RocksStatistics>>,
-        tx: Option<TikvMpsc::Sender<ServiceEvent>>,
+        service_event_tx: Option<TikvMpsc::Sender<ServiceEvent>>,
     ) {
         let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
         for signal in &mut signals {
             match signal {
                 SIGTERM | SIGINT | SIGHUP => {
                     info!("receive signal {}, stopping server...", signal);
+                    if let Some(tx) = service_event_tx {
+                        if let Err(e) = tx.send(ServiceEvent::Exit) {
+                            warn!("failed to notify grpc server exit, {:?}", e);
+                        }
+                    }
                     break;
                 }
                 SIGUSR1 => {
@@ -49,11 +54,6 @@ mod imp {
                 }
                 // TODO: handle more signal
                 _ => unreachable!(),
-            }
-        }
-        if let Some(tx) = tx {
-            if let Err(e) = tx.send(ServiceEvent::Exit) {
-                warn!("failed to notify grpc server exit, {:?}", e);
             }
         }
     }
