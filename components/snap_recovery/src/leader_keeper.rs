@@ -29,7 +29,7 @@ pub struct StepResult {
     pub campaign_failed: Vec<(u64, Error)>,
 }
 
-fn ellipse<'a, T: std::fmt::Debug>(ts: &'a [T], max_len: usize) -> String {
+fn ellipse<T: std::fmt::Debug>(ts: &[T], max_len: usize) -> String {
     if ts.len() < max_len {
         return format!("{:?}", &ts);
     }
@@ -104,9 +104,8 @@ where
                     Ok(_) => return,
                 };
 
-                match self.force_leader(*region_id) {
-                    Err(err) => r.lock().unwrap().campaign_failed.push((*region_id, err)),
-                    Ok(_) => return,
+                if let Err(err) = self.force_leader(*region_id) {
+                    r.lock().unwrap().campaign_failed.push((*region_id, err));
                 }
             });
             futures::future::join_all(tasks).await;
@@ -139,6 +138,7 @@ where
     }
 }
 
+#[cfg(test)]
 mod test {
     use std::{cell::RefCell, collections::HashSet};
 
@@ -215,7 +215,7 @@ mod test {
         let leaders = vec![1, 2, 3];
         let mut store = MockStore::default();
         store.regions = leaders.iter().copied().collect();
-        let mut lk = LeaderKeeper::<RocksEngine, _>::new(store, leaders.clone());
+        let mut lk = LeaderKeeper::<RocksEngine, _>::new(store, leaders);
         let res = block_on(lk.step());
         assert_eq!(res.failed_leader.len(), 3);
         assert_eq!(res.campaign_failed.len(), 0);

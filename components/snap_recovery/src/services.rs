@@ -281,7 +281,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
 
             let lk = LeaderKeeper::new(raft_router.clone(), leaders.clone());
             let cancel = lk.spawn_loop().await;
-            defer! { {cancel.map(|c| c.abort()); } };
+            defer! { if let Some(c) = cancel { c.abort() } };
 
             let now = Instant::now();
             // wait apply to the last log
