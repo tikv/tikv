@@ -13,11 +13,14 @@ use tikv_util::{config::ReadableDuration, HandyRwLock};
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    #[online_config(skip)]
     pub num_threads: usize,
+    #[online_config(skip)]
     pub stream_channel_window: usize,
     /// The timeout for going back into normal mode from import mode.
     ///
     /// Default is 10m.
+    #[online_config(skip)]
     pub import_mode_timeout: ReadableDuration,
     /// the ratio of system memory used for import.
     pub memory_use_ratio: f64,
