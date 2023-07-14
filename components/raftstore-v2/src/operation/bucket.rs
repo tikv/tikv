@@ -272,7 +272,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let buckets_count = region_buckets.meta.keys.len() - 1;
         if change_bucket_version {
             // TODO: we may need to make it debug once the coprocessor timeout is resolved.
-            info!(self.logger, "refreshed region bucket info";
+            info!(
+                self.logger, 
+                "refreshed region bucket info";
                 "bucket_version" => next_bucket_version,
                 "buckets_count" => buckets_count,
                 "estimated_region_size" => region_buckets.meta.total_size(),
