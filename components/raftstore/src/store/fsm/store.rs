@@ -552,10 +552,10 @@ where
     pub pending_count: usize,
     pub ready_count: usize,
     pub has_ready: bool,
-    // current_time and node_start_time relate to leader lease,
-    // must use monotonic_raw_now.
+    /// current_time from monotonic_raw_now.
     pub current_time: Option<Timespec>,
-    pub node_start_time: Option<Timespec>,
+    /// unsafe_vote_deadline from monotonic_raw_now.
+    pub unsafe_vote_deadline: Option<Timespec>,
     pub raft_perf_context: ER::PerfContext,
     pub kv_perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
@@ -617,22 +617,14 @@ where
         if self.cfg.allow_unsafe_vote_after_start {
             return None;
         }
-        let start_time = self.node_start_time?;
-        let election_timeout = self.cfg.raft_base_tick_interval.0
-            * if self.cfg.raft_min_election_timeout_ticks != 0 {
-                self.cfg.raft_min_election_timeout_ticks as u32
-            } else {
-                self.cfg.raft_election_timeout_ticks as u32
-            };
-        let start_time = TiInstant::Monotonic(start_time);
+        let deadline = TiInstant::Monotonic(self.unsafe_vote_deadline?);
         let current_time =
             TiInstant::Monotonic(*self.current_time.get_or_insert_with(monotonic_raw_now));
-        let remain_duration =
-            election_timeout.saturating_sub(current_time.saturating_duration_since(start_time));
+        let remain_duration = deadline.saturating_duration_since(current_time);
         if remain_duration > Duration::ZERO {
             Some(remain_duration)
         } else {
-            self.node_start_time.take();
+            self.unsafe_vote_deadline.take();
             None
         }
     }
@@ -1406,6 +1398,14 @@ where
         } else {
             None
         };
+        let election_timeout = self.cfg.value().raft_base_tick_interval.0
+            * if self.cfg.value().raft_min_election_timeout_ticks != 0 {
+                self.cfg.value().raft_min_election_timeout_ticks as u32
+            } else {
+                self.cfg.value().raft_election_timeout_ticks as u32
+            };
+        let unsafe_vote_deadline =
+            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1434,7 +1434,7 @@ where
             ready_count: 0,
             has_ready: false,
             current_time: None,
-            node_start_time: Some(self.node_start_time),
+            unsafe_vote_deadline,
             raft_perf_context: ER::get_perf_context(
                 self.cfg.value().perf_level,
                 PerfContextKind::RaftstoreStore,

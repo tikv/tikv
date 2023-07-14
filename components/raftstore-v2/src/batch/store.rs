@@ -96,10 +96,10 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// A background pool used for high-priority works.
     pub high_priority_pool: FuturePool,
 
-    // current_time and node_start_time relate to leader lease,
-    // must use monotonic_raw_now.
+    /// current_time from monotonic_raw_now.
     pub current_time: Option<Timespec>,
-    pub node_start_time: Option<Timespec>,
+    /// unsafe_vote_deadline from monotonic_raw_now.
+    pub unsafe_vote_deadline: Option<Timespec>,
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
@@ -146,22 +146,14 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         if self.cfg.allow_unsafe_vote_after_start {
             return None;
         }
-        let start_time = self.node_start_time?;
-        let election_timeout = self.cfg.raft_base_tick_interval.0
-            * if self.cfg.raft_min_election_timeout_ticks != 0 {
-                self.cfg.raft_min_election_timeout_ticks as u32
-            } else {
-                self.cfg.raft_election_timeout_ticks as u32
-            };
-        let start_time = TiInstant::Monotonic(start_time);
+        let deadline = TiInstant::Monotonic(self.unsafe_vote_deadline?);
         let current_time =
             TiInstant::Monotonic(*self.current_time.get_or_insert_with(monotonic_raw_now));
-        let remain_duration =
-            election_timeout.saturating_sub(current_time.saturating_duration_since(start_time));
+        let remain_duration = deadline.saturating_duration_since(current_time);
         if remain_duration > Duration::ZERO {
             Some(remain_duration)
         } else {
-            self.node_start_time.take();
+            self.unsafe_vote_deadline.take();
             None
         }
     }
@@ -544,12 +536,20 @@ where
 
     fn build(&mut self, _priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
+        let election_timeout = cfg.raft_base_tick_interval.0
+            * if cfg.raft_min_election_timeout_ticks != 0 {
+                cfg.raft_min_election_timeout_ticks as u32
+            } else {
+                cfg.raft_election_timeout_ticks as u32
+            };
+        let unsafe_vote_deadline =
+            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
         let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
             store_id: self.store_id,
             trans: self.trans.clone(),
             current_time: None,
-            node_start_time: Some(self.node_start_time),
+            unsafe_vote_deadline,
             has_ready: false,
             raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
             cfg,
