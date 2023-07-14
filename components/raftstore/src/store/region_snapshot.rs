@@ -35,6 +35,7 @@ pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
+    from_v2: bool,
     pub term: Option<NonZeroU64>,
     pub txn_extra_op: TxnExtraOp,
     // `None` means the snapshot does not provide peer related transaction extensions.
@@ -68,6 +69,7 @@ where
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
+            from_v2: false,
             term: None,
             txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
@@ -83,6 +85,22 @@ where
     #[inline]
     pub fn get_snapshot(&self) -> &S {
         self.snap.as_ref()
+    }
+
+    pub fn set_from_v2(&mut self) {
+        self.from_v2 = true;
+    }
+
+    pub fn get_data_version(&self) -> Result<u64> {
+        if self.from_v2 {
+            if self.snap.sequence_number() != 0 {
+                Ok(self.snap.sequence_number())
+            } else {
+                Err(box_err!("Snapshot sequence number 0"))
+            }
+        } else {
+            self.get_apply_index()
+        }
     }
 
     #[inline]
@@ -168,6 +186,7 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
+            from_v2: self.from_v2,
             term: self.term,
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),

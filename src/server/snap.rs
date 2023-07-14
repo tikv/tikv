@@ -384,11 +384,8 @@ impl<R: RaftExtension + 'static> Runner<R> {
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("snap-sender"))
+                .with_sys_hooks()
                 .worker_threads(DEFAULT_POOL_SIZE)
-                .with_sys_and_custom_hooks(
-                    tikv_alloc::add_thread_memory_accessor,
-                    tikv_alloc::remove_thread_memory_accessor,
-                )
                 .build()
                 .unwrap(),
             raft_router: r,

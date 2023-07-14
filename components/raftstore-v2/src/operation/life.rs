@@ -345,6 +345,13 @@ impl Store {
         ER: RaftEngine,
         T: Transport,
     {
+        debug!(
+            self.logger(),
+            "store handle raft message";
+            "message_type" => %util::MsgType(&msg),
+            "from_peer_id" => msg.get_from_peer().get_id(),
+            "to_peer_id" => msg.get_to_peer().get_id(),
+        );
         let region_id = msg.get_region_id();
         // The message can be sent when the peer is being created, so try send it first.
         let mut msg = if let Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) =
@@ -788,6 +795,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.remove_region(region_id);
             meta.readers.remove(&region_id);
+            meta.region_read_progress.remove(&region_id);
             ctx.tablet_registry.remove(region_id);
         }
         // Remove tablet first, otherwise in extreme cases, a new peer can be created

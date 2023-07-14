@@ -14,7 +14,8 @@ crossbeam = "0.8"
 crossbeam-skiplist = "0.1"
 dashmap = "5.1"
 fail = "0.5"
-futures = { version = "0.3" }
+file_system = { workspace = true }
+futures = { version = "0.3", features = ["compat"] }
 kvproto = { workspace = true }
 lazy_static = "1.0"
 online_config = { workspace = true }
@@ -26,9 +27,11 @@ protobuf = { version = "2.8", features = ["bytes"] }
 serde = { version = "1.0", features = ["derive"] }
 slog = { workspace = true }
 slog-global = { workspace = true }
+strum = { version = "0.20", features = ["derive"] }
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 tikv_util = { workspace = true }
+tokio-timer = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]

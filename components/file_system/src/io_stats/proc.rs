@@ -180,6 +180,13 @@ pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
     bytes
 }
 
+pub fn get_thread_io_bytes_total() -> Result<IoBytes, String> {
+    match LOCAL_IO_STATS.get() {
+        Some(s) => s.lock().id.fetch_io_bytes(),
+        None => Err("thread local io stats is None".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

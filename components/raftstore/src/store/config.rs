@@ -94,7 +94,6 @@ pub struct Config {
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
-    // TODO: make it auto adjusted based on background flush rate.
     #[doc(hidden)]
     #[online_config(hidden)]
     pub max_manual_flush_rate: f64,
@@ -219,7 +218,6 @@ pub struct Config {
     #[online_config(hidden)]
     pub use_delete_range: bool,
 
-    #[online_config(skip)]
     pub snap_generator_pool_size: usize,
 
     pub cleanup_import_sst_interval: ReadableDuration,
@@ -396,7 +394,7 @@ impl Default for Config {
             raft_log_gc_size_limit: None,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
-            max_manual_flush_rate: 1.0,
+            max_manual_flush_rate: 2.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
@@ -1177,6 +1175,13 @@ impl ConfigManager for RaftstoreConfigManager {
             let resize_io_task = RefreshConfigTask::ScaleWriters(*resized_io_size);
             if let Err(e) = self.scheduler.schedule(resize_io_task) {
                 error!("raftstore configuration manager schedule to resize store-io-pool-size work task failed"; "err"=> ?e);
+            }
+        }
+        if let Some(ConfigValue::Usize(resize_reader_size)) = change.get("snap_generator_pool_size")
+        {
+            let resize_reader_task = RefreshConfigTask::ScaleAsyncReader(*resize_reader_size);
+            if let Err(e) = self.scheduler.schedule(resize_reader_task) {
+                error!("raftstore configuration manager schedule to resize snap-generator-pool-size work task failed"; "err"=> ?e);
             }
         }
         info!(

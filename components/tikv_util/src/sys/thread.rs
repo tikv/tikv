@@ -7,6 +7,7 @@
 use std::{io, io::Result, sync::Mutex, thread};
 
 use collections::HashMap;
+use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
 
 /// A cross-platform CPU statistics data structure.
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
@@ -427,10 +428,14 @@ impl StdThreadBuildWrapper for std::thread::Builder {
         #[allow(clippy::disallowed_methods)]
         self.spawn(|| {
             call_thread_start_hooks();
+            // SAFETY: we will call `remove_thread_memory_accessor` at defer.
+            unsafe { add_thread_memory_accessor() };
             add_thread_name_to_map();
-            let res = f();
-            remove_thread_name_from_map();
-            res
+            defer! {{
+                remove_thread_name_from_map();
+                remove_thread_memory_accessor();
+            }};
+            f()
         })
     }
 }
@@ -444,12 +449,19 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
         #[allow(clippy::disallowed_methods)]
         self.on_thread_start(move || {
             call_thread_start_hooks();
+            // SAFETY: we will call `remove_thread_memory_accessor` at
+            // `before-stop_wrapper`.
+            // FIXME: What if the user only calls `after_start_wrapper`?
+            unsafe {
+                add_thread_memory_accessor();
+            }
             add_thread_name_to_map();
             start();
         })
         .on_thread_stop(move || {
             end();
             remove_thread_name_from_map();
+            remove_thread_memory_accessor();
         })
     }
 }
@@ -463,12 +475,19 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
         #[allow(clippy::disallowed_methods)]
         self.after_start(move |_| {
             call_thread_start_hooks();
+            // SAFETY: we will call `remove_thread_memory_accessor` at
+            // `before-stop_wrapper`.
+            // FIXME: What if the user only calls `after_start_wrapper`?
+            unsafe {
+                add_thread_memory_accessor();
+            }
             add_thread_name_to_map();
             start();
         })
         .before_stop(move |_| {
             end();
             remove_thread_name_from_map();
+            remove_thread_memory_accessor();
         })
     }
 }
