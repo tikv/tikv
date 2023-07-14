@@ -852,16 +852,20 @@ impl DataKeyManager {
     pub fn file_count(&self) -> usize {
         self.dicts.file_dict.lock().unwrap().files.len()
     }
-}
 
-impl Drop for DataKeyManager {
-    fn drop(&mut self) {
+    fn shutdown_background_worker(&mut self) {
         if let Err(e) = self.rotate_tx.send(RotateTask::Terminate) {
             info!("failed to terminate background rotation, are we shutting down?"; "err" => %e);
         }
         if let Some(Err(e)) = self.background_worker.take().map(|w| w.join()) {
             info!("failed to join background rotation, are we shutting down?"; "err" => ?e);
         }
+    }
+}
+
+impl Drop for DataKeyManager {
+    fn drop(&mut self) {
+        self.shutdown_background_worker();
     }
 }
 
@@ -1450,11 +1454,12 @@ mod tests {
     fn test_key_manager_rotate() {
         let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
+        let mut manager = new_key_manager_def(&tmp_dir, None).unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
+        manager.shutdown_background_worker();
 
         // Do not rotate.
         let master_key = MockBackend::default();
@@ -1519,11 +1524,12 @@ mod tests {
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let previous = new_mock_backend() as Box<dyn Backend>;
-        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        let mut manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
+        manager.shutdown_background_worker();
 
         let master_key_backend =
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
@@ -1569,7 +1575,8 @@ mod tests {
         let master_key_backend = Box::new(file_backend);
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let previous = new_mock_backend() as Box<dyn Backend>;
-        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        let mut manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        manager.shutdown_background_worker();
 
         let file_backend = FileBackend::new(key_path.as_path()).unwrap();
         let master_key_backend = Box::new(file_backend);
