@@ -400,7 +400,7 @@ impl BackupRange {
             .clone()
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
         let mut writer = writer_builder.build(next_file_start_key.clone(), storage_name)?;
-        let mut reschecule_checker =
+        let mut reschedule_checker =
             RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
@@ -449,7 +449,7 @@ impl BackupRange {
                 return Err(e);
             }
             if resource_limiter.is_some() {
-                reschecule_checker.check().await;
+                reschedule_checker.check().await;
             }
         }
         drop(snap_store);
