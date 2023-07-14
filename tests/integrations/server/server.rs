@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use fail;
 use grpcio::*;
 use grpcio_health::{proto::HealthCheckRequest, HealthClient, ServingStatus};
 use service::service_event::ServiceEvent;
@@ -8,6 +9,7 @@ use tikv::config::TikvConfig;
 
 #[test]
 fn test_restart_grpc_service() {
+    fail::cfg("mock_force_uninitial_logger", "return").unwrap();
     let check_heath_api = |max_retry, client: &HealthClient| {
         let req = HealthCheckRequest {
             service: "".to_string(),
@@ -63,4 +65,5 @@ fn test_restart_grpc_service() {
     check_heath_api(max_retry, &client);
     sender.send(ServiceEvent::Exit).unwrap();
     tikv_thread.join().unwrap();
+    fail::remove("mock_force_uninitial_logger");
 }

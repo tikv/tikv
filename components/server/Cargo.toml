@@ -49,6 +49,7 @@ engine_rocks = { workspace = true }
 engine_rocks_helper = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
+fail = "0.5"
 file_system = { workspace = true }
 fs2 = "0.4"
 futures = "0.3"
