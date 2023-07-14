@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use fail;
 use grpcio::*;
 use grpcio_health::{proto::HealthCheckRequest, HealthClient, ServingStatus};
 use service::service_event::ServiceEvent;

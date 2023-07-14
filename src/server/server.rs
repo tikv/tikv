@@ -398,11 +398,9 @@ where
 
     pub fn pause(&mut self) -> Result<()> {
         info!("pausing the grpc server");
-
-        // Prepare the builder for resume grpc server
+        // Prepare the builder for resume grpc server.
         // If the builder cannot be created, then pause will be skipped;
-        let builder = self.builder_factory.create_builder(self.env.clone())?;
-        let builder = Either::Left(builder);
+        let builder = Either::Left(self.builder_factory.create_builder(self.env.clone())?);
         if let Some(Either::Right(server)) = self.builder_or_server.take() {
             drop(server);
         }
