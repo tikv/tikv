@@ -148,11 +148,11 @@ fn test_resolved_ts_after_destroy_peer() {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    // add peer (2, 2) to region 1.
+    // Add peer (2, 2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), key, value);
 
-    // add peer (3, 3) to region 1.
+    // Add peer (3, 3) to region 1.
     pd_client.must_add_peer(r1, new_peer(3, 3));
     must_get_equal(&cluster.get_engine(3), key, value);
 
@@ -166,6 +166,6 @@ fn test_resolved_ts_after_destroy_peer() {
     cluster.wait_destroy_and_clean(r1, new_peer(1, 1));
 
     // Must not get destory peer's read progress
-    let meta = cluster.store_metas[&1].lock().unwrap();
+    let meta = cluster.store_metas[&r1].lock().unwrap();
     assert_eq!(None, meta.region_read_progress.get_resolved_ts(&r1))
 }
