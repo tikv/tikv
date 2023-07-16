@@ -23,7 +23,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
-    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
@@ -478,8 +478,8 @@ pub fn check_system_config(config: &TikvConfig) {
 
 pub struct EnginesResourceInfo {
     tablet_registry: TabletRegistry<RocksEngine>,
-    // The initial value of max_compactions. For kvdb.defaultcf, kvdb.writecf only.
-    base_max_compactions: [u32; 2],
+    // The initial value of max_compactions.
+    base_max_compactions: [u32; 3],
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
@@ -494,8 +494,10 @@ impl EnginesResourceInfo {
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
+        // Match DATA_CFS.
         let base_max_compactions = [
             config.rocksdb.defaultcf.max_compactions.unwrap_or(0),
+            config.rocksdb.lockcf.max_compactions.unwrap_or(0),
             config.rocksdb.writecf.max_compactions.unwrap_or(0),
         ];
         EnginesResourceInfo {
@@ -514,16 +516,30 @@ impl EnginesResourceInfo {
     ) {
         let mut compaction_pending_bytes = [0; DATA_CFS.len()];
         let mut soft_pending_compaction_bytes_limit = [0; DATA_CFS.len()];
+        // level0 file number ratio within [compaction trigger, slowdown trigger].
+        let mut level0_level = [0.0f32; DATA_CFS.len()];
 
         let mut fetch_engine_cf = |engine: &RocksEngine, cf: &str| {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
+                let offset = data_cf_offset(cf);
                 if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
-                    let offset = data_cf_offset(cf);
                     compaction_pending_bytes[offset] += b;
                     soft_pending_compaction_bytes_limit[offset] = cmp::max(
                         cf_opts.get_soft_pending_compaction_bytes_limit(),
                         soft_pending_compaction_bytes_limit[offset],
                     );
+                }
+                if let Ok(Some(n)) = engine.get_cf_num_files_at_level(cf, 0) {
+                    let level0 = n as f32;
+                    let slowdown_trigger = cf_opts.get_level_zero_slowdown_writes_trigger() as f32;
+                    let compaction_trigger =
+                        cf_opts.get_level_zero_file_num_compaction_trigger() as f32;
+                    assert!(slowdown_trigger > compaction_trigger);
+                    let level =
+                        (level0 - compaction_trigger) / (slowdown_trigger - compaction_trigger);
+                    if level > level0_level[offset] {
+                        level0_level[offset] = level;
+                    }
                 }
             }
         };
@@ -540,7 +556,7 @@ impl EnginesResourceInfo {
 
         for (_, cache) in cached_latest_tablets.iter_mut() {
             let Some(tablet) = cache.latest() else { continue };
-            for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+            for cf in DATA_CFS {
                 fetch_engine_cf(tablet, cf);
             }
         }
@@ -556,29 +572,33 @@ impl EnginesResourceInfo {
                     normalized_pending_bytes,
                     (*pending * EnginesResourceInfo::SCALE_FACTOR / limit) as u32,
                 );
-                // kvdb defaultcf or writecf.
-                if (i == 1 || i == 2 )
-                    && let base = self.base_max_compactions[i-1]
-                    && base > 0
-                {
-                    let level = *pending as f32 / limit as f32;
-                    let delta = if level > 0.7 {
+                let base = self.base_max_compactions[i];
+                if base > 0 {
+                    let mut level = *pending as f32 / limit as f32;
+                    if level < level0_level[i] {
+                        level = level0_level[i];
+                    }
+                    // 50% -> 1, 60% -> 2, 70% -> 3, 80% -> 4, 90% -> 8.
+                    let delta = if level > 0.9 {
+                        8
+                    } else if level > 0.8 {
+                        4
+                    } else if level > 0.7 {
+                        3
+                    } else if level > 0.6 {
                         2
                     } else {
                         u32::from(level > 0.5)
                     };
-                    let cf = if i == 1 {
-                        CF_DEFAULT
-                    } else {
-                        CF_WRITE
-                    };
+                    let cf = DATA_CFS[i];
                     if delta != 0 {
                         info!(
                             "adjusting `max-compactions`";
                             "cf" => cf,
                             "n" => base + delta,
                             "pending_bytes" => *pending,
-                            "soft_limit" => limit
+                            "soft_limit" => limit,
+                            "level0_level" => level0_level[i],
                         );
                     }
                     // We cannot get the current limit from limiter to avoid repeatedly setting the
