@@ -574,22 +574,28 @@ impl EnginesResourceInfo {
                 );
                 let base = self.base_max_compactions[i];
                 if base > 0 {
-                    let mut level = *pending as f32 / limit as f32;
-                    if level < level0_level[i] {
-                        level = level0_level[i];
-                    }
-                    // 50% -> 1, 60% -> 2, 70% -> 3, 80% -> 4, 90% -> 8.
-                    let delta = if level > 0.9 {
-                        8
-                    } else if level > 0.8 {
-                        4
-                    } else if level > 0.7 {
+                    let level = *pending as f32 / limit as f32;
+                    // 50% -> 1, 70% -> 2, 85% -> 3, 95% -> 6.
+                    let delta1 = if level > 0.95 {
+                        cmp::min(SysQuota::cpu_cores_quota() as u32 - 2, 6)
+                    } else if level > 0.85 {
                         3
-                    } else if level > 0.6 {
+                    } else if level > 0.7 {
                         2
                     } else {
                         u32::from(level > 0.5)
                     };
+                    // 20% -> 1, 60% -> 2, 80% -> 3, 90% -> 6.
+                    let delta2 = if level0_level[i] > 0.9 {
+                        cmp::min(SysQuota::cpu_cores_quota() as u32 - 2, 6)
+                    } else if level0_level[i] > 0.8 {
+                        3
+                    } else if level0_level[i] > 0.6 {
+                        2
+                    } else {
+                        u32::from(level0_level[i] > 0.2)
+                    };
+                    let delta = cmp::max(delta1, delta2);
                     let cf = DATA_CFS[i];
                     if delta != 0 {
                         info!(
