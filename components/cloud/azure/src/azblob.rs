@@ -579,6 +579,8 @@ impl AzureStorage {
     }
 
     pub fn new(config: Config) -> io::Result<AzureStorage> {
+        Self::check_config(&config)?;
+
         let account_name = config.get_account_name()?;
         let bucket = (*config.bucket.bucket).to_owned();
         // priority:
@@ -675,6 +677,38 @@ impl AzureStorage {
                 "credential info not found".to_owned(),
             ))
         }
+    }
+
+    fn check_config(config: &Config) -> io::Result<()> {
+        if config.bucket.storage_class.is_some() {
+            if config.encryption_scope.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    concat!(
+                        "Set Blob Tier cannot be used with customer-provided scope. ",
+                        "Please don't supply the access-tier when use encryption-scope."
+                    ),
+                ));
+            }
+            if config.encryption_customer.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    concat!(
+                        "Set Blob Tier cannot be used with customer-provided key. ",
+                        "Please don't supply the access-tier when use encryption-key."
+                    ),
+                ));
+            }
+        } else if config.encryption_scope.is_some() && config.encryption_customer.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                concat!(
+                    "Undefined input: There are both encryption-scope and customer provided key. ",
+                    "Please select only one to encrypt blobs."
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn maybe_prefix_key(&self, key: &str) -> String {
@@ -905,5 +939,81 @@ mod tests {
         cd.set_attrs(attrs);
         cd.set_bucket(bucket);
         cd
+    }
+
+    #[test]
+    fn test_config_check() {
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            input.set_encryption_scope("test".to_owned());
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
     }
 }
