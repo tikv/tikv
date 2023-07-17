@@ -397,9 +397,9 @@ where
     }
 
     pub fn pause(&mut self) -> Result<()> {
-        info!("pausing the grpc server");
-        // Prepare the builder for resume grpc server.
-        // If the builder cannot be created, then pause will be skipped;
+        let start = Instant::now();
+        // Prepare the builder for resume grpc server. And if the builder cannot be
+        // created, then pause will be skipped.
         let builder = Either::Left(self.builder_factory.create_builder(self.env.clone())?);
         if let Some(Either::Right(server)) = self.builder_or_server.take() {
             drop(server);
@@ -407,20 +407,20 @@ where
         self.health_service
             .set_serving_status("", ServingStatus::NotServing);
         self.builder_or_server = Some(builder);
+        info!("paused the grpc server"; "spent_time" => ?start.elapsed(),);
         Ok(())
     }
 
     pub fn resume(&mut self) -> Result<()> {
-        info!("resuming the grpc server");
         if let Some(builder) = self.builder_or_server.as_ref() {
+            let start = Instant::now();
             assert!(builder.is_left());
             self.build_and_bind()?;
             self.start_grpc();
+            info!("resumed the grpc server"; "spent_time" => ?start.elapsed(),);
             return Ok(());
         }
-        Err(Error::Other(box_err!(
-            "resuming the grpc server is skipped."
-        )))
+        Err(Error::Other(box_err!("resume the grpc server is skipped.")))
     }
 
     // Return listening address, this may only be used for outer test
