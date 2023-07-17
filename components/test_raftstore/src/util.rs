@@ -132,7 +132,20 @@ lazy_static! {
     static ref TEST_CONFIG: TiKvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
+<<<<<<< HEAD
         TiKvConfig::from_file(&common_test_cfg, None)
+=======
+        let mut cfg = TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                manifest_dir.display(),
+                e
+            );
+        });
+        // To speed up leader transfer.
+        cfg.raft_store.allow_unsafe_vote_after_start = true;
+        cfg
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
     };
 }
 

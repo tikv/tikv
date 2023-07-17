@@ -17,9 +17,16 @@ use engine_traits::Peekable;
 use engine_traits::{CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
 use test_raftstore::*;
+<<<<<<< HEAD
 use tikv::storage::kv::SnapContext;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
+=======
+use test_raftstore_macro::test_case;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv_util::{config::*, HandyRwLock};
+use txn_types::{Key, LastChange, PessimisticLock};
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 
 /// Test if merge is working as expected in a general condition.
 #[test]

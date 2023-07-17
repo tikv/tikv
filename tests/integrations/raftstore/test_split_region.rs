@@ -10,6 +10,19 @@ use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
+<<<<<<< HEAD
+=======
+use raftstore::{
+    store::{Bucket, BucketRange, Callback, WriteResponse},
+    Result,
+};
+use raftstore_v2::router::QueryResult;
+use test_raftstore::*;
+use test_raftstore_macro::test_case;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv_util::{config::*, future::block_on_timeout};
+use txn_types::{Key, LastChange, PessimisticLock};
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 
 use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_WRITE};

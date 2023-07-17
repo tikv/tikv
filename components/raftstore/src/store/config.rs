@@ -141,6 +141,26 @@ pub struct Config {
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
 
+<<<<<<< HEAD
+=======
+    // Interval of scheduling a tick to check the leader lease.
+    // It will be set to raft_store_max_leader_lease/4 by default.
+    pub check_leader_lease_interval: ReadableDuration,
+
+    // Check if leader lease will expire at `current_time + renew_leader_lease_advance_duration`.
+    // It will be set to raft_store_max_leader_lease/4 by default.
+    pub renew_leader_lease_advance_duration: ReadableDuration,
+
+    // Set true to allow handling request vote messages within one election time
+    // after TiKV start.
+    //
+    // Note: set to true may break leader lease. It should only be true in tests.
+    #[doc(hidden)]
+    #[serde(skip)]
+    #[online_config(skip)]
+    pub allow_unsafe_vote_after_start: bool,
+
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
     // Right region derive origin region id when split.
     #[online_config(hidden)]
     pub right_derive_when_split: bool,
@@ -325,6 +345,25 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
+<<<<<<< HEAD
+=======
+            // The param `slow_trend_unsensitive_cause == 2.0` can yield good results,
+            // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
+            slow_trend_unsensitive_cause: 10.0,
+            slow_trend_unsensitive_result: 0.5,
+            report_min_resolved_ts_interval: ReadableDuration::secs(1),
+            check_leader_lease_interval: ReadableDuration::secs(0),
+            renew_leader_lease_advance_duration: ReadableDuration::secs(0),
+            allow_unsafe_vote_after_start: false,
+            report_region_buckets_tick_interval: ReadableDuration::secs(10),
+            max_snapshot_file_raw_size: ReadableSize::mb(100),
+            unreachable_backoff: ReadableDuration::secs(10),
+            // TODO: make its value reasonable
+            check_peers_availability_interval: ReadableDuration::secs(30),
+            // TODO: make its value reasonable
+            check_request_snapshot_interval: ReadableDuration::minutes(1),
+            enable_v2_compatible_learner: false,
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
         }
     }
 }
@@ -351,6 +390,12 @@ impl Config {
             warn!(
                 "Election timeout ticks needs to be same across all the cluster, \
                  otherwise it may lead to inconsistency."
+            );
+        }
+        if self.allow_unsafe_vote_after_start {
+            warn!(
+                "allow_unsafe_vote_after_start need to be false, otherwise \
+                it may lead to inconsistency"
             );
         }
 

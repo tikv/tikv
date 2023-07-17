@@ -6,6 +6,7 @@ use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
+<<<<<<< HEAD
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -13,6 +14,12 @@ use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;
+=======
+use test_raftstore::*;
+use test_raftstore_macro::test_case;
+use tikv::storage::config::EngineType;
+use tikv_util::{config::ReadableDuration, future::block_on_timeout, HandyRwLock};
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 use txn_types::{Key, Lock, LockType};
 
 #[test]
