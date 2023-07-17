@@ -5,6 +5,7 @@
 #![feature(box_patterns)]
 #![feature(vec_into_raw_parts)]
 #![feature(let_chains)]
+#![feature(once_cell)]
 
 #[cfg(test)]
 extern crate test;
