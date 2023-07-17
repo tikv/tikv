@@ -32,6 +32,31 @@ use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLoc
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::StateRole;
+<<<<<<< HEAD
+=======
+use resource_control::{channel::unbounded, ResourceGroupManager};
+use resource_metering::CollectorRegHandle;
+use sst_importer::SstImporter;
+use tikv_alloc::trace::TraceEvent;
+use tikv_util::{
+    box_try,
+    config::{Tracker, VersionTrack},
+    debug, defer, error,
+    future::poll_future_notify,
+    info, is_zero_duration,
+    mpsc::{self, LooseBoundedSender, Receiver},
+    slow_log,
+    store::{find_peer, region_on_stores},
+    sys as sys_util,
+    sys::disk::{get_disk_status, DiskUsage},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    timer::SteadyTimer,
+    warn,
+    worker::{LazyWorker, Scheduler, Worker},
+    yatp_pool::FuturePool,
+    Either, RingQueue,
+};
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 use time::{self, Timespec};
 
 use collections::HashMap;
@@ -405,10 +430,17 @@ where
     pub pending_count: usize,
     pub ready_count: usize,
     pub has_ready: bool,
+    /// current_time from monotonic_raw_now.
     pub current_time: Option<Timespec>,
+<<<<<<< HEAD
     pub perf_context: EK::PerfContext,
+=======
+    /// unsafe_vote_deadline from monotonic_raw_now.
+    pub unsafe_vote_deadline: Option<Timespec>,
+    pub raft_perf_context: ER::PerfContext,
+    pub kv_perf_context: EK::PerfContext,
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
     pub tick_batch: Vec<PeerTickBatch>,
-    pub node_start_time: Option<TiInstant>,
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
 
@@ -447,6 +479,23 @@ where
             self.cfg.peer_stale_state_check_interval.0;
         self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
+    }
+
+    // Return None means it has passed unsafe vote period.
+    pub fn maybe_in_unsafe_vote_period(&mut self) -> Option<Duration> {
+        if self.cfg.allow_unsafe_vote_after_start {
+            return None;
+        }
+        let deadline = TiInstant::Monotonic(self.unsafe_vote_deadline?);
+        let current_time =
+            TiInstant::Monotonic(*self.current_time.get_or_insert_with(monotonic_raw_now));
+        let remain_duration = deadline.saturating_duration_since(current_time);
+        if remain_duration > Duration::ZERO {
+            Some(remain_duration)
+        } else {
+            self.unsafe_vote_deadline.take();
+            None
+        }
     }
 }
 
@@ -951,8 +1000,13 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
+<<<<<<< HEAD
     write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
+=======
+    write_senders: WriteSenders<EK, ER>,
+    node_start_time: Timespec, // monotonic_raw_now
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1146,6 +1200,14 @@ where
         } else {
             None
         };
+        let election_timeout = self.cfg.value().raft_base_tick_interval.0
+            * if self.cfg.value().raft_min_election_timeout_ticks != 0 {
+                self.cfg.value().raft_min_election_timeout_ticks as u32
+            } else {
+                self.cfg.value().raft_election_timeout_ticks as u32
+            };
+        let unsafe_vote_deadline =
+            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1173,12 +1235,25 @@ where
             ready_count: 0,
             has_ready: false,
             current_time: None,
+<<<<<<< HEAD
             perf_context: self
                 .engines
                 .kv
                 .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
+=======
+            unsafe_vote_deadline,
+            raft_perf_context: ER::get_perf_context(
+                self.cfg.value().perf_level,
+                PerfContextKind::RaftstoreStore,
+            ),
+            kv_perf_context: EK::get_perf_context(
+                self.cfg.value().perf_level,
+                PerfContextKind::RaftstoreStore,
+            ),
+            tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
             feature_gate: self.feature_gate.clone(),
             self_disk_usage: DiskUsage::Normal,
             store_disk_usages: Default::default(),
@@ -1234,7 +1309,11 @@ where
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
+<<<<<<< HEAD
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
+=======
+            node_start_time: self.node_start_time,
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
         }
     }
 }
@@ -1264,6 +1343,7 @@ pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK, ER>>,
     store_writers: StoreWriters<EK, ER>,
+    node_start_time: Timespec, // monotonic_raw_now
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
@@ -1404,8 +1484,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
+<<<<<<< HEAD
             write_senders: self.store_writers.senders().clone(),
             io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
+=======
+            write_senders: self.store_writers.senders(),
+            node_start_time: self.node_start_time,
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
@@ -1578,7 +1663,16 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_router,
         apply_system,
         router: raft_router.clone(),
+<<<<<<< HEAD
         store_writers: StoreWriters::new(),
+=======
+        store_writers: StoreWriters::new(
+            resource_manager
+                .as_ref()
+                .map(|m| m.derive_controller("store-writer".to_owned(), false)),
+        ),
+        node_start_time: monotonic_raw_now(),
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
     };
     (raft_router, system)
 }
