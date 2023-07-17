@@ -840,7 +840,7 @@ fn flashback_whole_cluster(
                     })
                     .for_each(|(key_range, region_id)| {
                         let key_range_var = key_range.clone();
-                        let prepare_stores_leader = prepare_stores_leader.clone();
+                        let prepare_stores_leader = &prepare_stores_leader;
                         // Prepare flashback region version by key range.
                         let key_range = build_key_range(&key_range.0, &key_range.1, false);
 
@@ -932,7 +932,7 @@ fn flashback_whole_cluster(
                         region_ids.is_empty() || region_ids.contains(region_id)
                     })
                     .for_each(|(key_range, region_id)| {
-                        let need_finish_stores_leader = need_finish_stores_leader.clone();
+                        let need_finish_stores_leader = &need_finish_stores_leader;
                         let key_range_var = key_range.clone();
                         // Flashback region version by key range.
                         let key_range = build_key_range(&key_range.0, &key_range.1, false);

@@ -2,9 +2,16 @@
 
 use collections::{HashMap, HashSet};
 use engine_rocks::{raw::Range, util::get_cf_handle};
-use engine_traits::{CachedTablet, MiscExt, CF_WRITE};
+use engine_traits::{CachedTablet, MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_WRITE};
 use keys::{data_key, DATA_MAX_KEY};
-use kvproto::debugpb::Db;
+use kvproto::{
+    debugpb::{
+        Db, FlashbackToVersionRequest, FlashbackToVersionResponse, GetAllRegionsInStoreRequest,
+        GetRequest, RegionInfoRequest,
+    },
+    debugpb_grpc::DebugClient,
+};
+use test_raftstore::{Cluster, ServerCluster};
 use tikv::{
     config::ConfigController,
     server::{debug::Debugger, debug2::DebuggerImplV2},
@@ -160,4 +167,103 @@ fn test_compact() {
     check_compact(b"".to_vec(), b"".to_vec(), regions_compacted.clone());
     check_compact(b"z".to_vec(), b"z".to_vec(), regions_compacted.clone());
     check_compact(b"z".to_vec(), b"{".to_vec(), regions_compacted);
+}
+
+#[test]
+fn test_flashback_to_version() {
+    // test_util::init_log_for_test();
+    let (mut cluster, client, store_id) = test_raftstore::must_new_cluster_and_debug_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    write_and_read_key(&mut cluster, &client, store_id, &k, &v);
+
+    // prepare flashback.
+    let req = GetAllRegionsInStoreRequest::default();
+    let regions = client.get_all_regions_in_store(&req).unwrap().regions;
+    // prepare flashback.
+    let res = flashback_to_version(&client, regions.clone(), 1, 0);
+    assert_eq!(res.is_ok(), true);
+    // finish flashback.
+    let res = flashback_to_version(&client, regions, 1, 2);
+    assert_eq!(res.is_ok(), true);
+
+    // check data.
+    let mut req = GetRequest::default();
+    req.set_cf(CF_DEFAULT.to_owned());
+    req.set_db(Db::Kv);
+    req.set_key(k.clone());
+    match client.get(&req).unwrap_err() {
+        grpcio::Error::RpcFailure(status) => {
+            assert_eq!(status.code(), grpcio::RpcStatusCode::NOT_FOUND);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_flashback_to_version_without_prepare() {
+    let (mut cluster, client, store_id) = test_raftstore::must_new_cluster_and_debug_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    write_and_read_key(&mut cluster, &client, store_id, &k, &v);
+
+    let req = GetAllRegionsInStoreRequest::default();
+    let regions = client.get_all_regions_in_store(&req).unwrap().regions;
+    // finish flashback.
+    match flashback_to_version(&client, regions, 1, 2).unwrap_err() {
+        grpcio::Error::RpcFailure(status) => {
+            assert_eq!(status.code(), grpcio::RpcStatusCode::UNKNOWN);
+            assert_eq!(status.message(), "not in flashback state");
+        }
+        _ => panic!("expect not in flashback state"),
+    }
+}
+
+fn write_and_read_key(
+    cluster: &mut Cluster<ServerCluster>,
+    client: &DebugClient,
+    store_id: u64,
+    k: &[u8],
+    v: &[u8],
+) {
+    // Put some data.
+    let engine = cluster.get_engine(store_id);
+    let k = keys::data_key(k);
+    engine.put(&k, v).unwrap();
+    assert_eq!(engine.get_value(&k).unwrap().unwrap(), v);
+
+    // Debug get
+    let mut req = GetRequest::default();
+    req.set_cf(CF_DEFAULT.to_owned());
+    req.set_db(Db::Kv);
+    req.set_key(k);
+    let mut resp = client.get(&req).unwrap();
+    assert_eq!(resp.take_value(), v);
+}
+
+fn flashback_to_version(
+    client: &DebugClient,
+    regions: Vec<u64>,
+    start_ts: u64,
+    commit_ts: u64,
+) -> grpcio::Result<FlashbackToVersionResponse> {
+    for region_id in regions {
+        let mut req = RegionInfoRequest::default();
+        req.set_region_id(region_id);
+        let r = client
+            .region_info(&req)
+            .unwrap()
+            .region_local_state
+            .unwrap()
+            .region
+            .take()
+            .unwrap();
+        let mut req = FlashbackToVersionRequest::default();
+        req.set_version(0);
+        req.set_region_id(region_id);
+        req.set_start_key(r.get_start_key().to_vec());
+        req.set_end_key(r.get_start_key().to_vec());
+        req.set_start_ts(start_ts);
+        req.set_commit_ts(commit_ts);
+        client.flashback_to_version(&req)?;
+    }
+    Ok(FlashbackToVersionResponse::default())
 }
