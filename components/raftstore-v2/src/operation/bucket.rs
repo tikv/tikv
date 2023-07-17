@@ -305,6 +305,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let version = region_buckets.meta.version;
         // Notify followers to flush their relevant memtables
         let peers = self.region().get_peers().to_vec();
+        if !self.is_leader() {
+            return;
+        }
         for p in peers {
             if p == *self.peer() || p.is_witness {
                 continue;
@@ -323,7 +326,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn on_refresh_buckets<T: Transport>(
+    pub fn on_msg_refresh_buckets<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         msg: &RaftMessage,

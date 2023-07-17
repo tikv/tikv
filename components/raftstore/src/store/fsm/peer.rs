@@ -6075,7 +6075,7 @@ where
 
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
         if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
-            reader.update(ReadProgress::region_buckets(Arc::new(meta.clone())));
+            reader.update(ReadProgress::region_buckets(Arc::new(meta)));
         }
     }
 

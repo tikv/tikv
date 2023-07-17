@@ -335,7 +335,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     return;
                 }
                 ExtraMessageType::MsgRefreshBuckets => {
-                    self.on_refresh_buckets(ctx, &msg);
+                    self.on_msg_refresh_buckets(ctx, &msg);
                     return;
                 }
                 _ => (),
