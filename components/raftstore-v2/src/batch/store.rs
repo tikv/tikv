@@ -59,7 +59,6 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub logger: Logger,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
-    pub current_time: Option<Timespec>,
     pub has_ready: bool,
     pub raft_metrics: RaftMetrics,
     /// The latest configuration.
@@ -333,6 +332,7 @@ where
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             current_time: None,
+            unsafe_vote_deadline,
             has_ready: false,
             raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
             cfg,
@@ -378,6 +378,7 @@ pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     workers: Option<Workers<EK, ER>>,
     logger: Logger,
     shutdown: Arc<AtomicBool>,
+    node_start_time: Timespec, // monotonic_raw_now
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
@@ -574,6 +575,7 @@ where
         workers: None,
         logger: logger.clone(),
         shutdown: Arc::new(AtomicBool::new(false)),
+        node_start_time: monotonic_raw_now(),
     };
     (StoreRouter { router, logger }, system)
 }
