@@ -97,6 +97,8 @@ raftstore = { workspace = true }
 raftstore-v2 = { workspace = true }
 rand = "0.8.3"
 resource_control = { workspace = true }
+server = { workspace = true }
+service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
