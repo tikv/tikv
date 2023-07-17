@@ -33,9 +33,8 @@ impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
             let table_props = context.table_properties(i);
             let user_props = table_props.user_collected_properties();
             if let Ok(props) = RocksTtlProperties::decode(user_props) {
-                if props.min_expire_ts != 0 {
-                    min_expire_ts = std::cmp::min(min_expire_ts, props.min_expire_ts);
-                }
+                min_expire_ts =
+                    std::cmp::min(min_expire_ts, props.min_expire_ts.unwrap_or(u64::MAX));
             }
         }
         if min_expire_ts > current {
