@@ -324,7 +324,7 @@ macro_rules! cf_config {
             #[serde(with = "rocks_config::compression_type_level_serde")]
             #[online_config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
-            pub write_buffer_size: ReadableSize,
+            pub write_buffer_size: Option<ReadableSize>,
             pub max_write_buffer_number: i32,
             #[online_config(skip)]
             pub min_write_buffer_number_to_merge: i32,
@@ -466,7 +466,7 @@ macro_rules! write_into_metrics {
             .set($cf.read_amp_bytes_per_bit.into());
         $metrics
             .with_label_values(&[$tag, "write_buffer_size"])
-            .set($cf.write_buffer_size.0 as f64);
+            .set($cf.write_buffer_size.unwrap().0 as f64);
         $metrics
             .with_label_values(&[$tag, "max_write_buffer_number"])
             .set($cf.max_write_buffer_number.into());
@@ -604,7 +604,7 @@ macro_rules! build_cf_opt {
             $opt.bottommost_zstd_compression_sample_size,
             1, // parallel_threads
         );
-        cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
+        cf_opts.set_write_buffer_size($opt.write_buffer_size.unwrap().0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
         cf_opts.set_max_bytes_for_level_base($opt.max_bytes_for_level_base.0);
@@ -699,7 +699,7 @@ impl Default for DefaultCfConfig {
                 DBCompressionType::Zstd,
                 DBCompressionType::Zstd,
             ],
-            write_buffer_size: ReadableSize::mb(128),
+            write_buffer_size: Some(ReadableSize::mb(128)),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
@@ -867,7 +867,7 @@ impl Default for WriteCfConfig {
                 DBCompressionType::Zstd,
                 DBCompressionType::Zstd,
             ],
-            write_buffer_size: ReadableSize::mb(128),
+            write_buffer_size: Some(ReadableSize::mb(128)),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
@@ -989,7 +989,7 @@ impl Default for LockCfConfig {
             ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
-            write_buffer_size: ReadableSize::mb(32),
+            write_buffer_size: None,
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
@@ -1086,7 +1086,7 @@ impl Default for RaftCfConfig {
             ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
-            write_buffer_size: ReadableSize::mb(128),
+            write_buffer_size: Some(ReadableSize::mb(128)),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
@@ -1348,6 +1348,9 @@ impl DbConfig {
                 self.writecf.format_version.get_or_insert(2);
                 self.lockcf.format_version.get_or_insert(2);
                 self.raftcf.format_version.get_or_insert(2);
+                if self.lockcf.write_buffer_size.is_none() {
+                    self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
+                }
             }
             EngineType::RaftKv2 => {
                 self.enable_multi_batch_write.get_or_insert(false);
@@ -1384,6 +1387,9 @@ impl DbConfig {
                 // strategy is consistent with single RocksDB.
                 self.defaultcf.max_compactions.get_or_insert(1);
                 self.writecf.max_compactions.get_or_insert(1);
+                if self.lockcf.write_buffer_size.is_none() {
+                    self.lockcf.write_buffer_size = Some(ReadableSize::mb(4));
+                }
             }
         }
     }
@@ -1619,7 +1625,7 @@ impl Default for RaftDefaultCfConfig {
                 DBCompressionType::Zstd,
                 DBCompressionType::Zstd,
             ],
-            write_buffer_size: ReadableSize::mb(128),
+            write_buffer_size: Some(ReadableSize::mb(128)),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
