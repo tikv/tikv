@@ -280,10 +280,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.add_pending_tick(PeerTick::SplitRegionCheck);
     }
 
-    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
+    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics, threshold: i64) {
         let control = self.split_flow_control_mut();
         control.size_diff_hint += metrics.size_diff_hint;
-        if self.is_leader() {
+        let size_diff_hint = control.size_diff_hint;
+        if self.is_leader() && size_diff_hint >= threshold {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
     }
