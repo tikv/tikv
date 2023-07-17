@@ -216,6 +216,84 @@ make_auto_flush_static_metric! {
 }
 
 make_static_metric! {
+<<<<<<< HEAD
+=======
+    pub label_enum RaftReadyType {
+        message,
+        commit,
+        append,
+        snapshot,
+        pending_region,
+        has_ready_region,
+    }
+
+    pub label_enum RaftSentMessageCounterType {
+        append,
+        append_resp,
+        prevote,
+        prevote_resp,
+        vote,
+        vote_resp,
+        snapshot,
+        heartbeat,
+        heartbeat_resp,
+        transfer_leader,
+        timeout_now,
+        read_index,
+        read_index_resp,
+    }
+
+    pub label_enum SendStatus {
+        accept,
+        drop,
+    }
+
+    pub label_enum RaftDroppedMessage {
+        mismatch_store_id,
+        mismatch_region_epoch,
+        mismatch_witness_snapshot,
+        stale_msg,
+        region_overlap,
+        region_no_peer,
+        region_tombstone_peer,
+        region_nonexistent,
+        applying_snap,
+        disk_full,
+        non_witness,
+        recovery,
+        unsafe_vote,
+    }
+
+    pub label_enum ProposalType {
+        all,
+        local_read,
+        read_index,
+        unsafe_read_index,
+        normal,
+        transfer_leader,
+        conf_change,
+        batch,
+        dropped_read_index,
+    }
+
+    pub label_enum RaftInvalidProposal {
+        mismatch_store_id,
+        region_not_found,
+        not_leader,
+        mismatch_peer_id,
+        stale_command,
+        epoch_not_match,
+        read_index_no_leader,
+        region_not_initialized,
+        is_applying_snapshot,
+        force_leader,
+        witness,
+        flashback_in_progress,
+        flashback_not_prepared,
+        non_witness,
+    }
+
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
     pub label_enum RaftEventDurationType {
         compact_check,
         pd_store_heartbeat,

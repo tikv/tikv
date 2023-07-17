@@ -17,8 +17,14 @@ use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{store::ReadIndexContext, Result};
+<<<<<<< HEAD
 use test_raftstore::*;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
+=======
+use test_raftstore::{Simulator as S1, *};
+use test_raftstore_macro::test_case;
+use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 use txn_types::{Key, Lock, LockType};
 use uuid::Uuid;
 
