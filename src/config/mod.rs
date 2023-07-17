@@ -1569,15 +1569,6 @@ impl DbConfig {
             )
             .into());
         }
-        if self.max_sub_compactions == 0
-            || self.max_sub_compactions as i32 > self.max_background_jobs
-        {
-            return Err(format!(
-                "max_sub_compactions should be greater than 0 and less than or equal to {:?}",
-                self.max_background_jobs,
-            )
-            .into());
-        }
         if self.max_background_flushes <= 0 || self.max_background_flushes > limit {
             return Err(format!(
                 "max_background_flushes should be greater than 0 and less than or equal to {:?}",

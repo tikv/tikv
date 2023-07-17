@@ -35,7 +35,8 @@ use std::{
 
 pub use file::{File, OpenOptions};
 pub use io_stats::{
-    get_io_type, get_thread_io_bytes_total, init as init_io_stats_collector, set_io_type,
+    fetch_io_bytes, get_io_type, get_thread_io_bytes_total, init as init_io_stats_collector,
+    set_io_type,
 };
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 use online_config::ConfigValue;
