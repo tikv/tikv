@@ -623,8 +623,6 @@ where
     }
 }
 
-type Callback<T> = Box<dyn FnOnce(T) + Send>;
-
 pub enum Task {
     RegionUpdated(Region),
     RegionDestroyed(Region),
@@ -662,7 +660,7 @@ pub enum Task {
         region_id: u64,
         log_locks: bool,
         min_start_ts: u64,
-        callback: Callback<(bool, bool, u64, u64, u64, u64)>,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
     },
 }
 
