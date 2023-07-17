@@ -197,6 +197,15 @@ pub struct Config {
     // It will be set to raft_store_max_leader_lease/4 by default.
     pub renew_leader_lease_advance_duration: ReadableDuration,
 
+    // Set true to allow handling request vote messages within one election time
+    // after TiKV start.
+    //
+    // Note: set to true may break leader lease. It should only be true in tests.
+    #[doc(hidden)]
+    #[serde(skip)]
+    #[online_config(skip)]
+    pub allow_unsafe_vote_after_start: bool,
+
     // Right region derive origin region id when split.
     #[online_config(hidden)]
     pub right_derive_when_split: bool,
@@ -270,10 +279,10 @@ pub struct Config {
     /// `evict_cache_on_memory_ratio` * total.
     ///
     /// Set it to 0 can disable cache evict.
-    // By default it's 0.2. So for different system memory capacity, cache evict happens:
-    // * system=8G,  memory_usage_limit=6G,  evict=1.2G
-    // * system=16G, memory_usage_limit=12G, evict=2.4G
-    // * system=32G, memory_usage_limit=24G, evict=4.8G
+    // By default it's 0.1. So for different system memory capacity, cache evict happens:
+    // * system=8G,  memory_usage_limit=6G,  evict=0.6G
+    // * system=16G, memory_usage_limit=12G, evict=1.2G
+    // * system=32G, memory_usage_limit=24G, evict=2.4G
     pub evict_cache_on_memory_ratio: f64,
 
     pub cmd_batch: bool,
@@ -451,7 +460,7 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
-            evict_cache_on_memory_ratio: 0.0,
+            evict_cache_on_memory_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -483,6 +492,7 @@ impl Default for Config {
             report_min_resolved_ts_interval: ReadableDuration::secs(1),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
+            allow_unsafe_vote_after_start: false,
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
@@ -606,6 +616,12 @@ impl Config {
             warn!(
                 "Election timeout ticks needs to be same across all the cluster, \
                  otherwise it may lead to inconsistency."
+            );
+        }
+        if self.allow_unsafe_vote_after_start {
+            warn!(
+                "allow_unsafe_vote_after_start need to be false, otherwise \
+                it may lead to inconsistency"
             );
         }
 
