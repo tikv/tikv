@@ -218,6 +218,7 @@ fn test_serde_custom_tikv_config() {
         consistency_check_interval: ReadableDuration::secs(12),
         report_region_flow_interval: ReadableDuration::minutes(12),
         raft_store_max_leader_lease: ReadableDuration::secs(12),
+        allow_unsafe_vote_after_start: false,
         right_derive_when_split: false,
         allow_remove_leader: true,
         merge_max_log_gap: 3,

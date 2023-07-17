@@ -196,8 +196,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
-        if util::is_vote_msg(msg.get_message()) && self.maybe_gc_sender(&msg) {
-            return;
+        if util::is_vote_msg(msg.get_message()) {
+            if self.maybe_gc_sender(&msg) {
+                return;
+            }
+            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
+                debug!(self.logger,
+                    "drop request vote for one election timeout after node starts";
+                    "from_peer_id" => msg.get_message().get_from(),
+                    "remain_duration" => ?remain,
+                );
+                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
+                return;
+            }
         }
         if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
