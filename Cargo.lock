@@ -2797,7 +2797,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#0af0becd87ae89dfd48ef313a4fca7e04688b2b2"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#92075f193814dbc00f347b4589743a36bf624f34"
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4403,6 +4407,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_with",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -4453,6 +4458,7 @@ dependencies = [
  "rand 0.8.5",
  "resource_control",
  "resource_metering",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -5337,6 +5343,7 @@ dependencies = [
  "engine_rocks_helper",
  "engine_traits",
  "error_code",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -5361,6 +5368,7 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "service",
  "signal-hook",
  "slog",
  "slog-global",
@@ -5373,6 +5381,15 @@ dependencies = [
  "toml",
  "txn_types",
  "yatp",
+]
+
+[[package]]
+name = "service"
+version = "0.0.1"
+dependencies = [
+ "atomic",
+ "crossbeam",
+ "tikv_util",
 ]
 
 [[package]]
@@ -6022,6 +6039,7 @@ dependencies = [
  "resource_metering",
  "security",
  "server",
+ "service",
  "slog",
  "slog-global",
  "tempfile",
@@ -6069,6 +6087,7 @@ dependencies = [
  "resource_metering",
  "security",
  "server",
+ "service",
  "slog",
  "slog-global",
  "tempfile",
@@ -6193,6 +6212,8 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "server",
+ "service",
  "slog",
  "slog-global",
  "sst_importer",
@@ -6520,6 +6541,7 @@ dependencies = [
  "serde_derive",
  "serde_ignored",
  "serde_json",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
