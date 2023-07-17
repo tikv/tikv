@@ -402,6 +402,8 @@ struct CrypterCore {
     mode: Mode,
     initial_iv: Iv,
 
+    // Used to ensure the atomicity of operation over a chunk of data. Only advance it when
+    // operation succeeds.
     offset: u64,
     crypter: Option<OCrypter>,
     block_size: usize,
