@@ -12,6 +12,7 @@ use raftstore::{
     store::{bootstrap_store, fsm, fsm::store::StoreMeta, AutoSplitController, SnapManager},
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
 use test_pd_client::{bootstrap_with_first_region, TestPdClient};
 use test_raftstore::*;
@@ -113,6 +114,7 @@ fn test_node_bootstrap_with_prepared_data() {
         ConcurrencyManager::new(1.into()),
         CollectorRegHandle::new_for_test(),
         None,
+        GrpcServiceManager::dummy(),
     )
     .unwrap();
     assert!(
