@@ -23,7 +23,6 @@ use raftstore::{
 use raftstore_v2::router::QueryResult;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as S2;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, future::block_on_timeout};
 use txn_types::{Key, LastChange, PessimisticLock};
