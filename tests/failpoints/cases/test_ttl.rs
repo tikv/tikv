@@ -1,15 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::channel;
+use std::{sync::mpsc::channel, time::Duration};
 
 use api_version::{test_kv_format_impl, ApiV1Ttl, KvFormat, RawValue};
 use engine_rocks::{raw::CompactOptions, util::get_cf_handle};
 use engine_traits::{IterOptions, MiscExt, Peekable, SyncMutable, CF_DEFAULT};
 use futures::executor::block_on;
-use kvproto::kvrpcpb::Context;
+use kvproto::{kvrpcpb, kvrpcpb::Context};
 use tikv::{
     config::DbConfig,
-    server::ttl::check_ttl_and_compact_files,
+    server::{
+        gc_worker::{GcTask, TestGcRunner},
+        ttl::check_ttl_and_compact_files,
+    },
     storage::{
         kv::{SnapContext, TestEngineBuilder},
         lock_manager::MockLockManager,
@@ -22,7 +25,7 @@ use txn_types::Key;
 
 #[test]
 fn test_ttl_checker() {
-    test_ttl_checker_impl::<ApiV1Ttl>();
+    test_kv_format_impl!(test_ttl_checker_impl<ApiV1Ttl ApiV2>);
 }
 
 fn test_ttl_checker_impl<F: KvFormat>() {
@@ -34,72 +37,110 @@ fn test_ttl_checker_impl<F: KvFormat>() {
         .path(dir.path())
         .api_version(F::TAG);
     let engine = builder.build_with_cfg(&cfg).unwrap();
-
     let kvdb = engine.get_rocksdb();
-    let key1 = b"zr\0key1";
+
+    // Make all entries earlier than safe point.
+    // TTL expired entries can only be collected when commit_ts < safe_point.
+    let commit_ts = 100;
+    let mut gc_runner = TestGcRunner::new(200);
+
+    let mut do_compact = |start_key: &[u8], end_key: &[u8], mut expect_keys: usize| {
+        gc_runner.prepare_gc(&kvdb);
+        check_ttl_and_compact_files(&kvdb, start_key, end_key, false);
+
+        if F::TAG == kvrpcpb::ApiVersion::V2 {
+            while let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::from_secs(3)) {
+                match task {
+                    GcTask::RawGcKeys { keys, .. } => {
+                        expect_keys = expect_keys.checked_sub(keys.len()).unwrap();
+
+                        // Delete keys by `delete_cf` for simplicity.
+                        // In real cases, all old MVCC versions of `key` should be deleted.
+                        // See `GcRunner::raw_gc_keys`.
+                        for key in keys {
+                            let db_key =
+                                keys::data_key(key.append_ts(commit_ts.into()).as_encoded());
+                            kvdb.delete_cf(CF_DEFAULT, &db_key).unwrap();
+                        }
+
+                        if expect_keys == 0 {
+                            break;
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            kvdb.flush_cf(CF_DEFAULT, true).unwrap();
+            assert_eq!(expect_keys, 0);
+        }
+
+        gc_runner.post_gc();
+    };
+
+    let key1 = make_raw_key::<F>(b"r\0key1", Some(commit_ts));
     let value1 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(10),
         is_delete: false,
     };
-    kvdb.put_cf(CF_DEFAULT, key1, &F::encode_raw_value_owned(value1))
+    kvdb.put_cf(CF_DEFAULT, &key1, &F::encode_raw_value_owned(value1))
         .unwrap();
     kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-    let key2 = b"zr\0key2";
+    let key2 = make_raw_key::<F>(b"r\0key2", Some(commit_ts));
     let value2 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(120),
         is_delete: false,
     };
-    kvdb.put_cf(CF_DEFAULT, key2, &F::encode_raw_value_owned(value2))
+    kvdb.put_cf(CF_DEFAULT, &key2, &F::encode_raw_value_owned(value2))
         .unwrap();
-    let key3 = b"zr\0key3";
+    let key3 = make_raw_key::<F>(b"r\0key3", Some(commit_ts));
     let value3 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(20),
         is_delete: false,
     };
-    kvdb.put_cf(CF_DEFAULT, key3, &F::encode_raw_value_owned(value3))
+    kvdb.put_cf(CF_DEFAULT, &key3, &F::encode_raw_value_owned(value3))
         .unwrap();
     kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-    let key4 = b"zr\0key4";
+    let key4 = make_raw_key::<F>(b"r\0key4", Some(commit_ts));
     let value4 = RawValue {
         user_value: vec![0; 10],
         expire_ts: None,
         is_delete: false,
     };
-    kvdb.put_cf(CF_DEFAULT, key4, &F::encode_raw_value_owned(value4))
+    kvdb.put_cf(CF_DEFAULT, &key4, &F::encode_raw_value_owned(value4))
         .unwrap();
     kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-    let key5 = b"zr\0key5";
+    let key5 = make_raw_key::<F>(b"r\0key5", Some(commit_ts));
     let value5 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(10),
         is_delete: false,
     };
-    kvdb.put_cf(CF_DEFAULT, key5, &F::encode_raw_value_owned(value5))
+    kvdb.put_cf(CF_DEFAULT, &key5, &F::encode_raw_value_owned(value5))
         .unwrap();
     kvdb.flush_cf(CF_DEFAULT, true).unwrap();
 
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key1).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key2).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key3).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key4).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key5).unwrap().is_some());
 
-    check_ttl_and_compact_files(&kvdb, b"zr\0key1", b"zr\0key25", false);
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
+    do_compact(b"zr\0key1", b"zr\0key25", 2);
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key1).unwrap().is_none());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key2).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key3).unwrap().is_none());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key4).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key5).unwrap().is_some());
 
-    check_ttl_and_compact_files(&kvdb, b"zr\0key2", b"zr\0key6", false);
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_none());
+    do_compact(b"zr\0key2", b"zr\0key6", 2);
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key1).unwrap().is_none());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key2).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key3).unwrap().is_none());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key4).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &key5).unwrap().is_none());
 }
 
 #[test]
@@ -445,4 +486,10 @@ fn test_stoarge_raw_batch_put_ttl_impl<F: KvFormat>() {
         let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key)).unwrap();
         assert_eq!(res, Some(ttl));
     }
+}
+
+fn make_raw_key<F: KvFormat>(key: &[u8], ts: Option<u64>) -> Vec<u8> {
+    let encode_key = F::encode_raw_key(key, ts.map(Into::into));
+    let res = keys::data_key(encode_key.as_encoded());
+    res
 }
