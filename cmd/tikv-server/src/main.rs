@@ -207,5 +207,22 @@ fn main() {
         process::exit(0);
     }
 
+<<<<<<< HEAD
     server::server::run_tikv(config);
+=======
+    // engine config needs to be validated
+    // so that it can adjust the engine type before too late
+    if let Err(e) = config.storage.validate_engine_type() {
+        println!("invalid storage.engine configuration: {}", e);
+        process::exit(1)
+    }
+
+    let (service_event_tx, service_event_rx) = tikv_util::mpsc::unbounded(); // pipe for controling service
+    match config.storage.engine {
+        EngineType::RaftKv => server::server::run_tikv(config, service_event_tx, service_event_rx),
+        EngineType::RaftKv2 => {
+            server::server2::run_tikv(config, service_event_tx, service_event_rx)
+        }
+    }
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 }

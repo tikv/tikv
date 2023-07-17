@@ -13,10 +13,29 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use kvproto::{metapb, pdpb};
+<<<<<<< HEAD
 use pd_client::PdClient;
 use raftstore::store::{util::KeysInfoFormatter, TxnExt};
 use slog::{error, info, Logger};
 use tikv_util::{time::UnixSecs, worker::Runnable};
+=======
+use pd_client::{BucketStat, PdClient};
+use raftstore::store::{
+    metrics::STORE_INSPECT_DURATION_HISTOGRAM,
+    util::{KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+    AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor, ReadStats,
+    RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
+    WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+};
+use resource_metering::{Collector, CollectorRegHandle, RawRecords};
+use service::service_manager::GrpcServiceManager;
+use slog::{error, warn, Logger};
+use tikv_util::{
+    config::VersionTrack,
+    time::{Instant as TiInstant, UnixSecs},
+    worker::{Runnable, Scheduler},
+};
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 use yatp::{task::future::TaskCell, Remote};
 
 use crate::{batch::StoreRouter, router::PeerMsg};
@@ -116,6 +135,15 @@ where
     concurrency_manager: ConcurrencyManager,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
+<<<<<<< HEAD
+=======
+    // For slowness detection
+    slowness_stats: slowness::SlownessStatistics,
+
+    // For grpc server.
+    grpc_service_manager: GrpcServiceManager,
+
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     logger: Logger,
     shutdown: Arc<AtomicBool>,
 }
@@ -135,6 +163,14 @@ where
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+<<<<<<< HEAD
+=======
+        pd_scheduler: Scheduler<Task>,
+        auto_split_controller: AutoSplitController,
+        region_read_progress: RegionReadProgressRegistry,
+        collector_reg_handle: CollectorRegHandle,
+        grpc_service_manager: GrpcServiceManager,
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         logger: Logger,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
@@ -152,6 +188,11 @@ where
             is_hb_receiver_scheduled: false,
             concurrency_manager,
             causal_ts_provider,
+<<<<<<< HEAD
+=======
+            slowness_stats,
+            grpc_service_manager,
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
             logger,
             shutdown,
         }

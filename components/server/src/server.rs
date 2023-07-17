@@ -82,6 +82,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use security::SecurityManager;
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
@@ -113,9 +114,14 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
+<<<<<<< HEAD
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
+=======
+    config::VersionTrack,
+    mpsc as TikvMpsc,
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
         cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
@@ -146,9 +152,12 @@ const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
 const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let mut tikv = TikvServer::<CER, F>::init(config);
-
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
+    let mut tikv = TikvServer::<CER, F>::init(config, service_event_tx.clone());
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
@@ -170,13 +179,49 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.run_status_server();
     tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
 
+<<<<<<< HEAD
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+=======
+    // Build a background worker for handling signals.
+    {
+        let engines = tikv.engines.take().unwrap().engines;
+        let kv_statistics = tikv.kv_statistics.clone();
+        let raft_statistics = tikv.raft_statistics.clone();
+        std::thread::spawn(move || {
+            signal_handler::wait_for_signal(
+                Some(engines),
+                kv_statistics,
+                raft_statistics,
+                Some(service_event_tx),
+            )
+        });
+    }
+    loop {
+        if let Ok(service_event) = service_event_rx.recv() {
+            match service_event {
+                ServiceEvent::PauseGrpc => {
+                    tikv.pause();
+                }
+                ServiceEvent::ResumeGrpc => {
+                    tikv.resume();
+                }
+                ServiceEvent::Exit => {
+                    break;
+                }
+            }
+        }
+    }
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     tikv.stop();
 }
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TikvConfig) {
+pub fn run_tikv(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -197,9 +242,9 @@ pub fn run_tikv(config: TikvConfig) {
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config)
+            run_impl::<RocksEngine, API>(config, service_event_tx, service_event_rx)
         } else {
-            run_impl::<RaftLogEngine, API>(config)
+            run_impl::<RaftLogEngine, API>(config, service_event_tx, service_event_rx)
         }
     })
 }
@@ -241,6 +286,7 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -269,7 +315,7 @@ where
     ER: RaftEngine,
     F: KvFormat,
 {
-    fn init(mut config: TikvConfig) -> TikvServer<ER, F> {
+    fn init(mut config: TikvConfig, tx: TikvMpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -395,6 +441,7 @@ where
             causal_ts_provider,
             tablet_factory: None,
             br_snap_recovery_mode: is_recovering_marked,
+            grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
 
@@ -1101,6 +1148,7 @@ where
             self.concurrency_manager.clone(),
             collector_reg_handle,
             self.causal_ts_provider.clone(),
+            self.grpc_service_mgr.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1648,9 +1696,17 @@ where
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),
+<<<<<<< HEAD
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
                 self.store_path.clone(),
+=======
+                Arc::new(self.core.config.security.clone()),
+                self.engines.as_ref().unwrap().engine.raft_extension(),
+                self.core.store_path.clone(),
+                self.resource_manager.clone(),
+                self.grpc_service_mgr.clone(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1802,6 +1858,26 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             raft_data_state_machine.after_dump_data();
         }
         raft_engine
+    }
+
+    fn pause(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        if let Err(e) = server.server.pause() {
+            warn!(
+                "failed to pause the server";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn resume(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        if let Err(e) = server.server.resume() {
+            warn!(
+                "failed to resume the server";
+                "err" => ?e
+            );
+        }
     }
 }
 

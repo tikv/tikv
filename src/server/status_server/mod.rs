@@ -49,6 +49,11 @@ use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use security::{self, SecurityConfig};
 use serde_json::Value;
+<<<<<<< HEAD
+=======
+use service::service_manager::GrpcServiceManager;
+use tikv_kv::RaftExtension;
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
@@ -91,7 +96,12 @@ pub struct StatusServer<E, R> {
     router: R,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
+<<<<<<< HEAD
     _snap: PhantomData<E>,
+=======
+    resource_manager: Option<Arc<ResourceGroupManager>>,
+    grpc_service_mgr: GrpcServiceManager,
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 }
 
 impl<E, R> StatusServer<E, R>
@@ -105,6 +115,11 @@ where
         security_config: Arc<SecurityConfig>,
         router: R,
         store_path: PathBuf,
+<<<<<<< HEAD
+=======
+        resource_manager: Option<Arc<ResourceGroupManager>>,
+        grpc_service_mgr: GrpcServiceManager,
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -124,7 +139,12 @@ where
             router,
             security_config,
             store_path,
+<<<<<<< HEAD
             _snap: PhantomData,
+=======
+            resource_manager,
+            grpc_service_mgr,
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         })
     }
 
@@ -428,6 +448,36 @@ where
     E: KvEngine,
     R: 'static + Send + CasualRouter<E> + Clone,
 {
+    async fn handle_pause_grpc(
+        mut grpc_service_mgr: GrpcServiceManager,
+    ) -> hyper::Result<Response<Body>> {
+        if let Err(err) = grpc_service_mgr.pause() {
+            return Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to pause grpc: {}", err),
+            ));
+        }
+        Ok(make_response(
+            StatusCode::OK,
+            "Successfully pause grpc service",
+        ))
+    }
+
+    async fn handle_resume_grpc(
+        mut grpc_service_mgr: GrpcServiceManager,
+    ) -> hyper::Result<Response<Body>> {
+        if let Err(err) = grpc_service_mgr.resume() {
+            return Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to resume grpc: {}", err),
+            ));
+        }
+        Ok(make_response(
+            StatusCode::OK,
+            "Successfully resume grpc service",
+        ))
+    }
+
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -539,6 +589,11 @@ where
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
+<<<<<<< HEAD
+=======
+        let resource_manager = self.resource_manager.clone();
+        let grpc_service_mgr = self.grpc_service_mgr.clone();
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -546,6 +601,11 @@ where
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let store_path = store_path.clone();
+<<<<<<< HEAD
+=======
+            let resource_manager = resource_manager.clone();
+            let grpc_service_mgr = grpc_service_mgr.clone();
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -554,6 +614,11 @@ where
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     let store_path = store_path.clone();
+<<<<<<< HEAD
+=======
+                    let resource_manager = resource_manager.clone();
+                    let grpc_service_mgr = grpc_service_mgr.clone();
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -628,6 +693,18 @@ where
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
+<<<<<<< HEAD
+=======
+                            (Method::GET, "/resource_groups") => {
+                                Self::handle_get_all_resource_groups(resource_manager.as_ref())
+                            }
+                            (Method::PUT, "/pause_grpc") => {
+                                Self::handle_pause_grpc(grpc_service_mgr).await
+                            }
+                            (Method::PUT, "/resume_grpc") => {
+                                Self::handle_resume_grpc(grpc_service_mgr).await
+                            }
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }
@@ -948,6 +1025,7 @@ mod tests {
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
     use raftstore::store::{transport::CasualRouter, CasualMessage};
     use security::SecurityConfig;
+    use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_util::logger::get_log_level;
 
@@ -974,6 +1052,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1022,6 +1105,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1067,6 +1155,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1183,6 +1276,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1227,6 +1325,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1263,6 +1366,11 @@ mod tests {
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1336,6 +1444,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1366,6 +1479,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1399,6 +1517,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1454,6 +1577,11 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1493,4 +1621,89 @@ mod tests {
         block_on(handle).unwrap();
         status_server.stop();
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_get_engine_type() {
+        let mut multi_rocks_cfg = TikvConfig::default();
+        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
+        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
+        let resp_strs = ["raft-kv", "partitioned-raft-kv"];
+        for (cfg, resp_str) in IntoIterator::into_iter(cfgs).zip(resp_strs) {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(cfg),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                temp_dir.path().to_path_buf(),
+                None,
+                GrpcServiceManager::dummy(),
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            let client = Client::new();
+            let uri = Uri::builder()
+                .scheme("http")
+                .authority(status_server.listening_addr().to_string().as_str())
+                .path_and_query("/engine_type")
+                .build()
+                .unwrap();
+
+            let handle = status_server.thread_pool.spawn(async move {
+                let res = client.get(uri).await.unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+                let body_bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
+                let engine_type = String::from_utf8(body_bytes.as_ref().to_owned()).unwrap();
+                assert_eq!(engine_type, resp_str);
+            });
+            block_on(handle).unwrap();
+            status_server.stop();
+        }
+    }
+
+    #[test]
+    fn test_control_grpc_service() {
+        let mut multi_rocks_cfg = TikvConfig::default();
+        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
+        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
+        for cfg in IntoIterator::into_iter(cfgs) {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(cfg),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                temp_dir.path().to_path_buf(),
+                None,
+                GrpcServiceManager::dummy(),
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            for req in ["/pause_grpc", "/resume_grpc"] {
+                let client = Client::new();
+                let uri = Uri::builder()
+                    .scheme("http")
+                    .authority(status_server.listening_addr().to_string().as_str())
+                    .path_and_query(req)
+                    .build()
+                    .unwrap();
+
+                let mut grpc_req = Request::default();
+                *grpc_req.method_mut() = Method::PUT;
+                *grpc_req.uri_mut() = uri;
+                let handle = status_server.thread_pool.spawn(async move {
+                    let res = client.request(grpc_req).await.unwrap();
+                    // Dummy grpc service manager, should return error.
+                    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+                });
+                block_on(handle).unwrap();
+            }
+            status_server.stop();
+        }
+    }
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 }

@@ -24,6 +24,7 @@ use kvproto::{
     metapb::Store,
     raft_serverpb::{PeerState, RaftMessage},
 };
+<<<<<<< HEAD
 use pd_client::PdClient;
 use raft::INVALID_ID;
 use raftstore::store::{
@@ -31,6 +32,12 @@ use raftstore::store::{
     StoreWriters, TabletSnapManager, Transport, WriteSenders,
 };
 use slog::Logger;
+=======
+use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
+use slog::{warn, Logger};
+use sst_importer::SstImporter;
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
@@ -394,6 +401,17 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         snap_mgr: TabletSnapManager,
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+<<<<<<< HEAD
+=======
+        coprocessor_host: CoprocessorHost<EK>,
+        auto_split_controller: AutoSplitController,
+        collector_reg_handle: CollectorRegHandle,
+        background: Worker,
+        pd_worker: LazyWorker<pd::Task>,
+        sst_importer: Arc<SstImporter>,
+        key_manager: Option<Arc<DataKeyManager>>,
+        grpc_service_mgr: GrpcServiceManager,
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -418,6 +436,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             .async_read_worker
             .start("async-read-worker", read_runner);
 
+<<<<<<< HEAD
         let pd_scheduler = workers.pd_worker.start(
             "pd-worker",
             PdRunner::new(
@@ -425,6 +444,32 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 pd_client,
                 raft_engine.clone(),
                 tablet_factory.clone(),
+=======
+        workers.pd.start(pd::Runner::new(
+            store_id,
+            pd_client,
+            raft_engine.clone(),
+            tablet_registry.clone(),
+            snap_mgr.clone(),
+            router.clone(),
+            workers.pd.remote(),
+            concurrency_manager,
+            causal_ts_provider,
+            workers.pd.scheduler(),
+            auto_split_controller,
+            store_meta.lock().unwrap().region_read_progress.clone(),
+            collector_reg_handle,
+            grpc_service_mgr,
+            self.logger.clone(),
+            self.shutdown.clone(),
+            cfg.clone(),
+        )?);
+
+        let split_check_scheduler = workers.background.start(
+            "split-check",
+            SplitCheckRunner::with_registry(
+                tablet_registry.clone(),
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
                 router.clone(),
                 workers.pd_worker.remote(),
                 concurrency_manager,

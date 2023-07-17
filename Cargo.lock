@@ -2827,7 +2827,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#369cf19436e18a637aebd3e1fb15d84f32d032ba"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#92075f193814dbc00f347b4589743a36bf624f34"
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4417,6 +4421,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_with",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -4461,6 +4466,7 @@ dependencies = [
  "raft-proto",
  "raftstore",
  "resource_metering",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -5314,6 +5320,7 @@ dependencies = [
  "engine_rocks_helper",
  "engine_traits",
  "error_code",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -5336,6 +5343,7 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "service",
  "signal-hook",
  "slog",
  "slog-global",
@@ -5348,6 +5356,15 @@ dependencies = [
  "toml",
  "txn_types",
  "yatp",
+]
+
+[[package]]
+name = "service"
+version = "0.0.1"
+dependencies = [
+ "atomic",
+ "crossbeam",
+ "tikv_util",
 ]
 
 [[package]]
@@ -5993,6 +6010,7 @@ dependencies = [
  "resource_metering",
  "security",
  "server",
+ "service",
  "slog",
  "slog-global",
  "tempfile",
@@ -6006,6 +6024,67 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+=======
+name = "test_raftstore-v2"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "backtrace",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption_export",
+ "engine_rocks",
+ "engine_rocks_helper",
+ "engine_test",
+ "engine_traits",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "grpcio",
+ "grpcio-health",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "pd_client",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "raftstore-v2",
+ "rand 0.8.5",
+ "resolved_ts",
+ "resource_control",
+ "resource_metering",
+ "security",
+ "server",
+ "service",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_pd_client",
+ "test_raftstore",
+ "test_util",
+ "tikv",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "txn_types",
+]
+
+[[package]]
+name = "test_raftstore_macro"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.103",
+]
+
+[[package]]
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
@@ -6106,6 +6185,8 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "server",
+ "service",
  "slog",
  "slog-global",
  "sst_importer",
@@ -6425,6 +6506,7 @@ dependencies = [
  "serde_derive",
  "serde_ignored",
  "serde_json",
+ "service",
  "slog",
  "slog-global",
  "smallvec",

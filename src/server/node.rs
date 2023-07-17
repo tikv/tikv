@@ -25,7 +25,12 @@ use raftstore::{
         RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
     },
 };
+<<<<<<< HEAD
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
+=======
+use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
@@ -223,6 +228,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -260,6 +266,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
+            grpc_service_mgr,
         )?;
 
         Ok(())
@@ -507,6 +514,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -540,6 +548,7 @@ where
             collector_reg_handle,
             self.health_service.clone(),
             causal_ts_provider,
+            grpc_service_mgr,
         )?;
         Ok(())
     }

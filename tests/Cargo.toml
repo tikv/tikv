@@ -95,8 +95,16 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
 rand = "0.8.3"
+<<<<<<< HEAD
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+=======
+resource_control = { workspace = true }
+server = { workspace = true }
+service = { workspace = true }
+slog = { workspace = true }
+slog-global = { workspace = true }
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 tempfile = "3.0"
 tidb_query_aggr = { workspace = true }
 tidb_query_common = { workspace = true }
