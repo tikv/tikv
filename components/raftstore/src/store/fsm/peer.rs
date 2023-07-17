@@ -2830,7 +2830,7 @@ where
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
-            ExtraMessageType::MsgRefreshBuckets => self.on_refresh_buckets(msg),
+            ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
         }
     }
 
@@ -6026,19 +6026,21 @@ where
         }
 
         // Notify followers to refresh their buckets version
-        let peers = self.region().get_peers().to_vec();
-        for p in peers {
-            if &p == self.peer() || p.is_witness {
-                continue;
+        if self.fsm.peer.is_leader() {
+            let peers = self.region().get_peers().to_vec();
+            for p in peers {
+                if &p == self.peer() || p.is_witness {
+                    continue;
+                }
+                let mut extra_msg = ExtraMessage::default();
+                extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
+                let mut refresh_buckets = RefreshBuckets::new();
+                refresh_buckets.set_version(version);
+                extra_msg.set_refresh_buckets(refresh_buckets);
+                self.fsm
+                    .peer
+                    .send_extra_message(extra_msg, &mut self.ctx.trans, &p);
             }
-            let mut extra_msg = ExtraMessage::default();
-            extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
-            let mut refresh_buckets = RefreshBuckets::new();
-            refresh_buckets.set_version(version);
-            extra_msg.set_refresh_buckets(refresh_buckets);
-            self.fsm
-                .peer
-                .send_extra_message(extra_msg, &mut self.ctx.trans, &p);
         }
 
         debug!(
@@ -6055,7 +6057,7 @@ where
         );
     }
 
-    pub fn on_refresh_buckets(&mut self, msg: RaftMessage) {
+    pub fn on_msg_refresh_buckets(&mut self, msg: RaftMessage) {
         // leader should not receive this message
         if self.fsm.peer.is_leader() {
             return;

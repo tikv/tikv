@@ -57,7 +57,7 @@ pub enum ResourceConsumeType {
 
 /// ResourceGroupManager manages the metadata of each resource group.
 pub struct ResourceGroupManager {
-    resource_groups: DashMap<String, ResourceGroup>,
+    pub(crate) resource_groups: DashMap<String, ResourceGroup>,
     registry: RwLock<Vec<Arc<ResourceController>>>,
 }
 
@@ -127,6 +127,12 @@ impl ResourceGroupManager {
     }
 
     fn build_resource_limiter(rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
+        #[cfg(test)]
+        {
+            if rg.name.contains("background") {
+                return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
+            }
+        }
         // TODO: only the "default" resource group support background tasks currently.
         if rg.name == DEFAULT_RESOURCE_GROUP_NAME {
             return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
@@ -211,11 +217,22 @@ impl ResourceGroupManager {
             );
         }
     }
+
+    pub fn get_resource_limiter(&self, rg: &str) -> Option<Arc<ResourceLimiter>> {
+        if let Some(g) = self.resource_groups.get(rg) {
+            return g.limiter.clone();
+        }
+
+        // fallback to the default resource group if target group doesn't exist.
+        self.resource_groups
+            .get(DEFAULT_RESOURCE_GROUP_NAME)
+            .and_then(|g| g.limiter.clone())
+    }
 }
 
 pub(crate) struct ResourceGroup {
-    group: PbResourceGroup,
-    limiter: Option<Arc<ResourceLimiter>>,
+    pub group: PbResourceGroup,
+    pub limiter: Option<Arc<ResourceLimiter>>,
 }
 
 impl ResourceGroup {
@@ -223,7 +240,6 @@ impl ResourceGroup {
         Self { group, limiter }
     }
 
-    #[cfg(test)]
     pub(crate) fn get_ru_quota(&self) -> u64 {
         assert!(self.group.has_r_u_settings());
         self.group
@@ -619,10 +635,10 @@ impl GroupPriorityTracker {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use rand::{thread_rng, RngCore};
     use yatp::queue::Extras;
 
     use super::*;
+    use crate::resource_limiter::ResourceType::{Cpu, Io};
 
     pub fn new_resource_group_ru(name: String, ru: u64, group_priority: u32) -> PbResourceGroup {
         new_resource_group(name, true, ru, ru, group_priority)
@@ -741,10 +757,10 @@ pub(crate) mod tests {
         assert!(group1.limiter.is_none());
         let default_group = resource_manager.get_resource_group("default").unwrap();
         let limiter = default_group.limiter.as_ref().unwrap().clone();
-        assert!(limiter.cpu_limiter.get_rate_limit().is_infinite());
-        assert!(limiter.io_limiter.get_rate_limit().is_infinite());
-        limiter.cpu_limiter.set_rate_limit(100.0);
-        limiter.io_limiter.set_rate_limit(200.0);
+        assert!(limiter.get_limiter(Cpu).get_rate_limit().is_infinite());
+        assert!(limiter.get_limiter(Io).get_rate_limit().is_infinite());
+        limiter.get_limiter(Cpu).set_rate_limit(100.0);
+        limiter.get_limiter(Io).set_rate_limit(200.0);
         drop(group1);
         drop(default_group);
 
@@ -755,8 +771,8 @@ pub(crate) mod tests {
         assert_eq!(default_group.get_ru_quota(), 100);
         let new_limiter = default_group.limiter.as_ref().unwrap().clone();
         // check rate_limiter is not changed.
-        assert_eq!(new_limiter.cpu_limiter.get_rate_limit(), 100.0);
-        assert_eq!(new_limiter.io_limiter.get_rate_limit(), 200.0);
+        assert_eq!(new_limiter.get_limiter(Cpu).get_rate_limit(), 100.0);
+        assert_eq!(new_limiter.get_limiter(Io).get_rate_limit(), 200.0);
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
     }
 
@@ -923,6 +939,7 @@ pub(crate) mod tests {
     #[cfg(feature = "failpoints")]
     #[test]
     fn test_reset_resource_group_vt_overflow() {
+        use rand::{thread_rng, RngCore};
         let resource_manager = ResourceGroupManager::default();
         let resource_ctl = resource_manager.derive_controller("test_write".into(), false);
         let mut rng = thread_rng();

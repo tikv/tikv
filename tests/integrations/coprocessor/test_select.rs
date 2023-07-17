@@ -10,7 +10,7 @@ use kvproto::{
 use protobuf::Message;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
-use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
+use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
@@ -1763,18 +1763,34 @@ fn test_snapshot_failed() {
     assert!(resp.get_region_error().has_store_not_match());
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_empty_data_cache_miss() {
+    let mut cluster = new_cluster(0, 1);
+    let (raft_engine, ctx) = prepare_raft_engine!(cluster, "");
+
+    let product = ProductTable::new();
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], false);
+    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
+    req.set_is_cache_enabled(true);
+    let resp = handle_request(&endpoint, req);
+    assert!(!resp.get_is_cache_hit());
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_cache() {
+    let mut cluster = new_cluster(0, 1);
+    let (raft_engine, ctx) = prepare_raft_engine!(cluster, "");
+
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
         (4, Some("name:3"), 1),
         (5, Some("name:1"), 4),
     ];
-
     let product = ProductTable::new();
-    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
-
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
@@ -2019,19 +2035,15 @@ fn test_rc_read() {
     assert_eq!(row_count, expected_data.len());
 }
 
-#[cfg(feature = "failpoints")]
-#[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
+#[test]
 fn test_buckets() {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
-    fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
     let product = ProductTable::new();
-    let (raft_engine, ctx) = leader_raft_engine(&mut cluster, "");
+    let (mut cluster, raft_engine, ctx) = new_raft_engine(1, "");
+
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
 
-    let mut req: Request = DagSelect::from(&product).build_with(ctx, &[0]);
+    let req = DagSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req.clone());
     assert_eq!(resp.get_latest_buckets_version(), 0);
 
@@ -2042,10 +2054,9 @@ fn test_buckets() {
         keys: vec![bucket_key],
         size: 1024,
     };
-
     cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
-    thread::sleep(Duration::from_millis(1000));
-    let wait_refresh_buckets = |endpoint, req: Request, old_buckets_ver| {
+
+    let wait_refresh_buckets = |old_buckets_ver| {
         let mut resp = Default::default();
         for _ in 0..10 {
             resp = handle_request(&endpoint, req.clone());
@@ -2056,14 +2067,8 @@ fn test_buckets() {
         }
         assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
     };
-    wait_refresh_buckets(endpoint, req.clone(), 0);
-    for (engine, ctx) in follower_raft_engine(&mut cluster, "") {
-        req.set_context(ctx.clone());
-        let (_, endpoint, _) =
-            init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
-        wait_refresh_buckets(endpoint, req.clone(), 0);
-    }
-    fail::remove("skip_check_stale_read_safe");
+
+    wait_refresh_buckets(0);
 }
 
 #[test]
