@@ -28,11 +28,14 @@ fn test_restart_grpc_service() {
     };
     let (service_event_tx, service_event_rx) = tikv_util::mpsc::unbounded();
     let sender = service_event_tx.clone();
+    let addr = format!("127.0.0.1:{}", test_util::alloc_port());
+    let grpc_addr = addr.clone();
     let tikv_thread = std::thread::spawn(move || {
         let dir = test_util::temp_dir("test_run_tikv_server", true);
         let mut pd_server = MockServer::new(1);
         let eps = pd_server.bind_addrs();
         let mut config = TikvConfig::default();
+        config.server.addr = grpc_addr;
         config.log.level = slog::Level::Critical.into();
         config.log.file.filename = "".to_string();
         config.storage.data_dir = dir.path().to_str().unwrap().to_string();
@@ -43,7 +46,7 @@ fn test_restart_grpc_service() {
     });
 
     let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect("127.0.0.1:20160");
+    let channel = ChannelBuilder::new(env).connect(&addr);
     let client: HealthClient = HealthClient::new(channel);
     let req = HealthCheckRequest {
         service: "".to_string(),
@@ -52,16 +55,27 @@ fn test_restart_grpc_service() {
     let max_retry = 30;
     check_heath_api(max_retry, &client);
     // PAUSE grpc service and validate.
-    sender.send(ServiceEvent::PauseGrpc).unwrap();
-    std::thread::sleep(Duration::from_secs(1));
-    let resp = client.check(&req);
-    assert!(resp.is_err());
-    if let Err(Error::RpcFailure(status)) = resp {
-        assert_eq!(status.code(), RpcStatusCode::UNAVAILABLE);
+    {
+        let start = std::time::Instant::now();
+        sender.send(ServiceEvent::PauseGrpc).unwrap();
+        loop {
+            if start.elapsed() > Duration::from_secs(5) {
+                panic!();
+            }
+            let resp = client.check(&req);
+            if resp.is_err() {
+                if let Err(Error::RpcFailure(status)) = resp {
+                    assert_eq!(status.code(), RpcStatusCode::UNAVAILABLE);
+                }
+                break;
+            }
+        }
     }
     // RESUME grpc service and validate.
-    sender.send(ServiceEvent::ResumeGrpc).unwrap();
-    check_heath_api(max_retry, &client);
+    {
+        sender.send(ServiceEvent::ResumeGrpc).unwrap();
+        check_heath_api(max_retry, &client);
+    }
     sender.send(ServiceEvent::Exit).unwrap();
     tikv_thread.join().unwrap();
     fail::remove("mock_force_uninitial_logger");

@@ -1472,8 +1472,7 @@ where
 
     fn pause(&mut self) {
         let server = self.servers.as_mut().unwrap();
-        let r = server.server.pause();
-        if let Err(e) = r {
+        if let Err(e) = server.server.pause() {
             warn!(
                 "failed to pause the server";
                 "err" => ?e
@@ -1483,8 +1482,7 @@ where
 
     fn resume(&mut self) {
         let server = self.servers.as_mut().unwrap();
-        let r = server.server.resume();
-        if let Err(e) = r {
+        if let Err(e) = server.server.resume() {
             warn!(
                 "failed to resume the server";
                 "err" => ?e

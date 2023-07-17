@@ -210,8 +210,7 @@ where
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
-        let builder = builder_factory.create_builder(env.clone())?;
-        let builder = Either::Left(builder);
+        let builder = Either::Left(builder_factory.create_builder(env.clone())?);
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
@@ -407,7 +406,7 @@ where
         self.health_service
             .set_serving_status("", ServingStatus::NotServing);
         self.builder_or_server = Some(builder);
-        info!("paused the grpc server"; "spent_time" => ?start.elapsed(),);
+        info!("paused the grpc server"; "takes" => ?start.elapsed(),);
         Ok(())
     }
 
@@ -417,7 +416,7 @@ where
             assert!(builder.is_left());
             self.build_and_bind()?;
             self.start_grpc();
-            info!("resumed the grpc server"; "spent_time" => ?start.elapsed(),);
+            info!("resumed the grpc server"; "takes" => ?start.elapsed(),);
             return Ok(());
         }
         Err(Error::Other(box_err!("resume the grpc server is skipped.")))
