@@ -2,16 +2,16 @@
 
 use collections::{HashMap, HashSet};
 use engine_rocks::{raw::Range, util::get_cf_handle};
-use engine_traits::{CachedTablet, MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CachedTablet, MiscExt, CF_WRITE};
 use keys::{data_key, DATA_MAX_KEY};
 use kvproto::{
     debugpb::{
         Db, FlashbackToVersionRequest, FlashbackToVersionResponse, GetAllRegionsInStoreRequest,
-        GetRequest, RegionInfoRequest,
+        RegionInfoRequest,
     },
     debugpb_grpc::DebugClient,
 };
-use test_raftstore::{Cluster, ServerCluster};
+use test_raftstore::{must_kv_read_equal, write_and_read_key};
 use tikv::{
     config::ConfigController,
     server::{debug::Debugger, debug2::DebuggerImplV2},
@@ -172,43 +172,46 @@ fn test_compact() {
 #[test]
 fn test_flashback_to_version() {
     // test_util::init_log_for_test();
-    let (mut cluster, client, store_id) = test_raftstore::must_new_cluster_and_debug_client();
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
-    write_and_read_key(&mut cluster, &client, store_id, &k, &v);
+    let (mut _cluster, kv_client, debug_client, ctx) =
+        test_raftstore::must_new_cluster_kv_client_and_debug_client();
+    let mut ts = 0;
+    for i in 0..2000 {
+        let v = format!("value@{}", i).into_bytes();
+        let k = format!("key@{}", i % 1000).into_bytes();
+        write_and_read_key(&kv_client, &ctx, &mut ts, k.clone(), v.clone());
+    }
 
     // prepare flashback.
     let req = GetAllRegionsInStoreRequest::default();
-    let regions = client.get_all_regions_in_store(&req).unwrap().regions;
+    let regions = debug_client.get_all_regions_in_store(&req).unwrap().regions;
+    println!("regions: {:?}", regions);
+    let flashback_version = 5;
     // prepare flashback.
-    let res = flashback_to_version(&client, regions.clone(), 1, 0);
+    let res = flashback_to_version(&debug_client, regions.clone(), flashback_version, ts + 1, 0);
     assert_eq!(res.is_ok(), true);
     // finish flashback.
-    let res = flashback_to_version(&client, regions, 1, 2);
+    let res = flashback_to_version(&debug_client, regions, flashback_version, ts + 1, ts + 2);
     assert_eq!(res.is_ok(), true);
 
-    // check data.
-    let mut req = GetRequest::default();
-    req.set_cf(CF_DEFAULT.to_owned());
-    req.set_db(Db::Kv);
-    req.set_key(k.clone());
-    match client.get(&req).unwrap_err() {
-        grpcio::Error::RpcFailure(status) => {
-            assert_eq!(status.code(), grpcio::RpcStatusCode::NOT_FOUND);
-        }
-        _ => panic!("expect NotFound"),
-    }
+    ts += 2;
+    must_kv_read_equal(&kv_client, ctx, b"key@1".to_vec(), b"value@1".to_vec(), ts);
 }
 
 #[test]
 fn test_flashback_to_version_without_prepare() {
-    let (mut cluster, client, store_id) = test_raftstore::must_new_cluster_and_debug_client();
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
-    write_and_read_key(&mut cluster, &client, store_id, &k, &v);
+    let (mut _cluster, kv_client, debug_client, ctx) =
+        test_raftstore::must_new_cluster_kv_client_and_debug_client();
+    let mut ts = 0;
+    for i in 0..2000 {
+        let v = format!("value@{}", i).into_bytes();
+        let k = format!("key@{}", i % 1000).into_bytes();
+        write_and_read_key(&kv_client, &ctx, &mut ts, k.clone(), v.clone());
+    }
 
     let req = GetAllRegionsInStoreRequest::default();
-    let regions = client.get_all_regions_in_store(&req).unwrap().regions;
+    let regions = debug_client.get_all_regions_in_store(&req).unwrap().regions;
     // finish flashback.
-    match flashback_to_version(&client, regions, 1, 2).unwrap_err() {
+    match flashback_to_version(&debug_client, regions, 0, 1, 2).unwrap_err() {
         grpcio::Error::RpcFailure(status) => {
             assert_eq!(status.code(), grpcio::RpcStatusCode::UNKNOWN);
             assert_eq!(status.message(), "not in flashback state");
@@ -217,31 +220,47 @@ fn test_flashback_to_version_without_prepare() {
     }
 }
 
-fn write_and_read_key(
-    cluster: &mut Cluster<ServerCluster>,
-    client: &DebugClient,
-    store_id: u64,
-    k: &[u8],
-    v: &[u8],
-) {
-    // Put some data.
-    let engine = cluster.get_engine(store_id);
-    let k = keys::data_key(k);
-    engine.put(&k, v).unwrap();
-    assert_eq!(engine.get_value(&k).unwrap().unwrap(), v);
+#[test]
+fn test_flashback_to_version_with_mismatch_ts() {
+    let (mut _cluster, kv_client, debug_client, ctx) =
+        test_raftstore::must_new_cluster_kv_client_and_debug_client();
+    let mut ts = 0;
+    for i in 0..2000 {
+        let v = format!("value@{}", i).into_bytes();
+        let k = format!("key@{}", i % 1000).into_bytes();
+        write_and_read_key(&kv_client, &ctx, &mut ts, k.clone(), v.clone());
+    }
 
-    // Debug get
-    let mut req = GetRequest::default();
-    req.set_cf(CF_DEFAULT.to_owned());
-    req.set_db(Db::Kv);
-    req.set_key(k);
-    let mut resp = client.get(&req).unwrap();
-    assert_eq!(resp.take_value(), v);
+    let req = GetAllRegionsInStoreRequest::default();
+    let regions = debug_client.get_all_regions_in_store(&req).unwrap().regions;
+    let flashback_version = 5;
+    // prepare flashback.
+    let res = flashback_to_version(&debug_client, regions.clone(), flashback_version, ts + 1, 0);
+    assert_eq!(res.is_ok(), true);
+
+    let res = flashback_to_version(
+        &debug_client,
+        regions.clone(),
+        flashback_version,
+        ts + 1,
+        ts + 3,
+    );
+    assert_eq!(res.is_ok(), true);
+
+    // use mismatch ts.
+    match flashback_to_version(&debug_client, regions, flashback_version, ts + 2, ts + 3).unwrap_err() {
+        grpcio::Error::RpcFailure(status) => {
+            assert_eq!(status.code(), grpcio::RpcStatusCode::UNKNOWN);
+            assert_eq!(status.message(), "not in flashback state");
+        }
+        _ => panic!("expect not in flashback state"),
+    }
 }
 
 fn flashback_to_version(
     client: &DebugClient,
     regions: Vec<u64>,
+    version: u64,
     start_ts: u64,
     commit_ts: u64,
 ) -> grpcio::Result<FlashbackToVersionResponse> {
@@ -257,7 +276,7 @@ fn flashback_to_version(
             .take()
             .unwrap();
         let mut req = FlashbackToVersionRequest::default();
-        req.set_version(0);
+        req.set_version(version);
         req.set_region_id(region_id);
         req.set_start_key(r.get_start_key().to_vec());
         req.set_end_key(r.get_start_key().to_vec());

@@ -898,9 +898,11 @@ fn flashback_whole_cluster(
                         for (store_id, leaders) in retry_stores_leader {
                             let mut check = prepare_stores_leader.write().unwrap();
                             let regions = check.entry(store_id).or_insert_with(HashMap::default);
+                            regions.remove(&(key_range.start_key.clone(), key_range.end_key.clone()));
                             regions.extend(leaders.clone());
                             // Need to update stores_leader as well.
                             let regions = need_finish_stores_leader.entry(store_id).or_insert_with(HashMap::default);
+                            regions.remove(&(key_range.start_key.clone(), key_range.end_key.clone()));
                             regions.extend(leaders);
                         }
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
