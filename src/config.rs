@@ -674,7 +674,6 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-<<<<<<< HEAD:src/config.rs
         match api_version {
             ApiVersion::V1 => {
                 // nothing to do
@@ -692,83 +691,16 @@ impl DefaultCfConfig {
                     .unwrap();
             }
             ApiVersion::V2 => {
+                cf_opts.add_table_properties_collector_factory(
+                    "tikv.rawkv-mvcc-properties-collector",
+                    RawMvccPropertiesCollectorFactory::default(),
+                );
                 cf_opts
                     .set_compaction_filter_factory(
                         "apiv2_gc_compaction_filter_factory",
                         RawCompactionFilterFactory,
                     )
                     .unwrap();
-=======
-        if let Some(factory) = filter_factory {
-            match api_version {
-                ApiVersion::V1 => {
-                    cf_opts
-                        .set_compaction_filter_factory("range_filter_factory", factory.clone())
-                        .unwrap();
-                }
-                ApiVersion::V1ttl => {
-                    cf_opts.add_table_properties_collector_factory(
-                        "tikv.ttl-properties-collector",
-                        TtlPropertiesCollectorFactory::<ApiV1Ttl>::default(),
-                    );
-                    let factory = StackingCompactionFilterFactory::new(
-                        factory.clone(),
-                        TtlCompactionFilterFactory::<ApiV1Ttl>::default(),
-                    );
-                    cf_opts
-                        .set_compaction_filter_factory(
-                            "range_filter_factory.ttl_compaction_filter_factory",
-                            factory,
-                        )
-                        .unwrap();
-                }
-                ApiVersion::V2 => {
-                    cf_opts.add_table_properties_collector_factory(
-                        "tikv.rawkv-mvcc-properties-collector",
-                        RawMvccPropertiesCollectorFactory::default(),
-                    );
-                    let factory = StackingCompactionFilterFactory::new(
-                        factory.clone(),
-                        RawCompactionFilterFactory,
-                    );
-                    cf_opts
-                        .set_compaction_filter_factory(
-                            "range_filter_factory.apiv2_gc_compaction_filter_factory",
-                            factory,
-                        )
-                        .unwrap();
-                }
-            }
-        } else {
-            match api_version {
-                ApiVersion::V1 => {
-                    // nothing to do
-                }
-                ApiVersion::V1ttl => {
-                    cf_opts.add_table_properties_collector_factory(
-                        "tikv.ttl-properties-collector",
-                        TtlPropertiesCollectorFactory::<ApiV1Ttl>::default(),
-                    );
-                    cf_opts
-                        .set_compaction_filter_factory(
-                            "ttl_compaction_filter_factory",
-                            TtlCompactionFilterFactory::<ApiV1Ttl>::default(),
-                        )
-                        .unwrap();
-                }
-                ApiVersion::V2 => {
-                    cf_opts.add_table_properties_collector_factory(
-                        "tikv.rawkv-mvcc-properties-collector",
-                        RawMvccPropertiesCollectorFactory::default(),
-                    );
-                    cf_opts
-                        .set_compaction_filter_factory(
-                            "apiv2_gc_compaction_filter_factory",
-                            RawCompactionFilterFactory,
-                        )
-                        .unwrap();
-                }
->>>>>>> 4a7b248053 (rawkv: fix ttl_checker for RawKV API v2 (#15143)):src/config/mod.rs
             }
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
