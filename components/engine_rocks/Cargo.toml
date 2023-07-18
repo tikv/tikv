@@ -42,7 +42,7 @@ online_config = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2"
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 regex = "1"
 serde = "1.0"
 serde_derive = "1.0"

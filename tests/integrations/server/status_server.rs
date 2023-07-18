@@ -5,6 +5,7 @@ use std::{error::Error, net::SocketAddr, sync::Arc};
 use hyper::{body, Client, StatusCode, Uri};
 use raftstore::store::region_meta::RegionMeta;
 use security::SecurityConfig;
+use service::service_manager::GrpcServiceManager;
 use test_raftstore::new_server_cluster;
 use tikv::{config::ConfigController, server::status_server::StatusServer};
 
@@ -46,6 +47,7 @@ fn test_region_meta_endpoint() {
         router,
         std::env::temp_dir(),
         None,
+        GrpcServiceManager::dummy(),
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());

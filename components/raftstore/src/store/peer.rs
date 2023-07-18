@@ -1240,7 +1240,7 @@ where
     /// Updates replication mode.
     pub fn switch_replication_mode(&mut self, state: &Mutex<GlobalReplicationState>) {
         self.replication_sync = false;
-        let mut guard = state.lock().unwrap();
+        let guard = state.lock().unwrap();
         let enable_group_commit = if guard.status().get_mode() == ReplicationMode::Majority {
             self.replication_mode_version = 0;
             self.dr_auto_sync_state = DrAutoSyncState::Async;
@@ -1248,9 +1248,23 @@ where
         } else {
             self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
             self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
-            guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async
+            match guard.status().get_dr_auto_sync().get_state() {
+                // SyncRecover will enable group commit after it catches up logs.
+                DrAutoSyncState::Async | DrAutoSyncState::SyncRecover => false,
+                _ => true,
+            }
         };
+        drop(guard);
+        self.switch_group_commit(enable_group_commit, state);
+    }
+
+    fn switch_group_commit(
+        &mut self,
+        enable_group_commit: bool,
+        state: &Mutex<GlobalReplicationState>,
+    ) {
         if enable_group_commit {
+            let mut guard = state.lock().unwrap();
             let ids = mem::replace(
                 guard.calculate_commit_group(
                     self.replication_mode_version,
@@ -1261,13 +1275,11 @@ where
             drop(guard);
             self.raft_group.raft.clear_commit_group();
             self.raft_group.raft.assign_commit_groups(&ids);
-        } else {
-            drop(guard);
         }
         self.raft_group
             .raft
             .enable_group_commit(enable_group_commit);
-        info!("switch replication mode"; "version" => self.replication_mode_version, "region_id" => self.region_id, "peer_id" => self.peer.id);
+        info!("switch replication mode"; "version" => self.replication_mode_version, "region_id" => self.region_id, "peer_id" => self.peer.id, "enable_group_commit" => enable_group_commit);
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
@@ -1956,6 +1968,19 @@ where
                     return Ok(());
                 }
                 self.should_wake_up = state == LeaseState::Expired;
+            }
+        } else if util::is_vote_msg(&m) {
+            // Only by passing an election timeout can peers handle request vote safely.
+            // See https://github.com/tikv/tikv/issues/15035
+            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
+                debug!("drop request vote for one election timeout after node start";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "from_peer_id" => m.get_from(),
+                    "remain_duration" => ?remain,
+                );
+                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
+                return Ok(());
             }
         }
 
@@ -4696,7 +4721,7 @@ where
         if self.pending_merge_state.is_some() {
             return Err(Error::ProposalInMergingMode(self.region_id));
         }
-        if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
+        if self.raft_group.raft.has_pending_conf() {
             info!(
                 "there is a pending conf change, try later";
                 "region_id" => self.region_id,
@@ -5230,7 +5255,10 @@ where
         None
     }
 
-    fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
+    fn region_replication_status<T>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T>,
+    ) -> Option<RegionReplicationStatus> {
         if self.replication_mode_version == 0 {
             return None;
         }
@@ -5240,7 +5268,8 @@ where
         };
         let state = if !self.replication_sync {
             if self.dr_auto_sync_state != DrAutoSyncState::Async {
-                let res = self.raft_group.raft.check_group_commit_consistent();
+                // use raft_log_gc_threshold, it's indicate the log is almost synced.
+                let res = self.check_group_commit_consistent(ctx.cfg.raft_log_gc_threshold);
                 if Some(true) != res {
                     let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
                     if self.get_store().applied_term() >= self.term() {
@@ -5257,9 +5286,16 @@ where
                         "status" => ?res,
                         "region_id" => self.region_id,
                         "peer_id" => self.peer.id,
-                        "progress" => ?buffer
+                        "progress" => ?buffer,
+                        "dr_auto_sync_state" => ?self.dr_auto_sync_state,
                     );
                 } else {
+                    // Once the DR replicas catch up the log during the `SyncRecover` phase, we
+                    // should enable group commit to promise `IntegrityOverLabel`. then safe
+                    // to switch to the `Sync` phase.
+                    if self.dr_auto_sync_state == DrAutoSyncState::SyncRecover {
+                        self.switch_group_commit(true, &ctx.global_replication_state)
+                    }
                     self.replication_sync = true;
                 }
                 match res {
@@ -5277,6 +5313,29 @@ where
         Some(status)
     }
 
+    pub fn check_group_commit_consistent(&mut self, allow_gap: u64) -> Option<bool> {
+        if !self.is_leader() || !self.raft_group.raft.apply_to_current_term() {
+            return None;
+        }
+        let original = self.raft_group.raft.group_commit();
+        let res = {
+            // Hack: to check groups consistent we need to enable group commit first
+            // otherwise `maximal_committed_index` will return the committed index
+            // based on majorty instead of commit group
+            // TODO: remove outdated workaround after fixing raft interface, but old version
+            // keep this workaround.
+            self.raft_group.raft.enable_group_commit(true);
+            let (index, mut group_consistent) =
+                self.raft_group.raft.mut_prs().maximal_committed_index();
+            if self.raft_group.raft.raft_log.committed > index {
+                group_consistent &= self.raft_group.raft.raft_log.committed - index < allow_gap;
+            }
+            Some(group_consistent)
+        };
+        self.raft_group.raft.enable_group_commit(original);
+        res
+    }
+
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
@@ -5288,7 +5347,7 @@ where
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
-            replication_status: self.region_replication_status(),
+            replication_status: self.region_replication_status(ctx),
             wait_data_peers: self.wait_data_peers.clone(),
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {

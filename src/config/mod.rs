@@ -1569,15 +1569,6 @@ impl DbConfig {
             )
             .into());
         }
-        if self.max_sub_compactions == 0
-            || self.max_sub_compactions as i32 > self.max_background_jobs
-        {
-            return Err(format!(
-                "max_sub_compactions should be greater than 0 and less than or equal to {:?}",
-                self.max_background_jobs,
-            )
-            .into());
-        }
         if self.max_background_flushes <= 0 || self.max_background_flushes > limit {
             return Err(format!(
                 "max_background_flushes should be greater than 0 and less than or equal to {:?}",
@@ -3470,6 +3461,11 @@ impl TikvConfig {
                     "raftstore.enable-partitioned-raft-kv-compatible-learner was true but \
                     storage.engine was partitioned-raft-kv, no need to enable \
                     enable-partitioned-raft-kv-compatible-learner, overwrite to false"
+                );
+            }
+            if self.raft_store.use_delete_range {
+                return Err(
+                    "partitioned-raft-kv doesn't support raftstore.use-delete-range=true.".into(),
                 );
             }
         }

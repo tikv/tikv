@@ -21,7 +21,7 @@ use engine_test::{
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{EncryptionKeyManager, TabletContext, TabletRegistry, DATA_CFS};
+use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::ApiVersion,
@@ -45,6 +45,7 @@ use raftstore_v2::{
     Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use slog::{debug, o, Logger};
 use sst_importer::SstImporter;
 use tempfile::TempDir;
@@ -353,6 +354,7 @@ impl RunningState {
                 pd_worker,
                 importer,
                 key_manager,
+                GrpcServiceManager::dummy(),
             )
             .unwrap();
 
@@ -662,7 +664,7 @@ impl Cluster {
                     }
                     std::fs::rename(&gen_path, &recv_path).unwrap();
                     if let Some(m) = from_snap_mgr.key_manager() {
-                        m.delete_file(gen_path.to_str().unwrap()).unwrap();
+                        m.remove_dir(&gen_path, Some(&recv_path)).unwrap();
                     }
                     assert!(recv_path.exists());
                 }

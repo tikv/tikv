@@ -112,7 +112,7 @@ pprof = { version = "0.11", default-features = false, features = ["flamegraph", 
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
@@ -128,6 +128,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
+service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 smallvec = "1.4"
@@ -254,6 +255,7 @@ members = [
   "components/resource_metering",
   "components/security",
   "components/server",
+  "components/service",
   "components/snap_recovery",
   "components/sst_importer",
   "components/test_backup",
@@ -331,6 +333,7 @@ resource_control = { path = "components/resource_control" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
+service = { path = "components/service" }
 snap_recovery = { path = "components/snap_recovery" }
 sst_importer = { path = "components/sst_importer", default-features = false }
 test_backup = { path = "components/test_backup" }
@@ -358,6 +361,7 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
