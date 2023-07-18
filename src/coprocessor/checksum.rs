@@ -20,6 +20,7 @@ use crate::{
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
     scanner: RangesScanner<TikvStorage<SnapshotStore<S>>, ApiV1>,
+    debug_msg: String,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -30,6 +31,8 @@ impl<S: Snapshot> ChecksumContext<S> {
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
+        let debug_msg = format!("peer: {:?}, ranges: {:?}", &req_ctx.peer, &req_ctx.ranges);
+        info!("create the checksum context"; "debug_msg" => &debug_msg);
         let store = SnapshotStore::new(
             snap,
             start_ts.into(),
@@ -49,7 +52,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             is_key_only: false,
             is_scanned_range_aware: false,
         });
-        Ok(Self { req, scanner })
+        Ok(Self { req, scanner, debug_msg })
     }
 }
 
@@ -60,6 +63,8 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
         }
+
+        info!("start to scan by checksum"; "debug" => &self.debug_msg);
 
         let mut checksum = 0;
         let mut total_kvs = 0;
@@ -84,6 +89,8 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
             total_kvs += 1;
             total_bytes += k.len() + v.len() + old_prefix.len() - new_prefix.len();
         }
+
+        info!("finish to scan by checksum"; "debug" => &self.debug_msg);
 
         let mut resp = ChecksumResponse::default();
         resp.set_checksum(checksum);
