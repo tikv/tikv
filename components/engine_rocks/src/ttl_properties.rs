@@ -30,19 +30,15 @@ impl RocksTtlProperties {
         props
     }
 
-    pub fn decode_from<T: DecodeProperties>(
-        ttl_props: &mut TtlProperties,
-        props: &T,
-    ) -> Result<()> {
+    pub fn decode_from<T: DecodeProperties>(ttl_props: &mut TtlProperties, props: &T) {
         ttl_props.max_expire_ts = props.decode_u64(PROP_MAX_EXPIRE_TS).ok();
         ttl_props.min_expire_ts = props.decode_u64(PROP_MIN_EXPIRE_TS).ok();
-        Ok(())
     }
 
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<TtlProperties> {
+    pub fn decode<T: DecodeProperties>(props: &T) -> TtlProperties {
         let mut res = TtlProperties::default();
-        Self::decode_from(&mut res, props)?;
-        Ok(res)
+        Self::decode_from(&mut res, props);
+        res
     }
 }
 
@@ -61,11 +57,10 @@ impl TtlPropertiesExt for RocksEngine {
 
         let mut res = Vec::new();
         for (file_name, v) in collection.iter() {
-            let prop = match RocksTtlProperties::decode(v.user_collected_properties()) {
-                Ok(v) if v.is_some() => v,
-                _ => continue,
-            };
-            res.push((file_name.to_string(), prop));
+            let prop = RocksTtlProperties::decode(v.user_collected_properties());
+            if prop.is_some() {
+                res.push((file_name.to_string(), prop));
+            }
         }
         Ok(res)
     }
@@ -169,7 +164,7 @@ mod tests {
                 collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
             }
             let result = UserProperties(collector.finish());
-            RocksTtlProperties::decode(&result).unwrap()
+            RocksTtlProperties::decode(&result)
         };
 
         // NOTE: expire_ts=0 is considered as no TTL in `ApiVersion::V1ttl`
@@ -232,7 +227,7 @@ mod tests {
             );
             assert_eq!(user_props.0, expect_user_props.0, "case {}", i);
 
-            let decoded = RocksTtlProperties::decode(&user_props).unwrap();
+            let decoded = RocksTtlProperties::decode(&user_props);
             assert_eq!(decoded.max_expire_ts, ttl_props.max_expire_ts, "case {}", i);
             assert_eq!(decoded.min_expire_ts, ttl_props.min_expire_ts, "case {}", i);
         }
