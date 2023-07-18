@@ -331,8 +331,14 @@ impl<EK: KvEngine> Runner<EK> {
             Either::Left(tablet) => {
                 // The tablet is about to be deleted, flush is a waste and will block destroy.
                 let _ = tablet.set_db_options(&[("avoid_flush_during_shutdown", "true")]);
-                let _ = tablet.pause_background_work();
-                PathBuf::from(tablet.path())
+                // `pause_background_work` needs to wait for outstanding compactions.
+                let path = PathBuf::from(tablet.path());
+                self.background_pool
+                    .spawn(async move {
+                        let _ = tablet.pause_background_work();
+                    })
+                    .unwrap();
+                path
             }
             Either::Right(path) => path,
         }
@@ -565,6 +571,7 @@ where
     type Task = Task<EK>;
 
     fn run(&mut self, task: Task<EK>) {
+        info!(self.logger, "tablet task {task}");
         match task {
             Task::Trim {
                 tablet,
