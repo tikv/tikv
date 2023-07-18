@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::mpsc::channel, time::Duration};
+use std::{iter::Iterator as StdIterator, sync::mpsc::channel, time::Duration};
 
 use api_version::{test_kv_format_impl, ApiV1Ttl, KvFormat, RawValue};
 use engine_rocks::{raw::CompactOptions, util::get_cf_handle};
@@ -70,77 +70,67 @@ fn test_ttl_checker_impl<F: KvFormat>() {
                     _ => unreachable!(),
                 }
             }
-            kvdb.flush_cf(CF_DEFAULT, true).unwrap();
             assert_eq!(expect_keys, 0);
         }
 
         gc_runner.post_gc();
     };
 
-    let key1 = make_raw_key::<F>(b"r\0key1", Some(commit_ts));
-    let value1 = RawValue {
-        user_value: vec![0; 10],
-        expire_ts: Some(10),
-        is_delete: false,
-    };
-    kvdb.put_cf(CF_DEFAULT, &key1, &F::encode_raw_value_owned(value1))
-        .unwrap();
-    kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-    let key2 = make_raw_key::<F>(b"r\0key2", Some(commit_ts));
-    let value2 = RawValue {
-        user_value: vec![0; 10],
-        expire_ts: Some(120),
-        is_delete: false,
-    };
-    kvdb.put_cf(CF_DEFAULT, &key2, &F::encode_raw_value_owned(value2))
-        .unwrap();
-    let key3 = make_raw_key::<F>(b"r\0key3", Some(commit_ts));
-    let value3 = RawValue {
-        user_value: vec![0; 10],
-        expire_ts: Some(20),
-        is_delete: false,
-    };
-    kvdb.put_cf(CF_DEFAULT, &key3, &F::encode_raw_value_owned(value3))
-        .unwrap();
-    kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-    let key4 = make_raw_key::<F>(b"r\0key4", Some(commit_ts));
-    let value4 = RawValue {
-        user_value: vec![0; 10],
-        expire_ts: None,
-        is_delete: false,
-    };
-    kvdb.put_cf(CF_DEFAULT, &key4, &F::encode_raw_value_owned(value4))
-        .unwrap();
-    kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-    let key5 = make_raw_key::<F>(b"r\0key5", Some(commit_ts));
-    let value5 = RawValue {
-        user_value: vec![0; 10],
-        expire_ts: Some(10),
-        is_delete: false,
-    };
-    kvdb.put_cf(CF_DEFAULT, &key5, &F::encode_raw_value_owned(value5))
-        .unwrap();
-    kvdb.flush_cf(CF_DEFAULT, true).unwrap();
+    let cases: Vec<
+        Vec<(&[u8] /* key */, Option<u64> /* expire_ts */)>, /* a batch, will be written to
+                                                              * individual sst file by
+                                                              * `flush_cf` */
+    > = vec![
+        vec![(b"r\0key0", Some(10)), (b"r\0key1", Some(110))],
+        vec![(b"r\0key2", Some(120)), (b"r\0key3", Some(20))],
+        vec![(b"r\0key4", None)],
+        vec![(b"r\0key5", Some(10))],
+    ];
+    let keys = cases
+        .into_iter()
+        .map(|batch| {
+            let keys = batch
+                .into_iter()
+                .map(|(key, expire_ts)| {
+                    let key = make_raw_key::<F>(key, Some(commit_ts));
+                    let value = RawValue {
+                        user_value: vec![0; 10],
+                        expire_ts,
+                        is_delete: false,
+                    };
+                    kvdb.put_cf(CF_DEFAULT, &key, &F::encode_raw_value_owned(value))
+                        .unwrap();
+                    key
+                })
+                .collect::<Vec<_>>();
+            kvdb.flush_cf(CF_DEFAULT, true).unwrap();
+            keys
+        })
+        .flatten()
+        .collect::<Vec<_>>();
 
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key1).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key2).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key3).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key4).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key5).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[0]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[1]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[2]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[3]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[4]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[5]).unwrap().is_some());
 
-    do_compact(b"zr\0key1", b"zr\0key25", 2);
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key1).unwrap().is_none());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key2).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key3).unwrap().is_none());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key4).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key5).unwrap().is_some());
+    do_compact(b"zr\0key1", b"zr\0key25", 2); // cover key0 ~ key3
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[0]).unwrap().is_none());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[1]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[2]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[3]).unwrap().is_none());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[4]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[5]).unwrap().is_some());
 
-    do_compact(b"zr\0key2", b"zr\0key6", 2);
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key1).unwrap().is_none());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key2).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key3).unwrap().is_none());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key4).unwrap().is_some());
-    assert!(kvdb.get_value_cf(CF_DEFAULT, &key5).unwrap().is_none());
+    do_compact(b"zr\0key2", b"zr\0key6", 2); // cover key2 ~ key5
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[0]).unwrap().is_none());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[1]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[2]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[3]).unwrap().is_none());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[4]).unwrap().is_some());
+    assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[5]).unwrap().is_none());
 }
 
 #[test]
