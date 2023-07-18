@@ -28,14 +28,11 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
     box_err, box_try,
     config::VersionTrack,
-    defer, error, info, thd_name,
+    defer, error, info,
     time::{Instant, UnixSecs},
     warn,
     worker::{Runnable, RunnableWithTimer},
-};
-use yatp::{
-    pool::{Builder, ThreadPool},
-    task::future::TaskCell,
+    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
 };
 
 use super::metrics::*;
@@ -54,6 +51,7 @@ use crate::{
 };
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
+const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";
@@ -373,7 +371,7 @@ where
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
     pd_client: Option<Arc<T>>,
-    pool: ThreadPool<TaskCell>,
+    pool: FuturePool,
 }
 
 impl<EK, R, T> Runner<EK, R, T>
@@ -407,10 +405,19 @@ where
             coprocessor_host,
             router,
             pd_client,
-            pool: Builder::new(thd_name!("snap-generator"))
-                .max_thread_count(cfg.value().snap_generator_pool_size)
+            pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("snap-generator")
+                .thread_count(
+                    1,
+                    cfg.value().snap_generator_pool_size,
+                    SNAP_GENERATOR_MAX_POOL_SIZE,
+                )
                 .build_future_pool(),
         }
+    }
+
+    pub fn snap_generator_pool(&self) -> FuturePool {
+        self.pool.clone()
     }
 
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -858,7 +865,12 @@ where
                         for_balance,
                         allow_multi_files_snapshot,
                     );
-                });
+                }).unwrap_or_else(
+                    |e| {
+                        error!("failed to generate snapshot"; "region_id" => region_id, "err" => ?e);
+                        SNAP_COUNTER.generate.fail.inc();
+                    },
+                );
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
@@ -886,10 +898,6 @@ where
                 self.clean_stale_ranges();
             }
         }
-    }
-
-    fn shutdown(&mut self) {
-        self.pool.shutdown();
     }
 }
 

@@ -265,8 +265,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
-        if util::is_vote_msg(msg.get_message()) && self.maybe_gc_sender(&msg) {
-            return;
+        if util::is_vote_msg(msg.get_message()) {
+            if self.maybe_gc_sender(&msg) {
+                return;
+            }
+            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
+                debug!(self.logger,
+                    "drop request vote for one election timeout after node starts";
+                    "from_peer_id" => msg.get_message().get_from(),
+                    "remain_duration" => ?remain,
+                );
+                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
+                return;
+            }
         }
         if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
@@ -513,9 +524,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
-        // Filling start and end key is only needed for being compatible with
-        // raftstore v1 learners (e.g. tiflash engine).
-        //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
         //   leader yet
@@ -844,7 +852,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        let (persisted_message, has_snapshot) =
+        let (persisted_message, flushed_epoch, has_snapshot) =
             self.async_writer
                 .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
@@ -868,6 +876,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
+        }
+
+        if let Some(flushed_epoch) = flushed_epoch {
+            self.storage_mut().set_flushed_epoch(&flushed_epoch);
         }
 
         self.storage_mut()

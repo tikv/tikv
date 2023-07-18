@@ -19,6 +19,7 @@ use raftstore::store::{
     WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
+use service::service_manager::GrpcServiceManager;
 use slog::{error, warn, Logger};
 use tikv_util::{
     config::VersionTrack,
@@ -217,6 +218,9 @@ where
     // For slowness detection
     slowness_stats: slowness::SlownessStatistics,
 
+    // For grpc server.
+    grpc_service_manager: GrpcServiceManager,
+
     logger: Logger,
     shutdown: Arc<AtomicBool>,
     cfg: Arc<VersionTrack<Config>>,
@@ -242,6 +246,7 @@ where
         auto_split_controller: AutoSplitController,
         region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
+        grpc_service_manager: GrpcServiceManager,
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
@@ -279,6 +284,7 @@ where
             concurrency_manager,
             causal_ts_provider,
             slowness_stats,
+            grpc_service_manager,
             logger,
             shutdown,
             cfg,
