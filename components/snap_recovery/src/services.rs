@@ -16,7 +16,7 @@ use engine_rocks::{
 use engine_traits::{CfNamesExt, CfOptionsExt, Engines, Peekable, RaftEngine};
 use futures::{
     channel::mpsc,
-    executor::{ThreadPool, ThreadPoolBuilder},
+    executor::{block_on, ThreadPool, ThreadPoolBuilder},
     FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{
@@ -27,7 +27,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{
         fsm::RaftRouter,
-        msg::{Callback, CasualMessage, PeerMsg, SignificantMsg},
+        msg::{CasualMessage, PeerMsg, SignificantMsg},
         transport::SignificantRouter,
         SnapshotRecoveryWaitApplySyncer,
     },
@@ -236,7 +236,6 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 }
             }
 
-            let mut rxs = Vec::with_capacity(leaders.len());
             for &region_id in &leaders {
                 if let Err(e) = raft_router.send_casual_msg(region_id, CasualMessage::Campaign) {
                     // TODO: retry may necessay
@@ -248,40 +247,12 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                     info!("region starts to campaign";
                     "region_id" => region_id);
                 }
-
-                let (tx, rx) = sync_channel(1);
-                let callback = Callback::read(Box::new(move |_| {
-                    if tx.send(1).is_err() {
-                        error!("response failed"; "region_id" => region_id);
-                    }
-                }));
-                if let Err(e) = raft_router
-                    .significant_send(region_id, SignificantMsg::LeaderCallback(callback))
-                {
-                    warn!("LeaderCallback failed"; "err" => ?e, "region_id" => region_id);
-                }
-                rxs.push(Some(rx));
             }
 
-            // leader is campaign and be ensured as leader
-            for (_rid, rx) in leaders.iter().zip(rxs) {
-                if let Some(rx) = rx {
-                    match rx.recv() {
-                        Ok(_id) => {
-                            info!("leader is assigned for region");
-                        }
-                        Err(e) => {
-                            error!("check leader failed"; "error" => ?e);
-                        }
-                    }
-                }
-            }
+            let mut lk = LeaderKeeper::new(raft_router.clone(), leaders.clone());
+            block_on(lk.wait_until_all_leader_ready());
 
             info!("all region leader assigned done");
-
-            let lk = LeaderKeeper::new(raft_router.clone(), leaders.clone());
-            let cancel = lk.spawn_loop().await;
-            defer! { if let Some(c) = cancel { c.abort() } };
 
             let now = Instant::now();
             // wait apply to the last log

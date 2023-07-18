@@ -1,24 +1,24 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cell::RefCell,
+    collections::HashSet,
     marker::PhantomData,
-    sync::Mutex,
     time::{Duration, Instant},
 };
 
 use engine_traits::KvEngine;
-use futures::{compat::Future01CompatExt, stream::AbortHandle};
+use futures::compat::Future01CompatExt;
+use itertools::Itertools;
 use raftstore::{
     errors::{Error, Result},
     store::{Callback, CasualMessage, CasualRouter, SignificantMsg, SignificantRouter},
 };
-use tikv_util::{
-    future::paired_future_callback, sys::thread::StdThreadBuildWrapper, timer::GLOBAL_TIMER_HANDLE,
-};
+use tikv_util::{future::paired_future_callback, timer::GLOBAL_TIMER_HANDLE};
 
 pub struct LeaderKeeper<EK, Router> {
     router: Router,
-    to_keep: Vec<u64>,
+    not_leader: HashSet<u64>,
 
     _ek: PhantomData<EK>,
 }
@@ -56,61 +56,55 @@ where
     EK: KvEngine,
     Router: CasualRouter<EK> + SignificantRouter<EK> + 'static,
 {
-    pub fn new(router: Router, to_keep: Vec<u64>) -> Self {
+    pub fn new(router: Router, to_keep: impl IntoIterator<Item = u64>) -> Self {
         Self {
             router,
-            to_keep,
+
+            not_leader: to_keep.into_iter().collect(),
             _ek: PhantomData,
         }
     }
 
-    pub async fn spawn_loop(self) -> Option<AbortHandle> {
-        let (tx, rx) = futures::channel::oneshot::channel();
-        let res = std::thread::Builder::new()
-                .name("leader_keeper".to_owned())
-                .spawn_wrapper(move || {
-                    let keep_loop = async move {
-                        loop {
-                            let now = Instant::now();
-                            GLOBAL_TIMER_HANDLE
-                                .delay(now + Duration::from_secs(30))
-                                .compat()
-                                .await
-                                .expect("wrong with global timer, cannot stepping.");
-                            let res = self.step().await;
-                            info!("finished leader keeper stepping."; "result" => ?res, "take" => ?(now.elapsed() - Duration::from_secs(30)));
-                        }
-                    };
-                    let (keep_loop, cancel) = futures::future::abortable(keep_loop);
-                    if tx.send(cancel).is_err() {
-                        // The outer function has gone.
-                        info!("special path: the rpc finished so fast (faster than starting a background thread).");
-                        return;
-                    }
-                    let _ = futures::executor::block_on(keep_loop);
-                });
-        res.map_err(|err| warn!("failed to start leader keeper, we might be stuck when there are too many regions."; "err" => %err))
-            .ok()?;
-        rx.await.ok()
+    pub async fn wait_until_all_leader_ready(&mut self) {
+        loop {
+            let now = Instant::now();
+            GLOBAL_TIMER_HANDLE
+                .delay(now + Duration::from_secs(30))
+                .compat()
+                .await
+                .expect("wrong with global timer, cannot stepping.");
+            let res = self.step().await;
+            info!("finished leader keeper stepping."; "result" => ?res, "take" => ?(now.elapsed() - Duration::from_secs(30)));
+            if res.failed_leader.is_empty() {
+                return;
+            }
+        }
     }
 
-    pub async fn step(&self) -> StepResult {
+    pub async fn step(&mut self) -> StepResult {
         const CONCURRENCY: usize = 256;
-        let r = Mutex::new(StepResult::default());
-        for batch in self.to_keep.as_slice().chunks(CONCURRENCY) {
-            let tasks = batch.iter().map(|region_id| async {
+        let r = RefCell::new(StepResult::default());
+        let success = RefCell::new(HashSet::new());
+        for batch in &self.not_leader.iter().chunks(CONCURRENCY) {
+            let tasks = batch.map(|region_id| async {
                 match self.check_leader(*region_id).await {
-                    Err(err) => r.lock().unwrap().failed_leader.push((*region_id, err)),
-                    Ok(_) => return,
+                    Ok(_) => {
+                        success.borrow_mut().insert(*region_id);
+                        return;
+                    }
+                    Err(err) => r.borrow_mut().failed_leader.push((*region_id, err)),
                 };
 
                 if let Err(err) = self.force_leader(*region_id) {
-                    r.lock().unwrap().campaign_failed.push((*region_id, err));
+                    r.borrow_mut().campaign_failed.push((*region_id, err));
                 }
             });
             futures::future::join_all(tasks).await;
         }
-        r.into_inner().unwrap()
+        success.borrow().iter().for_each(|i| {
+            debug_assert!(self.not_leader.remove(i));
+        });
+        r.into_inner()
     }
 
     async fn check_leader(&self, region_id: u64) -> Result<()> {
@@ -219,15 +213,6 @@ mod test {
         let res = block_on(lk.step());
         assert_eq!(res.failed_leader.len(), 3);
         assert_eq!(res.campaign_failed.len(), 0);
-
-        lk.mut_router().leaders.get_mut().remove(&1);
-        lk.mut_router().leaders.get_mut().remove(&3);
-        let res = block_on(lk.step());
-        assert_eq!(res.failed_leader.len(), 2);
-        assert_eq!(res.campaign_failed.len(), 0);
-        let res = block_on(lk.step());
-        assert_eq!(res.failed_leader.len(), 0);
-        assert_eq!(res.campaign_failed.len(), 0);
     }
 
     #[test]
@@ -235,10 +220,20 @@ mod test {
         let leaders = vec![1, 2, 3];
         let mut store = MockStore::default();
         store.regions = leaders.iter().copied().collect();
-        let lk = LeaderKeeper::<RocksEngine, _>::new(store, vec![1, 2, 3, 4]);
+        let mut lk = LeaderKeeper::<RocksEngine, _>::new(store, vec![1, 2, 3, 4]);
         let res = block_on(lk.step());
         assert_eq!(res.failed_leader.len(), 4);
         assert_eq!(res.campaign_failed.len(), 1);
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 1);
+        assert_eq!(res.campaign_failed.len(), 1);
+        lk.mut_router().regions.insert(4);
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 1);
+        assert_eq!(res.campaign_failed.len(), 0);
+        let res = block_on(lk.step());
+        assert_eq!(res.failed_leader.len(), 0);
+        assert_eq!(res.campaign_failed.len(), 0);
     }
 
     #[test]
@@ -254,7 +249,7 @@ mod test {
         .collect::<Vec<_>>();
         let mut store = MockStore::default();
         store.regions = leaders.iter().copied().collect();
-        let lk = LeaderKeeper::<RocksEngine, _>::new(store, leaders);
+        let mut lk = LeaderKeeper::<RocksEngine, _>::new(store, leaders);
         let res = block_on(lk.step());
         assert_eq!(res.failed_leader.len(), 2049);
         assert_eq!(res.campaign_failed.len(), 0);

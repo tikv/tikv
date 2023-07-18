@@ -30,3 +30,4 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 toml = "0.5"
 txn_types = { workspace = true }
+itertools = "0.10"
