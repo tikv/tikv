@@ -332,6 +332,8 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+
+                info!("checksum req ctx"; "ctx" => ?req_ctx);
                 // Checksum is allowed during the flashback period to make sure the tool such
                 // like BR can work.
                 req_ctx.allowed_in_flashback = true;
