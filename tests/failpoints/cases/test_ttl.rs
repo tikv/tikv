@@ -88,7 +88,7 @@ fn test_ttl_checker_impl<F: KvFormat>() {
     ];
     let keys = cases
         .into_iter()
-        .map(|batch| {
+        .flat_map(|batch| {
             let keys = batch
                 .into_iter()
                 .map(|(key, expire_ts)| {
@@ -106,7 +106,6 @@ fn test_ttl_checker_impl<F: KvFormat>() {
             kvdb.flush_cf(CF_DEFAULT, true).unwrap();
             keys
         })
-        .flatten()
         .collect::<Vec<_>>();
 
     assert!(kvdb.get_value_cf(CF_DEFAULT, &keys[0]).unwrap().is_some());
