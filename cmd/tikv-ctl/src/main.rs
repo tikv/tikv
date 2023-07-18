@@ -658,7 +658,11 @@ fn main() {
                     log,
                     min_start_ts,
                 } => {
-                    debug_executor.get_region_read_progress(region, log, min_start_ts);
+                    debug_executor.get_region_read_progress(
+                        region,
+                        log,
+                        min_start_ts.unwrap_or_default(),
+                    );
                 }
                 _ => {
                     unreachable!()

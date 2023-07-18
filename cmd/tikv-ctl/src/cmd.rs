@@ -628,7 +628,7 @@ pub enum Cmd {
         end: String,
     },
     GetRegionReadProgress {
-        #[structopt(short = "r")]
+        #[structopt(short = "r", long)]
         /// The target region id
         region: u64,
 
@@ -638,11 +638,11 @@ pub enum Cmd {
         /// preventing the 'resolved_ts' from advancing.
         log: bool,
 
-        #[structopt(long, requires = "log", default_value = "0")]
+        #[structopt(long, requires = "log")]
         /// The smallest start_ts of the target transaction. Namely, only the
         /// transaction whose start_ts is greater than or equal to this value
         /// can be recorded in TiKV logs.
-        min_start_ts: u64,
+        min_start_ts: Option<u64>,
     },
 }
 
