@@ -58,7 +58,7 @@ pub enum Task<EK> {
         /// Do not flush if the active memtable is just flushed within this
         /// threshold.
         threshold: Option<Duration>,
-        /// Callback will be called if memtable is fresh.
+        /// Callback will be called regardless of whether the flush succeeds.
         cb: Option<Box<dyn FnOnce() + Send>>,
     },
     DeleteRange {
@@ -445,7 +445,10 @@ impl<EK: KvEngine> Runner<EK> {
                 "region_id" => region_id,
                 "reason" => reason,
             );
-            return
+            if let Some(cb) = cb {
+                cb();
+            }
+            return;
         };
         let threshold = threshold.map(|t| std::time::SystemTime::now() - t);
         // The callback `cb` being some means it's the task sent from
@@ -468,7 +471,6 @@ impl<EK: KvEngine> Runner<EK> {
                                 "reason" => reason,
                                 "err" => ?e,
                             );
-                            return;
                         } else {
                             info!(
                                 logger,
