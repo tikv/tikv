@@ -8,6 +8,8 @@ use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
+const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
 pub struct Resolver {
@@ -209,12 +211,13 @@ impl Resolver {
             let keys_for_log = keys
                 .iter()
                 .map(|key| log_wrappers::Value::key(key))
+                .take(MAX_NUMBER_OF_LOCKS_IN_LOG)
                 .collect::<Vec<_>>();
             info!(
                 "locks with the minimum start_ts in resolver";
                 "region_id" => self.region_id,
                 "start_ts" => start_ts,
-                "keys" => ?keys_for_log,
+                "sampled keys" => ?keys_for_log,
             );
         }
     }
