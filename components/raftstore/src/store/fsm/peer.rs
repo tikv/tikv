@@ -2681,10 +2681,10 @@ where
         if self.fsm.peer.is_leader() {
             return;
         }
-        let mut resp = ExtraMessage::default();
+        let mut resp: ExtraMessage = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgAvailabilityResponse);
         resp.wait_data = self.fsm.peer.wait_data;
-        let report = msg.mut_extra_msg().mut_availability_context();
+        let report = resp.mut_availability_context();
         report.set_from_region_id(self.region_id());
         report.set_from_region_epoch(self.region().get_region_epoch().clone());
         report.set_trimmed(true);
