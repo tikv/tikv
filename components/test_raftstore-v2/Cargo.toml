@@ -54,6 +54,7 @@ resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true }
 server = { workspace = true }
+service = { workspace = true }
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }
