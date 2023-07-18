@@ -44,7 +44,7 @@ impl RocksMvccProperties {
             .decode_u64(PROP_NUM_DELETES)
             .unwrap_or(res.num_versions - res.num_puts);
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
-        RocksTtlProperties::decode_from(&mut res.ttl, props)?;
+        RocksTtlProperties::decode_from(&mut res.ttl, props);
         Ok(res)
     }
 }
