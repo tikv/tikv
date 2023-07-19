@@ -578,8 +578,10 @@ impl EnginesResourceInfo {
                 let base = self.base_max_compactions[i];
                 if base > 0 {
                     let level = *pending as f32 / limit as f32;
-                    // 50% -> 1, 70% -> 2, 85% -> 3, 95% -> 6.
-                    let delta1 = if level > 0.95 {
+                    // 50% -> 1, 70% -> 2, 85% -> 3, 95% -> 6, 98% -> 1024.
+                    let delta1 = if level > 0.98 {
+                        1024
+                    } else if level > 0.95 {
                         cmp::min(SysQuota::cpu_cores_quota() as u32 - 2, 6)
                     } else if level > 0.85 {
                         3
@@ -588,8 +590,11 @@ impl EnginesResourceInfo {
                     } else {
                         u32::from(level > 0.5)
                     };
-                    // 20% -> 1, 60% -> 2, 80% -> 3, 90% -> 6.
-                    let delta2 = if level0_ratio[i] > 0.9 {
+                    // 20% -> 1, 60% -> 2, 80% -> 3, 90% -> 6, 98% -> 1024.
+                    let delta2 = if level0_ratio[i] > 0.98 {
+                        // effectively disable the limiter.
+                        1024
+                    } else if level0_ratio[i] > 0.9 {
                         cmp::min(SysQuota::cpu_cores_quota() as u32 - 2, 6)
                     } else if level0_ratio[i] > 0.8 {
                         3
