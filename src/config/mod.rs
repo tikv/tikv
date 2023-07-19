@@ -109,6 +109,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 /// Tentative value.
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.25;
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(15).0;
+const LOCK_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::mb(128).0;
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
@@ -1251,6 +1252,7 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub allow_concurrent_memtable_write: Option<bool>,
     pub write_buffer_limit: Option<ReadableSize>,
+    pub lock_write_buffer_limit: Option<ReadableSize>,
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1281,6 +1283,7 @@ pub struct DbResources {
     pub statistics: Arc<RocksStatistics>,
     pub rate_limiter: Option<Arc<RateLimiter>>,
     pub write_buffer_manager: Option<Arc<WriteBufferManager>>,
+    pub lock_write_buffer_manager: Option<Arc<WriteBufferManager>>,
 }
 
 impl Default for DbConfig {
@@ -1324,6 +1327,7 @@ impl Default for DbConfig {
             enable_unordered_write: false,
             allow_concurrent_memtable_write: None,
             write_buffer_limit: None,
+            lock_write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
             paranoid_checks: None,
@@ -1358,6 +1362,10 @@ impl DbConfig {
                 self.write_buffer_limit.get_or_insert(ReadableSize(cmp::min(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                     WRITE_BUFFER_MEMORY_LIMIT_MAX,
+                )));
+                self.lock_write_buffer_limit.get_or_insert(ReadableSize(cmp::min(
+                    (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
+                    LOCK_BUFFER_MEMORY_LIMIT_MAX,
                 )));
                 self.max_total_wal_size.get_or_insert(ReadableSize(1));
                 // In RaftKv2, every region uses its own rocksdb instance, it's actually the
@@ -1405,6 +1413,13 @@ impl DbConfig {
             statistics: Arc::new(RocksStatistics::new_titan()),
             rate_limiter,
             write_buffer_manager: self.write_buffer_limit.map(|limit| {
+                Arc::new(WriteBufferManager::new(
+                    limit.0 as usize,
+                    self.write_buffer_stall_ratio,
+                    self.write_buffer_flush_oldest_first,
+                ))
+            }),
+            lock_write_buffer_manager: self.lock_write_buffer_limit.map(|limit| {
                 Arc::new(WriteBufferManager::new(
                     limit.0 as usize,
                     self.write_buffer_stall_ratio,
