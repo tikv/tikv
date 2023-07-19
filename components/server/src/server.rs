@@ -114,14 +114,10 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-<<<<<<< HEAD
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
-=======
-    config::VersionTrack,
     mpsc as TikvMpsc,
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
         cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
@@ -179,21 +175,11 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     tikv.run_status_server();
     tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-<<<<<<< HEAD
-    signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
-=======
     // Build a background worker for handling signals.
     {
         let engines = tikv.engines.take().unwrap().engines;
-        let kv_statistics = tikv.kv_statistics.clone();
-        let raft_statistics = tikv.raft_statistics.clone();
         std::thread::spawn(move || {
-            signal_handler::wait_for_signal(
-                Some(engines),
-                kv_statistics,
-                raft_statistics,
-                Some(service_event_tx),
-            )
+            signal_handler::wait_for_signal(Some(engines), Some(service_event_tx))
         });
     }
     loop {
@@ -211,7 +197,6 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
             }
         }
     }
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     tikv.stop();
 }
 
@@ -1696,17 +1681,10 @@ where
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),
-<<<<<<< HEAD
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
                 self.store_path.clone(),
-=======
-                Arc::new(self.core.config.security.clone()),
-                self.engines.as_ref().unwrap().engine.raft_extension(),
-                self.core.store_path.clone(),
-                self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1741,6 +1719,26 @@ where
         }
 
         self.to_stop.into_iter().for_each(|s| s.stop());
+    }
+
+    fn pause(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        if let Err(e) = server.server.pause() {
+            warn!(
+                "failed to pause the server";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn resume(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        if let Err(e) = server.server.resume() {
+            warn!(
+                "failed to resume the server";
+                "err" => ?e
+            );
+        }
     }
 }
 
@@ -1858,26 +1856,6 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             raft_data_state_machine.after_dump_data();
         }
         raft_engine
-    }
-
-    fn pause(&mut self) {
-        let server = self.servers.as_mut().unwrap();
-        if let Err(e) = server.server.pause() {
-            warn!(
-                "failed to pause the server";
-                "err" => ?e
-            );
-        }
-    }
-
-    fn resume(&mut self) {
-        let server = self.servers.as_mut().unwrap();
-        if let Err(e) = server.server.resume() {
-            warn!(
-                "failed to resume the server";
-                "err" => ?e
-            );
-        }
     }
 }
 

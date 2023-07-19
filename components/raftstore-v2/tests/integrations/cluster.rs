@@ -38,11 +38,6 @@ use raftstore_v2::{
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
     Bootstrap, StoreMeta, StoreSystem,
 };
-<<<<<<< HEAD
-=======
-use resource_metering::CollectorRegHandle;
-use service::service_manager::GrpcServiceManager;
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 use slog::{debug, o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
@@ -260,17 +255,6 @@ impl RunningState {
                 snap_mgr.clone(),
                 concurrency_manager,
                 causal_ts_provider,
-<<<<<<< HEAD
-=======
-                coprocessor_host,
-                AutoSplitController::default(),
-                CollectorRegHandle::new_for_test(),
-                background.clone(),
-                pd_worker,
-                importer,
-                key_manager,
-                GrpcServiceManager::dummy(),
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
             )
             .unwrap();
 

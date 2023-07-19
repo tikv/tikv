@@ -76,14 +76,9 @@ resource_metering = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 serde_with = "1.4"
-<<<<<<< HEAD
+service = { workspace = true }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-=======
-service = { workspace = true }
-slog = { workspace = true }
-slog-global = { workspace = true }
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 smallvec = "1.4"
 sst_importer = { workspace = true }
 tempfile = "3.0"

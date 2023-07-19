@@ -4,12 +4,8 @@ pub use self::imp::wait_for_signal;
 
 #[cfg(unix)]
 mod imp {
-<<<<<<< HEAD
     use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine};
-=======
-    use engine_traits::MiscExt;
     use service::service_event::ServiceEvent;
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     use signal_hook::{
         consts::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2},
         iterator::Signals,
@@ -17,16 +13,10 @@ mod imp {
     use tikv_util::{metrics, mpsc as TikvMpsc};
 
     #[allow(dead_code)]
-<<<<<<< HEAD
-    pub fn wait_for_signal(engines: Option<Engines<impl KvEngine, impl RaftEngine>>) {
-=======
     pub fn wait_for_signal(
         engines: Option<Engines<impl KvEngine, impl RaftEngine>>,
-        kv_statistics: Option<Arc<RocksStatistics>>,
-        raft_statistics: Option<Arc<RocksStatistics>>,
         service_event_tx: Option<TikvMpsc::Sender<ServiceEvent>>,
     ) {
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
         for signal in &mut signals {
             match signal {

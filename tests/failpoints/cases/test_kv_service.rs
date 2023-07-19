@@ -68,38 +68,3 @@ fn test_snapshot_not_block_grpc() {
     must_kv_prewrite(&client, ctx, vec![mutation], b"k".to_vec(), 10);
     fail::remove("after-snapshot");
 }
-<<<<<<< HEAD
-=======
-
-#[test]
-fn test_undetermined_write_err() {
-    let (cluster, leader, ctx) = must_new_cluster_mul(1);
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_millis(500))
-        .keepalive_timeout(Duration::from_millis(500))
-        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
-    let client = TikvClient::new(channel);
-
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.set_key(b"k".to_vec());
-    mutation.set_value(b"v".to_vec());
-    fail::cfg("applied_cb_return_undetermined_err", "return()").unwrap();
-    let err = try_kv_prewrite_with_impl(
-        &client,
-        ctx,
-        vec![mutation],
-        b"k".to_vec(),
-        10,
-        0,
-        false,
-        false,
-    )
-    .unwrap_err();
-    assert_eq!(err.to_string(), "RpcFailure: 1-CANCELLED CANCELLED",);
-    fail::remove("applied_cb_return_undetermined_err");
-    // The previous panic hasn't been captured.
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(cluster))).is_err());
-}
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))

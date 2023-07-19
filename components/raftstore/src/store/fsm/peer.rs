@@ -2714,26 +2714,6 @@ where
             ExtraMessageType::MsgAvailabilityResponse => {
                 self.on_availability_response(msg.get_from_peer(), msg.get_extra_msg());
             }
-<<<<<<< HEAD
-=======
-            ExtraMessageType::MsgVoterReplicatedIndexRequest => {
-                self.on_voter_replicated_index_request(msg.get_from_peer());
-            }
-            ExtraMessageType::MsgVoterReplicatedIndexResponse => {
-                self.on_voter_replicated_index_response(msg.get_extra_msg());
-            }
-            ExtraMessageType::MsgGcPeerRequest => {
-                // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
-                // it needs to response GcPeerResponse.
-                if self.ctx.cfg.enable_v2_compatible_learner {
-                    self.on_gc_peer_request(msg);
-                }
-            }
-            // It's v2 only message and ignore does no harm.
-            ExtraMessageType::MsgGcPeerResponse
-            | ExtraMessageType::MsgFlushMemtable
-            | ExtraMessageType::MsgRefreshBuckets => (),
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         }
     }
 

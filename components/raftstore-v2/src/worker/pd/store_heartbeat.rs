@@ -220,8 +220,6 @@ where
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
         stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
         stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
-        // Update grpc server status
-        stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
@@ -252,51 +250,9 @@ where
         let router = self.router.clone();
         let resp = self.pd_client.store_heartbeat(stats, None, None);
         let logger = self.logger.clone();
-        let mut grpc_service_manager = self.grpc_service_manager.clone();
         let f = async move {
-<<<<<<< HEAD:components/raftstore-v2/src/worker/pd/store_heartbeat.rs
             if let Err(e) = resp.await {
                 error!(logger, "store heartbeat failed"; "err" => ?e);
-=======
-            match resp.await {
-                Ok(mut resp) => {
-                    // TODO: unsafe recovery
-
-                    // Attention, as Hibernate Region is eliminated in
-                    // raftstore-v2, followings just mock the awaken
-                    // operation.
-                    if resp.awaken_regions.take().is_some() {
-                        info!(
-                            logger,
-                            "Ignored AwakenRegions in raftstore-v2 as no hibernated regions in raftstore-v2"
-                        );
-                    }
-                    // Control grpc server.
-                    else if let Some(op) = resp.control_grpc.take() {
-                        info!(logger, "forcely control grpc server";
-                                "is_grpc_server_paused" => grpc_service_manager.is_paused(),
-                                "event" => ?op,
-                        );
-                        match op.get_ctrl_event() {
-                            pdpb::ControlGrpcEvent::Pause => {
-                                if let Err(e) = grpc_service_manager.pause() {
-                                    warn!(logger, "failed to send service event to PAUSE grpc server";
-                                        "err" => ?e);
-                                }
-                            }
-                            pdpb::ControlGrpcEvent::Resume => {
-                                if let Err(e) = grpc_service_manager.resume() {
-                                    warn!(logger, "failed to send service event to RESUME grpc server";
-                                        "err" => ?e);
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!(logger, "store heartbeat failed"; "err" => ?e);
-                }
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088)):components/raftstore-v2/src/worker/pd/store.rs
             }
         };
         self.remote.spawn(f);

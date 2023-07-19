@@ -5,12 +5,8 @@ use std::{error::Error, net::SocketAddr, sync::Arc};
 use hyper::{body, Client, StatusCode, Uri};
 use raftstore::store::region_meta::RegionMeta;
 use security::SecurityConfig;
-<<<<<<< HEAD
-use test_raftstore::{new_server_cluster, Simulator};
-=======
 use service::service_manager::GrpcServiceManager;
-use test_raftstore::new_server_cluster;
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
+use test_raftstore::{new_server_cluster, Simulator};
 use tikv::{config::ConfigController, server::status_server::StatusServer};
 use tikv_util::HandyRwLock;
 
@@ -52,11 +48,7 @@ fn test_region_meta_endpoint() {
         Arc::new(SecurityConfig::default()),
         router.unwrap(),
         std::env::temp_dir(),
-<<<<<<< HEAD
-=======
-        None,
         GrpcServiceManager::dummy(),
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());

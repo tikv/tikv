@@ -157,14 +157,10 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
 
     // Build a background worker for handling signals.
     {
-        let kv_statistics = tikv.kv_statistics.clone();
-        let raft_statistics = tikv.raft_statistics.clone();
         // TODO: support signal dump stats
         std::thread::spawn(move || {
             signal_handler::wait_for_signal(
                 None as Option<Engines<RocksEngine, CER>>,
-                kv_statistics,
-                raft_statistics,
                 Some(service_event_tx),
             )
         });

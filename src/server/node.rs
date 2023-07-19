@@ -25,12 +25,8 @@ use raftstore::{
         RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
     },
 };
-<<<<<<< HEAD
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
-=======
-use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
