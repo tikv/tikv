@@ -1681,11 +1681,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_read_progress,
             health_service,
             causal_ts_provider,
-<<<<<<< HEAD
-=======
-            snap_generator_pool,
             grpc_service_mgr,
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         )?;
         Ok(())
     }
@@ -1703,11 +1699,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-<<<<<<< HEAD
-=======
-        snap_generator_pool: FuturePool,
         grpc_service_mgr: GrpcServiceManager,
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();

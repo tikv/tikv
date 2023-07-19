@@ -17,12 +17,7 @@ use raftstore::store::{
     TxnExt, WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
-<<<<<<< HEAD
 use slog::{error, Logger};
-=======
-use service::service_manager::GrpcServiceManager;
-use slog::{error, warn, Logger};
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 use tikv_util::{
     config::VersionTrack,
     time::UnixSecs,
@@ -188,15 +183,6 @@ where
     concurrency_manager: ConcurrencyManager,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
-<<<<<<< HEAD
-=======
-    // For slowness detection
-    slowness_stats: slowness::SlownessStatistics,
-
-    // For grpc server.
-    grpc_service_manager: GrpcServiceManager,
-
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     logger: Logger,
     shutdown: Arc<AtomicBool>,
     cfg: Arc<VersionTrack<Config>>,
@@ -222,7 +208,6 @@ where
         auto_split_controller: AutoSplitController,
         region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
-        grpc_service_manager: GrpcServiceManager,
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
@@ -255,11 +240,6 @@ where
             is_hb_receiver_scheduled: false,
             concurrency_manager,
             causal_ts_provider,
-<<<<<<< HEAD
-=======
-            slowness_stats,
-            grpc_service_manager,
->>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
             logger,
             shutdown,
             cfg,
