@@ -175,7 +175,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_exit_force_leader<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
-        if self.has_force_leader() {
+        if !self.has_force_leader() {
             return;
         }
 

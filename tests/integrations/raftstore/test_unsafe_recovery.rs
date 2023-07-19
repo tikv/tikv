@@ -7,20 +7,23 @@ use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, store::find_peer, HandyRwLock};
 
-fn confirm_quorum_is_lost<T: Simulator>(cluster: &mut Cluster<T>, region: &metapb::Region) {
-    let put = new_put_cmd(b"k2", b"v2");
-    let req = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![put],
-        true,
-    );
-    // marjority is lost, can't propose command successfully.
-    cluster
-        .call_command_on_leader(req, Duration::from_millis(10))
-        .unwrap_err();
+macro_rules! confirm_quorum_is_lost {
+    ($cluster:expr, $region:expr) => {{
+        let put = new_put_cmd(b"k2", b"v2");
+        let req = new_request(
+            $region.get_id(),
+            $region.get_region_epoch().clone(),
+            vec![put],
+            true,
+        );
+        // marjority is lost, can't propose command successfully.
+        $cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap_err();
+    }};
 }
 
 #[test]
@@ -41,7 +44,7 @@ fn test_unsafe_recovery_demote_failed_voters() {
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
 
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
 
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
@@ -96,7 +99,7 @@ fn test_unsafe_recovery_demote_non_exist_voters() {
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
 
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
     let mut plan = pdpb::RecoveryPlan::default();
@@ -172,7 +175,7 @@ fn test_unsafe_recovery_auto_promote_learner() {
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
 
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
     let to_be_removed: Vec<metapb::Peer> = region
@@ -258,7 +261,7 @@ fn test_unsafe_recovery_already_in_joint_state() {
     cluster.stop_node(nodes[2]);
     cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
 
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
     let to_be_removed: Vec<metapb::Peer> = region
@@ -356,7 +359,7 @@ fn test_unsafe_recovery_early_return_after_exit_joint_state() {
     cluster.stop_node(nodes[2]);
     cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
 
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
     let to_be_removed: Vec<metapb::Peer> = region
@@ -434,33 +437,32 @@ fn test_unsafe_recovery_create_region() {
     assert_eq!(created, true);
 }
 
-fn must_get_error_recovery_in_progress<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    region: &metapb::Region,
-    cmd: kvproto::raft_cmdpb::Request,
-) {
-    let req = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![cmd],
-        true,
-    );
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_millis(100))
-        .unwrap();
-    assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
-            region_id: region.get_id(),
-            ..Default::default()
-        }
-    );
+macro_rules! must_get_error_recovery_in_progress {
+    ($cluster:expr, $region:expr, $cmd:expr) => {
+        let req = new_request(
+            $region.get_id(),
+            $region.get_region_epoch().clone(),
+            vec![$cmd],
+            true,
+        );
+        let resp = $cluster
+            .call_command_on_leader(req, Duration::from_millis(100))
+            .unwrap();
+        assert_eq!(
+            resp.get_header().get_error().get_recovery_in_progress(),
+            &kvproto::errorpb::RecoveryInProgress {
+                region_id: $region.get_id(),
+                ..Default::default()
+            }
+        );
+    };
 }
 
 // Test the case that two of three nodes fail and force leader on the rest node.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_three_nodes() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -476,7 +478,7 @@ fn test_force_leader_three_nodes() {
     cluster.stop_node(3);
 
     // quorum is lost, can't propose command successfully.
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
 
     cluster.must_enter_force_leader(region.get_id(), 1, vec![2, 3]);
     // remove the peers on failed nodes
@@ -488,13 +490,13 @@ fn test_force_leader_three_nodes() {
         .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
     // forbid writes in force leader state
     let put = new_put_cmd(b"k3", b"v3");
-    must_get_error_recovery_in_progress(&mut cluster, &region, put);
+    must_get_error_recovery_in_progress!(cluster, region, put);
     // forbid reads in force leader state
     let get = new_get_cmd(b"k1");
-    must_get_error_recovery_in_progress(&mut cluster, &region, get);
+    must_get_error_recovery_in_progress!(cluster, region, get);
     // forbid read index in force leader state
     let read_index = new_read_index_cmd();
-    must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
+    must_get_error_recovery_in_progress!(cluster, region, read_index);
     cluster.exit_force_leader(region.get_id(), 1);
 
     // quorum is formed, can propose command successfully now
@@ -525,7 +527,7 @@ fn test_force_leader_five_nodes() {
     cluster.stop_node(5);
 
     // quorum is lost, can't propose command successfully.
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
 
     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
@@ -540,13 +542,13 @@ fn test_force_leader_five_nodes() {
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
     // forbid writes in force leader state
     let put = new_put_cmd(b"k3", b"v3");
-    must_get_error_recovery_in_progress(&mut cluster, &region, put);
+    must_get_error_recovery_in_progress!(cluster, region, put);
     // forbid reads in force leader state
     let get = new_get_cmd(b"k1");
-    must_get_error_recovery_in_progress(&mut cluster, &region, get);
+    must_get_error_recovery_in_progress!(cluster, region, get);
     // forbid read index in force leader state
     let read_index = new_read_index_cmd();
-    must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
+    must_get_error_recovery_in_progress!(cluster, region, read_index);
 
     cluster.exit_force_leader(region.get_id(), 1);
 
@@ -594,7 +596,7 @@ fn test_force_leader_for_learner() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
 
     // wait election timeout
     std::thread::sleep(Duration::from_millis(
@@ -842,7 +844,7 @@ fn test_force_leader_with_uncommitted_conf_change() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
 
     // an uncommitted conf-change
     let cmd = new_change_peer_request(
@@ -957,7 +959,7 @@ fn test_force_leader_on_wrong_leader() {
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();
 
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
 
     // try to force leader on peer of node2 which is stale
     cluster.must_enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
@@ -1001,7 +1003,7 @@ fn test_force_leader_twice_on_different_peers() {
     cluster.run_node(1).unwrap();
     cluster.stop_node(2);
     cluster.run_node(2).unwrap();
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
 
     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // enter force leader on a different peer
@@ -1260,7 +1262,7 @@ fn test_unsafe_recovery_during_merge() {
 
     cluster.stop_node(1);
     cluster.stop_node(3);
-    confirm_quorum_is_lost(&mut cluster, &region);
+    confirm_quorum_is_lost!(cluster, region);
 
     let report = cluster.must_enter_force_leader(right.get_id(), 2, vec![1, 3]);
     assert_eq!(report.get_peer_reports().len(), 1);
