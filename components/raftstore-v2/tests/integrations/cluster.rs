@@ -44,7 +44,6 @@ use raftstore_v2::{
     Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
 use resource_metering::CollectorRegHandle;
-use service::service_manager::GrpcServiceManager;
 use slog::{debug, o, Logger};
 use sst_importer::SstImporter;
 use tempfile::TempDir;
@@ -354,7 +353,6 @@ impl RunningState {
                 pd_worker,
                 importer,
                 key_manager,
-                GrpcServiceManager::dummy(),
             )
             .unwrap();
 
