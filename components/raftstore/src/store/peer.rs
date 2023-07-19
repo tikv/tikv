@@ -89,14 +89,15 @@ use crate::{
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         fsm::{
             apply::{self, CatchUpLogs},
-            store::{PollContext, RaftRouter},
+            store::PollContext,
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{CasualMessage, ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
         txn_ext::LocksStatus,
+        unsafe_recovery::UnsafeRecoveryHandle,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
             HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
@@ -539,7 +540,7 @@ pub enum ForceLeaderState {
 // addition to that, it uses a closure to avoid having a raft router as a member
 // variable, which is statically dispatched, thus needs to propagate the
 // generics everywhere.
-pub struct InvokeClosureOnDrop(Box<dyn Fn() + Send + Sync>);
+pub struct InvokeClosureOnDrop(Option<Box<dyn FnOnce() + Send + Sync>>);
 
 impl fmt::Debug for InvokeClosureOnDrop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -549,20 +550,18 @@ impl fmt::Debug for InvokeClosureOnDrop {
 
 impl Drop for InvokeClosureOnDrop {
     fn drop(&mut self) {
-        self.0();
+        self.0.take().map(|on_drop| on_drop());
     }
 }
 
-pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
-    router: &RaftRouter<EK, ER>,
+pub fn start_unsafe_recovery_report(
+    router: Arc<dyn UnsafeRecoveryHandle>,
     report_id: u64,
     exit_force_leader: bool,
 ) {
     let wait_apply =
         UnsafeRecoveryWaitApplySyncer::new(report_id, router.clone(), exit_force_leader);
-    router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryWaitApply(wait_apply.clone()))
-    });
+    router.broadcast_wait_apply(wait_apply.clone());
 }
 
 // Propose a read index request to the raft group, return the request id and
@@ -647,13 +646,11 @@ pub fn can_amend_read<C>(
 pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
 
 impl UnsafeRecoveryForceLeaderSyncer {
-    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
-        let thread_safe_router = Mutex::new(router);
-        let inner = InvokeClosureOnDrop(Box::new(move || {
+    pub fn new(report_id: u64, router: Arc<dyn UnsafeRecoveryHandle>) -> Self {
+        let inner = InvokeClosureOnDrop(Some(Box::new(move || {
             info!("Unsafe recovery, force leader finished.");
-            let router_ptr = thread_safe_router.lock().unwrap();
-            start_unsafe_recovery_report(&*router_ptr, report_id, false);
-        }));
+            start_unsafe_recovery_report(router, report_id, false);
+        })));
         UnsafeRecoveryForceLeaderSyncer(Arc::new(inner))
     }
 }
@@ -665,19 +662,17 @@ pub struct UnsafeRecoveryExecutePlanSyncer {
 }
 
 impl UnsafeRecoveryExecutePlanSyncer {
-    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
-        let thread_safe_router = Mutex::new(router);
+    pub fn new(report_id: u64, router: Arc<dyn UnsafeRecoveryHandle>) -> Self {
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
+        let closure = InvokeClosureOnDrop(Some(Box::new(move || {
             info!("Unsafe recovery, plan execution finished");
             if *abort_clone.lock().unwrap() {
                 warn!("Unsafe recovery, plan execution aborted");
                 return;
             }
-            let router_ptr = thread_safe_router.lock().unwrap();
-            start_unsafe_recovery_report(&*router_ptr, report_id, true);
-        }));
+            start_unsafe_recovery_report(router, report_id, true);
+        })));
         UnsafeRecoveryExecutePlanSyncer {
             _closure: Arc::new(closure),
             abort,
@@ -700,7 +695,7 @@ impl SnapshotRecoveryWaitApplySyncer {
         let thread_safe_router = Mutex::new(sender);
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
+        let closure = InvokeClosureOnDrop(Some(Box::new(move || {
             info!("region {} wait apply finished", region_id);
             if *abort_clone.lock().unwrap() {
                 warn!("wait apply aborted");
@@ -711,7 +706,7 @@ impl SnapshotRecoveryWaitApplySyncer {
             _ = router_ptr.send(region_id).map_err(|_| {
                 warn!("reply waitapply states failure.");
             });
-        }));
+        })));
         SnapshotRecoveryWaitApplySyncer {
             _closure: Arc::new(closure),
             abort,
@@ -732,32 +727,23 @@ pub struct UnsafeRecoveryWaitApplySyncer {
 impl UnsafeRecoveryWaitApplySyncer {
     pub fn new(
         report_id: u64,
-        router: RaftRouter<impl KvEngine, impl RaftEngine>,
+        router: Arc<dyn UnsafeRecoveryHandle>,
         exit_force_leader: bool,
     ) -> Self {
-        let thread_safe_router = Mutex::new(router);
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
+        let closure = InvokeClosureOnDrop(Some(Box::new(move || {
             info!("Unsafe recovery, wait apply finished");
             if *abort_clone.lock().unwrap() {
                 warn!("Unsafe recovery, wait apply aborted");
                 return;
             }
-            let router_ptr = thread_safe_router.lock().unwrap();
             if exit_force_leader {
-                (*router_ptr).broadcast_normal(|| {
-                    PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState)
-                });
+                router.broadcast_exit_force_leader();
             }
-            let fill_out_report =
-                UnsafeRecoveryFillOutReportSyncer::new(report_id, (*router_ptr).clone());
-            (*router_ptr).broadcast_normal(|| {
-                PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryFillOutReport(
-                    fill_out_report.clone(),
-                ))
-            });
-        }));
+            let fill_out_report = UnsafeRecoveryFillOutReportSyncer::new(report_id, router.clone());
+            router.broadcast_fill_out_report(fill_out_report);
+        })));
         UnsafeRecoveryWaitApplySyncer {
             _closure: Arc::new(closure),
             abort,
@@ -776,11 +762,10 @@ pub struct UnsafeRecoveryFillOutReportSyncer {
 }
 
 impl UnsafeRecoveryFillOutReportSyncer {
-    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
-        let thread_safe_router = Mutex::new(router);
+    pub fn new(report_id: u64, router: Arc<dyn UnsafeRecoveryHandle>) -> Self {
         let reports = Arc::new(Mutex::new(vec![]));
         let reports_clone = reports.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
+        let closure = InvokeClosureOnDrop(Some(Box::new(move || {
             info!("Unsafe recovery, peer reports collected");
             let mut store_report = pdpb::StoreReport::default();
             {
@@ -788,12 +773,10 @@ impl UnsafeRecoveryFillOutReportSyncer {
                 store_report.set_peer_reports(mem::take(&mut *reports_ptr).into());
             }
             store_report.set_step(report_id);
-            let router_ptr = thread_safe_router.lock().unwrap();
-            if let Err(e) = (*router_ptr).send_control(StoreMsg::UnsafeRecoveryReport(store_report))
-            {
+            if let Err(e) = router.send_report(store_report) {
                 error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e);
             }
-        }));
+        })));
         UnsafeRecoveryFillOutReportSyncer {
             _closure: Arc::new(closure),
             reports,

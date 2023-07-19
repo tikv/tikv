@@ -362,6 +362,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::FlushBeforeClose { tx } => {
                     self.fsm.peer_mut().flush_before_close(self.store_ctx, tx)
                 }
+                PeerMsg::EnterForceLeaderState { .. } | PeerMsg::ExitForceLeaderState => (),
+                PeerMsg::UnsafeRecoveryWaitApply(_) | PeerMsg::UnsafeRecoveryFillOutReport(_) => (),
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.
