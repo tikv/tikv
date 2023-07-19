@@ -2681,7 +2681,7 @@ where
         if self.fsm.peer.is_leader() {
             return;
         }
-        let mut resp: ExtraMessage = ExtraMessage::default();
+        let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgAvailabilityResponse);
         resp.wait_data = self.fsm.peer.wait_data;
         let report = resp.mut_availability_context();
