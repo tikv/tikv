@@ -813,7 +813,7 @@ pub mod test_utils {
             self
         }
 
-        fn prepare_gc(&self, engine: &RocksEngine) {
+        pub fn prepare_gc(&self, engine: &RocksEngine) {
             let safe_point = Arc::new(AtomicU64::new(self.safe_point));
             let cfg_tracker = {
                 let mut cfg = GcConfig::default();
@@ -842,7 +842,7 @@ pub mod test_utils {
             });
         }
 
-        fn post_gc(&mut self) {
+        pub fn post_gc(&mut self) {
             self.callbacks_on_drop.clear();
             let mut gc_context = GC_CONTEXT.lock().unwrap();
             let callbacks = &mut gc_context.as_mut().unwrap().callbacks_on_drop;
