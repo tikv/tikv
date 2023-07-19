@@ -44,7 +44,6 @@ use raftstore::{
 };
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
-use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -597,7 +596,6 @@ impl ServerCluster {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
-            GrpcServiceManager::dummy(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

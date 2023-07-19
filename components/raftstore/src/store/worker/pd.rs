@@ -36,7 +36,6 @@ use pd_client::{merge_bucket_stats, metrics::*, BucketStat, Error, PdClient, Reg
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
-use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
@@ -915,9 +914,6 @@ where
     curr_health_status: ServingStatus,
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-
-    // Service manager for grpc service.
-    _grpc_service_manager: GrpcServiceManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -944,7 +940,6 @@ where
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        _grpc_service_manager: GrpcServiceManager,
     ) -> Runner<EK, ER, T> {
         // Register the region CPU records collector.
         let mut region_cpu_records_collector = None;
@@ -991,7 +986,6 @@ where
             curr_health_status: ServingStatus::Serving,
             coprocessor_host,
             causal_ts_provider,
-            _grpc_service_manager, // TODO: be used when optimization on slowness detection is ready
         }
     }
 

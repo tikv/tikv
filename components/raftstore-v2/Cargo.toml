@@ -50,7 +50,6 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raft-proto = { version = "0.7.0" }
 raftstore = { workspace = true }
 resource_metering = { workspace = true }
-service = { workspace = true }
 slog = "2.3"
 smallvec = "1.4"
 tikv_util = { workspace = true }
