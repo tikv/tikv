@@ -106,6 +106,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                                     "has_already_inited" => has_already_inited,
                                     "inited_or_fallback" => o.get().inited_or_fallback.load(Ordering::SeqCst),
                                     "snapshot_inflight" => o.get().snapshot_inflight.load(Ordering::SeqCst),
+                                    "fast_add_peer_start" => o.get().fast_add_peer_start.load(Ordering::SeqCst),
                                     "elapsed" => elapsed,
                                     "do_fallback" => do_fallback,
                             );
@@ -200,6 +201,14 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                         "is_first" => is_first,
                 );
             } else {
+                let mut ents = vec![];
+                let max_len = inner_msg.get_index();
+                // TODO If remove this, test_timeout_fallback may fail. Need investigate.
+                for i in 0..max_len {
+                    if let Ok(Some(e)) = self.raft_engine.get_entry(region_id, i) {
+                        ents.push(e);
+                    }
+                }
                 info!("fast path: ongoing {}:{} {}, MsgAppend accepted",
                     self.store_id, region_id, new_peer_id;
                         "to_peer_id" => msg.get_to_peer().get_id(),
@@ -209,6 +218,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                         "is_replicated" => is_replicated,
                         "has_already_inited" => has_already_inited,
                         "is_first" => is_first,
+                        "all_entries" => ?ents,
                 );
             }
         }
@@ -399,6 +409,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             if fake_send {
                 // A handling snapshot may block handling later MsgAppend.
                 // So we fake send.
+                debug!("fast path: send fake snapshot");
                 cached_manager
                     .set_snapshot_inflight(region_id, current.as_millis())
                     .unwrap();

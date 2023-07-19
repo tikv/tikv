@@ -34,6 +34,10 @@ test-engines-panic = [
   "raftstore/test-engines-panic",
   "mock-engine-store/test-engines-panic"
 ]
+test-engine-raft-rocksdb = [
+  "engine_test/test-engine-raft-rocksdb"
+]
+
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
 snmalloc = ["tikv/snmalloc"]
@@ -55,6 +59,7 @@ crossbeam = "0.8"
 encryption = { workspace = true }
 engine_rocks_helper = { workspace = true }
 engine_store_ffi = { workspace = true, default-features = false }
+engine_test = { workspace = true, default-features = false }
 engine_tiflash = { workspace = true, default-features = false }
 error_code = { workspace = true }
 fail = "0.5"

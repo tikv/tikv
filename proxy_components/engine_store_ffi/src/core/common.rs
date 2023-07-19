@@ -12,7 +12,7 @@ pub use std::{
 
 pub use collections::HashMap;
 pub use engine_tiflash::{CachedRegionInfo, CachedRegionInfoManager};
-pub use engine_traits::{RaftEngine, SstMetaInfo, CF_LOCK, CF_RAFT};
+pub use engine_traits::{RaftEngine, RaftEngineDebug, SstMetaInfo, CF_LOCK, CF_RAFT};
 pub use kvproto::{
     metapb::Region,
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, RaftCmdRequest},
