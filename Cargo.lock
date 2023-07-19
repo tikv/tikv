@@ -6004,7 +6004,6 @@ dependencies = [
  "resource_metering",
  "security",
  "server",
- "service",
  "slog",
  "slog-global",
  "tempfile",
