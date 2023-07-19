@@ -17,6 +17,8 @@ use tikv_util::{config::*, time::Instant};
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_put() {
     let mut cluster = new_cluster(0, 1);
+    cluster.cfg.rocksdb.lock_write_buffer_limit = Some(ReadableSize::mb(32));
+    cluster.cfg.rocksdb.write_buffer_limit = Some(ReadableSize::mb(132));
     cluster.run();
 
     let mut data_set: Vec<_> = (1..1000)

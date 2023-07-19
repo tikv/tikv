@@ -1490,6 +1490,9 @@ impl DbConfig {
         if let Some(r) = &shared.write_buffer_manager {
             opts.set_write_buffer_manager(r);
         }
+        if let Some(r) = &shared.lock_write_buffer_manager {
+            opts.set_lock_write_buffer_manager(r);
+        }
         if for_engine == EngineType::RaftKv2 {
             // Historical stats are not used.
             opts.set_stats_persist_period_sec(0);
