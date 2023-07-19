@@ -257,11 +257,6 @@ fn test_delete_sst_v2_after_epoch_stale() {
     config.server.addr = "127.0.0.1:0".to_owned();
     let cleanup_interval = Duration::from_millis(10);
     config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
-    config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
-    config.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
-    config.raft_store.report_region_buckets_tick_interval.0 = cleanup_interval;
-
-    config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
     config.server.grpc_concurrency = 1;
 
     let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
@@ -288,24 +283,9 @@ fn test_delete_sst_v2_after_epoch_stale() {
         tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
-    rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
-    assert_eq!(1, sst_file_count(&cluster.paths));
-
-    let (tx, rx) = channel::<()>();
-    let tx = Arc::new(Mutex::new(tx));
-    fail::cfg_callback("on_update_region_keys", move || {
-        tx.lock().unwrap().send(()).unwrap();
-    })
-    .unwrap();
     rx.recv_timeout(std::time::Duration::from_millis(100))
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    let region_keys = cluster
-        .pd_client
-        .get_region_approximate_keys(ctx.get_region_id())
-        .unwrap();
-    assert_eq!(100, region_keys);
-    fail::remove("on_update_region_keys");
+    assert_eq!(1, sst_file_count(&cluster.paths));
 
     // test restart cluster
     cluster.stop_node(1);
@@ -328,7 +308,7 @@ fn test_delete_sst_v2_after_epoch_stale() {
         tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
-    rx.recv_timeout(std::time::Duration::from_millis(100))
+    rx.recv_timeout(std::time::Duration::from_millis(1000))
         .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(100));
     assert_eq!(0, sst_file_count(&cluster.paths));
@@ -339,24 +319,13 @@ fn test_delete_sst_v2_after_epoch_stale() {
     let count = sst_file_count(&cluster.paths);
     assert_eq!(0, count);
     fail::remove("on_flush_completed");
-
-    let buckets = pd_client.get_buckets(1).unwrap();
-    assert_eq!(buckets.meta.keys.len(), 1);
 }
 
 #[test]
 fn test_delete_sst_after_applied_sst() {
-    // let mut cluster = test_raftstore_v2::new_server_cluster(1, 1);
-    let mut config = TikvConfig::default();
-    config.server.addr = "127.0.0.1:0".to_owned();
-    let cleanup_interval = Duration::from_millis(10);
-    config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
-    config.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
-    config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
-    config.server.grpc_concurrency = 1;
     // disable data flushed
     fail::cfg("on_flush_completed", "return()").unwrap();
-    let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
+    let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None);
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
@@ -400,6 +369,55 @@ fn test_delete_sst_after_applied_sst() {
 
     cluster.stop_node(1);
     cluster.start().unwrap();
+}
+
+#[test]
+fn test_split_buckets_after_ingest_sst_v2() {
+    let mut config = TikvConfig::default();
+    config.server.addr = "127.0.0.1:0".to_owned();
+    let cleanup_interval = Duration::from_millis(10);
+    config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
+    config.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
+    config.raft_store.report_region_buckets_tick_interval.0 = cleanup_interval;
+    config.coprocessor.enable_region_bucket = Some(true);
+    config.coprocessor.region_bucket_size = ReadableSize(200);
+    config.raft_store.region_split_check_diff = Some(ReadableSize(200));
+    config.server.grpc_concurrency = 1;
+
+    let (cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(Some(config));
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 255);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    send_upload_sst(&import, &meta, &data).unwrap();
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx.clone());
+    ingest.set_sst(meta.clone());
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    send_upload_sst(&import, &meta, &data).unwrap();
+    ingest.set_sst(meta.clone());
+
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
+
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    fail::cfg_callback("on_update_region_keys", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+    rx.recv_timeout(std::time::Duration::from_millis(100))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let region_keys = cluster
+        .pd_client
+        .get_region_approximate_keys(ctx.get_region_id())
+        .unwrap();
+    assert_eq!(255, region_keys);
+    let buckets = cluster.pd_client.get_buckets(ctx.get_region_id()).unwrap();
+    assert!(buckets.meta.keys.len() > 2);
+    fail::remove("on_update_region_keys");
 }
 
 fn sst_file_count(paths: &Vec<TempDir>) -> u64 {
