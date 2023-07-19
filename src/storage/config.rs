@@ -281,7 +281,6 @@ impl BlockCacheConfig {
         if self.shared == Some(false) {
             warn!("storage.block-cache.shared is deprecated, cache is always shared.");
         }
-        // Prod must set it in `TikvConfig::validate`.
         let capacity = self.capacity.unwrap_or(FALLBACK_BLOCK_CACHE_CAPACITY).0 as usize;
         let mut cache_opts = LRUCacheOptions::new();
         cache_opts.set_capacity(capacity);

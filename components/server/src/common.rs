@@ -517,7 +517,7 @@ impl EnginesResourceInfo {
         let mut compaction_pending_bytes = [0; DATA_CFS.len()];
         let mut soft_pending_compaction_bytes_limit = [0; DATA_CFS.len()];
         // level0 file number ratio within [compaction trigger, slowdown trigger].
-        let mut level0_level = [0.0f32; DATA_CFS.len()];
+        let mut level0_ratio = [0.0f32; DATA_CFS.len()];
 
         let mut fetch_engine_cf = |engine: &RocksEngine, cf: &str| {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
@@ -534,11 +534,14 @@ impl EnginesResourceInfo {
                     let slowdown_trigger = cf_opts.get_level_zero_slowdown_writes_trigger() as f32;
                     let compaction_trigger =
                         cf_opts.get_level_zero_file_num_compaction_trigger() as f32;
-                    assert!(slowdown_trigger > compaction_trigger);
-                    let level =
-                        (level0 - compaction_trigger) / (slowdown_trigger - compaction_trigger);
-                    if level > level0_level[offset] {
-                        level0_level[offset] = level;
+                    let ratio = if slowdown_trigger > compaction_trigger {
+                        (level0 - compaction_trigger) / (slowdown_trigger - compaction_trigger)
+                    } else {
+                        1.0
+                    };
+
+                    if ratio > level0_ratio[offset] {
+                        level0_ratio[offset] = ratio;
                     }
                 }
             }
@@ -586,14 +589,14 @@ impl EnginesResourceInfo {
                         u32::from(level > 0.5)
                     };
                     // 20% -> 1, 60% -> 2, 80% -> 3, 90% -> 6.
-                    let delta2 = if level0_level[i] > 0.9 {
+                    let delta2 = if level0_ratio[i] > 0.9 {
                         cmp::min(SysQuota::cpu_cores_quota() as u32 - 2, 6)
-                    } else if level0_level[i] > 0.8 {
+                    } else if level0_ratio[i] > 0.8 {
                         3
-                    } else if level0_level[i] > 0.6 {
+                    } else if level0_ratio[i] > 0.6 {
                         2
                     } else {
-                        u32::from(level0_level[i] > 0.2)
+                        u32::from(level0_ratio[i] > 0.2)
                     };
                     let delta = cmp::max(delta1, delta2);
                     let cf = DATA_CFS[i];
@@ -604,7 +607,7 @@ impl EnginesResourceInfo {
                             "n" => base + delta,
                             "pending_bytes" => *pending,
                             "soft_limit" => limit,
-                            "level0_level" => level0_level[i],
+                            "level0_ratio" => level0_ratio[i],
                         );
                     }
                     // We cannot get the current limit from limiter to avoid repeatedly setting the

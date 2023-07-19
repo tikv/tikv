@@ -571,7 +571,6 @@ where
     type Task = Task<EK>;
 
     fn run(&mut self, task: Task<EK>) {
-        info!(self.logger, "tablet task {task}");
         match task {
             Task::Trim {
                 tablet,
