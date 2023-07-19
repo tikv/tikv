@@ -259,6 +259,8 @@ fn test_delete_sst_v2_after_epoch_stale() {
     config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
     config.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
     config.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
+    config.raft_store.report_region_buckets_tick_interval.0 = cleanup_interval;
+
     config.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
     config.server.grpc_concurrency = 1;
 
@@ -337,6 +339,9 @@ fn test_delete_sst_v2_after_epoch_stale() {
     let count = sst_file_count(&cluster.paths);
     assert_eq!(0, count);
     fail::remove("on_flush_completed");
+
+    let buckets = pd_client.get_buckets(1).unwrap();
+    assert_eq!(buckets.meta.keys.len(), 1);
 }
 
 #[test]

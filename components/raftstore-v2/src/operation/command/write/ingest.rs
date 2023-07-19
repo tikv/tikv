@@ -148,7 +148,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let metas: Vec<SstMeta> = infos.iter().map(|info| info.meta.clone()).collect();
             self.sst_apply_state().register_ssts(index, metas);
         }
-
+        if let Some(s) = self.buckets.as_mut() {
+            s.ingest_sst(keys, size as u64);
+        }
         self.metrics.size_diff_hint += size;
         self.metrics.written_bytes += size as u64;
         self.metrics.written_keys += keys;

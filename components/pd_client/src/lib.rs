@@ -198,6 +198,15 @@ impl BucketStat {
         }
     }
 
+    pub fn ingest_sst(&mut self, key: u64, value_size: u64) {
+        for stat in self.stats.mut_write_bytes() {
+            *stat += value_size;
+        }
+        for stat in self.stats.mut_write_bytes() {
+            *stat += key;
+        }
+    }
+
     pub fn split(&mut self, idx: usize) {
         assert!(idx != 0);
         // inherit the traffic stats for splited bucket
