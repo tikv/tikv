@@ -54,8 +54,12 @@ resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true }
 server = { workspace = true }
-service = { workspace = true }
+<<<<<<< HEAD
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+=======
+service = { workspace = true }
+slog = { workspace = true }
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"

@@ -2797,7 +2797,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#0af0becd87ae89dfd48ef313a4fca7e04688b2b2"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#92075f193814dbc00f347b4589743a36bf624f34"
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4454,6 +4458,7 @@ dependencies = [
  "rand 0.8.5",
  "resource_control",
  "resource_metering",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -6664,7 +6669,6 @@ dependencies = [
  "serde_json",
  "server",
  "tikv",
- "tikv_util",
  "time",
  "toml",
 ]

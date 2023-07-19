@@ -55,6 +55,7 @@ raftstore = { workspace = true }
 rand = "0.8.3"
 resource_control = { workspace = true }
 resource_metering = { workspace = true }
+service = { workspace = true }
 slog = "2.3"
 smallvec = "1.4"
 sst_importer = { workspace = true }

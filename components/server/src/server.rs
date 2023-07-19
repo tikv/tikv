@@ -130,12 +130,18 @@ use crate::{
 };
 
 #[inline]
+<<<<<<< HEAD
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
+    let mut tikv = TikvServer::<CER>::init::<F>(config);
+
+=======
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     config: TikvConfig,
     service_event_tx: TikvMpsc::Sender<ServiceEvent>,
     service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
 ) {
-    let mut tikv = TikvServer::<CER>::init::<F>(config, service_event_tx.clone());
+    let mut tikv = TikvServer::<CER, F>::init(config, service_event_tx.clone());
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
@@ -279,10 +285,11 @@ impl<ER> TikvServer<ER>
 where
     ER: RaftEngine,
 {
-    fn init<F: KvFormat>(
-        mut config: TikvConfig,
-        tx: TikvMpsc::Sender<ServiceEvent>,
-    ) -> TikvServer<ER> {
+<<<<<<< HEAD
+    fn init<F: KvFormat>(mut config: TikvConfig) -> TikvServer<ER> {
+=======
+    fn init(mut config: TikvConfig, tx: TikvMpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
+>>>>>>> c27b43018c (raftstore & raftstore-v2:control grpc server according to slowness. (#15088))
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only

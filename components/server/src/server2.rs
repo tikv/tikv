@@ -852,6 +852,7 @@ where
                 &state,
                 importer.clone(),
                 self.core.encryption_key_manager.clone(),
+                self.grpc_service_mgr.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
