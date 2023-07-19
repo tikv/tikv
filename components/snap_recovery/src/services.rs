@@ -250,9 +250,16 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             }
 
             let mut lk = LeaderKeeper::new(raft_router.clone(), leaders.clone());
-            block_on(lk.wait_until_all_leader_ready());
-
-            info!("all region leader assigned done");
+            // We must use the tokio runtime here because there isn't a `block_in_place`
+            // like thing in the futures executor. It simply panics when block
+            // on the block_on context.
+            // It is also impossible to directly `await` here, because that will make
+            // borrowing to the raft router crosses the await point.
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("failed to build temporary tokio runtime.")
+                .block_on(lk.wait_until_all_leader_ready());
+            info!("all region leader assigned done"; "count" => %leaders.len());
 
             let now = Instant::now();
             // wait apply to the last log
