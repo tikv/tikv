@@ -1,5 +1,3 @@
-use proxy_ffi::interfaces_ffi::ColumnFamilyType;
-
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::utils::v1::*;
 

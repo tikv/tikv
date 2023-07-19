@@ -14,6 +14,7 @@ use engine_traits::PerfLevel;
 use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
+use resource_control::TaskMetadata;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
@@ -102,7 +103,7 @@ impl<E: Engine> Endpoint<E> {
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
-            max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            max_handle_duration: cfg.end_point_request_max_handle_duration().0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             quota_limiter,
             _phantom: Default::default(),
@@ -486,12 +487,7 @@ impl<E: Engine> Endpoint<E> {
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
-        let group_name = req_ctx
-            .context
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -502,7 +498,7 @@ impl<E: Engine> Endpoint<E> {
                     .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
-                group_name,
+                metadata,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -726,12 +722,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let group_name = req_ctx
-            .context
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
         let key_ranges = req_ctx
             .ranges
             .iter()
@@ -754,7 +745,7 @@ impl<E: Engine> Endpoint<E> {
                     }),
                 priority,
                 task_id,
-                group_name,
+                metadata,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)
@@ -1501,9 +1492,9 @@ mod tests {
         ));
 
         let config = Config {
-            end_point_request_max_handle_duration: ReadableDuration(
+            end_point_request_max_handle_duration: Some(ReadableDuration(
                 (PAYLOAD_SMALL + PAYLOAD_LARGE) * 2,
-            ),
+            )),
             ..Default::default()
         };
 
@@ -1674,10 +1665,6 @@ mod tests {
 
             // Response 1
             //
-            // Note: `process_wall_time_ms` includes `total_process_time` and
-            // `total_suspend_time`. Someday it will be separated, but for now,
-            // let's just consider the combination.
-            //
             // In the worst case, `total_suspend_time` could be totally req2 payload.
             // So here: req1 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
@@ -1700,10 +1687,6 @@ mod tests {
             );
 
             // Response 2
-            //
-            // Note: `process_wall_time_ms` includes `total_process_time` and
-            // `total_suspend_time`. Someday it will be separated, but for now,
-            // let's just consider the combination.
             //
             // In the worst case, `total_suspend_time` could be totally req1 payload.
             // So here: req2 payload <= process time <= (req1 payload + req2 payload)
@@ -1955,6 +1938,7 @@ mod tests {
                 0.into(),
                 1,
                 20.into(),
+                false,
             ));
         });
 

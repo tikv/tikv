@@ -147,8 +147,10 @@ where
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
-            .after_start_wrapper(|| debug!("Proxy's Status server started"))
-            .before_stop_wrapper(|| debug!("stopping status server"))
+            .with_sys_and_custom_hooks(
+                || debug!("Proxy's Status server started"),
+                || debug!("stopping status server"),
+            )
             .build()?;
 
         let (tx, rx) = oneshot::channel::<()>();

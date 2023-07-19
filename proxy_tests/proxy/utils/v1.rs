@@ -94,7 +94,14 @@ pub fn create_tmp_importer(cfg: &MixedClusterConfig, kv_path: &str) -> (PathBuf,
     let dir = Path::new(kv_path).join("import-sst");
     let importer = {
         Arc::new(
-            SstImporter::new(&cfg.import, dir.clone(), None, cfg.storage.api_version()).unwrap(),
+            SstImporter::new(
+                &cfg.import,
+                dir.clone(),
+                None,
+                cfg.storage.api_version(),
+                false,
+            )
+            .unwrap(),
         )
     };
     (dir, importer)

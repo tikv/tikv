@@ -70,8 +70,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
             Builder::new_multi_thread()
                 .thread_name("inc-scan")
                 .worker_threads(count)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap(),
         );

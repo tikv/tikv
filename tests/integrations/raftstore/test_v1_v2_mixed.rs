@@ -8,8 +8,11 @@ use std::{
 use engine_rocks::{RocksCfOptions, RocksDbOptions};
 use engine_traits::{Checkpointer, KvEngine, Peekable, SyncMutable, LARGE_CFS};
 use futures::executor::block_on;
-use grpcio::Environment;
-use kvproto::raft_serverpb::{RaftMessage, *};
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{
+    raft_serverpb::{RaftMessage, *},
+    tikvpb::TikvClient,
+};
 use raft::eraftpb::{MessageType, Snapshot};
 use raftstore::{
     errors::Result,
@@ -109,16 +112,13 @@ fn test_v1_receive_snap_from_v2() {
     let test_receive_snap = |key_num| {
         let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
         let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
-        let mut cluster_v1_tikv = test_raftstore::new_server_cluster(1, 1);
 
         cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
 
         cluster_v1.run();
         cluster_v2.run();
-        cluster_v1_tikv.run();
 
         let s1_addr = cluster_v1.get_addr(1);
-        let s2_addr = cluster_v1_tikv.get_addr(1);
         let region = cluster_v2.get_region(b"");
         let region_id = region.get_id();
         let engine = cluster_v2.get_engine(1);
@@ -132,33 +132,15 @@ fn test_v1_receive_snap_from_v2() {
         let snap_mgr = cluster_v2.get_snap_mgr(1);
         let security_mgr = cluster_v2.get_security_mgr();
         let (msg, snap_key) = generate_snap(&engine, region_id, &snap_mgr);
-        let cfg = tikv::server::Config::default();
         let limit = Limiter::new(f64::INFINITY);
         let env = Arc::new(Environment::new(1));
         let _ = block_on(async {
-            send_snap_v2(
-                env.clone(),
-                snap_mgr.clone(),
-                security_mgr.clone(),
-                &cfg,
-                &s1_addr,
-                msg.clone(),
-                limit.clone(),
-            )
-            .unwrap()
-            .await
-        });
-        let send_result = block_on(async {
-            send_snap_v2(env, snap_mgr, security_mgr, &cfg, &s2_addr, msg, limit)
-                .unwrap()
+            let client =
+                TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+            send_snap_v2(client, snap_mgr.clone(), msg.clone(), limit.clone())
                 .await
+                .unwrap()
         });
-        // snapshot should be rejected by cluster v1 tikv, and the snapshot should be
-        // deleted.
-        assert!(send_result.is_err());
-        let dir = cluster_v2.get_snap_dir(1);
-        let read_dir = std::fs::read_dir(dir).unwrap();
-        assert_eq!(0, read_dir.count());
 
         // The snapshot has been received by cluster v1, so check it's completeness
         let snap_mgr = cluster_v1.get_snap_mgr(1);

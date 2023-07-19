@@ -381,6 +381,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                true,
             )
             .unwrap();
 
@@ -486,7 +487,8 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
-        let check_leader_runner = CheckLeaderRunner::new(store_meta, coprocessor_host.clone());
+        let check_leader_runner =
+            CheckLeaderRunner::new(store_meta.clone(), coprocessor_host.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
@@ -532,6 +534,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                     dir,
                     key_manager.clone(),
                     cfg.storage.api_version(),
+                    true,
                 )
                 .unwrap(),
             )
@@ -542,6 +545,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             raft_kv_v2,
             LocalTablets::Registry(tablet_registry.clone()),
             Arc::clone(&importer),
+            Some(store_meta),
         );
 
         // Create deadlock service.
@@ -573,8 +577,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap(),
         );
@@ -885,6 +888,14 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
 
 impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
     pub fn must_get_snapshot_of_region(&mut self, region_id: u64) -> RegionSnapshot<EK::Snapshot> {
+        self.must_get_snapshot_of_region_with_ctx(region_id, SnapContext::default())
+    }
+
+    pub fn must_get_snapshot_of_region_with_ctx(
+        &mut self,
+        region_id: u64,
+        snap_ctx: SnapContext<'_>,
+    ) -> RegionSnapshot<EK::Snapshot> {
         let mut try_snapshot = || -> Option<RegionSnapshot<EK::Snapshot>> {
             let leader = self.leader_of_region(region_id)?;
             let store_id = leader.store_id;
@@ -897,7 +908,7 @@ impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
             let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
-                ..Default::default()
+                ..snap_ctx.clone()
             };
             storage.snapshot(snap_ctx).ok()
         };

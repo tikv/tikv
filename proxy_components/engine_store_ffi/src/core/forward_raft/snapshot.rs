@@ -118,6 +118,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             "snap_key" => ?snap_key,
             "has_snap" => snap.is_some(),
             "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
+            "snapshot" => ?snap,
         );
         fail::fail_point!("on_ob_pre_handle_snapshot", |_| {});
 

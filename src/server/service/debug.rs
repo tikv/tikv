@@ -21,6 +21,8 @@ fn error_to_status(e: Error) -> RpcStatus {
         Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
         Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
         Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
+        Error::EngineTrait(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
+        Error::FlashbackFailed(msg) => (RpcStatusCode::UNKNOWN, msg),
     };
     RpcStatus::with_message(code, msg)
 }
@@ -53,8 +55,8 @@ where
     T: RaftExtension,
     D: Debugger,
 {
-    /// Constructs a new `Service` with `Engines`, a `RaftExtension` and a
-    /// `GcWorker`.
+    /// Constructs a new `Service` with `Engines`, a `RaftExtension`, a
+    /// `GcWorker` and a `RegionInfoAccessor`.
     pub fn new(debugger: D, pool: Handle, raft_router: T) -> Self {
         Service {
             pool,
@@ -433,6 +435,35 @@ where
         self.handle_response(ctx, sink, f, TAG);
     }
 
+    fn get_range_properties(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: GetRangePropertiesRequest,
+        sink: UnarySink<GetRangePropertiesResponse>,
+    ) {
+        const TAG: &str = "get_range_properties";
+        let debugger = self.debugger.clone();
+
+        let f =
+            self.pool
+                .spawn(async move {
+                    debugger.get_range_properties(req.get_start_key(), req.get_end_key())
+                })
+                .map(|res| res.unwrap())
+                .map_ok(|props| {
+                    let mut resp = GetRangePropertiesResponse::default();
+                    for (key, value) in props {
+                        let mut prop = GetRangePropertiesResponseRangeProperty::default();
+                        prop.set_key(key);
+                        prop.set_value(value);
+                        resp.mut_properties().push(prop)
+                    }
+                    resp
+                });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
     fn get_store_info(
         &mut self,
         ctx: RpcContext<'_>,
@@ -516,6 +547,34 @@ where
     ) {
         self.debugger.reset_to_version(req.get_ts());
         sink.success(ResetToVersionResponse::default());
+    }
+
+    fn flashback_to_version(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: FlashbackToVersionRequest,
+        sink: UnarySink<FlashbackToVersionResponse>,
+    ) {
+        let debugger = self.debugger.clone();
+        let f = self
+            .pool
+            .spawn(async move {
+                let check = debugger.key_range_flashback_to_version(
+                    req.get_version(),
+                    req.get_region_id(),
+                    req.get_start_key(),
+                    req.get_end_key(),
+                    req.get_start_ts(),
+                    req.get_commit_ts(),
+                );
+                match check.await {
+                    Ok(_) => Ok(FlashbackToVersionResponse::default()),
+                    Err(err) => Err(err),
+                }
+            })
+            .map(|res| res.unwrap());
+
+        self.handle_response(ctx, sink, f, "debug_flashback_to_version");
     }
 }
 

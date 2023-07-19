@@ -120,7 +120,8 @@ pub extern "C" fn ffi_handle_delete_file(
         proxy_ptr.as_ref().maybe_key_manager().as_ref().map_or(
             FileEncryptionInfoRaw::new(FileEncryptionRes::Disabled),
             |key_manager| {
-                let p = key_manager.delete_file(std::str::from_utf8_unchecked(name.to_slice()));
+                let p =
+                    key_manager.delete_file(std::str::from_utf8_unchecked(name.to_slice()), None);
                 p.map_or_else(
                     |e| {
                         FileEncryptionInfoRaw::error(

@@ -290,6 +290,7 @@ impl<E: KvEngine> Initializer<E> {
             self.sink_scan_events(entries, done).await?;
         }
 
+        fail_point!("before_post_incremental_scan");
         if !post_init_downstream(&self.downstream_state) {
             return on_cancel();
         }
@@ -493,9 +494,10 @@ impl<E: KvEngine> Initializer<E> {
             }
         } else {
             Deregister::Downstream {
+                conn_id: self.conn_id,
+                request_id: self.request_id,
                 region_id: self.region_id,
                 downstream_id: self.downstream_id,
-                conn_id: self.conn_id,
                 err: Some(err),
             }
         };
@@ -633,8 +635,7 @@ mod tests {
         let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
             .worker_threads(4)
-            .after_start_wrapper(|| {})
-            .before_stop_wrapper(|| {})
+            .with_sys_hooks()
             .build()
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
@@ -1030,6 +1031,14 @@ mod tests {
         let (tx1, rx1) = sync_channel(1);
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = (
+                &initializer,
+                &change_cmd,
+                &raft_router,
+                &concurrency_semaphore,
+            );
             let res = initializer
                 .initialize(change_cmd, raft_router, concurrency_semaphore)
                 .await;

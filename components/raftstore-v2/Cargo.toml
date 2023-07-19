@@ -49,7 +49,7 @@ parking_lot = "0.12"
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raft-proto = { version = "0.7.0" }
 raftstore = { workspace = true }
 rand = "0.8.3"
@@ -72,6 +72,7 @@ slog-global = { workspace = true }
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_util = { workspace = true }
+walkdir = "2"
 
 [[test]]
 name = "raftstore-v2-failpoints"

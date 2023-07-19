@@ -1,6 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{collections::BTreeMap, sync::atomic::AtomicU64};
 
+use engine_traits::RaftEngineDebug;
+
 use super::common::*;
 
 pub type RegionId = u64;
@@ -72,7 +74,7 @@ pub fn delete_kv_in_mem(region: &mut MockRegion, cf_index: usize, k: &[u8]) {
 }
 
 // TODO adapt raftstore-v2
-pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine>(
+pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine + RaftEngineDebug>(
     source_engines: &Engines<EK, ER>,
     target_engines: &Engines<EK, ER>,
     source: &MockRegion,
@@ -127,7 +129,7 @@ pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine>(
 
 // TODO adapt raftstore-v2
 pub fn copy_data_from(
-    source_engines: &Engines<impl KvEngine, impl RaftEngine>,
+    source_engines: &Engines<impl KvEngine, impl RaftEngine + RaftEngineDebug>,
     target_engines: &Engines<impl KvEngine, impl RaftEngine>,
     source: &MockRegion,
     target: &mut MockRegion,
@@ -152,7 +154,7 @@ pub fn copy_data_from(
     debug!("copy raft log {:?}", entries);
 
     raft_wb.append(region_id, None, entries)?;
-    box_try!(target_engines.raft.consume(&mut raft_wb, true));
+    target_engines.raft.consume(&mut raft_wb, true)?;
     Ok(())
 }
 

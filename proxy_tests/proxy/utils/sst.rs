@@ -3,6 +3,7 @@
 #![allow(unused)]
 
 use byteorder::{BigEndian, ByteOrder};
+use collections::HashMap;
 use mock_engine_store::interfaces_ffi::BaseBuffView;
 use more_asserts::assert_gt;
 use proxy_ffi::{
@@ -181,4 +182,44 @@ pub unsafe fn read_sst_file(path: &str) {
         // BigEndian::read_u64(&ks[12..]));
         ffi_sst_reader_next(reader.clone(), ColumnFamilyType::Write);
     }
+}
+
+pub fn read_from_reader(path: &str, cf: ColumnFamilyType) -> Vec<String> {
+    unsafe {
+        let mut keys: Vec<String> = Default::default();
+        let reader = TabletReader::ffi_get_cf_file_reader(path, cf, None);
+        loop {
+            let r = ffi_sst_reader_remained(reader.clone(), cf);
+            if r == 0 {
+                break;
+            }
+            let k = ffi_sst_reader_key(reader.clone(), cf);
+            let ks = k.to_slice();
+            let encoded = hex::encode_upper(ks);
+            keys.push(encoded);
+            ffi_sst_reader_next(reader.clone(), cf);
+        }
+        keys
+    }
+}
+
+pub fn list_all_orphan_keys(path: &str) -> Vec<String> {
+    let write_keys: Vec<String> = read_from_reader(path, ColumnFamilyType::Write);
+    let default_keys: Vec<String> = read_from_reader(path, ColumnFamilyType::Default);
+    let mut default_pk: HashMap<i64, String> = Default::default();
+    let mut res: Vec<String> = Default::default();
+    for i in default_keys.iter() {
+        let h = from_hex(i.as_str()).unwrap();
+        let pk = parse_handle_id(&h);
+        default_pk.insert(pk, i.to_owned());
+    }
+
+    for i in write_keys.iter() {
+        let h = from_hex(i.as_str()).unwrap();
+        let pk = parse_handle_id(&h);
+        if !default_pk.contains_key(&pk) {
+            res.push(i.to_owned())
+        }
+    }
+    res
 }
