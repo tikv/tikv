@@ -1,6 +1,12 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{array, collections::HashMap, io::Result as IoResult, sync::Arc, time::Duration};
+use std::{
+    array,
+    collections::{HashMap, HashSet},
+    io::Result as IoResult,
+    sync::Arc,
+    time::Duration,
+};
 
 use file_system::{fetch_io_bytes, IoBytes, IoType};
 use strum::EnumCount;
@@ -143,6 +149,15 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
 
         self.do_adjust(ResourceType::Cpu, dur_secs, &mut background_groups);
         self.do_adjust(ResourceType::Io, dur_secs, &mut background_groups);
+
+        // clean up deleted group stats
+        if self.prev_stats_by_group[0].len() != background_groups.len() {
+            let name_set: HashSet<_> =
+                HashSet::from_iter(background_groups.iter().map(|g| &g.name));
+            for stat_map in &mut self.prev_stats_by_group {
+                stat_map.retain(|k, _v| !name_set.contains(k));
+            }
+        }
     }
 
     fn do_adjust(
@@ -173,12 +188,18 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let mut has_wait = false;
         for g in bg_group_stats.iter_mut() {
             total_ru_quota += g.ru_quota;
-            let total_stats = g.limiter.get_limiter(resource_type).get_statistics();
-            let stats_per_sec = (total_stats
-                - self.prev_stats_by_group[resource_type as usize]
-                    .insert(g.name.clone(), total_stats)
-                    .unwrap_or_default())
-                / dur_secs;
+            let total_stats = g.limiter.get_limit_statistics(resource_type);
+            let last_stats = self.prev_stats_by_group[resource_type as usize]
+                .insert(g.name.clone(), total_stats)
+                .unwrap_or_default();
+            // version changes means this is a brand new limiter, so no need to sub the old
+            // statistics.
+            let stats_delta = if total_stats.version == last_stats.version {
+                total_stats - last_stats
+            } else {
+                total_stats
+            };
+            let stats_per_sec = stats_delta / dur_secs;
             background_consumed_total += stats_per_sec.total_consumed as f64;
             g.stats_per_sec = stats_per_sec;
             if stats_per_sec.total_wait_dur_us > 0 {

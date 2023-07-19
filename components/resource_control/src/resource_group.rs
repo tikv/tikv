@@ -60,6 +60,9 @@ pub enum ResourceConsumeType {
 pub struct ResourceGroupManager {
     pub(crate) resource_groups: DashMap<String, ResourceGroup>,
     registry: RwLock<Vec<Arc<ResourceController>>>,
+    // auto incremental version generator used for mark the background
+    // resource limiter has changed.
+    version_generator: AtomicU64,
 }
 
 impl Default for ResourceGroupManager {
@@ -67,6 +70,7 @@ impl Default for ResourceGroupManager {
         let manager = Self {
             resource_groups: Default::default(),
             registry: Default::default(),
+            version_generator: AtomicU64::new(0),
         };
 
         // init the default resource group by default.
@@ -135,7 +139,10 @@ impl ResourceGroupManager {
     ) -> Option<Arc<ResourceLimiter>> {
         if !rg.get_background_settings().get_job_types().is_empty() {
             old_limiter
-                .or_else(|| Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY))))
+                .or_else(|| {
+                    let version = self.version_generator.fetch_add(1, Ordering::Relaxed);
+                    Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY, version)))
+                })
         } else {
             None
         }
