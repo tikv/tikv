@@ -17,6 +17,7 @@ kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 match-template = "0.0.1"
 protobuf = { version = "2.8", features = ["bytes"] }
+resource_control = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 smallvec = "1.4"
