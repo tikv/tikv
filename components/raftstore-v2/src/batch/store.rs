@@ -37,7 +37,6 @@ use raftstore::{
     },
 };
 use resource_metering::CollectorRegHandle;
-use service::service_manager::GrpcServiceManager;
 use slog::{warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -597,7 +596,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         pd_worker: LazyWorker<pd::Task>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
-        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -659,7 +657,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             auto_split_controller,
             store_meta.lock().unwrap().region_read_progress.clone(),
             collector_reg_handle,
-            grpc_service_mgr,
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),
