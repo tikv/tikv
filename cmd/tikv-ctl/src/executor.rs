@@ -1008,6 +1008,7 @@ impl DebugExecutor for DebugClient {
             ),
             ("paused", resp.get_region_read_progress_paused().to_string()),
             ("discarding", resp.get_discard().to_string()),
+            // TODO: figure out the performance impact here before implementing it.
             // (
             //     "duration to last update_safe_ts",
             //     format!("{} ms", resp.get_duration_to_last_update_safe_ts_ms()),

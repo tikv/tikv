@@ -609,16 +609,15 @@ where
             if log_locks {
                 r.resolver.log_locks(min_start_ts);
             }
-            callback((
-                true,
+            callback(Some((
                 r.resolver.stopped(),
                 r.resolver.resolved_ts().into_inner(),
                 r.resolver.tracked_index(),
                 r.resolver.num_locks(),
                 r.resolver.num_transactions(),
-            ));
+            )));
         } else {
-            callback((false, false, 0u64, 0u64, 0u64, 0u64));
+            callback(None);
         }
     }
 }

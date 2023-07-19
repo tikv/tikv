@@ -42,14 +42,15 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 }
 
 pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
-pub type ResolvedTsDiagnosisCallback = Callback<(
-    bool, // exist
-    bool, // stopped
-    u64,  // resolved_ts
-    u64,  // tracked index
-    u64,  // num_locks
-    u64,  // num_transactions
-)>;
+pub type ResolvedTsDiagnosisCallback = Callback<
+    Option<(
+        bool, // stopped
+        u64,  // resolved_ts
+        u64,  // tracked index
+        u64,  // num_locks
+        u64,  // num_transactions
+    )>,
+>;
 pub type ScheduleResolvedTsTask = Arc<
     dyn Fn(
             u64,  // region id
@@ -680,20 +681,22 @@ where
                         resp.set_error("get resolved-ts info failed".to_owned());
                         error!("tikv-ctl get resolved-ts info failed"; "err" => ?e);
                     }
-                    Ok((
-                        resolver_exist,
+                    Ok(Some((
                         stopped,
                         resolved_ts,
                         resolver_tracked_index,
                         num_locks,
                         num_transactions,
-                    )) => {
-                        resp.set_resolver_exist(resolver_exist);
+                    ))) => {
+                        resp.set_resolver_exist(true);
                         resp.set_resolver_stopped(stopped);
                         resp.set_resolved_ts(resolved_ts);
                         resp.set_resolver_tracked_index(resolver_tracked_index);
                         resp.set_num_locks(num_locks);
                         resp.set_num_transactions(num_transactions);
+                    }
+                    Ok(None) => {
+                        resp.set_resolver_exist(false);
                     }
                 }
 
