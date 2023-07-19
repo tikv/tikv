@@ -9,6 +9,8 @@ use std::{
 use strum::EnumCount;
 use tikv_util::time::Limiter;
 
+use crate::metrics::BACKGROUND_TASKS_WAIT_DURATION;
+
 #[derive(Clone, Copy, Eq, PartialEq, EnumCount)]
 #[repr(usize)]
 pub enum ResourceType {
@@ -16,16 +18,23 @@ pub enum ResourceType {
     Io,
 }
 
-impl fmt::Debug for ResourceType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ResourceType {
+    pub fn as_str(&self) -> &str {
         match *self {
-            ResourceType::Cpu => write!(f, "cpu"),
-            ResourceType::Io => write!(f, "io"),
+            ResourceType::Cpu => "cpu",
+            ResourceType::Io => "io",
         }
     }
 }
 
+impl fmt::Debug for ResourceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 pub struct ResourceLimiter {
+    name: String,
     limiters: [QuotaLimiter; ResourceType::COUNT],
 }
 
@@ -36,10 +45,11 @@ impl std::fmt::Debug for ResourceLimiter {
 }
 
 impl ResourceLimiter {
-    pub fn new(cpu_limit: f64, io_limit: f64) -> Self {
+    pub fn new(name: String, cpu_limit: f64, io_limit: f64) -> Self {
         let cpu_limiter = QuotaLimiter::new(cpu_limit);
         let io_limiter = QuotaLimiter::new(io_limit);
         Self {
+            name,
             limiters: [cpu_limiter, io_limiter],
         }
     }
@@ -48,7 +58,11 @@ impl ResourceLimiter {
         let cpu_dur =
             self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64);
         let io_dur = self.limiters[ResourceType::Io as usize].consume(io_bytes);
-        cpu_dur.max(io_dur)
+        let wait_dur = cpu_dur.max(io_dur);
+        BACKGROUND_TASKS_WAIT_DURATION
+            .with_label_values(&[&self.name])
+            .inc_by(wait_dur.as_micros() as u64);
+        wait_dur
     }
 
     #[inline]

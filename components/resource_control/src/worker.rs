@@ -11,6 +11,7 @@ use tikv_util::{
 };
 
 use crate::{
+    metrics::*,
     resource_group::ResourceGroupManager,
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
 };
@@ -174,11 +175,15 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         for g in bg_group_stats.iter_mut() {
             total_ru_quota += g.ru_quota;
             let total_stats = g.limiter.get_limiter(resource_type).get_statistics();
-            let stats_per_sec = (total_stats
+            let stats_delta = total_stats
                 - self.prev_stats_by_group[resource_type as usize]
                     .insert(g.name.clone(), total_stats)
-                    .unwrap_or_default())
-                / dur_secs;
+                    .unwrap_or_default();
+
+            BACKGROUND_RESOURCE_CONSUMPTION
+                .with_label_values(&[&g.name, resource_type.as_str()])
+                .inc_by(stats_delta.total_consumed);
+            let stats_per_sec = stats_delta / dur_secs;
             background_consumed_total += stats_per_sec.total_consumed as f64;
             g.stats_per_sec = stats_per_sec;
             if stats_per_sec.total_wait_dur_us > 0 {
@@ -233,6 +238,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                     .expect_cost_rate
                     .max(available_resource_rate / total_ru_quota * g.ru_quota);
                 g.limiter.get_limiter(resource_type).set_rate_limit(limit);
+                BACKGROUND_QUOTA_LIMIT_VEC
+                    .with_label_values(&[&g.name, resource_type.as_str()])
+                    .set(limit as i64);
                 available_resource_rate -= limit;
                 total_ru_quota -= g.ru_quota;
             }
@@ -250,6 +258,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 .expect_cost_rate
                 .min(available_resource_rate / total_ru_quota * g.ru_quota);
             g.limiter.get_limiter(resource_type).set_rate_limit(limit);
+            BACKGROUND_QUOTA_LIMIT_VEC
+                .with_label_values(&[&g.name, resource_type.as_str()])
+                .set(limit as i64);
             available_resource_rate -= limit;
             total_ru_quota -= g.ru_quota;
         }

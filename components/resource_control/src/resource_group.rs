@@ -25,7 +25,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{info, time::Instant};
 use yatp::queue::priority::TaskPriorityProvider;
 
-use crate::resource_limiter::ResourceLimiter;
+use crate::{resource_limiter::ResourceLimiter, metrics::deregister_metrics};
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -134,8 +134,13 @@ impl ResourceGroupManager {
         old_limiter: Option<Arc<ResourceLimiter>>,
     ) -> Option<Arc<ResourceLimiter>> {
         if !rg.get_background_settings().get_job_types().is_empty() {
-            old_limiter
-                .or_else(|| Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY))))
+            old_limiter.or_else(|| {
+                Some(Arc::new(ResourceLimiter::new(
+                    rg.name.clone(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                )))
+            })
         } else {
             None
         }
@@ -146,8 +151,10 @@ impl ResourceGroupManager {
         self.registry.read().iter().for_each(|controller| {
             controller.remove_resource_group(group_name.as_bytes());
         });
-        info!("remove resource group"; "name"=> name);
-        self.resource_groups.remove(&group_name);
+        if self.resource_groups.remove(&group_name).is_some() {
+            deregister_metrics(name);
+            info!("remove resource group"; "name"=> name);
+        }
     }
 
     pub fn retain(&self, mut f: impl FnMut(&String, &PbResourceGroup) -> bool) {
@@ -160,6 +167,7 @@ impl ResourceGroupManager {
             let ret = f(k, &v.group);
             if !ret {
                 removed_names.push(k.clone());
+                deregister_metrics(k);
             }
             ret
         });
