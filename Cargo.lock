@@ -3095,7 +3095,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=lock-cf-manager#c3bf7d4fd9a20a67260cc25194cd4e897c109104"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=lock-cf-manager#3e5a4b02285a64168595bcc529e3549d34bd9f1e"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3114,7 +3114,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=lock-cf-manager#c3bf7d4fd9a20a67260cc25194cd4e897c109104"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=lock-cf-manager#3e5a4b02285a64168595bcc529e3549d34bd9f1e"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5089,7 +5089,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=lock-cf-manager#c3bf7d4fd9a20a67260cc25194cd4e897c109104"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=lock-cf-manager#3e5a4b02285a64168595bcc529e3549d34bd9f1e"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
