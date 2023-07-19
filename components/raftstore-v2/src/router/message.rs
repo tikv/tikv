@@ -258,6 +258,8 @@ pub enum PeerMsg {
     },
     /// Let a peer exits force leader state.
     ExitForceLeaderState,
+    /// Let a peer campaign directly after exit force leader.
+    ExitForceLeaderStateCampaign,
     /// Wait for a peer to apply to the latest commit index.
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     /// Wait for a peer to fill its status to the report.

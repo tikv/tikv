@@ -57,8 +57,8 @@ pub use self::{
     },
     peer::{
         can_amend_read, get_sync_log_from_request, make_transfer_leader_response,
-        propose_read_index, should_renew_lease, Peer, PeerStat, ProposalContext, ProposalQueue,
-        RequestInspector, RequestPolicy, SnapshotRecoveryWaitApplySyncer,
+        propose_read_index, should_renew_lease, ForceLeaderState, Peer, PeerStat, ProposalContext,
+        ProposalQueue, RequestInspector, RequestPolicy, SnapshotRecoveryWaitApplySyncer,
         UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
         UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
         TRANSFER_LEADER_COMMAND_REPLY_CTX,

@@ -3256,7 +3256,7 @@ where
             let persist_index = self.raft_group.raft.raft_log.persisted;
             self.mut_store().update_cache_persisted(persist_index);
 
-            if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
+            if self.is_in_force_leader() {
                 // forward commit index, the committed entries will be applied in the next raft
                 // base tick round
                 self.maybe_force_forward_commit_index();
@@ -3299,7 +3299,7 @@ where
         self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
-        if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
+        if self.is_in_force_leader() {
             // forward commit index, the committed entries will be applied in the next raft
             // base tick round
             self.maybe_force_forward_commit_index();
@@ -4770,7 +4770,7 @@ where
             &self.peer,
             changes.as_ref(),
             &cc,
-            self.is_force_leader(),
+            self.is_in_force_leader(),
         )?;
 
         ctx.raft_metrics.propose.conf_change.inc();
@@ -5131,7 +5131,7 @@ where
     }
 
     #[inline]
-    pub fn is_force_leader(&self) -> bool {
+    pub fn is_in_force_leader(&self) -> bool {
         matches!(
             self.force_leader,
             Some(ForceLeaderState::ForceLeader { .. })
@@ -5143,7 +5143,7 @@ where
             &self.unsafe_recovery_state
         {
             if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                if self.is_force_leader() {
+                if self.is_in_force_leader() {
                     info!(
                         "Unsafe recovery, finish wait apply";
                         "region_id" => self.region().get_id(),
