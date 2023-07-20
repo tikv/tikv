@@ -1213,7 +1213,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 task.cmd
                     .ctx()
                     .get_resource_control_context()
-                    .get_resource_group_name(), // , task.cmd.ctx().get_request_source()
+                    .get_resource_group_name(),
+                task.cmd.ctx().get_request_source(),
             )
         });
         let mut sample = quota_limiter.new_sample(true);
