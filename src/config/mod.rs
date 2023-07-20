@@ -5983,6 +5983,7 @@ mod tests {
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
         cfg.rocksdb.write_buffer_limit = None;
         cfg.rocksdb.max_total_wal_size = None;
+        cfg.rocksdb.stats_dump_period = None;
         //
         cfg.rocksdb.defaultcf.enable_compaction_guard = None;
         cfg.rocksdb.writecf.enable_compaction_guard = None;
