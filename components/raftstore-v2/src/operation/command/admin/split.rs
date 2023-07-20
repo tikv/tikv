@@ -55,7 +55,7 @@ use raftstore::{
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
+use tikv_util::{box_err, log::SlogFormat, slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -316,6 +316,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             )));
             return;
         }
+        if self.storage().has_dirty_data() {
+            // If we split dirty tablet, the same trim compaction will be repeated
+            // exponentially more times.
+            info!(self.logger, "tablet still dirty, skip split.");
+            ch.set_result(cmd_resp::new_error(Error::Other(box_err!(
+                "tablet is dirty"
+            ))));
+            return;
+        }
         if let Err(e) = util::validate_split_region(
             self.region_id(),
             self.peer_id(),
@@ -357,6 +366,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "receive a stale halfsplit message";
                 "is_key_range" => is_key_range,
             );
+            return;
+        }
+
+        if self.storage().has_dirty_data() {
+            info!(self.logger, "tablet still dirty, skip half split.");
             return;
         }
 

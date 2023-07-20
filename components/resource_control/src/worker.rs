@@ -269,7 +269,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::{resource_group::tests::new_resource_group_ru, resource_limiter::QuotaLimiter};
+    use crate::{resource_group::tests::*, resource_limiter::QuotaLimiter};
 
     struct TestResourceStatsProvider {
         cpu_total: f64,
@@ -309,13 +309,21 @@ mod tests {
         let resource_ctl = Arc::new(ResourceGroupManager::default());
         let rg1 = new_resource_group_ru("test".into(), 1000, 14);
         resource_ctl.add_resource_group(rg1);
-        assert!(resource_ctl.get_resource_limiter("test").is_none());
+        assert!(resource_ctl.get_resource_limiter("test", "br").is_none());
 
         let test_provider = TestResourceStatsProvider::new(8.0, 10000.0);
         let mut worker =
             GroupQuotaAdjustWorker::with_quota_getter(resource_ctl.clone(), test_provider);
 
-        let limiter = resource_ctl.get_resource_limiter("default").unwrap();
+        let default_bg =
+            new_background_resource_group_ru("default".into(), 100000, 8, vec!["br".into()]);
+        resource_ctl.add_resource_group(default_bg);
+        assert!(
+            resource_ctl
+                .get_resource_limiter("default", "lightning")
+                .is_none()
+        );
+        let limiter = resource_ctl.get_resource_limiter("default", "br").unwrap();
         assert!(
             limiter
                 .get_limiter(ResourceType::Cpu)
@@ -401,14 +409,17 @@ mod tests {
         worker.adjust_quota();
         check_limiter(&limiter, 2.25, 2250.0);
 
-        let default = new_resource_group_ru("default".into(), 2000, 8);
+        let default =
+            new_background_resource_group_ru("default".into(), 2000, 8, vec!["br".into()]);
         resource_ctl.add_resource_group(default);
-        let new_limiter = resource_ctl.get_resource_limiter("default").unwrap();
+        let new_limiter = resource_ctl.get_resource_limiter("default", "br").unwrap();
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
 
-        let bg = new_resource_group_ru("background".into(), 1000, 15);
+        let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
-        let bg_limiter = resource_ctl.get_resource_limiter("background").unwrap();
+        let bg_limiter = resource_ctl
+            .get_resource_limiter("background", "br")
+            .unwrap();
 
         reset_quota(&mut worker, 5.0, 7000.0, Duration::from_secs(1));
         worker.adjust_quota();

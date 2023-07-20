@@ -400,7 +400,7 @@ dependencies = [
 [[package]]
 name = "azure_core"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "async-trait",
  "base64 0.21.0",
@@ -412,7 +412,7 @@ dependencies = [
  "log",
  "paste",
  "pin-project",
- "quick-xml 0.28.2",
+ "quick-xml 0.29.0",
  "rand 0.8.5",
  "reqwest",
  "rustc_version 0.4.0",
@@ -426,7 +426,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -446,7 +446,7 @@ dependencies = [
 [[package]]
 name = "azure_security_keyvault"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -461,7 +461,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -483,7 +483,7 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -546,6 +546,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
+ "resource_control",
  "security",
  "serde",
  "serde_derive",
@@ -4481,9 +4482,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.28.2"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce5e73202a820a31f8a0ee32ada5e21029c81fd9e3ebf668a40832e4219d9d1"
+checksum = "81b9228215d82c7b61490fec1de287136b5de6f5700f6e58ea9ad61a7964ca51"
 dependencies = [
  "memchr",
  "serde",
@@ -6652,6 +6653,7 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "protobuf",
+ "resource_control",
  "slog",
  "slog-global",
  "smallvec",

@@ -96,7 +96,7 @@ pub fn new_debug_executor(
         .unwrap()
         .map(Arc::new);
 
-    let cache = cfg.storage.block_cache.build_shared_cache(engine_type);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
