@@ -55,8 +55,7 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy v1_specific::region_ext
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy v1_specific::flashback
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::server_cluster_test -- --test-threads 1
-    # TODO test_timeout_fallback may fail with raft-engine. Need investigate.
-    cargo test --package proxy_tests --features="test-engine-kv-rocksdb test-engine-raft-rocksdb" --test proxy shared::fast_add_peer
+    cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::fast_add_peer
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::replica_read -- --test-threads 1
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::ffi -- --test-threads 1
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::write --features="proxy_tests/enable-pagestorage"
