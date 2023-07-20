@@ -22,7 +22,6 @@ use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, Con
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
-        config::EngineType,
         kv::{SnapContext, SnapshotExt},
         point_key_range, Engine, Snapshot,
     },
@@ -57,10 +56,7 @@ pub fn create_test_engine(
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(EngineType::RaftKv2);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
