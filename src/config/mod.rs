@@ -1214,7 +1214,7 @@ pub struct DbConfig {
     #[serde(skip_serializing)]
     pub enable_statistics: bool,
     #[online_config(skip)]
-    pub stats_dump_period: ReadableDuration,
+    pub stats_dump_period: Option<ReadableDuration>,
     pub compaction_readahead_size: ReadableSize,
     #[online_config(skip)]
     pub info_log_max_size: ReadableSize,
@@ -1303,7 +1303,7 @@ impl Default for DbConfig {
             create_if_missing: true,
             max_open_files: 40960,
             enable_statistics: true,
-            stats_dump_period: ReadableDuration::minutes(10),
+            stats_dump_period: None,
             compaction_readahead_size: ReadableSize::kb(0),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
@@ -1343,6 +1343,8 @@ impl DbConfig {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
                 self.max_total_wal_size.get_or_insert(ReadableSize::gb(4));
+                self.stats_dump_period
+                    .get_or_insert(ReadableDuration::minutes(10));
                 self.defaultcf.enable_compaction_guard.get_or_insert(true);
                 self.writecf.enable_compaction_guard.get_or_insert(true);
                 self.defaultcf.format_version.get_or_insert(2);
@@ -1361,6 +1363,8 @@ impl DbConfig {
                     WRITE_BUFFER_MEMORY_LIMIT_MAX,
                 )));
                 self.max_total_wal_size.get_or_insert(ReadableSize(1));
+                self.stats_dump_period
+                    .get_or_insert(ReadableDuration::minutes(120));
                 // In RaftKv2, every region uses its own rocksdb instance, it's actually the
                 // even stricter compaction guard, so use the same output file size base.
                 self.writecf
@@ -1431,7 +1435,9 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
+        opts.set_stats_dump_period_sec(
+            self.stats_dump_period.unwrap_or_default().as_secs() as usize
+        );
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
