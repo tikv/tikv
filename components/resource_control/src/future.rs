@@ -96,7 +96,6 @@ pub struct LimitedFuture<F: Future> {
 }
 
 impl<F: Future> LimitedFuture<F> {
-    #[allow(dead_code)]
     pub fn new(f: F, resource_limiter: Arc<ResourceLimiter>) -> Self {
         Self {
             f,
@@ -210,6 +209,17 @@ impl<F: Future> Future for OptionalFuture<F> {
             }),
             None => Poll::Ready(None),
         }
+    }
+}
+
+pub async fn with_resource_limiter<F: Future>(
+    f: F,
+    limiter: Option<Arc<ResourceLimiter>>,
+) -> F::Output {
+    if let Some(limiter) = limiter {
+        LimitedFuture::new(f, limiter).await
+    } else {
+        f.await
     }
 }
 
