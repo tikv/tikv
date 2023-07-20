@@ -373,9 +373,43 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             if pending_peers.is_empty() {
+<<<<<<< HEAD
                 let (ch, _) = CmdResChannel::pair();
                 let req = req.take().unwrap();
                 self.on_admin_command(store_ctx, req, ch);
+=======
+                let mailbox = match store_ctx.router.mailbox(region_id) {
+                    Some(mailbox) => mailbox,
+                    None => {
+                        assert!(
+                            store_ctx.router.is_shutdown(),
+                            "{} router should have been closed",
+                            SlogFormat(&self.logger)
+                        );
+                        return;
+                    }
+                };
+                let mut req = req.take().unwrap();
+                req.mut_header().set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
+                let logger = self.logger.clone();
+                let on_flush_finish = move || {
+                    let (ch, _) = CmdResChannel::pair();
+                    if let Err(e) = mailbox.try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch))) {
+                        error!(
+                            logger,
+                            "send PrepareMerge request failed after pre-flush finished";
+                            "err" => ?e,
+                        );
+                    }
+                };
+                self.start_pre_flush(
+                    store_ctx,
+                    "prepare_merge",
+                    false,
+                    &self.region().clone(),
+                    Box::new(on_flush_finish),
+                );
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
             }
         }
     }

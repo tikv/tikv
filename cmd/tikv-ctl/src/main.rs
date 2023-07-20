@@ -935,3 +935,24 @@ fn flush_std_buffer_to_log(
     out_buffer.read_to_string(&mut out).unwrap();
     println!("{}, err redirect:{}, out redirect:{}", msg, err, out);
 }
+<<<<<<< HEAD
+=======
+
+fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
+    let key_manager =
+        data_key_manager_from_config(&config.security.encryption, &config.storage.data_dir)
+            .unwrap()
+            .map(Arc::new);
+    let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
+    let cache = config.storage.block_cache.build_shared_cache();
+    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache, key_manager)
+        .build()
+        .create_shared_db(&config.storage.data_dir)
+        .map_err(|e| format!("create_shared_db fail: {}", e))?;
+    let ident = kv_engine
+        .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+        .unwrap()
+        .unwrap();
+    Ok(ident.cluster_id)
+}
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))

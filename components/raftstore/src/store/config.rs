@@ -371,6 +371,10 @@ impl Default for Config {
             raft_log_gc_size_limit: None,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
+<<<<<<< HEAD
+=======
+            max_manual_flush_rate: 3.0,
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),

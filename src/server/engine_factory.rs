@@ -283,10 +283,7 @@ mod tests {
                 e
             );
         });
-        let cache = cfg
-            .storage
-            .block_cache
-            .build_shared_cache(cfg.storage.engine);
+        let cache = cfg.storage.block_cache.build_shared_cache();
         let dir = test_util::temp_dir(name, false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 

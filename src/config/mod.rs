@@ -106,8 +106,15 @@ pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
 /// Maximum of 15% of system memory can be used by Raft Engine. Normally its
 /// memory usage is much smaller than that.
 const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
+<<<<<<< HEAD
 /// Tentative value.
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.25;
+=======
+
+const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
+// Too large will increase Raft Engine memory usage.
+const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
@@ -1163,7 +1170,7 @@ pub struct DbConfig {
     #[serde(skip_serializing)]
     pub enable_statistics: bool,
     #[online_config(skip)]
-    pub stats_dump_period: ReadableDuration,
+    pub stats_dump_period: Option<ReadableDuration>,
     pub compaction_readahead_size: ReadableSize,
     #[online_config(skip)]
     pub info_log_max_size: ReadableSize,
@@ -1254,7 +1261,7 @@ impl Default for DbConfig {
             create_if_missing: true,
             max_open_files: 40960,
             enable_statistics: true,
-            stats_dump_period: ReadableDuration::minutes(10),
+            stats_dump_period: None,
             compaction_readahead_size: ReadableSize::kb(0),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
@@ -1293,6 +1300,12 @@ impl DbConfig {
         match engine {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
+<<<<<<< HEAD
+=======
+                self.max_total_wal_size.get_or_insert(ReadableSize::gb(4));
+                self.stats_dump_period
+                    .get_or_insert(ReadableDuration::minutes(10));
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
                 self.defaultcf.enable_compaction_guard.get_or_insert(true);
                 self.writecf.enable_compaction_guard.get_or_insert(true);
             }
@@ -1302,7 +1315,15 @@ impl DbConfig {
                 let total_mem = SysQuota::memory_limit_in_bytes() as f64;
                 self.write_buffer_limit.get_or_insert(ReadableSize(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
+<<<<<<< HEAD
                 ));
+=======
+                    WRITE_BUFFER_MEMORY_LIMIT_MAX,
+                )));
+                self.max_total_wal_size.get_or_insert(ReadableSize(1));
+                self.stats_dump_period
+                    .get_or_insert(ReadableDuration::minutes(120));
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
                 // In RaftKv2, every region uses its own rocksdb instance, it's actually the
                 // even stricter compaction guard, so use the same output file size base.
                 self.writecf
@@ -1361,7 +1382,9 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
+        opts.set_stats_dump_period_sec(
+            self.stats_dump_period.unwrap_or_default().as_secs() as usize
+        );
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
@@ -3255,6 +3278,22 @@ impl TikvConfig {
 
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
+<<<<<<< HEAD
+=======
+        }
+        if self.storage.block_cache.capacity.is_none() {
+            let total_mem = SysQuota::memory_limit_in_bytes();
+            let capacity = if self.storage.engine == EngineType::RaftKv2 {
+                (total_mem as f64) * RAFTSTORE_V2_BLOCK_CACHE_RATE
+            } else {
+                (total_mem as f64) * BLOCK_CACHE_RATE
+            };
+            self.storage.block_cache.capacity = Some(ReadableSize(capacity as u64));
+        }
+
+        // Validate for v2.
+        if self.storage.engine == EngineType::RaftKv2 {
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
             if !self.raft_engine.enable {
                 return Err("partitioned-raft-kv only supports raft log engine.".into());
             }
@@ -3469,25 +3508,43 @@ impl TikvConfig {
         fill_cf_opts!(self.rocksdb.lockcf, flow_control_cfg);
         fill_cf_opts!(self.rocksdb.raftcf, flow_control_cfg);
 
+<<<<<<< HEAD
+=======
+        // Validate memory usage limit.
+        let block_cache_cap = self.storage.block_cache.capacity.unwrap();
+        let write_buffer_cap = self.rocksdb.write_buffer_limit.unwrap_or(ReadableSize(0));
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
         if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
             if memory_usage_limit.0 > total {
                 // Explicitly exceeds system memory capacity is not allowed.
                 return Err(format!(
-                    "memory_usage_limit is greater than system memory capacity {}",
+                    "memory_usage_limit is greater than system memory capacity ({})",
                     total
                 )
                 .into());
             }
         } else {
-            // Adjust `memory_usage_limit` if necessary.
-            if let Some(cap) = self.storage.block_cache.capacity {
-                let limit = (cap.0 as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
-                self.memory_usage_limit = Some(ReadableSize(limit));
-            } else {
-                self.memory_usage_limit = Some(Self::suggested_memory_usage_limit());
+            let mut limit =
+                (block_cache_cap.0 as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
+            if self.storage.engine == EngineType::RaftKv2 {
+                limit = cmp::max(
+                    limit,
+                    (write_buffer_cap.0 as f64 / WRITE_BUFFER_MEMORY_LIMIT_RATE
+                        * MEMORY_USAGE_LIMIT_RATE) as u64,
+                );
             }
+            let limit = ReadableSize(cmp::min(limit, SysQuota::memory_limit_in_bytes()));
+            let default = Self::suggested_memory_usage_limit();
+            if limit > default {
+                warn!(
+                    "memory_usage_limit ({}) > recommanded ({}), maybe page cache isn't enough",
+                    limit, default,
+                );
+            }
+            self.memory_usage_limit = Some(limit);
         }
+<<<<<<< HEAD
 
         let mut limit = self.memory_usage_limit.unwrap();
         let total = ReadableSize(SysQuota::memory_limit_in_bytes());
@@ -3506,6 +3563,17 @@ impl TikvConfig {
                 "memory_usage_limit:{:?} > recommanded:{:?}, maybe page cache isn't enough",
                 limit, default,
             );
+=======
+        if block_cache_cap.0 + write_buffer_cap.0 > self.memory_usage_limit.unwrap().0 {
+            return Err(format!(
+                "The sum of `storage.block-cache.capacity` and `rocksdb.write-buffer-limit` \
+                is greater than memory-usage-limit: {} + {} > {}",
+                block_cache_cap,
+                write_buffer_cap,
+                self.memory_usage_limit.unwrap(),
+            )
+            .into());
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
         }
 
         Ok(())
@@ -4757,11 +4825,8 @@ mod tests {
             &cfg.storage.data_dir,
             Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
-                &cfg.rocksdb.build_cf_resources(
-                    cfg.storage
-                        .block_cache
-                        .build_shared_cache(cfg.storage.engine),
-                ),
+                &cfg.rocksdb
+                    .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
                 None,
                 cfg.storage.api_version(),
                 None,
@@ -5723,6 +5788,12 @@ mod tests {
         cfg.raft_engine.mut_config().memory_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
         cfg.rocksdb.write_buffer_limit = None;
+<<<<<<< HEAD
+=======
+        cfg.rocksdb.max_total_wal_size = None;
+        cfg.rocksdb.stats_dump_period = None;
+        //
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
         cfg.rocksdb.defaultcf.enable_compaction_guard = None;
         cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = None;
         cfg.rocksdb.defaultcf.level0_stop_writes_trigger = None;

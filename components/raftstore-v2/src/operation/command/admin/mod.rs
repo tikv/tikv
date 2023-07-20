@@ -197,6 +197,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                     );
                                 }
                             };
+<<<<<<< HEAD
 
                             if let Err(e) =
                                 ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
@@ -234,6 +235,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                 self.send_raft_message(ctx, msg);
                             }
 
+=======
+                            self.start_pre_flush(
+                                ctx,
+                                "split",
+                                false,
+                                &self.region().clone(),
+                                Box::new(on_flush_finish),
+                            );
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
                             return;
                         }
 
@@ -292,4 +302,55 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         self.post_propose_command(ctx, res, vec![ch], true);
     }
+<<<<<<< HEAD
+=======
+
+    fn start_pre_flush<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        reason: &'static str,
+        high_priority: bool,
+        target: &Region,
+        on_local_flushed: Box<dyn FnOnce() + Send>,
+    ) {
+        let target_id = target.get_id();
+        info!(
+            self.logger,
+            "Start pre flush tablet";
+            "target" => target_id,
+            "reason" => reason,
+        );
+        if let Err(e) = ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
+            region_id: target_id,
+            reason,
+            high_priority,
+            threshold: Some(std::time::Duration::from_secs(10)),
+            cb: Some(on_local_flushed),
+        }) {
+            error!(
+                self.logger,
+                "Fail to schedule flush task";
+                "err" => ?e,
+            )
+        }
+        // Notify followers to flush their relevant memtables
+        for p in target.get_peers() {
+            if p == self.peer() || p.get_role() != PeerRole::Voter || p.is_witness {
+                continue;
+            }
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(target_id);
+            msg.set_from_peer(self.peer().clone());
+            msg.set_to_peer(p.clone());
+            msg.set_region_epoch(target.get_region_epoch().clone());
+            let extra_msg = msg.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgFlushMemtable);
+            let mut flush_memtable = FlushMemtable::new();
+            flush_memtable.set_region_id(target_id);
+            extra_msg.set_flush_memtable(flush_memtable);
+
+            self.send_raft_message(ctx, msg);
+        }
+    }
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
 }

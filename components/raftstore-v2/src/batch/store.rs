@@ -61,6 +61,12 @@ use crate::{
     Error, Result,
 };
 
+<<<<<<< HEAD
+=======
+const MIN_MANUAL_FLUSH_RATE: f64 = 0.2;
+const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(120);
+
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// A logger without any KV. It's clean for creating new PeerFSM.

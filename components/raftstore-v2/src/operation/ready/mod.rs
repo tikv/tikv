@@ -229,6 +229,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .tablet
                         .schedule(crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
+<<<<<<< HEAD
+=======
+                            reason: "unknown",
+                            high_priority: false,
+                            threshold: Some(std::time::Duration::from_secs(10)),
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
                             cb: None,
                         });
                     return;

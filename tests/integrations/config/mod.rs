@@ -299,7 +299,7 @@ fn test_serde_custom_tikv_config() {
         create_if_missing: false,
         max_open_files: 12_345,
         enable_statistics: true,
-        stats_dump_period: ReadableDuration::minutes(12),
+        stats_dump_period: Some(ReadableDuration::minutes(12)),
         compaction_readahead_size: ReadableSize::kb(1),
         info_log_max_size: ReadableSize::kb(1),
         info_log_roll_time: ReadableDuration::secs(12),

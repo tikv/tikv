@@ -222,6 +222,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // quorum stores of target region. Otherwise we need to enable proposal
         // forwarding.
         let msg = PeerMsg::AskCommitMerge(request);
+<<<<<<< HEAD
         // If target peer is destroyed, life.rs is responsible for telling us to
         // rollback.
         match store_ctx.router.force_send(target_id, msg) {
@@ -233,6 +234,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 {
                     if store_ctx.router.is_shutdown() {
                         return;
+=======
+        let router = store_ctx.router.clone();
+        let logger = self.logger.clone();
+        self.start_pre_flush(
+            store_ctx,
+            "commit_merge",
+            true,
+            &target.clone(),
+            Box::new(move || {
+                // If target peer is destroyed, life.rs is responsible for telling us to
+                // rollback.
+                match router.force_send(target_id, msg) {
+                    Ok(_) => (),
+                    Err(SendError(PeerMsg::AskCommitMerge(msg))) => {
+                        if let Err(e) = router.force_send_control(StoreMsg::AskCommitMerge(msg)) {
+                            if router.is_shutdown() {
+                                return;
+                            }
+                            slog_panic!(
+                                logger,
+                                "fails to send `AskCommitMerge` msg to store";
+                                "error" => ?e,
+                            );
+                        }
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
                     }
                     slog_panic!(
                         self.logger,

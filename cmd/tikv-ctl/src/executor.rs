@@ -67,10 +67,14 @@ pub fn new_debug_executor(
         .unwrap()
         .map(Arc::new);
 
+<<<<<<< HEAD
     let cache = cfg
         .storage
         .block_cache
         .build_shared_cache(cfg.storage.engine);
+=======
+    let cache = cfg.storage.block_cache.build_shared_cache();
+>>>>>>> 2f2900a6ff (raftstore-v2: fix issues related to background work (#15115))
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
