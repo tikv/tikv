@@ -262,16 +262,18 @@ fn test_flush_index_exceed_last_modified() {
 
     fail::cfg("before_report_apply_res", "return").unwrap();
     let reg = cluster.tablet_registries.get(&1).unwrap();
-    let mut cache = reg.get(1).unwrap();
-    let tablet = cache.latest().unwrap();
-    tablet
-        .set_db_options(&[("avoid_flush_during_shutdown", "true")])
-        .unwrap();
+    {
+        let mut cache = reg.get(1).unwrap();
+        let tablet = cache.latest().unwrap();
+        tablet
+            .set_db_options(&[("avoid_flush_during_shutdown", "true")])
+            .unwrap();
 
-    // previous flush before strategy is flush oldest one by one, where freshness
-    // comparison is in second, so sleep a second
-    std::thread::sleep(Duration::from_millis(1000));
-    tablet.flush_cf(CF_LOCK, true).unwrap();
+        // previous flush before strategy is flush oldest one by one, where freshness
+        // comparison is in second, so sleep a second
+        std::thread::sleep(Duration::from_millis(1000));
+        tablet.flush_cf(CF_LOCK, true).unwrap();
+    }
 
     cluster
         .batch_put(
@@ -282,9 +284,6 @@ fn test_flush_index_exceed_last_modified() {
             ],
         )
         .unwrap();
-
-    drop(tablet);
-    drop(cache);
 
     fail::cfg("flush_before_cluse_threshold", "return(1)").unwrap();
     let router = cluster.get_router(1).unwrap();
