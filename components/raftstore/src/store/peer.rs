@@ -550,7 +550,9 @@ impl fmt::Debug for InvokeClosureOnDrop {
 
 impl Drop for InvokeClosureOnDrop {
     fn drop(&mut self) {
-        self.0.take().map(|on_drop| on_drop());
+        if let Some(on_drop) = self.0.take() {
+            on_drop();
+        }
     }
 }
 
@@ -561,7 +563,7 @@ pub fn start_unsafe_recovery_report(
 ) {
     let wait_apply =
         UnsafeRecoveryWaitApplySyncer::new(report_id, router.clone(), exit_force_leader);
-    router.broadcast_wait_apply(wait_apply.clone());
+    router.broadcast_wait_apply(wait_apply);
 }
 
 // Propose a read index request to the raft group, return the request id and

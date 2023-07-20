@@ -1968,17 +1968,15 @@ where
                 self.register_check_long_uncommitted_tick();
             }
 
-            if self.fsm.peer.is_in_force_leader() {
-                if r != StateRole::Leader {
-                    // for some reason, it's not leader anymore
-                    info!(
-                        "step down in force leader state";
-                        "region_id" => self.fsm.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "state" => ?r,
-                    );
-                    self.on_force_leader_fail();
-                }
+            if self.fsm.peer.is_in_force_leader() && r != StateRole::Leader {
+                // for some reason, it's not leader anymore
+                info!(
+                    "step down in force leader state";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?r,
+                );
+                self.on_force_leader_fail();
             }
         }
     }

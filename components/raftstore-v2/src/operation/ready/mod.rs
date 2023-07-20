@@ -1057,15 +1057,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 _ => {}
             }
 
-            if self.is_in_force_leader() {
-                if ss.raft_state != StateRole::Leader {
-                    // for some reason, it's not leader anymore
-                    info!(self.logger,
-                        "step down in force leader state";
-                        "state" => ?ss.raft_state,
-                    );
-                    self.on_force_leader_fail();
-                }
+            if self.is_in_force_leader() && ss.raft_state != StateRole::Leader {
+                // for some reason, it's not leader anymore
+                info!(self.logger,
+                    "step down in force leader state";
+                    "state" => ?ss.raft_state,
+                );
+                self.on_force_leader_fail();
             }
 
             self.read_progress()
