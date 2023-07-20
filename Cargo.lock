@@ -5314,6 +5314,7 @@ dependencies = [
  "engine_rocks_helper",
  "engine_traits",
  "error_code",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -5336,6 +5337,7 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "service",
  "signal-hook",
  "slog",
  "slog-global",
@@ -5348,6 +5350,15 @@ dependencies = [
  "toml",
  "txn_types",
  "yatp",
+]
+
+[[package]]
+name = "service"
+version = "0.0.1"
+dependencies = [
+ "atomic",
+ "crossbeam",
+ "tikv_util",
 ]
 
 [[package]]
@@ -6106,6 +6117,8 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "server",
+ "service",
  "slog",
  "slog-global",
  "sst_importer",
@@ -6425,6 +6438,7 @@ dependencies = [
  "serde_derive",
  "serde_ignored",
  "serde_json",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -6554,6 +6568,7 @@ dependencies = [
  "serde_json",
  "server",
  "tikv",
+ "tikv_util",
  "time",
  "toml",
 ]
