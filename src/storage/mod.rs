@@ -90,7 +90,7 @@ use kvproto::{
 use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
-use resource_control::{ResourceController, TaskMetadata};
+use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
@@ -273,6 +273,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         feature_gate: FeatureGate,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         resource_ctl: Option<Arc<ResourceController>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -289,6 +290,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             Arc::clone(&quota_limiter),
             feature_gate,
             resource_ctl,
+            resource_manager,
         );
 
         info!("Storage started.");
@@ -3199,6 +3201,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             ts_provider,
+            Some(Arc::new(ResourceController::new_for_test(
+                "test".to_owned(),
+                false,
+            ))),
             None,
         )
     }
@@ -3234,6 +3240,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 "test".to_owned(),
                 false,
             ))),
+            None,
         )
     }
 
@@ -3268,6 +3275,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             latest_feature_gate(),
             None,
             Some(resource_controller),
+            None,
         )
     }
 }
