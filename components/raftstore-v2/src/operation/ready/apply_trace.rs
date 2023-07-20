@@ -621,8 +621,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "count" => replay_count,
                 );
                 tablet.flush_cfs(DATA_CFS, true).unwrap();
-                // Now, the modifications of all data cfs are persisted. So, we can advance the
-                // admin flushed index directly.
 
                 let flush_state = self.flush_state().clone();
                 let applied_index = self.storage().entry_storage().applied_index();
