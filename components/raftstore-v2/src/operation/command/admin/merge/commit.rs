@@ -266,13 +266,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let merge = req.get_admin_request().get_commit_merge();
         assert!(merge.has_source_state() && merge.get_source_state().has_merge_state());
         let source_region = merge.get_source_state().get_region();
+        let source_id = source_region.get_id();
         let region = self.region();
         if let Some(r) = self
             .storage()
             .region_state()
             .get_merged_records()
             .iter()
-            .find(|p| p.get_source_region_id() == source_region.get_id())
+            .find(|p| p.get_source_region_id() == source_id)
         {
             info!(
                 self.logger,
@@ -282,13 +283,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             let index = commit_of_merge(req.get_admin_request().get_commit_merge());
             // If target caught up by snapshot, the source checkpoint hasn't been used.
-            let source_path =
-                merge_source_path(&store_ctx.tablet_registry, source_region.get_id(), index);
+            let source_path = merge_source_path(&store_ctx.tablet_registry, source_id, index);
             if source_path.exists() {
                 self.record_tombstone_tablet_path(store_ctx, source_path, r.get_index());
             }
             let _ = store_ctx.router.force_send(
-                source_region.get_id(),
+                source_id,
                 PeerMsg::AckCommitMerge {
                     index,
                     target_id: self.region_id(),
@@ -304,7 +304,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let index = commit_of_merge(req.get_admin_request().get_commit_merge());
             let _ = store_ctx
                 .router
-                .force_send(source_region.get_id(), PeerMsg::RejectCommitMerge { index });
+                .force_send(source_id, PeerMsg::RejectCommitMerge { index });
         } else if expected_epoch == region.get_region_epoch() {
             assert!(
                 util::is_sibling_regions(source_region, region),
@@ -321,8 +321,35 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             assert!(!self.storage().has_dirty_data());
             if self.is_leader() {
-                let (ch, _) = CmdResChannel::pair();
-                self.on_admin_command(store_ctx, req, ch);
+                let index = commit_of_merge(req.get_admin_request().get_commit_merge());
+                if self.proposal_control().is_merging() {
+                    // `on_admin_command` may delay our request indefinitely. It's better to check
+                    // directly.
+                    info!(
+                        self.logger,
+                        "reject commit merge because of target is merging with another region";
+                    );
+                } else {
+                    let (ch, res) = CmdResChannel::pair();
+                    self.on_admin_command(store_ctx, req, ch);
+                    match res.take_result() {
+                        Some(res) if res.get_header().has_error() => error!(
+                            self.logger,
+                            "failed to propose commit merge";
+                            "source" => source_id,
+                            "res" => ?res,
+                        ),
+                        None => error!(
+                            self.logger,
+                            "propose commit merge is delayed";
+                            "source" => source_id,
+                        ),
+                        _ => return,
+                    }
+                }
+                let _ = store_ctx
+                    .router
+                    .force_send(source_id, PeerMsg::RejectCommitMerge { index });
             }
         } else {
             info!(
