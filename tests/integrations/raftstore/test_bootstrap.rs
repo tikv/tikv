@@ -252,6 +252,19 @@ fn test_flush_before_stop() {
 }
 
 #[test]
+// We cannot use a flushed index to call `maybe_advance_admin_flushed`
+// consider a case:
+// 1. lock `k` with index 6
+// 2. on_applied_res => lockcf's last_modified = 6
+// 3. flush lock cf => lockcf's flushed_index = 6
+// 4. batch {unlock `k`, write `k`} with index 7
+//
+// flush-before-close:
+// 5. pick write cf to flush => writecf's flushed_index = 7
+//
+// 6. maybe_advance_admin_flushed(7): as lockcf's last_modified = flushed_index,
+// it will not block advancing admin index
+// 7. admin index 7 is persisted. => we may loss `unlock k`
 fn test_flush_index_exceed_last_modified() {
     let mut cluster = test_raftstore_v2::new_node_cluster(0, 1);
     cluster.run();
