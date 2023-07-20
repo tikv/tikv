@@ -562,9 +562,10 @@ fn test_force_leader_five_nodes() {
 
 // Test the case that three of five nodes fail and force leader on the rest node
 // which is a learner.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_for_learner() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
@@ -580,14 +581,17 @@ fn test_force_leader_for_learner() {
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
     let peer_on_store1 = find_peer(&region, 1).unwrap();
+    let new_learner = new_learner_peer(
+        peer_on_store1.get_store_id(),
+        cluster.pd_client.alloc_id().unwrap(),
+    );
     // replace one peer with learner
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), peer_on_store1.clone());
-    cluster.pd_client.must_add_peer(
-        region.get_id(),
-        new_learner_peer(peer_on_store1.get_store_id(), peer_on_store1.get_id()),
-    );
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), new_learner.clone());
     // Sleep 100 ms to wait for the new learner to be initialized.
     sleep_ms(100);
 
@@ -607,9 +611,10 @@ fn test_force_leader_for_learner() {
     ));
     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // promote the learner first and remove the peers on failed nodes
+    let new_peer = new_peer(new_learner.get_store_id(), new_learner.get_id());
     cluster
         .pd_client
-        .must_add_peer(region.get_id(), find_peer(&region, 1).unwrap().clone());
+        .must_add_peer(region.get_id(), new_peer.clone());
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
@@ -626,7 +631,7 @@ fn test_force_leader_for_learner() {
     assert_eq!(cluster.must_get(b"k2"), None);
     assert_eq!(cluster.must_get(b"k3"), None);
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
-    cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
+    cluster.must_transfer_leader(region.get_id(), new_peer);
 }
 
 // Test the case that three of five nodes fail and force leader on a hibernated
