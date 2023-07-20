@@ -1037,7 +1037,12 @@ impl<'a> DataKeyImporter<'a> {
             if let Entry::Vacant(e) = file_dict.files.entry(fname.to_owned()) {
                 e.insert(file.clone());
             } else {
-                return Err(box_err!("file name collides with existing file: {}", fname));
+                // check for physical file.
+                if Path::new(fname).exists() {
+                    return Err(box_err!("file name collides with existing file: {}", fname));
+                } else {
+                    warn!("overwriting existing unused encryption key"; "fname" => fname);
+                }
             }
             file_dict.files.len() as _
         };
@@ -1832,10 +1837,17 @@ mod tests {
         let mut importer = DataKeyImporter::new(&manager);
         let file0 = manager.new_file("0").unwrap();
 
-        // conflict
+        // conflict with actual file.
+        let f = tmp_dir.path().join("0").to_str().unwrap().to_owned();
+        let _ = manager.new_file(&f).unwrap();
+        File::create(&f).unwrap();
+        importer
+            .add(&f, file0.iv.clone(), DataKey::default())
+            .unwrap_err();
+        // conflict with only key.
         importer
             .add("0", file0.iv.clone(), DataKey::default())
-            .unwrap_err();
+            .unwrap();
         // same key
         importer
             .add(

@@ -29,6 +29,12 @@ pub struct ResourceLimiter {
     limiters: [QuotaLimiter; ResourceType::COUNT],
 }
 
+impl std::fmt::Debug for ResourceLimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ResourceLimiter(...)")
+    }
+}
+
 impl ResourceLimiter {
     pub fn new(cpu_limit: f64, io_limit: f64) -> Self {
         let cpu_limiter = QuotaLimiter::new(cpu_limit);
@@ -38,7 +44,6 @@ impl ResourceLimiter {
         }
     }
 
-    #[allow(dead_code)]
     pub fn consume(&self, cpu_time: Duration, io_bytes: u64) -> Duration {
         let cpu_dur =
             self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64);
@@ -53,10 +58,8 @@ impl ResourceLimiter {
 }
 
 pub(crate) struct QuotaLimiter {
-    #[allow(dead_code)]
     limiter: Limiter,
     // total waiting duration in us
-    #[allow(dead_code)]
     total_wait_dur_us: AtomicU64,
 }
 
@@ -80,7 +83,6 @@ impl QuotaLimiter {
         self.limiter.set_speed_limit(limit);
     }
 
-    #[allow(dead_code)]
     pub fn get_statistics(&self) -> GroupStatistics {
         GroupStatistics {
             total_consumed: self.limiter.total_bytes_consumed() as u64,
@@ -88,7 +90,6 @@ impl QuotaLimiter {
         }
     }
 
-    #[allow(dead_code)]
     fn consume(&self, value: u64) -> Duration {
         if value == 0 {
             return Duration::ZERO;
