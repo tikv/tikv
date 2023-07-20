@@ -198,12 +198,12 @@ impl BucketStat {
         }
     }
 
-    pub fn ingest_sst(&mut self, key: u64, value_size: u64) {
+    pub fn ingest_sst(&mut self, key_count: u64, value_size: u64) {
         for stat in self.stats.mut_write_bytes() {
             *stat += value_size;
         }
-        for stat in self.stats.mut_write_bytes() {
-            *stat += key;
+        for stat in self.stats.mut_write_keys() {
+            *stat += key_count;
         }
     }
 
