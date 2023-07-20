@@ -612,18 +612,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         })();
 
         if let Some(tablet) = self.tablet().cloned() {
+            let applied_index = self.storage().entry_storage().applied_index();
             // flush the oldest cf one by one until we are under the replay count threshold
-            let replay_count = self.storage().estimate_replay_count();
-            if replay_count >= flush_threshold {
+            // or have flushed all CFs
+            let mut tried_count = 0;
+            loop {
+                tried_count += 1;
+                let replay_count = self.storage().estimate_replay_count();
+                if replay_count < flush_threshold {
+                    break;
+                }
                 info!(
                     self.logger,
                     "flush-before-close: replay count exceeds threshold, pick the oldest cf to flush";
                     "count" => replay_count,
                 );
-                tablet.flush_cfs(DATA_CFS, true).unwrap();
+                tablet.flush_oldest_cf(true, None).unwrap();
 
                 let flush_state = self.flush_state().clone();
-                let applied_index = self.storage().entry_storage().applied_index();
                 let mut apply_trace = self.storage_mut().apply_trace_mut();
 
                 let flushed_indexes = flush_state.as_ref().flushed_index();
@@ -637,19 +643,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let admin_flush = apply_trace.admin.flushed;
                 apply_trace.persisted_applied = admin_flush;
 
-                let (_, _, tablet_index) = ctx
-                    .tablet_registry
-                    .parse_tablet_name(Path::new(tablet.path()))
-                    .unwrap();
-                let mut lb = ctx.engine.log_batch(1);
-                lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
-                    .unwrap();
-                ctx.engine.consume(&mut lb, true).unwrap();
-                info!(
-                    self.logger,
-                    "flush before close flush admin for region";
-                    "admin_flush" => admin_flush,
-                );
+                if self.storage().estimate_replay_count() < flush_threshold
+                    || tried_count == DATA_CFS_LEN
+                {
+                    let (_, _, tablet_index) = ctx
+                        .tablet_registry
+                        .parse_tablet_name(Path::new(tablet.path()))
+                        .unwrap();
+                    let mut lb = ctx.engine.log_batch(1);
+                    lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
+                        .unwrap();
+                    ctx.engine.consume(&mut lb, true).unwrap();
+                    info!(
+                        self.logger,
+                        "flush before close flush admin for region";
+                        "admin_flush" => admin_flush,
+                    );
+                    break;
+                }
             }
         }
 
