@@ -2,12 +2,13 @@
 use std::{
     path::Path,
     sync::{mpsc::sync_channel, Arc, Mutex},
+    time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    Engines, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
+    DbOptionsExt, Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
@@ -248,4 +249,57 @@ fn test_flush_before_stop() {
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn test_flush_index_exceed_last_modified() {
+    let mut cluster = test_raftstore_v2::new_node_cluster(0, 1);
+    cluster.run();
+
+    let key = b"key1";
+    cluster.must_put_cf(CF_LOCK, key, b"v");
+    cluster.must_put_cf(CF_WRITE, b"dummy", b"v");
+
+    fail::cfg("before_report_apply_res", "return").unwrap();
+    let reg = cluster.tablet_registries.get(&1).unwrap();
+    let mut cache = reg.get(1).unwrap();
+    let tablet = cache.latest().unwrap();
+    tablet
+        .set_db_options(&[("avoid_flush_during_shutdown", "true")])
+        .unwrap();
+
+    // previous flush before strategy is flush oldest one by one, where freshness
+    // comparison is in second, so sleep a second
+    std::thread::sleep(Duration::from_millis(1000));
+    tablet.flush_cf(CF_LOCK, true).unwrap();
+
+    cluster
+        .batch_put(
+            key,
+            vec![
+                new_put_cf_cmd(CF_WRITE, key, b"value"),
+                new_delete_cmd(CF_LOCK, key),
+            ],
+        )
+        .unwrap();
+
+    drop(tablet);
+    drop(cache);
+
+    fail::cfg("flush_before_cluse_threshold", "return(1)").unwrap();
+    let router = cluster.get_router(1).unwrap();
+    let (tx, rx) = sync_channel(1);
+    let msg = PeerMsg::FlushBeforeClose { tx };
+    router.force_send(1, msg).unwrap();
+    rx.recv().unwrap();
+
+    assert!(cluster.get_cf(CF_WRITE, b"key1").is_some());
+    assert!(cluster.get_cf(CF_LOCK, b"key1").is_none());
+    cluster.stop_node(1);
+
+    fail::remove("before_report_apply_res");
+    cluster.start().unwrap();
+
+    assert!(cluster.get_cf(CF_WRITE, b"key1").is_some());
+    assert!(cluster.get_cf(CF_LOCK, b"key1").is_none());
 }

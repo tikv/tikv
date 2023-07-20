@@ -613,50 +613,45 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         if let Some(tablet) = self.tablet().cloned() {
             // flush the oldest cf one by one until we are under the replay count threshold
-            loop {
-                let replay_count = self.storage().estimate_replay_count();
-                if replay_count < flush_threshold {
-                    break;
-                }
+            let replay_count = self.storage().estimate_replay_count();
+            if replay_count >= flush_threshold {
                 info!(
                     self.logger,
                     "flush-before-close: replay count exceeds threshold, pick the oldest cf to flush";
                     "count" => replay_count,
                 );
-                tablet.flush_oldest_cf(true, None).unwrap();
+                tablet.flush_cfs(DATA_CFS, true).unwrap();
+                // Now, the modifications of all data cfs are persisted. So, we can advance the
+                // admin flushed index directly.
 
                 let flush_state = self.flush_state().clone();
+                let applied_index = self.storage().entry_storage().applied_index();
                 let mut apply_trace = self.storage_mut().apply_trace_mut();
-                let mut max_flush_index = 0;
 
                 let flushed_indexes = flush_state.as_ref().flushed_index();
                 for i in 0..flushed_indexes.len() {
                     let flush_index = flushed_indexes[i].load(Ordering::SeqCst);
                     let cf = offset_to_cf(i);
                     apply_trace.on_flush(cf, flush_index);
-                    max_flush_index = u64::max(max_flush_index, flush_index);
                 }
 
-                apply_trace.maybe_advance_admin_flushed(max_flush_index);
+                apply_trace.maybe_advance_admin_flushed(applied_index);
                 let admin_flush = apply_trace.admin.flushed;
                 apply_trace.persisted_applied = admin_flush;
 
-                if self.storage().estimate_replay_count() < flush_threshold {
-                    let (_, _, tablet_index) = ctx
-                        .tablet_registry
-                        .parse_tablet_name(Path::new(tablet.path()))
-                        .unwrap();
-                    let mut lb = ctx.engine.log_batch(1);
-                    lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
-                        .unwrap();
-                    ctx.engine.consume(&mut lb, true).unwrap();
-                    info!(
-                        self.logger,
-                        "flush before close flush admin for region";
-                        "admin_flush" => admin_flush,
-                    );
-                    break;
-                }
+                let (_, _, tablet_index) = ctx
+                    .tablet_registry
+                    .parse_tablet_name(Path::new(tablet.path()))
+                    .unwrap();
+                let mut lb = ctx.engine.log_batch(1);
+                lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
+                    .unwrap();
+                ctx.engine.consume(&mut lb, true).unwrap();
+                info!(
+                    self.logger,
+                    "flush before close flush admin for region";
+                    "admin_flush" => admin_flush,
+                );
             }
         }
 
