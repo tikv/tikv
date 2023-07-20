@@ -340,8 +340,7 @@ where
 
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::default());
-            let mut resource_mgr_service =
-                ResourceManagerService::new(mgr.clone(), pd_client.clone());
+            let resource_mgr_service = ResourceManagerService::new(mgr.clone(), pd_client.clone());
             // spawn a task to periodically update the minimal virtual time of all resource
             // groups.
             let resource_mgr = mgr.clone();
@@ -349,8 +348,19 @@ where
                 resource_mgr.advance_min_virtual_time();
             });
             // spawn a task to watch all resource groups update.
+            let mut resource_mgr_service_clone = resource_mgr_service.clone();
+            // spawn a task to watch all resource groups update.
             background_worker.spawn_async_task(async move {
-                resource_mgr_service.watch_resource_groups().await;
+                resource_mgr_service_clone.watch_resource_groups().await;
+            });
+            // spawn a task to auto adjust background quota limiter.
+            let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
+            let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
+            background_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
+                worker.adjust_quota();
+            });
+            background_worker.spawn_async_task(async move {
+                resource_mgr_service.upload_ru_metrics().await;
             });
             // spawn a task to auto adjust background quota limiter.
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;

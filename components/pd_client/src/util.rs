@@ -29,6 +29,9 @@ use kvproto::{
         RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
         ReportBucketsResponse, ResponseHeader,
     },
+    resource_manager::{
+        ResourceManagerClient as ResourceManagerStub, TokenBucketsRequest, TokenBucketsResponse,
+    },
 };
 use security::SecurityManager;
 use tikv_util::{
@@ -105,6 +108,12 @@ pub struct Inner {
     pub pending_buckets: Arc<AtomicU64>,
     pub tso: TimestampOracle,
     pub meta_storage: MetaStorageStub,
+
+    pub rg_sender: Either<
+        Option<ClientDuplexSender<TokenBucketsRequest>>,
+        UnboundedSender<TokenBucketsRequest>,
+    >,
+    pub rg_resp: Option<ClientDuplexReceiver<TokenBucketsResponse>>,
 
     last_try_reconnect: Instant,
 }
@@ -186,6 +195,14 @@ impl Client {
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
         let meta_storage =
             kvproto::meta_storagepb::MetaStorageClient::new(client_stub.client.channel().clone());
+        let resource_manager = kvproto::resource_manager::ResourceManagerClient::new(
+            client_stub.client.channel().clone(),
+        );
+        let (rg_sender, rg_rx) = resource_manager
+            .acquire_token_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| {
+                panic!("fail to request PD {} err {:?}", "acquire_token_buckets", e)
+            });
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
@@ -204,6 +221,8 @@ impl Client {
                 last_try_reconnect: Instant::now(),
                 tso,
                 meta_storage,
+                rg_sender: Either::Left(Some(rg_sender)),
+                rg_resp: Some(rg_rx),
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
@@ -246,9 +265,23 @@ impl Client {
         inner.buckets_resp = Some(buckets_resp);
 
         inner.meta_storage = MetaStorageStub::new(client_stub.client.channel().clone());
+        let resource_manager = ResourceManagerStub::new(client_stub.client.channel().clone());
         inner.client_stub = client_stub;
         inner.members = members;
         inner.tso = tso;
+
+        let (rg_tx, rg_rx) = resource_manager
+            .acquire_token_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| {
+                panic!("fail to request PD {} err {:?}", "acquire_token_buckets", e)
+            });
+        info!("acquire_token_buckets sender and receiver are stale, refreshing ...");
+        // Try to cancel an unused token buckets sender.
+        if let Either::Left(Some(ref mut r)) = inner.rg_sender {
+            r.cancel();
+        }
+        inner.rg_sender = Either::Left(Some(rg_tx));
+        inner.rg_resp = Some(rg_rx);
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
