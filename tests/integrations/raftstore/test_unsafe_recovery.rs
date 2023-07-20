@@ -508,7 +508,8 @@ fn test_force_leader_three_nodes() {
 
 // Test the case that three of five nodes fail and force leader on one of the
 // rest nodes.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_five_nodes() {
     let mut cluster = new_node_cluster(0, 5);
     cluster.pd_client.disable_default_operator();
