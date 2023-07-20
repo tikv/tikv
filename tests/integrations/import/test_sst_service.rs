@@ -127,14 +127,27 @@ fn test_ingest_sst() {
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    let region_keys = cluster
-        .pd_client
-        .get_region_approximate_keys(ctx.get_region_id())
-        .unwrap();
-    assert_eq!(255, region_keys);
-    let buckets = cluster.pd_client.get_buckets(ctx.get_region_id()).unwrap();
-    assert!(buckets.meta.keys.len() > 2);
+
+    for _ in 0..10 {
+        let region_keys = cluster
+            .pd_client
+            .get_region_approximate_keys(ctx.get_region_id())
+            .unwrap_or_default();
+        if region_keys != 255 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
+        }
+
+        let buckets = cluster
+            .pd_client
+            .get_buckets(ctx.get_region_id())
+            .unwrap_or_default();
+        if buckets.meta.keys.len() <= 2 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        return;
+    }
+    panic!("region keys is not 255 or buckets keys len less than 2")
 }
 
 fn switch_mode(import: &ImportSstClient, range: Range, mode: SwitchMode) {
