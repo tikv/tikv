@@ -730,9 +730,10 @@ fn test_force_leader_on_hibernated_follower() {
 
 // Test the case that three of five nodes fail and force leader on the rest node
 // with triggering snapshot.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_trigger_snapshot() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
