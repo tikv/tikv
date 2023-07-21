@@ -299,6 +299,8 @@ macro_rules! cf_config {
         pub struct $name {
             #[online_config(skip)]
             pub block_size: ReadableSize,
+            // FIXME: deprecate it and update all tests related to it.
+            #[online_config(hidden)]
             pub block_cache_size: ReadableSize,
             #[online_config(skip)]
             pub disable_block_cache: bool,
@@ -3796,18 +3798,6 @@ impl TikvConfig {
                 "rocksdb.auto_tuned", "rocksdb.rate_limiter_auto_tuned",
             );
             self.rocksdb.auto_tuned = None;
-        }
-        // When shared block cache is enabled, if its capacity is set, it overrides
-        // individual block cache sizes. Otherwise use the sum of block cache
-        // size of all column families as the shared cache size.
-        let cache_cfg = &mut self.storage.block_cache;
-        if cache_cfg.capacity.is_none() {
-            cache_cfg.capacity = Some(ReadableSize(
-                self.rocksdb.defaultcf.block_cache_size.0
-                    + self.rocksdb.writecf.block_cache_size.0
-                    + self.rocksdb.lockcf.block_cache_size.0
-                    + self.raftdb.defaultcf.block_cache_size.0,
-            ));
         }
         if self.backup.sst_max_size.0 < default_coprocessor.region_max_size().0 / 10 {
             warn!(
