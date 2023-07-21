@@ -1257,10 +1257,7 @@ fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
             .unwrap()
             .map(Arc::new);
     let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
-    let cache = config
-        .storage
-        .block_cache
-        .build_shared_cache(config.storage.engine);
+    let cache = config.storage.block_cache.build_shared_cache();
     let kv_engine = KvEngineFactoryBuilder::new(env, config, cache, key_manager)
         .build()
         .create_shared_db(&config.storage.data_dir)
