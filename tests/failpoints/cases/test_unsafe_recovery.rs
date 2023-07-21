@@ -6,11 +6,13 @@ use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, mpsc, store::find_peer};
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_send_report() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -24,7 +26,7 @@ fn test_unsafe_recovery_send_report() {
     cluster.must_transfer_leader(region.get_id(), store2_peer);
     cluster.put(b"random_key1", b"random_val1").unwrap();
 
-    // Blocks the raft apply process on store 1 entirely .
+    // Blocks the raft apply process on store 1 entirely.
     let (apply_triggered_tx, apply_triggered_rx) = mpsc::bounded::<()>(1);
     let (apply_released_tx, apply_released_rx) = mpsc::bounded::<()>(1);
     fail::cfg_callback("on_handle_apply_store_1", move || {

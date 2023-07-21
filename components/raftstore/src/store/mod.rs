@@ -60,7 +60,7 @@ pub use self::{
         propose_read_index, should_renew_lease, ForceLeaderState, Peer, PeerStat, ProposalContext,
         ProposalQueue, RequestInspector, RequestPolicy, SnapshotRecoveryWaitApplySyncer,
         UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         TRANSFER_LEADER_COMMAND_REPLY_CTX,
     },
     peer_storage::{
