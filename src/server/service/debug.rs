@@ -55,8 +55,8 @@ where
     T: RaftExtension,
     D: Debugger,
 {
-    /// Constructs a new `Service` with `Engines`, a `RaftExtension`, a
-    /// `GcWorker` and a `RegionInfoAccessor`.
+    /// Constructs a new `Service` with `Engines`, a `RaftExtension` and a
+    /// `GcWorker`.
     pub fn new(debugger: D, pool: Handle, raft_router: T) -> Self {
         Service {
             pool,
@@ -537,16 +537,6 @@ where
             .map(|res| res.unwrap());
 
         self.handle_response(ctx, sink, f, TAG);
-    }
-
-    fn reset_to_version(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        req: ResetToVersionRequest,
-        sink: UnarySink<ResetToVersionResponse>,
-    ) {
-        self.debugger.reset_to_version(req.get_ts());
-        sink.success(ResetToVersionResponse::default());
     }
 
     fn flashback_to_version(

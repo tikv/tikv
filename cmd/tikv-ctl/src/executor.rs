@@ -706,8 +706,6 @@ pub trait DebugExecutor {
 
     fn dump_cluster_info(&self);
 
-    fn reset_to_version(&self, version: u64);
-
     fn flashback_to_version(
         &self,
         _version: u64,
@@ -930,13 +928,6 @@ impl DebugExecutor for DebugClient {
             .get_cluster_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
         println!("{}", resp.get_cluster_id())
-    }
-
-    fn reset_to_version(&self, version: u64) {
-        let mut req = ResetToVersionRequest::default();
-        req.set_ts(version);
-        self.reset_to_version(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
     }
 
     fn flashback_to_version(
@@ -1203,10 +1194,6 @@ where
         }
     }
 
-    fn reset_to_version(&self, version: u64) {
-        Debugger::reset_to_version(self, version);
-    }
-
     fn flashback_to_version(
         &self,
         _version: u64,
@@ -1413,10 +1400,6 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         if let Ok(ident) = store_ident_info {
             println!("cluster id: {}", ident.get_cluster_id());
         }
-    }
-
-    fn reset_to_version(&self, _version: u64) {
-        unimplemented!()
     }
 
     fn flashback_to_version(

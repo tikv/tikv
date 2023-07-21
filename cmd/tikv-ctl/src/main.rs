@@ -652,7 +652,6 @@ fn main() {
                 Cmd::Cluster {} => {
                     debug_executor.dump_cluster_info();
                 }
-                Cmd::ResetToVersion { version } => debug_executor.reset_to_version(version),
                 _ => {
                     unreachable!()
                 }

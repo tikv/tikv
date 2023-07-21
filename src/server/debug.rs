@@ -181,8 +181,6 @@ pub trait Debugger {
 
     fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>>;
 
-    fn reset_to_version(&self, version: u64);
-
     fn key_range_flashback_to_version(
         &self,
         version: u64,
@@ -211,7 +209,6 @@ where
     engines: Engines<RocksEngine, ER>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
-    reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
     storage: Option<Storage<E, L, K>>,
 }
@@ -259,12 +256,10 @@ where
         cfg_controller: ConfigController,
         storage: Option<Storage<E, L, K>>,
     ) -> DebuggerImpl<ER, E, L, K> {
-        let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
         DebuggerImpl {
             engines,
             kv_statistics: None,
             raft_statistics: None,
-            reset_to_version_manager,
             cfg_controller,
             storage,
         }
@@ -1006,10 +1001,6 @@ where
             hex::encode(middle_key),
         ));
         Ok(res)
-    }
-
-    fn reset_to_version(&self, version: u64) {
-        self.reset_to_version_manager.start(version.into());
     }
 
     fn key_range_flashback_to_version(
