@@ -10,7 +10,8 @@ use kvproto::{
 use protobuf::Message;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
-use test_raftstore::{Cluster, ServerCluster};
+use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
     codec::{datum, Datum},
@@ -1762,18 +1763,34 @@ fn test_snapshot_failed() {
     assert!(resp.get_region_error().has_store_not_match());
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_empty_data_cache_miss() {
+    let mut cluster = new_cluster(0, 1);
+    let (raft_engine, ctx) = prepare_raft_engine!(cluster, "");
+
+    let product = ProductTable::new();
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], false);
+    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
+    req.set_is_cache_enabled(true);
+    let resp = handle_request(&endpoint, req);
+    assert!(!resp.get_is_cache_hit());
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_cache() {
+    let mut cluster = new_cluster(0, 1);
+    let (raft_engine, ctx) = prepare_raft_engine!(cluster, "");
+
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
         (4, Some("name:3"), 1),
         (5, Some("name:1"), 4),
     ];
-
     let product = ProductTable::new();
-    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
-
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 

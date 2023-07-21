@@ -230,6 +230,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.start_pre_flush(
             store_ctx,
             "commit_merge",
+            true,
             &target.clone(),
             Box::new(move || {
                 // If target peer is destroyed, life.rs is responsible for telling us to

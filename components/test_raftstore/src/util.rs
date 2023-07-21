@@ -151,13 +151,16 @@ lazy_static! {
     pub static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+        let mut cfg = TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 manifest_dir.display(),
                 e
             );
-        })
+        });
+        // To speed up leader transfer.
+        cfg.raft_store.allow_unsafe_vote_after_start = true;
+        cfg
     };
 }
 
@@ -636,10 +639,7 @@ pub fn create_test_engine(
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(cfg.storage.engine);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();

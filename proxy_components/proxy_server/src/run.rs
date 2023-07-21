@@ -70,6 +70,7 @@ use server::{
     common::{check_system_config, EngineMetricsManager, TikvServerCore},
     memory::*,
 };
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
@@ -121,8 +122,14 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     proxy_config: ProxyConfig,
     engine_store_server_helper: &EngineStoreServerHelper,
 ) {
+    let (service_event_tx, service_event_rx) = tikv_util::mpsc::unbounded(); // pipe for controling service
     let engine_store_server_helper_ptr = engine_store_server_helper as *const _ as isize;
-    let mut tikv = TiKvServer::<CER, F>::init(config, proxy_config, engine_store_server_helper_ptr);
+    let mut tikv = TiKvServer::<CER, F>::init(
+        config,
+        proxy_config,
+        engine_store_server_helper_ptr,
+        service_event_tx.clone(),
+    );
 
     // Must be called after `TiKvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
@@ -203,6 +210,24 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
 
     proxy.set_status(RaftProxyStatus::Running);
 
+    let jh = std::thread::spawn(move || {
+        loop {
+            if let Ok(service_event) = service_event_rx.recv() {
+                match service_event {
+                    ServiceEvent::PauseGrpc => {
+                        debug!("don't support PauseGrpc")
+                    }
+                    ServiceEvent::ResumeGrpc => {
+                        debug!("don't support ResumeGrpc")
+                    }
+                    ServiceEvent::Exit => {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
     {
         debug_assert!(
             engine_store_server_helper.handle_get_engine_store_server_status()
@@ -223,6 +248,11 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
         "found engine-store server status is {:?}, start to stop all services",
         engine_store_server_helper.handle_get_engine_store_server_status()
     );
+
+    if let Err(e) = service_event_tx.send(ServiceEvent::Exit) {
+        warn!("failed to notify grpc server exit, {:?}", e);
+    }
+    jh.join().unwrap();
 
     tikv.stop();
 
@@ -418,12 +448,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TiKvServer<CER, F> {
         flow_listener: engine_rocks::FlowListener,
         engine_store_server_helper: isize,
     ) -> (Engines<TiFlashEngine, CER>, Arc<EnginesResourceInfo>) {
-        let block_cache = self
-            .core
-            .config
-            .storage
-            .block_cache
-            .build_shared_cache(self.core.config.storage.engine);
+        let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
             .core
             .config
@@ -536,6 +561,7 @@ struct TiKvServer<ER: RaftEngine, F: KvFormat> {
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -560,6 +586,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
         mut config: TikvConfig,
         proxy_config: ProxyConfig,
         engine_store_server_helper_ptr: isize,
+        tx: tikv_util::mpsc::Sender<ServiceEvent>,
     ) -> TiKvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
@@ -670,6 +697,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             quota_limiter,
             resource_manager,
             tablet_registry: None,
+            grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
 
@@ -1155,6 +1183,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
                 Arc::clone(&self.quota_limiter),
+                self.resource_manager.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
@@ -1269,6 +1298,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             self.concurrency_manager.clone(),
             collector_reg_handle,
             None,
+            self.grpc_service_mgr.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1330,6 +1360,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
             None,
+            self.resource_manager.clone(),
         );
         if servers
             .server

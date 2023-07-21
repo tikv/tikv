@@ -294,9 +294,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     tablet_index,
                     flushed_index,
                 } => {
-                    self.fsm
-                        .peer_mut()
-                        .on_data_flushed(cf, tablet_index, flushed_index);
+                    self.fsm.peer_mut().on_data_flushed(
+                        self.store_ctx,
+                        cf,
+                        tablet_index,
+                        flushed_index,
+                    );
                 }
                 PeerMsg::PeerUnreachable { to_peer_id } => {
                     self.fsm.peer_mut().on_peer_unreachable(to_peer_id)

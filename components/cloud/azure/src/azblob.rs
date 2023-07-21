@@ -13,7 +13,7 @@ use azure_core::{
 };
 use azure_identity::{ClientSecretCredential, TokenCredentialOptions};
 use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
-use azure_storage_blobs::prelude::*;
+use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
@@ -24,8 +24,11 @@ use futures_util::{
     stream::StreamExt,
     TryStreamExt,
 };
-pub use kvproto::brpb::{AzureBlobStorage as InputConfig, Bucket as InputBucket, CloudDynamic};
+pub use kvproto::brpb::{
+    AzureBlobStorage as InputConfig, AzureCustomerKey, Bucket as InputBucket, CloudDynamic,
+};
 use oauth2::{ClientId, ClientSecret};
+use openssl::sha::Sha256;
 use tikv_util::{
     debug,
     stream::{retry, RetryError},
@@ -53,6 +56,39 @@ struct CredentialInfo {
     client_secret: ClientSecret,
 }
 
+#[derive(Clone, Debug)]
+struct EncryptionCustomer {
+    encryption_key: String,
+    encryption_key_sha256: String,
+}
+
+impl EncryptionCustomer {
+    fn new(encryption_key: &str) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(encryption_key.as_bytes());
+        let encryption_key_sha256 = base64::encode(hasher.finish());
+        EncryptionCustomer {
+            encryption_key: base64::encode(encryption_key),
+            encryption_key_sha256,
+        }
+    }
+}
+
+impl From<AzureCustomerKey> for EncryptionCustomer {
+    fn from(value: AzureCustomerKey) -> Self {
+        EncryptionCustomer {
+            encryption_key: value.encryption_key,
+            encryption_key_sha256: value.encryption_key_sha256,
+        }
+    }
+}
+
+impl From<EncryptionCustomer> for (String, String) {
+    fn from(value: EncryptionCustomer) -> (String, String) {
+        (value.encryption_key, value.encryption_key_sha256)
+    }
+}
+
 #[derive(Clone)]
 pub struct Config {
     bucket: BucketConf,
@@ -64,6 +100,7 @@ pub struct Config {
     env_account_name: Option<StringNonEmpty>,
     env_shared_key: Option<StringNonEmpty>,
     encryption_scope: Option<StringNonEmpty>,
+    encryption_customer: Option<EncryptionCustomer>,
 }
 
 impl std::fmt::Debug for Config {
@@ -77,6 +114,7 @@ impl std::fmt::Debug for Config {
             .field("env_account_name", &self.env_account_name)
             .field("env_shared_key", &"?")
             .field("encryption_scope", &self.encryption_scope)
+            .field("encryption_customer_key", &"?")
             .finish()
     }
 }
@@ -93,6 +131,7 @@ impl Config {
             env_account_name: Self::load_env_account_name(),
             env_shared_key: Self::load_env_shared_key(),
             encryption_scope: None,
+            encryption_customer: None,
         }
     }
 
@@ -141,6 +180,9 @@ impl Config {
             encryption_scope: StringNonEmpty::opt(
                 attrs.get("encryption_scope").unwrap_or(def).clone(),
             ),
+            encryption_customer: attrs
+                .get("encryption_key")
+                .map(|encryption_key| EncryptionCustomer::new(encryption_key)),
         })
     }
 
@@ -153,6 +195,11 @@ impl Config {
             region: None,
         };
 
+        let encryption_customer = input
+            .encryption_key
+            .into_option()
+            .map(EncryptionCustomer::from);
+
         Ok(Config {
             bucket,
             account_name: StringNonEmpty::opt(input.account_name),
@@ -162,6 +209,7 @@ impl Config {
             env_account_name: Self::load_env_account_name(),
             env_shared_key: Self::load_env_shared_key(),
             encryption_scope: StringNonEmpty::opt(input.encryption_scope),
+            encryption_customer,
         })
     }
 
@@ -265,6 +313,7 @@ struct AzureUploader {
 
     storage_class: Option<AccessTier>,
     encryption_scope: Option<StringNonEmpty>,
+    encryption_customer: Option<EncryptionCustomer>,
 }
 
 impl AzureUploader {
@@ -279,6 +328,7 @@ impl AzureUploader {
                 config.bucket.storage_class.clone(),
             )),
             encryption_scope: config.encryption_scope.clone(),
+            encryption_customer: config.encryption_customer.clone(),
         }
     }
 
@@ -313,14 +363,8 @@ impl AzureUploader {
                 .blob_client(&self.name)
                 .put_block_blob(data.to_vec());
 
-            // the encryption scope and the access tier can not be both in the HTTP headers
-            let builder = if let Some(scope) = &self.encryption_scope {
-                builder.encryption_scope(scope.deref().clone())
-            } else if let Some(tier) = self.storage_class {
-                builder.access_tier(tier)
-            } else {
-                builder
-            };
+            let builder = self.adjust_put_builder(builder);
+
             builder.await?;
             Ok(())
         })
@@ -337,6 +381,26 @@ impl AzureUploader {
                 "timeout after 15mins for complete in azure storage".to_owned(),
             )),
         }
+    }
+
+    #[inline]
+    fn adjust_put_builder(&self, builder: PutBlockBlobBuilder) -> PutBlockBlobBuilder {
+        // the encryption scope and the access tier can not be both in the HTTP headers
+        if let Some(scope) = &self.encryption_scope {
+            return builder.encryption_scope(scope.deref().clone());
+        }
+
+        // the encryption customer provided key and the access tier can not be both in
+        // the HTTP headers
+        if let Some(key) = &self.encryption_customer {
+            return builder.encryption_key::<(String, String)>(key.clone().into());
+        }
+
+        if let Some(tier) = self.storage_class {
+            return builder.access_tier(tier);
+        }
+
+        builder
     }
 
     fn get_timeout() -> Duration {
@@ -515,6 +579,8 @@ impl AzureStorage {
     }
 
     pub fn new(config: Config) -> io::Result<AzureStorage> {
+        Self::check_config(&config)?;
+
         let account_name = config.get_account_name()?;
         let bucket = (*config.bucket.bucket).to_owned();
         // priority:
@@ -613,6 +679,38 @@ impl AzureStorage {
         }
     }
 
+    fn check_config(config: &Config) -> io::Result<()> {
+        if config.bucket.storage_class.is_some() {
+            if config.encryption_scope.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    concat!(
+                        "Set Blob Tier cannot be used with customer-provided scope. ",
+                        "Please don't supply the access-tier when use encryption-scope."
+                    ),
+                ));
+            }
+            if config.encryption_customer.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    concat!(
+                        "Set Blob Tier cannot be used with customer-provided key. ",
+                        "Please don't supply the access-tier when use encryption-key."
+                    ),
+                ));
+            }
+        } else if config.encryption_scope.is_some() && config.encryption_customer.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                concat!(
+                    "Undefined input: There are both encryption-scope and customer provided key. ",
+                    "Please select only one to encrypt blobs."
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
             return format!("{}/{}", prefix.trim_end_matches('/'), key);
@@ -634,6 +732,12 @@ impl AzureStorage {
                 blob_client.get().range(r)
             } else {
                 blob_client.get()
+            };
+
+            let builder = if let Some(key) = &self.config.encryption_customer {
+                builder.encryption_key::<(String, String)>(key.clone().into())
+            } else {
+                builder
             };
 
             let mut chunk: Vec<u8> = vec![];
@@ -835,5 +939,81 @@ mod tests {
         cd.set_attrs(attrs);
         cd.set_bucket(bucket);
         cd
+    }
+
+    #[test]
+    fn test_config_check() {
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            input.set_encryption_scope("test".to_owned());
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
     }
 }

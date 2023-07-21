@@ -68,6 +68,7 @@ rand = "0.8"
 resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }
+service = { workspace = true }
 security = { workspace = true, default-features = false }
 server = { workspace = true }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
