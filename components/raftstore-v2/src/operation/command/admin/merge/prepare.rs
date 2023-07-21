@@ -416,6 +416,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.start_pre_flush(
                     store_ctx,
                     "prepare_merge",
+                    false,
                     &self.region().clone(),
                     Box::new(on_flush_finish),
                 );
