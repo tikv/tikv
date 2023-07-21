@@ -198,6 +198,18 @@ impl BucketStat {
         }
     }
 
+    // Notice: It's not evenly distributed, so we update all buckets after ingest
+    // sst. Generally, sst file size is region split size, and this region is
+    // empty region.
+    pub fn ingest_sst(&mut self, key_count: u64, value_size: u64) {
+        for stat in self.stats.mut_write_bytes() {
+            *stat += value_size;
+        }
+        for stat in self.stats.mut_write_keys() {
+            *stat += key_count;
+        }
+    }
+
     pub fn split(&mut self, idx: usize) {
         assert!(idx != 0);
         // inherit the traffic stats for splited bucket
