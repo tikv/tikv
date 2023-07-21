@@ -12,8 +12,9 @@ use tikv_util::time::Instant as TiInstant;
 use crate::{batch::StoreContext, raft::Peer, router::PeerMsg};
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn on_enter_pre_force_leader(
+    pub fn on_enter_pre_force_leader<T>(
         &mut self,
+        ctx: &StoreContext<EK, ER, T>,
         syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
     ) {
@@ -52,6 +53,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // election.
         } else if self.raft_group().raft.promotable() && self.leader_id() != raft::INVALID_ID {
             // wait one round of election timeout to make sure leader_id is invalid
+            if self.raft_group().raft.election_elapsed <= ctx.cfg.raft_election_timeout_ticks {
+                warn!(
+                    self.logger,
+                    "Unsafe recovery, reject pre force leader due to leader lease may not expired"
+                );
+                return;
+            }
             Some(
                 self.raft_group().raft.randomized_election_timeout()
                     - self.raft_group().raft.election_elapsed,
@@ -231,7 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if *ticks == 0 {
                 let syncer_clone = syncer.clone();
                 let s = mem::take(failed_stores);
-                self.on_enter_pre_force_leader(syncer_clone, s);
+                self.on_enter_pre_force_leader(ctx, syncer_clone, s);
             } else {
                 *ticks -= 1;
             }

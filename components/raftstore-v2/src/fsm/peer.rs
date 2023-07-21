@@ -365,10 +365,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::EnterForceLeaderState {
                     syncer,
                     failed_stores,
-                } => self
-                    .fsm
-                    .peer_mut()
-                    .on_enter_pre_force_leader(syncer, failed_stores),
+                } => self.fsm.peer_mut().on_enter_pre_force_leader(
+                    self.store_ctx,
+                    syncer,
+                    failed_stores,
+                ),
                 PeerMsg::ExitForceLeaderState => {
                     self.fsm.peer_mut().on_exit_force_leader(self.store_ctx)
                 }

@@ -19,7 +19,7 @@ macro_rules! confirm_quorum_is_lost {
             vec![put],
             true,
         );
-        // marjority is lost, can't propose command successfully.
+        // majority is lost, can't propose command successfully.
         $cluster
             .call_command_on_leader(req, Duration::from_millis(10))
             .unwrap_err();
@@ -830,9 +830,10 @@ fn test_force_leader_trigger_snapshot() {
 
 // Test the case that three of five nodes fail and force leader on the rest node
 // with uncommitted conf change.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_with_uncommitted_conf_change() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
@@ -867,7 +868,7 @@ fn test_force_leader_with_uncommitted_conf_change() {
     std::thread::sleep(Duration::from_millis(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * 2,
+            * 8,
     ));
     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // the uncommitted conf-change is committed successfully after being force
@@ -900,9 +901,10 @@ fn test_force_leader_with_uncommitted_conf_change() {
 // is sent to b and break lease constrain, then b will reject a's heartbeat
 // while can vote for c. So c becomes leader and there are two leaders in the
 // group.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_on_healthy_region() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(30);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
@@ -939,9 +941,10 @@ fn test_force_leader_on_healthy_region() {
 
 // Test the case that three of five nodes fail and force leader on the one not
 // having latest log
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_on_wrong_leader() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -987,9 +990,10 @@ fn test_force_leader_on_wrong_leader() {
 
 // Test the case that three of five nodes fail and force leader twice on
 // peers on different nodes
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_twice_on_different_peers() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1053,9 +1057,10 @@ fn test_force_leader_twice_on_different_peers() {
 
 // Test the case that three of five nodes fail and force leader twice on
 // peer on the same node
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_twice_on_same_peer() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1098,9 +1103,10 @@ fn test_force_leader_twice_on_same_peer() {
 
 // Test the case that three of five nodes fail and force leader doesn't finish
 // in one election rounds due to network partition.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_multiple_election_rounds() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(30);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
@@ -1166,9 +1172,10 @@ fn test_force_leader_multiple_election_rounds() {
 // leader state before the peer(s) of the target region, thus proposes a no-op
 // entry (while becoming the leader) which is conflict with part of the catch up
 // logs, there will be data loss.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_has_commit_merge() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
 
     cluster.run();
@@ -1224,9 +1231,10 @@ fn test_unsafe_recovery_has_commit_merge() {
     assert!(has_commit_merge);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_during_merge() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
 
     cluster.run();
