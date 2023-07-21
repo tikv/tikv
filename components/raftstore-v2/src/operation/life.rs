@@ -317,17 +317,32 @@ impl Store {
         // It will create the peer if it does not exist
         self.on_raft_message(ctx, raft_msg);
 
-        if let Err(SendError(PeerMsg::AskCommitMerge(req))) = ctx
+        let commit_merge = req.get_admin_request().get_commit_merge();
+        let source_id = commit_merge.get_source().get_id();
+        let source_index = commit_merge.get_commit();
+
+        if let Err(SendError(PeerMsg::AskCommitMerge(_))) = ctx
             .router
             .force_send(region_id, PeerMsg::AskCommitMerge(req))
         {
-            let commit_merge = req.get_admin_request().get_commit_merge();
-            let source_id = commit_merge.get_source().get_id();
             let _ = ctx.router.force_send(
                 source_id,
                 PeerMsg::RejectCommitMerge {
-                    index: commit_merge.get_commit(),
+                    index: source_index,
                 },
+            );
+            info!(
+                self.logger(),
+                "Store rejects CommitMerge request";
+                "source" => source_id,
+                "index" => source_index,
+            );
+        } else {
+            info!(
+                self.logger(),
+                "Store forwards CommitMerge request to peer";
+                "source" => source_id,
+                "index" => source_index,
             );
         }
     }

@@ -38,10 +38,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         index: u64,
     ) {
-        if self
-            .merge_context()
-            .map_or(true, |c| c.prepare_merge_index() != Some(index))
-        {
+        let self_index = self.merge_context().and_then(|c| c.prepare_merge_index());
+        if self_index != Some(index) {
+            info!(
+                self.logger,
+                "ignore RejectCommitMerge due to index not match";
+                "index" => index,
+                "self_index" => ?self_index,
+            );
             return;
         }
         self.propose_rollback_merge(store_ctx, index);
