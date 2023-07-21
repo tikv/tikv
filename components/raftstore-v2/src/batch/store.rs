@@ -68,7 +68,7 @@ use crate::{
 };
 
 const MIN_MANUAL_FLUSH_RATE: f64 = 0.2;
-const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(90);
+const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(120);
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
