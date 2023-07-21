@@ -314,6 +314,9 @@ async fn cleanup_cache(
             }
         }
         fs::remove_file(entry.path())?;
+        if let Some(m) = key_manager {
+            m.delete_file(entry.path().to_str().unwrap(), None)?;
+        }
     }
     let mut missing = vec![];
     loop {
@@ -329,7 +332,10 @@ async fn cleanup_cache(
                     continue;
                 }
                 // We should not write to the file directly as it's hard linked.
-                fs::remove_file(p)?;
+                fs::remove_file(&p)?;
+                if let Some(m) = key_manager {
+                    m.delete_file(p.to_str().unwrap(), None)?;
+                }
             }
             missing.push(meta.file_name);
         }
@@ -338,7 +344,10 @@ async fn cleanup_cache(
         }
     }
     for (_, p) in exists {
-        fs::remove_file(p)?;
+        fs::remove_file(&p)?;
+        if let Some(m) = key_manager {
+            m.delete_file(p.to_str().unwrap(), None)?;
+        }
     }
     let mut resp = TabletSnapshotResponse::default();
     resp.mut_files().set_file_name(missing.clone().into());

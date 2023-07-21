@@ -26,6 +26,7 @@ use futures_util::AsyncReadExt;
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
+    future::RescheduleChecker,
     stream::READ_BUF_SIZE,
     time::{Instant, Limiter},
 };
@@ -285,7 +286,8 @@ where
             format!("openssl hasher failed to init: {}", err),
         )
     })?;
-
+    let mut yield_checker =
+        RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
     loop {
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
@@ -306,6 +308,7 @@ where
             })?;
         }
         file_length += bytes_read as u64;
+        yield_checker.check().await;
     }
 
     if expected_length != 0 && expected_length != file_length {

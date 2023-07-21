@@ -535,11 +535,17 @@ pub enum ForceLeaderState {
 //         learner
 //       - exit joint state
 //     - start_unsafe_recovery_report
-//
-// Intends to use RAII to sync unsafe recovery procedures between peers, in
-// addition to that, it uses a closure to avoid having a raft router as a member
-// variable, which is statically dispatched, thus needs to propagate the
-// generics everywhere.
+
+// A wrapper of a closure that will be invoked when it is dropped.
+// This design has two benefits:
+//   1. Using a closure (dynamically dispatched), so that it can avoid having
+//      generic member fields like RaftRouter, thus avoid having Rust generic
+//      type explosion problem.
+//   2. Invoke on drop, so that it can be easily and safely used (together with
+//      Arc) as a coordinator between all concerning peers. Each of the peers
+//      holds a reference to the same strcuture, and whoever finishes the task
+//      drops its reference. Once the last reference is dropped, indicating all
+//      the peers have finished their own tasks, the closure is invoked.
 pub struct InvokeClosureOnDrop(Option<Box<dyn FnOnce() + Send + Sync>>);
 
 impl fmt::Debug for InvokeClosureOnDrop {

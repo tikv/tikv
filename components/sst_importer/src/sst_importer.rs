@@ -38,6 +38,7 @@ use tikv_util::{
         bytes::{decode_bytes_in_place, encode_bytes},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     },
+    future::RescheduleChecker,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
@@ -1251,6 +1252,9 @@ impl SstImporter {
             .build(path.save.to_str().unwrap())
             .unwrap();
 
+        let mut yield_check =
+            RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
+        let mut count = 0;
         while iter.valid()? {
             let mut old_key = Cow::Borrowed(keys::origin_key(iter.key()));
             let mut ts = None;
@@ -1314,6 +1318,11 @@ impl SstImporter {
             }
 
             sst_writer.put(&data_key, &value)?;
+            count += 1;
+            if count >= 1024 {
+                count = 0;
+                yield_check.check().await;
+            }
             iter.next()?;
             if first_key.is_none() {
                 first_key = Some(keys::origin_key(&data_key).to_vec());
