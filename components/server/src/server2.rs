@@ -71,6 +71,7 @@ use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
         loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
@@ -107,6 +108,7 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
+    mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
@@ -126,8 +128,12 @@ use crate::{
 };
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let mut tikv = TikvServer::<CER>::init::<F>(config);
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
+    let mut tikv = TikvServer::<CER>::init::<F>(config, service_event_tx.clone());
 
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
@@ -149,18 +155,45 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.run_status_server();
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-    // TODO: support signal dump stats
-    signal_handler::wait_for_signal(
-        None as Option<Engines<RocksEngine, CER>>,
-        tikv.kv_statistics.clone(),
-        tikv.raft_statistics.clone(),
-    );
+    // Build a background worker for handling signals.
+    {
+        let kv_statistics = tikv.kv_statistics.clone();
+        let raft_statistics = tikv.raft_statistics.clone();
+        // TODO: support signal dump stats
+        std::thread::spawn(move || {
+            signal_handler::wait_for_signal(
+                None as Option<Engines<RocksEngine, CER>>,
+                kv_statistics,
+                raft_statistics,
+                Some(service_event_tx),
+            )
+        });
+    }
+    loop {
+        if let Ok(service_event) = service_event_rx.recv() {
+            match service_event {
+                ServiceEvent::PauseGrpc => {
+                    tikv.pause();
+                }
+                ServiceEvent::ResumeGrpc => {
+                    tikv.resume();
+                }
+                ServiceEvent::Exit => {
+                    break;
+                }
+            }
+        }
+    }
     tikv.stop();
 }
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TikvConfig) {
+pub fn run_tikv(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -181,9 +214,9 @@ pub fn run_tikv(config: TikvConfig) {
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config)
+            run_impl::<RocksEngine, API>(config, service_event_tx, service_event_rx)
         } else {
-            run_impl::<RaftLogEngine, API>(config)
+            run_impl::<RaftLogEngine, API>(config, service_event_tx, service_event_rx)
         }
     })
 }
@@ -219,6 +252,7 @@ struct TikvServer<ER: RaftEngine> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -239,7 +273,10 @@ impl<ER> TikvServer<ER>
 where
     ER: RaftEngine,
 {
-    fn init<F: KvFormat>(mut config: TikvConfig) -> TikvServer<ER> {
+    fn init<F: KvFormat>(
+        mut config: TikvConfig,
+        tx: TikvMpsc::Sender<ServiceEvent>,
+    ) -> TikvServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -363,6 +400,7 @@ where
             resource_manager,
             causal_ts_provider,
             tablet_registry: None,
+            grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
 
@@ -729,6 +767,7 @@ where
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
                 self.quota_limiter.clone(),
+                self.resource_manager.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
@@ -834,6 +873,7 @@ where
                 &state,
                 importer.clone(),
                 self.core.encryption_key_manager.clone(),
+                self.grpc_service_mgr.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -897,6 +937,7 @@ where
             self.concurrency_manager.clone(),
             self.core.config.storage.api_version(),
             self.causal_ts_provider.clone(),
+            self.resource_manager.clone(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,
@@ -912,6 +953,7 @@ where
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             servers.importer.clone(),
             Some(self.router.as_ref().unwrap().store_meta().clone()),
+            self.resource_manager.clone(),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1242,6 +1284,7 @@ where
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.core.store_path.clone(),
                 self.resource_manager.clone(),
+                self.grpc_service_mgr.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1347,6 +1390,28 @@ where
 
         self.core.to_stop.into_iter().for_each(|s| s.stop());
     }
+
+    fn pause(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        let r = server.server.pause();
+        if let Err(e) = r {
+            warn!(
+                "failed to pause the server";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn resume(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        let r = server.server.resume();
+        if let Err(e) = r {
+            warn!(
+                "failed to resume the server";
+                "err" => ?e
+            );
+        }
+    }
 }
 
 impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
@@ -1354,12 +1419,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> Arc<EnginesResourceInfo> {
-        let block_cache = self
-            .core
-            .config
-            .storage
-            .block_cache
-            .build_shared_cache(self.core.config.storage.engine);
+        let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
             .core
             .config
@@ -1502,10 +1562,7 @@ mod test {
         config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
-        let cache = config
-            .storage
-            .block_cache
-            .build_shared_cache(config.storage.engine);
+        let cache = config.storage.block_cache.build_shared_cache();
 
         let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();

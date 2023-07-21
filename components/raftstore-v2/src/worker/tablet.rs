@@ -25,7 +25,8 @@ use tikv_util::{
     Either,
 };
 
-const DEFAULT_BACKGROUND_POOL_SIZE: usize = 6;
+const DEFAULT_HIGH_PRI_POOL_SIZE: usize = 1;
+const DEFAULT_LOW_PRI_POOL_SIZE: usize = 6;
 
 pub enum Task<EK> {
     Trim {
@@ -55,10 +56,11 @@ pub enum Task<EK> {
     Flush {
         region_id: u64,
         reason: &'static str,
+        high_priority: bool,
         /// Do not flush if the active memtable is just flushed within this
         /// threshold.
         threshold: Option<Duration>,
-        /// Callback will be called if memtable is fresh.
+        /// Callback will be called regardless of whether the flush succeeds.
         cb: Option<Box<dyn FnOnce() + Send>>,
     },
     DeleteRange {
@@ -108,12 +110,14 @@ impl<EK> Display for Task<EK> {
             Task::Flush {
                 region_id,
                 reason,
+                high_priority,
                 threshold,
                 cb: on_flush_finish,
             } => {
                 write!(
                     f,
-                    "flush tablet for region_id {region_id}, reason {reason}, threshold {:?}, has_cb {}",
+                    "flush tablet for region_id {region_id}, reason {reason}, high_priority \
+                    {high_priority}, threshold {:?}, has_cb {}",
                     threshold,
                     on_flush_finish.is_some(),
                 )
@@ -241,7 +245,8 @@ pub struct Runner<EK: KvEngine> {
 
     // An independent pool to run tasks that are time-consuming but doesn't take CPU resources,
     // such as waiting for RocksDB compaction.
-    background_pool: FuturePool,
+    high_pri_pool: FuturePool,
+    low_pri_pool: FuturePool,
 }
 
 impl<EK: KvEngine> Runner<EK> {
@@ -258,13 +263,13 @@ impl<EK: KvEngine> Runner<EK> {
             logger,
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
-            background_pool: YatpPoolBuilder::new(DefaultTicker::default())
+            high_pri_pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("tablet-high")
+                .thread_count(0, DEFAULT_HIGH_PRI_POOL_SIZE, DEFAULT_HIGH_PRI_POOL_SIZE)
+                .build_future_pool(),
+            low_pri_pool: YatpPoolBuilder::new(DefaultTicker::default())
                 .name_prefix("tablet-bg")
-                .thread_count(
-                    0,
-                    DEFAULT_BACKGROUND_POOL_SIZE,
-                    DEFAULT_BACKGROUND_POOL_SIZE,
-                )
+                .thread_count(0, DEFAULT_LOW_PRI_POOL_SIZE, DEFAULT_LOW_PRI_POOL_SIZE)
                 .build_future_pool(),
         }
     }
@@ -289,7 +294,7 @@ impl<EK: KvEngine> Runner<EK> {
             return;
         }
         let logger = self.logger.clone();
-        self.background_pool
+        self.low_pri_pool
             .spawn(async move {
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
@@ -331,8 +336,14 @@ impl<EK: KvEngine> Runner<EK> {
             Either::Left(tablet) => {
                 // The tablet is about to be deleted, flush is a waste and will block destroy.
                 let _ = tablet.set_db_options(&[("avoid_flush_during_shutdown", "true")]);
-                let _ = tablet.pause_background_work();
-                PathBuf::from(tablet.path())
+                // `pause_background_work` needs to wait for outstanding compactions.
+                let path = PathBuf::from(tablet.path());
+                self.low_pri_pool
+                    .spawn(async move {
+                        let _ = tablet.pause_background_work();
+                    })
+                    .unwrap();
+                path
             }
             Either::Right(path) => path,
         }
@@ -432,6 +443,7 @@ impl<EK: KvEngine> Runner<EK> {
         &self,
         region_id: u64,
         reason: &'static str,
+        high_priority: bool,
         threshold: Option<Duration>,
         cb: Option<Box<dyn FnOnce() + Send>>,
     ) {
@@ -445,7 +457,10 @@ impl<EK: KvEngine> Runner<EK> {
                 "region_id" => region_id,
                 "reason" => reason,
             );
-            return
+            if let Some(cb) = cb {
+                cb();
+            }
+            return;
         };
         let threshold = threshold.map(|t| std::time::SystemTime::now() - t);
         // The callback `cb` being some means it's the task sent from
@@ -454,42 +469,47 @@ impl<EK: KvEngine> Runner<EK> {
         if let Some(cb) = cb {
             let logger = self.logger.clone();
             let now = Instant::now();
-            self.background_pool
-                .spawn(async move {
-                    // sync flush for leader to let the flush happend before later checkpoint.
-                    if threshold.is_none() || tablet.has_old_active_memtable(threshold.unwrap()) {
-                        let r = tablet.flush_cfs(DATA_CFS, true);
-                        let elapsed = now.saturating_elapsed();
-                        if let Err(e) = r {
-                            warn!(
-                                logger,
-                                "flush memtable for leader failed";
-                                "region_id" => region_id,
-                                "reason" => reason,
-                                "err" => ?e,
-                            );
-                            return;
-                        } else {
-                            info!(
-                                logger,
-                                "flush memtable for leader";
-                                "region_id" => region_id,
-                                "reason" => reason,
-                                "duration" => %ReadableDuration(elapsed),
-                            );
-                        }
+            let pool = if high_priority
+                && self.low_pri_pool.get_running_task_count() > DEFAULT_LOW_PRI_POOL_SIZE / 2
+            {
+                &self.high_pri_pool
+            } else {
+                &self.low_pri_pool
+            };
+            pool.spawn(async move {
+                // sync flush for leader to let the flush happen before later checkpoint.
+                if threshold.is_none() || tablet.has_old_active_memtable(threshold.unwrap()) {
+                    let r = tablet.flush_cfs(DATA_CFS, true);
+                    let elapsed = now.saturating_elapsed();
+                    if let Err(e) = r {
+                        warn!(
+                            logger,
+                            "flush memtable for leader failed";
+                            "region_id" => region_id,
+                            "reason" => reason,
+                            "err" => ?e,
+                        );
                     } else {
                         info!(
                             logger,
-                            "skipped flush memtable for leader";
+                            "flush memtable for leader";
                             "region_id" => region_id,
                             "reason" => reason,
+                            "duration" => %ReadableDuration(elapsed),
                         );
                     }
-                    drop(tablet);
-                    cb();
-                })
-                .unwrap();
+                } else {
+                    info!(
+                        logger,
+                        "skipped flush memtable for leader";
+                        "region_id" => region_id,
+                        "reason" => reason,
+                    );
+                }
+                drop(tablet);
+                cb();
+            })
+            .unwrap();
         } else if threshold.is_none() || tablet.has_old_active_memtable(threshold.unwrap()) {
             if let Err(e) = tablet.flush_cfs(DATA_CFS, false) {
                 warn!(
@@ -585,9 +605,10 @@ where
             Task::Flush {
                 region_id,
                 reason,
+                high_priority,
                 threshold,
                 cb,
-            } => self.flush_tablet(region_id, reason, threshold, cb),
+            } => self.flush_tablet(region_id, reason, high_priority, threshold, cb),
             delete_range @ Task::DeleteRange { .. } => self.delete_range(delete_range),
             Task::SnapGc(keys) => self.snap_gc(keys),
         }

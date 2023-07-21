@@ -852,16 +852,20 @@ impl DataKeyManager {
     pub fn file_count(&self) -> usize {
         self.dicts.file_dict.lock().unwrap().files.len()
     }
-}
 
-impl Drop for DataKeyManager {
-    fn drop(&mut self) {
+    fn shutdown_background_worker(&mut self) {
         if let Err(e) = self.rotate_tx.send(RotateTask::Terminate) {
             info!("failed to terminate background rotation, are we shutting down?"; "err" => %e);
         }
         if let Some(Err(e)) = self.background_worker.take().map(|w| w.join()) {
             info!("failed to join background rotation, are we shutting down?"; "err" => ?e);
         }
+    }
+}
+
+impl Drop for DataKeyManager {
+    fn drop(&mut self) {
+        self.shutdown_background_worker();
     }
 }
 
@@ -1033,7 +1037,12 @@ impl<'a> DataKeyImporter<'a> {
             if let Entry::Vacant(e) = file_dict.files.entry(fname.to_owned()) {
                 e.insert(file.clone());
             } else {
-                return Err(box_err!("file name collides with existing file: {}", fname));
+                // check for physical file.
+                if Path::new(fname).exists() {
+                    return Err(box_err!("file name collides with existing file: {}", fname));
+                } else {
+                    warn!("overwriting existing unused encryption key"; "fname" => fname);
+                }
             }
             file_dict.files.len() as _
         };
@@ -1450,11 +1459,12 @@ mod tests {
     fn test_key_manager_rotate() {
         let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
+        let mut manager = new_key_manager_def(&tmp_dir, None).unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
+        manager.shutdown_background_worker();
 
         // Do not rotate.
         let master_key = MockBackend::default();
@@ -1519,11 +1529,12 @@ mod tests {
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let previous = new_mock_backend() as Box<dyn Backend>;
-        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        let mut manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
+        manager.shutdown_background_worker();
 
         let master_key_backend =
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
@@ -1569,7 +1580,8 @@ mod tests {
         let master_key_backend = Box::new(file_backend);
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let previous = new_mock_backend() as Box<dyn Backend>;
-        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        let mut manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        manager.shutdown_background_worker();
 
         let file_backend = FileBackend::new(key_path.as_path()).unwrap();
         let master_key_backend = Box::new(file_backend);
@@ -1825,10 +1837,17 @@ mod tests {
         let mut importer = DataKeyImporter::new(&manager);
         let file0 = manager.new_file("0").unwrap();
 
-        // conflict
+        // conflict with actual file.
+        let f = tmp_dir.path().join("0").to_str().unwrap().to_owned();
+        let _ = manager.new_file(&f).unwrap();
+        File::create(&f).unwrap();
+        importer
+            .add(&f, file0.iv.clone(), DataKey::default())
+            .unwrap_err();
+        // conflict with only key.
         importer
             .add("0", file0.iv.clone(), DataKey::default())
-            .unwrap_err();
+            .unwrap();
         // same key
         importer
             .add(
