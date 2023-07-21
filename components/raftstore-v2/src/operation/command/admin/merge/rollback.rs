@@ -78,6 +78,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         _index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        fail::fail_point!("apply_rollback_merge");
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         if self.region_state().get_state() != PeerState::Merging {
             slog_panic!(

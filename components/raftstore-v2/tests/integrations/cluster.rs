@@ -732,7 +732,7 @@ pub mod split_helper {
         req
     }
 
-    pub fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
+    pub fn must_split(region_id: u64, req: RaftCmdRequest, router: &TestRouter) {
         let (msg, sub) = PeerMsg::admin_command(req);
         router.send(region_id, msg).unwrap();
         block_on(sub.result()).unwrap();
@@ -742,7 +742,7 @@ pub mod split_helper {
         thread::sleep(Duration::from_secs(1));
     }
 
-    pub fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
+    pub fn put(router: &TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
         let header = Box::new(router.new_request_for(region_id).take_header());
         let mut put = SimpleWriteEncoder::with_capacity(64);
         put.put(CF_DEFAULT, key, b"v1");
@@ -752,7 +752,7 @@ pub mod split_helper {
     // Split the region according to the parameters
     // return the updated original region
     pub fn split_region<'a>(
-        router: &'a mut TestRouter,
+        router: &'a TestRouter,
         region: metapb::Region,
         peer: metapb::Peer,
         split_region_id: u64,
@@ -820,7 +820,7 @@ pub mod split_helper {
     // This is to simulate the case when the splitted peer's storage is not
     // initialized yet when refresh bucket happens
     pub fn split_region_and_refresh_bucket(
-        router: &mut TestRouter,
+        router: &TestRouter,
         region: metapb::Region,
         peer: metapb::Peer,
         split_region_id: u64,

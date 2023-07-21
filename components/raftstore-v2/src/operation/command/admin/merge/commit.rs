@@ -333,19 +333,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 } else {
                     let (ch, res) = CmdResChannel::pair();
                     self.on_admin_command(store_ctx, req, ch);
-                    match res.take_result() {
-                        Some(res) if res.get_header().has_error() => error!(
+                    if let Some(res) = res.take_result()
+                        && res.get_header().has_error()
+                    {
+                        error!(
                             self.logger,
                             "failed to propose commit merge";
                             "source" => source_id,
                             "res" => ?res,
-                        ),
-                        None => error!(
-                            self.logger,
-                            "propose commit merge is delayed";
-                            "source" => source_id,
-                        ),
-                        _ => return,
+                        );
+                    } else {
+                        return;
                     }
                 }
                 let _ = store_ctx
@@ -380,6 +378,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        fail::fail_point!("apply_commit_merge");
         PEER_ADMIN_CMD_COUNTER.commit_merge.all.inc();
 
         self.flush();
