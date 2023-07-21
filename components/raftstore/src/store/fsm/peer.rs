@@ -6019,6 +6019,7 @@ where
         self.fsm.peer.last_region_buckets = old_region_buckets;
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
         let version = self.fsm.peer.region_buckets.as_ref().unwrap().meta.version;
+        let keys = self.fsm.peer.region_buckets.as_ref().unwrap().meta.keys.clone();
         if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
             reader.update(ReadProgress::region_buckets(
                 self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
@@ -6036,6 +6037,7 @@ where
                 extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
                 let mut refresh_buckets = RefreshBuckets::new();
                 refresh_buckets.set_version(version);
+                refresh_buckets.set_keys(keys.clone().into());
                 extra_msg.set_refresh_buckets(refresh_buckets);
                 self.fsm
                     .peer
@@ -6063,13 +6065,14 @@ where
             return;
         }
         let version = msg.get_extra_msg().get_refresh_buckets().get_version();
+        let keys = msg.get_extra_msg().get_refresh_buckets().get_keys();
         let region_epoch = msg.get_region_epoch().clone();
 
         let meta = BucketMeta {
             region_id: self.region_id(),
             version,
             region_epoch,
-            keys: vec![],
+            keys: keys.to_vec(),
             sizes: vec![],
         };
 

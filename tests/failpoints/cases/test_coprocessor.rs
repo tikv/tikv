@@ -471,3 +471,54 @@ fn test_follower_buckets() {
     }
     fail::remove("skip_check_stale_read_safe");
 }
+
+
+#[cfg(feature = "failpoints")]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_bucket_version_not_match() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
+    let product = ProductTable::new();
+    let (raft_engine, ctx) = leader_raft_engine(&mut cluster, "");
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+
+    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
+    let resp = handle_request(&endpoint, req.clone());
+    assert_eq!(resp.get_latest_buckets_version(), 0);
+
+    let mut bucket_key = product.get_record_range_all().get_start().to_owned();
+    bucket_key.push(0);
+    let region = cluster.get_region(&bucket_key);
+    let bucket = Bucket {
+        keys: vec![bucket_key],
+        size: 1024,
+    };
+
+    cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
+    thread::sleep(Duration::from_millis(1000));
+    let wait_refresh_buckets = |endpoint, req:&mut Request, old_buckets_ver| {
+        let mut resp = Default::default();
+        for _ in 0..10 {
+            req.mut_context().set_buckets_version(old_buckets_ver);
+            resp = handle_request(&endpoint, req.clone());
+            if resp.has_region_error() && resp.get_region_error().has_bucket_version_not_match(){
+                assert_ge!(resp.get_region_error().get_bucket_version_not_match().version , old_buckets_ver);
+                assert_ge!(resp.get_region_error().get_bucket_version_not_match().keys.len() ,2);
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
+    };
+    wait_refresh_buckets(endpoint, &mut req, 1);
+    for (engine, ctx) in follower_raft_engine(&mut cluster, "") {
+        req.set_context(ctx.clone());
+        let (_, endpoint, _) =
+            init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
+        wait_refresh_buckets(endpoint, &mut req, 0);
+    }
+    fail::remove("skip_check_stale_read_safe");
+}

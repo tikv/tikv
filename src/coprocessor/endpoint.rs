@@ -417,7 +417,12 @@ impl<E: Engine> Endpoint<E> {
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
                 .await?;
         let latest_buckets = snapshot.ext().get_buckets();
-        if let Some(buckets) = latest_buckets&& buckets.version > tracker.req_ctx.context.buckets_version  {
+
+        // Check if the buckets version is latest.
+        // skip if request don't carry this bucket version. 
+        if let Some(ref buckets) = latest_buckets&&
+            buckets.version > tracker.req_ctx.context.buckets_version &&
+            tracker.req_ctx.context.buckets_version!=0 {
                 let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
                 bucket_not_match.set_version(buckets.version);
                 bucket_not_match.set_keys(buckets.keys.clone().into());
