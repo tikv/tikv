@@ -14,10 +14,7 @@ use tikv_util::{
     sys::SysQuota,
 };
 
-use crate::config::{
-    BLOCK_CACHE_RATE, DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE,
-    RAFTSTORE_V2_BLOCK_CACHE_RATE,
-};
+use crate::config::{DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -33,6 +30,10 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
+
+// Block cache capacity used when TikvConfig isn't validated. It should only
+// occur in tests.
+const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSize = ReadableSize::mb(128);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -276,21 +277,11 @@ impl BlockCacheConfig {
         }
     }
 
-    pub fn build_shared_cache(&self, engine_type: EngineType) -> Cache {
+    pub fn build_shared_cache(&self) -> Cache {
         if self.shared == Some(false) {
             warn!("storage.block-cache.shared is deprecated, cache is always shared.");
         }
-        let capacity = match self.capacity {
-            None => {
-                let total_mem = SysQuota::memory_limit_in_bytes();
-                if engine_type == EngineType::RaftKv2 {
-                    ((total_mem as f64) * RAFTSTORE_V2_BLOCK_CACHE_RATE) as usize
-                } else {
-                    ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
-                }
-            }
-            Some(c) => c.0 as usize,
-        };
+        let capacity = self.capacity.unwrap_or(FALLBACK_BLOCK_CACHE_CAPACITY).0 as usize;
         let mut cache_opts = LRUCacheOptions::new();
         cache_opts.set_capacity(capacity);
         cache_opts.set_num_shard_bits(self.adjust_shard_bits(capacity) as c_int);

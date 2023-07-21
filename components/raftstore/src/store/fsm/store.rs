@@ -45,6 +45,7 @@ use protobuf::Message;
 use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -1576,6 +1577,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1715,6 +1717,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             health_service,
             causal_ts_provider,
             snap_generator_pool,
+            grpc_service_mgr,
         )?;
         Ok(())
     }
@@ -1733,6 +1736,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         snap_generator_pool: FuturePool,
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1824,6 +1828,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             health_service,
             coprocessor_host,
             causal_ts_provider,
+            grpc_service_mgr,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 

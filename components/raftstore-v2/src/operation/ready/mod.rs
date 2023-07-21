@@ -310,6 +310,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .schedule(crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
                             reason: "unknown",
+                            high_priority: false,
                             threshold: Some(std::time::Duration::from_secs(10)),
                             cb: None,
                         });
