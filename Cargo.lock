@@ -391,7 +391,7 @@ dependencies = [
 [[package]]
 name = "azure_core"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "async-trait",
  "base64 0.21.0",
@@ -403,7 +403,7 @@ dependencies = [
  "log",
  "paste",
  "pin-project",
- "quick-xml 0.28.2",
+ "quick-xml 0.29.0",
  "rand 0.8.5",
  "reqwest",
  "rustc_version 0.4.0",
@@ -417,7 +417,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -437,7 +437,7 @@ dependencies = [
 [[package]]
 name = "azure_security_keyvault"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -452,7 +452,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -474,7 +474,7 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.12.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust#5014404dff3cd77faf37a7077ec67bb6a2cf1f4c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#69431158e9d39f2064fe207cf241d3fc748c851c"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -537,6 +537,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
+ "resource_control",
  "security",
  "serde",
  "serde_derive",
@@ -2966,7 +2967,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f32671394cc43c7558e23fb953872e6b09a3dac2"
+source = "git+https://github.com/pingcap/kvproto.git#92075f193814dbc00f347b4589743a36bf624f34"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4450,9 +4451,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.28.2"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce5e73202a820a31f8a0ee32ada5e21029c81fd9e3ebf668a40832e4219d9d1"
+checksum = "81b9228215d82c7b61490fec1de287136b5de6f5700f6e58ea9ad61a7964ca51"
 dependencies = [
  "memchr",
  "serde",
@@ -4614,6 +4615,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_with",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -4664,6 +4666,7 @@ dependencies = [
  "rand 0.8.5",
  "resource_control",
  "resource_metering",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -5550,6 +5553,7 @@ dependencies = [
  "engine_rocks_helper",
  "engine_traits",
  "error_code",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -5574,6 +5578,7 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "service",
  "signal-hook",
  "slog",
  "slog-global",
@@ -5586,6 +5591,15 @@ dependencies = [
  "toml",
  "txn_types",
  "yatp",
+]
+
+[[package]]
+name = "service"
+version = "0.0.1"
+dependencies = [
+ "atomic",
+ "crossbeam",
+ "tikv_util",
 ]
 
 [[package]]
@@ -6251,6 +6265,7 @@ dependencies = [
  "resource_metering",
  "security",
  "server",
+ "service",
  "slog",
  "slog-global",
  "tempfile",
@@ -6298,6 +6313,7 @@ dependencies = [
  "resource_metering",
  "security",
  "server",
+ "service",
  "slog",
  "slog-global",
  "tempfile",
@@ -6423,6 +6439,8 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "server",
+ "service",
  "slog",
  "slog-global",
  "sst_importer",
@@ -6604,6 +6622,7 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "protobuf",
+ "resource_control",
  "slog",
  "slog-global",
  "smallvec",
@@ -6750,6 +6769,7 @@ dependencies = [
  "serde_derive",
  "serde_ignored",
  "serde_json",
+ "service",
  "slog",
  "slog-global",
  "smallvec",

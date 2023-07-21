@@ -40,6 +40,7 @@ use raftstore::{
     },
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use slog::{warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -67,7 +68,7 @@ use crate::{
 };
 
 const MIN_MANUAL_FLUSH_RATE: f64 = 0.2;
-const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(90);
+const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(120);
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
@@ -678,6 +679,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         pd_worker: LazyWorker<pd::Task>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -793,6 +795,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             auto_split_controller,
             store_meta.lock().unwrap().region_read_progress.clone(),
             collector_reg_handle,
+            grpc_service_mgr,
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),

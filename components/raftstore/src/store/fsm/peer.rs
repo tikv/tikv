@@ -2684,6 +2684,10 @@ where
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgAvailabilityResponse);
         resp.wait_data = self.fsm.peer.wait_data;
+        let report = resp.mut_availability_context();
+        report.set_from_region_id(self.region_id());
+        report.set_from_region_epoch(self.region().get_region_epoch().clone());
+        report.set_trimmed(true);
         self.fsm
             .peer
             .send_extra_message(resp, &mut self.ctx.trans, from);
@@ -2824,7 +2828,9 @@ where
                 }
             }
             // It's v2 only message and ignore does no harm.
-            ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
+            ExtraMessageType::MsgGcPeerResponse
+            | ExtraMessageType::MsgFlushMemtable
+            | ExtraMessageType::MsgRefreshBuckets => (),
         }
     }
 

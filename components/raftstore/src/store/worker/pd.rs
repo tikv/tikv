@@ -36,6 +36,7 @@ use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
+use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
@@ -198,6 +199,7 @@ where
         min_resolved_ts: u64,
     },
     ReportBuckets(BucketStat),
+    ControlGrpcServer(pdpb::ControlGrpcEvent),
 }
 
 pub struct StoreStat {
@@ -427,6 +429,9 @@ where
             }
             Task::ReportBuckets(ref buckets) => {
                 write!(f, "report buckets: {:?}", buckets)
+            }
+            Task::ControlGrpcServer(ref event) => {
+                write!(f, "control grpc server: {:?}", event)
             }
         }
     }
@@ -950,6 +955,9 @@ where
     curr_health_status: ServingStatus,
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+
+    // Service manager for grpc service.
+    grpc_service_manager: GrpcServiceManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -973,6 +981,7 @@ where
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_manager: GrpcServiceManager,
     ) -> Runner<EK, ER, T> {
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
@@ -1045,6 +1054,7 @@ where
             curr_health_status: ServingStatus::Serving,
             coprocessor_host,
             causal_ts_provider,
+            grpc_service_manager,
         }
     }
 
@@ -1355,6 +1365,9 @@ where
         stats.set_slow_score(slow_score as u64);
         self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
 
+        stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
+
+        let scheduler = self.scheduler.clone();
         let router = self.router.clone();
         let resp = self
             .pd_client
@@ -1430,6 +1443,14 @@ where
                         let _ = router.send_store_msg(StoreMsg::AwakenRegions {
                             abnormal_stores: awaken_regions.get_abnormal_stores().to_vec(),
                         });
+                    }
+                    // Control grpc server.
+                    if let Some(op) = resp.control_grpc.take() {
+                        if let Err(e) =
+                            scheduler.schedule(Task::ControlGrpcServer(op.get_ctrl_event()))
+                        {
+                            warn!("fail to schedule control grpc task"; "err" => ?e);
+                        }
                     }
                 }
                 Err(e) => {
@@ -1969,6 +1990,31 @@ where
         (interval_second >= self.store_heartbeat_interval.as_secs())
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
     }
+
+    fn handle_control_grpc_server(&mut self, event: pdpb::ControlGrpcEvent) {
+        info!("forcely control grpc server";
+                "curr_health_status" => ?self.curr_health_status,
+                "event" => ?event,
+        );
+        match event {
+            pdpb::ControlGrpcEvent::Pause => {
+                if let Err(e) = self.grpc_service_manager.pause() {
+                    warn!("failed to send service event to PAUSE grpc server";
+                            "err" => ?e);
+                } else {
+                    self.update_health_status(ServingStatus::NotServing);
+                }
+            }
+            pdpb::ControlGrpcEvent::Resume => {
+                if let Err(e) = self.grpc_service_manager.resume() {
+                    warn!("failed to send service event to RESUME grpc server";
+                            "err" => ?e);
+                } else {
+                    self.update_health_status(ServingStatus::Serving);
+                }
+            }
+        }
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -2221,6 +2267,9 @@ where
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
             Task::ReportBuckets(buckets) => {
                 self.handle_report_region_buckets(buckets);
+            }
+            Task::ControlGrpcServer(event) => {
+                self.handle_control_grpc_server(event);
             }
         };
     }

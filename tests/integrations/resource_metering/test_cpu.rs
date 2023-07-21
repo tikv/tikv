@@ -229,6 +229,7 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         cm,
         test_suite.get_tag_factory(),
         Arc::new(QuotaLimiter::default()),
+        None,
     );
     (test_suite, store, endpoint)
 }
