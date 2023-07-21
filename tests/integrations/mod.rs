@@ -20,3 +20,4 @@ mod resource_metering;
 mod server;
 mod server_encryption;
 mod storage;
+mod debugger;

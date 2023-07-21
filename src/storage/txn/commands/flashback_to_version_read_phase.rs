@@ -45,6 +45,7 @@ pub fn new_flashback_rollback_lock_cmd(
     end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
+    info!("flashback to version rollback lock"; "start_key" => %start_key, "end_key" => ?end_key, "version" => version);
     FlashbackToVersionReadPhase::new(
         start_ts,
         TimeStamp::zero(),
@@ -67,6 +68,7 @@ pub fn new_flashback_write_cmd(
     end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
+    info!("flashback to version write"; "start_key" => %start_key, "end_key" => ?end_key, "version" => version);
     FlashbackToVersionReadPhase::new(
         start_ts,
         commit_ts,
@@ -213,6 +215,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }));
                 }
                 if next_write_key == self.start_key {
+                    info!("flashback to version fake prewrite"; "start_key" => %start_key, "end_key" => ?self.end_key, "version" => self.version);
                     // The start key from the client is actually a range which is used to limit the
                     // upper bound of this flashback when scanning data, so it may not be a real
                     // key. In the Prewrite Phase, we make sure that the start
