@@ -364,9 +364,10 @@ fn test_unsafe_recovery_demotion_reentrancy() {
     fail::remove("on_handle_apply_store_1");
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_create_destroy_reentrancy() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -449,5 +450,4 @@ fn test_unsafe_recovery_create_destroy_reentrancy() {
     assert_eq!(reported_region.get_id(), 101);
     assert_eq!(reported_region.get_peers().len(), 1);
     assert_eq!(reported_region.get_peers()[0].get_id(), 102);
-    fail::remove("on_handle_apply_store_1");
 }

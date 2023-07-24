@@ -302,6 +302,19 @@ impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for UnsafeRecoveryRouter
         }
     }
 
+    fn send_destroy_peer(
+        &self,
+        region_id: u64,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        match router.check_send(region_id, PeerMsg::UnsafeRecoveryDestroy(syncer)) {
+            // The peer may be destroy already.
+            Err(crate::Error::RegionNotFound(_)) => Ok(()),
+            res => res,
+        }
+    }
+
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer) {
         let router = self.0.lock().unwrap();
         router.broadcast_normal(|| PeerMsg::UnsafeRecoveryWaitApply(syncer.clone()));

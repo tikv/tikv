@@ -35,6 +35,12 @@ pub trait UnsafeRecoveryHandle: Sync + Send {
         syncer: UnsafeRecoveryExecutePlanSyncer,
     ) -> Result<()>;
 
+    fn send_destroy_peer(
+        &self,
+        region_id: u64,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()>;
+
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer);
 
     fn broadcast_fill_out_report(&self, syncer: UnsafeRecoveryFillOutReportSyncer);
@@ -76,6 +82,22 @@ impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for Mutex<RaftRouter<EK,
         }) {
             Ok(()) => Ok(()),
             Err(SendError(_)) => Err(box_err!("fail to send unsafe recovery create peer")),
+        }
+    }
+
+    fn send_destroy_peer(
+        &self,
+        region_id: u64,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()> {
+        let router = self.lock().unwrap();
+        match router.significant_send(
+            region_id,
+            SignificantMsg::UnsafeRecoveryDestroy(syncer),
+        ) {
+            // The peer may be destroy already.
+            Err(crate::Error::RegionNotFound(_)) => Ok(()),
+            res => res,
         }
     }
 

@@ -266,6 +266,8 @@ pub enum PeerMsg {
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     /// Wait for a peer to be initialized.
     UnsafeRecoveryWaitInitialized(UnsafeRecoveryExecutePlanSyncer),
+    /// Destroy a peer.
+    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
 impl ResourceMetered for PeerMsg {}

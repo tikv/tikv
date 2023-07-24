@@ -1412,11 +1412,8 @@ where
                                 }
                             }
                             for delete in plan.take_tombstones().into_iter() {
-                                if let Err(e) = router.significant_send(
-                                    delete,
-                                    SignificantMsg::UnsafeRecoveryDestroy(syncer.clone()),
-                                ) {
-                                    error!("fail to send delete peer message for recovery"; "err" => ?e);
+                                if let Err(e) = handle.send_destroy_peer(delete, syncer.clone()) {
+                                    error!("fail to send destroy peer message for recovery"; "err" => ?e);
                                 }
                             }
                             for mut demote in plan.take_demotes().into_iter() {

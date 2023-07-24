@@ -728,11 +728,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.maybe_schedule_gc_peer_tick();
     }
 
-    /// A peer can be destroyed in three cases:
+    /// A peer can be destroyed in four cases:
+    ///
     /// 1. Received a gc message;
     /// 2. Received a message whose target peer's ID is larger than this;
     /// 3. Applied a conf remove self command.
-    /// In all cases, the peer will be destroyed asynchronousely in next
+    /// 4. Received UnsafeRecoveryDestroy message.
+    ///
+    /// In all cases, the peer will be destroyed asynchronously in next
     /// handle_raft_ready.
     /// `triggered_msg` will be sent to store fsm after destroy is finished.
     /// Should set the message only when the target peer is supposed to be

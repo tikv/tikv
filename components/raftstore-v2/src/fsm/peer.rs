@@ -387,6 +387,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_unsafe_recovery_wait_initialized(syncer),
+                PeerMsg::UnsafeRecoveryDestroy(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_destroy_peer(syncer)
+                }
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

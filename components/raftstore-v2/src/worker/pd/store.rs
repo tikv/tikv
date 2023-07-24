@@ -320,7 +320,15 @@ where
                                         "err" => ?e);
                                 }
                             }
-                            // TODO: handle tombstone/demotes
+                            for tombstone in plan.take_tombstones().into_iter() {
+                                if let Err(e) = handle.send_destroy_peer(tombstone, syncer.clone())
+                                {
+                                    error!(logger,
+                                        "fail to send destroy peer message for recovery";
+                                        "err" => ?e);
+                                }
+                            }
+                            // TODO: handle demotes
                         }
                     }
 
