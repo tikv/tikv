@@ -6,8 +6,7 @@ use std::{
 };
 
 use engine_traits::Peekable;
-use kvproto::raft_serverpb::RaftMessage;
-use raft::prelude::MessageType;
+use raftstore_v2::router::{PeerMsg, PeerTick};
 use tikv_util::store::new_peer;
 
 use crate::cluster::{
@@ -177,8 +176,9 @@ fn test_rollback() {
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
+// Target is merging.
 #[test]
-fn test_merge_conflict() {
+fn test_merge_conflict_0() {
     let mut cluster = Cluster::default();
     let store_id = cluster.node(0).id();
     let router = &mut cluster.routers[0];
@@ -250,8 +250,9 @@ fn test_merge_conflict() {
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
+// Target has been merged and destroyed..
 #[test]
-fn test_merge_destroyed() {
+fn test_merge_conflict_1() {
     let mut cluster = Cluster::default();
     let store_id = cluster.node(0).id();
     let router = &mut cluster.routers[0];
@@ -267,7 +268,7 @@ fn test_merge_destroyed() {
         region_1,
         peer_1.clone(),
         region_2_id,
-        peer_2,
+        peer_2.clone(),
         Some(format!("k{}k", region_1_id).as_bytes()),
         Some(format!("k{}k", region_2_id).as_bytes()),
         format!("k{}", region_2_id).as_bytes(),
@@ -275,51 +276,57 @@ fn test_merge_destroyed() {
         false,
     );
 
+    let peer_3 = new_peer(store_id, peer_1.get_id() + 2);
+    let region_3_id = region_2_id + 1;
+    let (region_2, region_3) = split_region(
+        router,
+        region_2,
+        peer_2.clone(),
+        region_3_id,
+        peer_3,
+        Some(format!("k{}k", region_2_id).as_bytes()),
+        Some(format!("k{}k", region_3_id).as_bytes()),
+        format!("k{}", region_3_id).as_bytes(),
+        format!("k{}", region_3_id).as_bytes(),
+        false,
+    );
+
+    // pause merge progress of 1+2.
+    println!("region_id.id={}", region_2.get_id());
+    assert_eq!(region_1.get_id(), 2);
+    let fp = fail::FailGuard::new("ask_target_peer_to_commit_merge_2", "return");
+    merge_region(
+        &cluster,
+        0,
+        region_1.clone(),
+        peer_1,
+        region_2.clone(),
+        false,
+    );
+    // merge 2+3.
+    merge_region(
+        &cluster,
+        0,
+        region_2.clone(),
+        peer_2.clone(),
+        region_3,
+        true,
+    );
+    assert_peer_not_exist(region_2.get_id(), peer_2.get_id(), &cluster.routers[0]);
+    // resume merging 1+2. it should be aborted.
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     fail::cfg_callback("apply_rollback_merge", move || {
         tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
-
-    // remove target before asking commit merge.
-    let region_2_clone = region_2.clone();
-    let router_clone = Mutex::new(cluster.routers[0].clone());
-    fail::cfg_callback("start_commit_merge", move || {
-        let router = router_clone.lock().unwrap();
-        // Larger ID should trigger destroy.
-        let header = Box::new(
-            router
-                .new_request_for(region_2_clone.get_id())
-                .take_header(),
-        );
-        let mut larger_id_msg = Box::<RaftMessage>::default();
-        larger_id_msg.set_region_id(region_2_clone.get_id());
-        let mut target_peer = header.get_peer().clone();
-        target_peer.set_id(target_peer.get_id() + 1);
-        larger_id_msg.set_to_peer(target_peer.clone());
-        larger_id_msg.set_region_epoch(header.get_region_epoch().clone());
-        larger_id_msg
-            .mut_region_epoch()
-            .set_conf_ver(header.get_region_epoch().get_conf_ver() + 1);
-        larger_id_msg.set_from_peer(new_peer(2, 8));
-        let raft_message = larger_id_msg.mut_message();
-        raft_message.set_msg_type(MessageType::MsgHeartbeat);
-        raft_message.set_from(8);
-        raft_message.set_to(target_peer.get_id());
-        raft_message.set_term(10);
-
-        router.send_raft_message(larger_id_msg).unwrap();
-        assert_peer_not_exist(region_2_clone.get_id(), header.get_peer().get_id(), &router);
-    })
-    .unwrap();
-
-    merge_region(&cluster, 0, region_1, peer_1, region_2, false);
-
+    drop(fp);
+    cluster.routers[0]
+        .send(region_1.get_id(), PeerMsg::Tick(PeerTick::CheckMerge))
+        .unwrap();
     // wait for rollback.
     rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
     fail::remove("apply_rollback_merge");
-    fail::remove("start_commit_merge");
 
     // Check region 1 is not merged and can serve writes.
     let mut resp = Default::default();

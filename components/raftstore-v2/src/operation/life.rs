@@ -308,6 +308,7 @@ impl Store {
         ER: RaftEngine,
         T: Transport,
     {
+        println!("store process on_ask_commit_merge");
         let region_id = req.get_header().get_region_id();
         let mut raft_msg = Box::<RaftMessage>::default();
         raft_msg.set_region_id(region_id);
@@ -318,13 +319,19 @@ impl Store {
         self.on_raft_message(ctx, raft_msg);
 
         let commit_merge = req.get_admin_request().get_commit_merge();
-        let source_id = commit_merge.get_source().get_id();
-        let source_index = commit_merge.get_commit();
+        // v2 specific.
+        assert!(commit_merge.has_source_state());
+        let source_index = commit_merge
+            .get_source_state()
+            .get_merge_state()
+            .get_commit();
+        let source_id = commit_merge.get_source_state().get_region().get_id();
 
         if let Err(SendError(PeerMsg::AskCommitMerge(_))) = ctx
             .router
             .force_send(region_id, PeerMsg::AskCommitMerge(req))
         {
+            println!("store fails to forward AskCommitMerge, send reject to {source_id}");
             let _ = ctx.router.force_send(
                 source_id,
                 PeerMsg::RejectCommitMerge {
@@ -338,6 +345,7 @@ impl Store {
                 "index" => source_index,
             );
         } else {
+            println!("store forwards AskCommitMerge");
             info!(
                 self.logger(),
                 "Store forwards CommitMerge request to peer";
