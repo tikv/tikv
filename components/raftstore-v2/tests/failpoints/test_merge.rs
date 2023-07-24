@@ -292,7 +292,6 @@ fn test_merge_conflict_1() {
     );
 
     // pause merge progress of 1+2.
-    println!("region_id.id={}", region_2.get_id());
     assert_eq!(region_1.get_id(), 2);
     let fp = fail::FailGuard::new("ask_target_peer_to_commit_merge_2", "return");
     merge_region(

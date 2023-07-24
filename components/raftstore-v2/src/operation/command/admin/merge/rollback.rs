@@ -40,7 +40,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         let self_index = self.merge_context().and_then(|c| c.prepare_merge_index());
         if self_index != Some(index) {
-            println!("peer ignores RejectCommitMerge {self_index:?} {index}");
             info!(
                 self.logger,
                 "ignore RejectCommitMerge due to index not match";

@@ -182,9 +182,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         fail::fail_point!(
             "ask_target_peer_to_commit_merge_2",
             self.region_id() == 2,
-            |_| {
-                println!("ask_target_peer_to_commit_merge_2 fired");
-            }
+            |_| {}
         );
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
@@ -245,7 +243,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 match router.force_send(target_id, msg) {
                     Ok(_) => (),
                     Err(SendError(PeerMsg::AskCommitMerge(msg))) => {
-                        println!("failed to send AskCommitMerge to {target_id}");
                         if let Err(e) = router.force_send_control(StoreMsg::AskCommitMerge(msg)) {
                             if router.is_shutdown() {
                                 return;
