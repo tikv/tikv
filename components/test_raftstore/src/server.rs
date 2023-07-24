@@ -491,7 +491,13 @@ impl ServerCluster {
 
         let debugger = DebuggerImpl::new(engines.clone(), ConfigController::default());
         let debug_thread_handle = debug_thread_pool.handle().clone();
-        let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
+        let debug_service = DebugService::new(
+            debugger,
+            debug_thread_handle,
+            extension,
+            store_meta.clone(),
+            Arc::new(|_, _, _, _| false),
+        );
 
         let apply_router = system.apply_router();
         // Create node.
