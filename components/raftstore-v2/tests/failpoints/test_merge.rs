@@ -219,7 +219,14 @@ fn test_merge_conflict_0() {
 
     // pause merge progress of 2+3.
     let fp = fail::FailGuard::new("apply_commit_merge", "pause");
-    merge_region(&cluster, 0, region_2.clone(), peer_2, region_3, false);
+    merge_region(
+        &cluster,
+        0,
+        region_2.clone(),
+        peer_2,
+        region_3.clone(),
+        false,
+    );
     // start merging 1+2. it should be aborted.
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
@@ -248,6 +255,10 @@ fn test_merge_conflict_0() {
         std::thread::sleep(Duration::from_millis(100));
     }
     assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+    // Ref https://github.com/tikv/yatp/issues/82, the nested future pool high_priority_pool can be
+    // leaked. We must wait for apply to finish.
+    cluster.routers[0].wait_applied_to_current_term(region_3.get_id(), Duration::from_secs(3));
 }
 
 // Target has been merged and destroyed.
