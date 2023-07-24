@@ -66,6 +66,7 @@ use raftstore_v2::{
     router::{PeerMsg, RaftRouter},
     StateStorage,
 };
+use resolved_ts::Task;
 use resource_control::{
     worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION},
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
@@ -252,6 +253,7 @@ struct TikvServer<ER: RaftEngine> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
+    resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
 }
 
@@ -400,6 +402,7 @@ where
             resource_manager,
             causal_ts_provider,
             tablet_registry: None,
+            resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
@@ -693,6 +696,7 @@ where
                 self.env.clone(),
                 self.security_mgr.clone(),
             );
+            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
             self.core.to_stop.push(rts_worker);
         }
@@ -991,10 +995,27 @@ where
         debugger.set_raft_statistics(self.raft_statistics.clone());
 
         // Debug service.
+        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
         let debug_service = DebugService::new(
             debugger,
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
+            self.router.as_ref().unwrap().store_meta().clone(),
+            Arc::new(
+                move |region_id, log_locks, min_start_ts, callback| -> bool {
+                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                        let res = s.schedule(Task::GetDiagnosisInfo {
+                            region_id,
+                            log_locks,
+                            min_start_ts,
+                            callback,
+                        });
+                        res.is_ok()
+                    } else {
+                        false
+                    }
+                },
+            ),
         );
         if servers
             .server
@@ -1420,12 +1441,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> Arc<EnginesResourceInfo> {
-        let block_cache = self
-            .core
-            .config
-            .storage
-            .block_cache
-            .build_shared_cache(self.core.config.storage.engine);
+        let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
             .core
             .config
@@ -1568,10 +1584,7 @@ mod test {
         config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
-        let cache = config
-            .storage
-            .block_cache
-            .build_shared_cache(config.storage.engine);
+        let cache = config.storage.block_cache.build_shared_cache();
 
         let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
