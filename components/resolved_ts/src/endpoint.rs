@@ -35,12 +35,15 @@ use tokio::sync::Notify;
 use txn_types::{Key, TimeStamp};
 
 use crate::{
-    advance::{AdvanceTsWorker, LeadershipResolver},
+    advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
     resolver::Resolver,
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
 };
+
+/// grace period for logging safe-ts and resolved-ts gap in slow log
+const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
 
 enum ResolverStatus {
     Pending {
@@ -818,8 +821,22 @@ where
         let now = TimeStamp::physical_now();
         RTS_MIN_SAFE_TS.set(oldest_safe_ts as i64);
         RTS_MIN_SAFE_TS_REGION.set(oldest_safe_ts_region as i64);
-        RTS_MIN_SAFE_TS_GAP
-            .set(now.saturating_sub(TimeStamp::from(oldest_safe_ts).physical()) as i64);
+        let safe_ts_gap = now.saturating_sub(TimeStamp::from(oldest_safe_ts).physical());
+        if safe_ts_gap
+            > self.cfg.advance_ts_interval.as_millis()
+                + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64
+                + SLOW_LOG_GRACE_PERIOD_MS
+        {
+            info!(
+                "max safe-ts-gap is large";
+                "gap" => safe_ts_gap,
+                "oldest safe-ts" => ?oldest_safe_ts,
+                "region id" => oldest_safe_ts_region,
+                "advance-ts-interval" => ?self.cfg.advance_ts_interval,
+            );
+        }
+        RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);
+
         RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
         RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
