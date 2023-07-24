@@ -659,6 +659,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     apply_trace.on_flush(cf, flush_index);
                 }
 
+                // We should use applied_index rather than flushed_index here. Memtable flush
+                // may be earlier than `on_apply_res` which means flushed_index can be larger
+                // than applied_index, and using flush_index can cause data loss which is
+                // described on the comment of `test_flush_index_exceed_last_modified`.
                 apply_trace.maybe_advance_admin_flushed(applied_index);
                 apply_trace.persisted_applied = apply_trace.admin.flushed;
             }
