@@ -621,6 +621,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let replay_count = self.storage().estimate_replay_count();
                 if replay_count < flush_threshold {
                     if flushed {
+                        let admin_flush = self.storage_mut().apply_trace_mut().admin.flushed;
                         let (_, _, tablet_index) = ctx
                             .tablet_registry
                             .parse_tablet_name(Path::new(tablet.path()))
@@ -646,7 +647,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 );
                 tried_count += 1;
                 tablet.flush_oldest_cf(true, None).unwrap();
-                flush_threshold = true;
+                flushed = true;
 
                 let flush_state = self.flush_state().clone();
                 let mut apply_trace = self.storage_mut().apply_trace_mut();
@@ -659,8 +660,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
 
                 apply_trace.maybe_advance_admin_flushed(applied_index);
-                let admin_flush = apply_trace.admin.flushed;
-                apply_trace.persisted_applied = admin_flush;
+                apply_trace.persisted_applied = apply_trace.admin.flushed;
             }
         }
 
