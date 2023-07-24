@@ -1,9 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::RefCell,
     collections::HashSet,
     marker::PhantomData,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -65,16 +65,16 @@ where
         }
     }
 
-    pub async fn wait_until_all_leader_ready(&mut self) {
+    pub async fn elect_and_wait_all_ready(&mut self) {
         loop {
             let now = Instant::now();
+            let res = self.step().await;
+            info!("finished leader keeper stepping."; "result" => ?res, "take" => ?now.elapsed());
             GLOBAL_TIMER_HANDLE
-                .delay(now + Duration::from_secs(30))
+                .delay(now + Duration::from_secs(10))
                 .compat()
                 .await
                 .expect("wrong with global timer, cannot stepping.");
-            let res = self.step().await;
-            info!("finished leader keeper stepping."; "result" => ?res, "take" => ?(now.elapsed() - Duration::from_secs(30)));
             if res.failed_leader.is_empty() {
                 return;
             }
@@ -83,28 +83,28 @@ where
 
     pub async fn step(&mut self) -> StepResult {
         const CONCURRENCY: usize = 256;
-        let r = RefCell::new(StepResult::default());
-        let success = RefCell::new(HashSet::new());
+        let r = Mutex::new(StepResult::default());
+        let success = Mutex::new(HashSet::new());
         for batch in &self.not_leader.iter().chunks(CONCURRENCY) {
             let tasks = batch.map(|region_id| async {
                 match self.check_leader(*region_id).await {
                     Ok(_) => {
-                        success.borrow_mut().insert(*region_id);
+                        success.lock().unwrap().insert(*region_id);
                         return;
                     }
-                    Err(err) => r.borrow_mut().failed_leader.push((*region_id, err)),
+                    Err(err) => r.lock().unwrap().failed_leader.push((*region_id, err)),
                 };
 
                 if let Err(err) = self.force_leader(*region_id) {
-                    r.borrow_mut().campaign_failed.push((*region_id, err));
+                    r.lock().unwrap().campaign_failed.push((*region_id, err));
                 }
             });
             futures::future::join_all(tasks).await;
         }
-        success.borrow().iter().for_each(|i| {
+        success.lock().unwrap().iter().for_each(|i| {
             debug_assert!(self.not_leader.remove(i));
         });
-        r.into_inner()
+        r.into_inner().unwrap()
     }
 
     async fn check_leader(&self, region_id: u64) -> Result<()> {

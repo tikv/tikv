@@ -27,7 +27,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{
         fsm::RaftRouter,
-        msg::{CasualMessage, PeerMsg, SignificantMsg},
+        msg::{PeerMsg, SignificantMsg},
         transport::SignificantRouter,
         SnapshotRecoveryWaitApplySyncer,
     },
@@ -236,19 +236,6 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 }
             }
 
-            for &region_id in &leaders {
-                if let Err(e) = raft_router.send_casual_msg(region_id, CasualMessage::Campaign) {
-                    // TODO: retry may necessay
-                    warn!("region fails to campaign: ";
-                    "region_id" => region_id, 
-                    "err" => ?e);
-                    continue;
-                } else {
-                    info!("region starts to campaign";
-                    "region_id" => region_id);
-                }
-            }
-
             let mut lk = LeaderKeeper::new(raft_router.clone(), leaders.clone());
             // We must use the tokio runtime here because there isn't a `block_in_place`
             // like thing in the futures executor. It simply panics when block
@@ -258,7 +245,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             tokio::runtime::Builder::new_current_thread()
                 .build()
                 .expect("failed to build temporary tokio runtime.")
-                .block_on(lk.wait_until_all_leader_ready());
+                .block_on(lk.elect_and_wait_all_ready());
             info!("all region leader assigned done"; "count" => %leaders.len());
 
             let now = Instant::now();
