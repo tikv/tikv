@@ -217,12 +217,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         // the available resource for background tasks is defined as:
         // (total_resource_quota - foreground_task_used). foreground_task_used
         // resource is calculated by: (resource_current_total_used -
-        // background_consumed_total). We reserve 10% of the free resources for
+        // background_consumed_total). We reserve 20% of the free resources for
         // foreground tasks in case the fore ground traffics increases.
         let mut available_resource_rate = ((resource_stats.total_quota
             - resource_stats.current_used
             + background_consumed_total)
-            * 0.9)
+            * 0.8)
             .max(resource_stats.total_quota * 0.1);
         let mut total_expected_cost = 0.0;
         for g in bg_group_stats.iter_mut() {
@@ -453,5 +453,41 @@ mod tests {
         worker.adjust_quota();
         check_limiter(&limiter, 2.4, 3600.0);
         check_limiter(&bg_limiter, 2.1, 3600.0);
+
+        let bg = new_resource_group_ru("background".into(), 1000, 15);
+        resource_ctl.add_resource_group(bg);
+
+        let new_bg =
+            new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
+        resource_ctl.add_resource_group(new_bg);
+        let new_bg_limiter = resource_ctl
+            .get_resource_limiter("background", "br")
+            .unwrap();
+        assert_ne!(&*bg_limiter as *const _, &*new_bg_limiter as *const _);
+        assert!(
+            new_bg_limiter
+                .get_limit_statistics(ResourceType::Cpu)
+                .version
+                > bg_limiter.get_limit_statistics(ResourceType::Cpu).version
+        );
+        let cpu_stats = new_bg_limiter.get_limit_statistics(ResourceType::Cpu);
+        assert_eq!(cpu_stats.total_consumed, 0);
+        assert_eq!(cpu_stats.total_wait_dur_us, 0);
+        let io_stats = new_bg_limiter.get_limit_statistics(ResourceType::Io);
+        assert_eq!(io_stats.total_consumed, 0);
+        assert_eq!(io_stats.total_wait_dur_us, 0);
+
+        reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check_limiter(&limiter, 4.8, 6000.0);
+        check_limiter(&new_bg_limiter, 2.4, 3000.0);
+
+        reset_quota(&mut worker, 6.0, 5000.0, Duration::from_secs(1));
+        limiter.consume(Duration::from_millis(1200), 1200);
+        new_bg_limiter.consume(Duration::from_millis(1800), 1800);
+
+        worker.adjust_quota();
+        check_limiter(&limiter, 2.4, 3600.0);
+        check_limiter(&new_bg_limiter, 2.1, 3600.0);
     }
 }
