@@ -818,7 +818,20 @@ where
                 }
             }
         }
-        let now = TimeStamp::physical_now();
+        // approximate a TSO from PD. It is better than local timestamp when clock skew
+        // exists.
+        let now: u64 = self
+            .advance_worker
+            .last_pd_tso
+            .try_lock()
+            .map(|opt| {
+                opt.map(|(pd_ts, instant)| {
+                    pd_ts.physical() + instant.saturating_elapsed().as_millis() as u64
+                })
+                .unwrap_or_else(|| TimeStamp::physical_now())
+            })
+            .unwrap_or_else(|_| TimeStamp::physical_now());
+
         RTS_MIN_SAFE_TS.set(oldest_safe_ts as i64);
         RTS_MIN_SAFE_TS_REGION.set(oldest_safe_ts_region as i64);
         let safe_ts_gap = now.saturating_sub(TimeStamp::from(oldest_safe_ts).physical());
