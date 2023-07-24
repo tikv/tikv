@@ -23,6 +23,7 @@ use std::{
 };
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
+use fail::fail_point;
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
@@ -822,7 +823,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.metrics = mem::take(&mut self.metrics);
         apply_res.bucket_stat = self.buckets.clone();
         let written_bytes = apply_res.metrics.written_bytes;
-        self.res_reporter().report(apply_res);
+
+        let skip_report = || -> bool {
+            fail_point!("before_report_apply_res", |_| { true });
+            false
+        }();
+        if !skip_report {
+            self.res_reporter().report(apply_res);
+        }
         if let Some(buckets) = &mut self.buckets {
             buckets.clear_stats();
         }
