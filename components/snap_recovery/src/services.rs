@@ -16,7 +16,7 @@ use engine_rocks::{
 use engine_traits::{CfNamesExt, CfOptionsExt, Engines, Peekable, RaftEngine};
 use futures::{
     channel::mpsc,
-    executor::{block_on, ThreadPool, ThreadPoolBuilder},
+    executor::{ThreadPool, ThreadPoolBuilder},
     FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{

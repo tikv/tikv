@@ -13,6 +13,7 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 futures = { version = "0.3", features = ["executor"] }
 grpcio = { workspace = true }
+itertools = "0.10"
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4"
