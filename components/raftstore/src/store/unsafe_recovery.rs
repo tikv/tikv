@@ -29,6 +29,12 @@ pub trait UnsafeRecoveryHandle: Sync + Send {
 
     fn broadcast_exit_force_leader(&self);
 
+    fn send_create_peer(
+        &self,
+        region: metapb::Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()>;
+
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer);
 
     fn broadcast_fill_out_report(&self, syncer: UnsafeRecoveryFillOutReportSyncer);
@@ -56,6 +62,21 @@ impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for Mutex<RaftRouter<EK,
     fn broadcast_exit_force_leader(&self) {
         let router = self.lock().unwrap();
         router.broadcast_normal(|| PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState));
+    }
+
+    fn send_create_peer(
+        &self,
+        region: metapb::Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()> {
+        let router = self.lock().unwrap();
+        match router.force_send_control(StoreMsg::UnsafeRecoveryCreatePeer {
+            syncer,
+            create: region,
+        }) {
+            Ok(()) => Ok(()),
+            Err(SendError(_)) => Err(box_err!("fail to send unsafe recovery create peer")),
+        }
     }
 
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer) {
@@ -344,4 +365,5 @@ pub enum UnsafeRecoveryState {
         demote_after_exit: bool,
     },
     Destroy(UnsafeRecoveryExecutePlanSyncer),
+    WaitInitialize(UnsafeRecoveryExecutePlanSyncer),
 }

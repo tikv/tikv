@@ -393,9 +393,10 @@ fn test_unsafe_recovery_early_return_after_exit_joint_state() {
     assert_eq!(demoted, true);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_create_region() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -407,7 +408,7 @@ fn test_unsafe_recovery_create_region() {
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     let store0_peer = find_peer(&region, nodes[0]).unwrap().to_owned();
 
-    // Removes the boostrap region, since it overlaps with any regions we create.
+    // Removes the bootstrap region, since it overlaps with any regions we create.
     pd_client.must_remove_peer(region.get_id(), store0_peer);
     cluster.must_remove_region(nodes[0], region.get_id());
 
@@ -423,6 +424,52 @@ fn test_unsafe_recovery_create_region() {
     peer.set_store_id(nodes[0]);
     create.mut_peers().push(peer);
     let mut plan = pdpb::RecoveryPlan::default();
+    plan.mut_creates().push(create);
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+    let mut created = false;
+    for _ in 1..11 {
+        let region = pd_client.get_region(b"anykey1").unwrap();
+        if region.get_id() == 101 {
+            created = true;
+        }
+        sleep_ms(200);
+    }
+    assert_eq!(created, true);
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_unsafe_recovery_create_region_reentrancy() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let store0_peer = find_peer(&region, nodes[0]).unwrap().to_owned();
+
+    // Removes the bootstrap region, since it overlaps with any regions we create.
+    pd_client.must_remove_peer(region.get_id(), store0_peer);
+    cluster.must_remove_region(nodes[0], region.get_id());
+
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
+    cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
+
+    let mut create = metapb::Region::default();
+    create.set_id(101);
+    create.set_start_key(b"anykey".to_vec());
+    let mut peer = metapb::Peer::default();
+    peer.set_id(102);
+    peer.set_store_id(nodes[0]);
+    create.mut_peers().push(peer);
+    let mut plan = pdpb::RecoveryPlan::default();
+    plan.mut_creates().push(create.clone());
     plan.mut_creates().push(create);
     pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
     cluster.must_send_store_heartbeat(nodes[0]);

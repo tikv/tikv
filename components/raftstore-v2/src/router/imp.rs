@@ -11,7 +11,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
     kvrpcpb::ExtraOp,
-    metapb::RegionEpoch,
+    metapb::{Region, RegionEpoch},
     pdpb,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -20,8 +20,8 @@ use raftstore::{
     router::CdcHandle,
     store::{
         fsm::ChangeObserver, AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
-        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
-        UnsafeRecoveryWaitApplySyncer,
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryWaitApplySyncer,
     },
 };
 use slog::warn;
@@ -288,6 +288,18 @@ impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for UnsafeRecoveryRouter
     fn broadcast_exit_force_leader(&self) {
         let router = self.0.lock().unwrap();
         router.broadcast_normal(|| PeerMsg::ExitForceLeaderState);
+    }
+
+    fn send_create_peer(
+        &self,
+        region: Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        match router.force_send_control(StoreMsg::UnsafeRecoveryCreatePeer { region, syncer }) {
+            Ok(()) => Ok(()),
+            Err(SendError(_)) => Err(box_err!("fail to send unsafe recovery create peer")),
+        }
     }
 
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer) {
