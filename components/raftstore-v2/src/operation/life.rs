@@ -795,6 +795,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.remove_region(region_id);
             meta.readers.remove(&region_id);
+            meta.region_read_progress.remove(&region_id);
             ctx.tablet_registry.remove(region_id);
         }
         // Remove tablet first, otherwise in extreme cases, a new peer can be created

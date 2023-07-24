@@ -50,6 +50,7 @@ encryption = { workspace = true, default-features = false }
 encryption_export = { workspace = true, default-features = false }
 engine_rocks = { workspace = true, default-features = false }
 engine_rocks_helper = { workspace = true }
+service = { workspace = true }
 engine_store_ffi = { workspace = true, default-features = false }
 engine_tiflash = { workspace = true, default-features = false }
 engine_traits = { workspace = true, default-features = false }

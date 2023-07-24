@@ -32,6 +32,7 @@ use raftstore::{
     Result,
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -390,6 +391,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
             None,
+            GrpcServiceManager::dummy(),
         )?;
         assert!(
             engines

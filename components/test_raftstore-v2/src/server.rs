@@ -43,6 +43,7 @@ use raftstore_v2::{router::RaftRouter, StateStorage, StoreMeta, StoreRouter};
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
+use service::service_manager::GrpcServiceManager;
 use slog_global::debug;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -546,6 +547,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             LocalTablets::Registry(tablet_registry.clone()),
             Arc::clone(&importer),
             Some(store_meta),
+            resource_manager.clone(),
         );
 
         // Create deadlock service.
@@ -568,6 +570,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             concurrency_manager.clone(),
             res_tag_factory,
             quota_limiter,
+            resource_manager.clone(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
@@ -663,6 +666,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             &state,
             importer,
             key_manager,
+            GrpcServiceManager::dummy(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

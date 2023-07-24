@@ -55,7 +55,7 @@ use raftstore::{
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
+use tikv_util::{box_err, log::SlogFormat, slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -280,10 +280,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.add_pending_tick(PeerTick::SplitRegionCheck);
     }
 
-    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
+    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics, threshold: i64) {
         let control = self.split_flow_control_mut();
         control.size_diff_hint += metrics.size_diff_hint;
-        if self.is_leader() {
+        let size_diff_hint = control.size_diff_hint;
+        if self.is_leader() && size_diff_hint >= threshold {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
     }
@@ -313,6 +314,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.region_id(),
                 self.leader(),
             )));
+            return;
+        }
+        if self.storage().has_dirty_data() {
+            // If we split dirty tablet, the same trim compaction will be repeated
+            // exponentially more times.
+            info!(self.logger, "tablet still dirty, skip split.");
+            ch.set_result(cmd_resp::new_error(Error::Other(box_err!(
+                "tablet is dirty"
+            ))));
             return;
         }
         if let Err(e) = util::validate_split_region(
@@ -356,6 +366,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "receive a stale halfsplit message";
                 "is_key_range" => is_key_range,
             );
+            return;
+        }
+
+        if self.storage().has_dirty_data() {
+            info!(self.logger, "tablet still dirty, skip half split.");
             return;
         }
 
