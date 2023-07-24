@@ -716,6 +716,8 @@ pub trait DebugExecutor {
         _start_ts: u64,
         _commit_ts: u64,
     ) -> Result<(), KeyRange>;
+
+    fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64);
 }
 
 impl DebugExecutor for DebugClient {
@@ -962,6 +964,78 @@ impl DebugExecutor for DebugClient {
                     key_range, start_ts, commit_ts, err
                 );
                 Err(key_range)
+            }
+        }
+    }
+
+    fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64) {
+        let mut req = GetRegionReadProgressRequest::default();
+        req.set_region_id(region_id);
+        req.set_log_locks(log);
+        req.set_min_start_ts(min_start_ts);
+        let opt = grpcio::CallOption::default().timeout(Duration::from_secs(10));
+        let resp = self
+            .get_region_read_progress_opt(&req, opt)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_read_progress", e));
+        if !resp.get_error().is_empty() {
+            println!("error: {}", resp.get_error());
+        }
+        let fields = [
+            ("Region read progress:", "".to_owned()),
+            ("exist", resp.get_region_read_progress_exist().to_string()),
+            ("safe_ts", resp.get_safe_ts().to_string()),
+            ("applied_index", resp.get_applied_index().to_string()),
+            ("read_state.ts", resp.get_read_state_ts().to_string()),
+            (
+                "read_state.apply_index",
+                resp.get_read_state_apply_index().to_string(),
+            ),
+            (
+                "pending front item (oldest) ts",
+                resp.get_pending_front_ts().to_string(),
+            ),
+            (
+                "pending front item (oldest) applied index",
+                resp.get_pending_front_applied_index().to_string(),
+            ),
+            (
+                "pending back item (latest) ts",
+                resp.get_pending_back_ts().to_string(),
+            ),
+            (
+                "pending back item (latest) applied index",
+                resp.get_pending_back_applied_index().to_string(),
+            ),
+            ("paused", resp.get_region_read_progress_paused().to_string()),
+            ("discarding", resp.get_discard().to_string()),
+            // TODO: figure out the performance impact here before implementing it.
+            // (
+            //     "duration to last update_safe_ts",
+            //     format!("{} ms", resp.get_duration_to_last_update_safe_ts_ms()),
+            // ),
+            // (
+            //     "duration to last consume_leader_info",
+            //     format!("{} ms", resp.get_duration_to_last_consume_leader_ms()),
+            // ),
+            ("Resolver:", "".to_owned()),
+            ("exist", resp.get_resolver_exist().to_string()),
+            ("resolved_ts", resp.get_resolved_ts().to_string()),
+            (
+                "tracked index",
+                resp.get_resolver_tracked_index().to_string(),
+            ),
+            ("number of locks", resp.get_num_locks().to_string()),
+            (
+                "number of transactions",
+                resp.get_num_transactions().to_string(),
+            ),
+            ("stopped", resp.get_resolver_stopped().to_string()),
+        ];
+        for (name, value) in &fields {
+            if value.is_empty() {
+                println!("{}", name);
+            } else {
+                println!("    {}: {}, ", name, value);
             }
         }
     }
@@ -1217,6 +1291,11 @@ where
     ) -> Result<(), KeyRange> {
         unimplemented!("only available for remote mode");
     }
+
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
+    }
 }
 
 fn handle_engine_error(err: EngineError) -> ! {
@@ -1428,5 +1507,10 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         _commit_ts: u64,
     ) -> Result<(), KeyRange> {
         unimplemented!("only available for remote mode");
+    }
+
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 }
