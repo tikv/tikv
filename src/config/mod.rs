@@ -300,7 +300,6 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub block_size: ReadableSize,
             // FIXME: deprecate it and update all tests related to it.
-            #[online_config(hidden)]
             pub block_cache_size: ReadableSize,
             #[online_config(skip)]
             pub disable_block_cache: bool,
