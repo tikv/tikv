@@ -903,22 +903,6 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
 }
 
 #[test]
-fn test_block_cache_backward_compatible() {
-    let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
-    let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
-    assert!(cfg.storage.block_cache.capacity.is_none());
-    cfg.compatible_adjust();
-    assert!(cfg.storage.block_cache.capacity.is_some());
-    assert_eq!(
-        cfg.storage.block_cache.capacity.unwrap().0,
-        cfg.rocksdb.defaultcf.block_cache_size.0
-            + cfg.rocksdb.writecf.block_cache_size.0
-            + cfg.rocksdb.lockcf.block_cache_size.0
-            + cfg.raftdb.defaultcf.block_cache_size.0
-    );
-}
-
-#[test]
 fn test_log_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-log-compatible.toml");
     let mut cfg: TikvConfig = toml::from_str(&content).unwrap();

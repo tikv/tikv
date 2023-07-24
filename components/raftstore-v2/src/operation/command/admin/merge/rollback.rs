@@ -8,7 +8,6 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse},
     raft_serverpb::PeerState,
 };
-use protobuf::Message;
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, LocksStatus, Transport},
@@ -23,6 +22,7 @@ use crate::{
     fsm::ApplyResReporter,
     operation::AdminCmdResult,
     raft::{Apply, Peer},
+    router::CmdResChannel,
 };
 
 #[derive(Debug)]
@@ -48,19 +48,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return;
         }
-        self.propose_rollback_merge(store_ctx, index);
-    }
-
-    pub fn propose_rollback_merge<T: Transport>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        index: u64,
-    ) {
-        info!(
-            self.logger,
-            "rollback prepare merge";
-            "index" => index,
-        );
         let mut request = new_admin_request(self.region_id(), self.peer().clone());
         request
             .mut_header()
@@ -69,8 +56,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         admin.set_cmd_type(AdminCmdType::RollbackMerge);
         admin.mut_rollback_merge().set_commit(index);
         request.set_admin_request(admin);
-        if let Err(e) = self.propose(store_ctx, request.write_to_bytes().unwrap()) {
-            error!(self.logger, "failed to propose RollbackMerge"; "err" => ?e);
+        let (ch, res) = CmdResChannel::pair();
+        self.on_admin_command(store_ctx, request, ch);
+        if let Some(res) = res.take_result()
+            && res.get_header().has_error()
+        {
+            error!(
+                self.logger,
+                "failed to propose rollback merge";
+                "res" => ?res,
+            );
         }
     }
 }

@@ -250,7 +250,7 @@ fn test_merge_conflict_0() {
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
-// Target has been merged and destroyed..
+// Target has been merged and destroyed.
 #[test]
 fn test_merge_conflict_1() {
     let mut cluster = Cluster::default();
@@ -317,6 +317,7 @@ fn test_merge_conflict_1() {
     let tx = Mutex::new(tx);
     fail::cfg_callback("apply_rollback_merge", move || {
         tx.lock().unwrap().send(()).unwrap();
+        fail::remove("apply_rollback_merge");
     })
     .unwrap();
     drop(fp);
@@ -325,7 +326,6 @@ fn test_merge_conflict_1() {
         .unwrap();
     // wait for rollback.
     rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
-    fail::remove("apply_rollback_merge");
 
     // Check region 1 is not merged and can serve writes.
     let mut resp = Default::default();
