@@ -6473,6 +6473,10 @@ where
             Some(self.fsm.peer.approximate_size.unwrap_or_default() + size);
         self.fsm.peer.approximate_keys =
             Some(self.fsm.peer.approximate_keys.unwrap_or_default() + keys);
+
+        if let Some(buckets) = &mut self.fsm.peer.region_buckets {
+            buckets.ingest_sst(keys, size);
+        }
         // The ingested file may be overlapped with the data in engine, so we need to
         // check it again to get the accurate value.
         self.fsm.peer.may_skip_split_check = false;
