@@ -201,7 +201,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let mut available_resource_rate = ((resource_stats.total_quota
             - resource_stats.current_used
             + background_consumed_total)
-            * 0.9)
+            * 0.8)
             .max(resource_stats.total_quota * 0.1);
         let mut total_expected_cost = 0.0;
         for g in bg_group_stats.iter_mut() {
@@ -380,20 +380,20 @@ mod tests {
 
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter(&limiter, 7.2, 9000.0);
+        check_limiter(&limiter, 6.4, 8000.0);
 
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_millis(500));
         worker.adjust_quota();
-        check_limiter(&limiter, 7.2, 9000.0);
+        check_limiter(&limiter, 6.4, 8000.0);
 
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter(&limiter, 3.6, 7200.0);
+        check_limiter(&limiter, 3.2, 6400.0);
 
         reset_quota(&mut worker, 6.0, 4000.0, Duration::from_secs(1));
         limiter.consume(Duration::from_secs(2), 2000);
         worker.adjust_quota();
-        check_limiter(&limiter, 3.6, 7200.0);
+        check_limiter(&limiter, 3.2, 6400.0);
 
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
@@ -402,12 +402,12 @@ mod tests {
         reset_quota(&mut worker, 7.5, 9500.0, Duration::from_secs(1));
         limiter.consume(Duration::from_secs(2), 2000);
         worker.adjust_quota();
-        check_limiter(&limiter, 2.25, 2250.0);
+        check_limiter(&limiter, 2.0, 2000.0);
 
         reset_quota(&mut worker, 7.5, 9500.0, Duration::from_secs(5));
         limiter.consume(Duration::from_secs(10), 10000);
         worker.adjust_quota();
-        check_limiter(&limiter, 2.25, 2250.0);
+        check_limiter(&limiter, 2.0, 2000.0);
 
         let default =
             new_background_resource_group_ru("default".into(), 2000, 8, vec!["br".into()]);
@@ -423,14 +423,14 @@ mod tests {
 
         reset_quota(&mut worker, 5.0, 7000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter(&limiter, 1.8, 1800.0);
-        check_limiter(&bg_limiter, 0.9, 900.0);
+        check_limiter(&limiter, 1.6, 1600.0);
+        check_limiter(&bg_limiter, 0.8, 800.0);
 
         reset_quota(&mut worker, 6.0, 5000.0, Duration::from_secs(1));
         limiter.consume(Duration::from_millis(1200), 1200);
         bg_limiter.consume(Duration::from_millis(1800), 1800);
         worker.adjust_quota();
-        check_limiter(&limiter, 2.4, 3600.0);
-        check_limiter(&bg_limiter, 2.1, 3600.0);
+        check_limiter(&limiter, 2.4, 2800.0);
+        check_limiter(&bg_limiter, 1.6, 3600.0);
     }
 }
