@@ -99,6 +99,10 @@ pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
 
+// we only do resource control in txn scheudler, so the cpu time tracked is much
+// less than the actual cost, so we increase it by a factor.
+const SCHEDULER_CPU_TIME_FACTOR: u32 = 5;
+
 type SVec<T> = SmallVec<[T; 4]>;
 
 /// Task is a running command.
@@ -1274,9 +1278,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
             sample.add_write_bytes(write_bytes);
+            // estimate the cpu time for write by the schdule cpu time and write bytes
+            let expected_dur = (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
+                * SCHEDULER_CPU_TIME_FACTOR;
             if let Some(limiter) = resource_limiter {
                 limiter
-                    .async_consume(sample.cpu_time() * 10, write_bytes as u64)
+                    .async_consume(expected_dur, write_bytes as u64)
                     .await;
             }
         }

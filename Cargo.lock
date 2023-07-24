@@ -6622,7 +6622,6 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "protobuf",
- "resource_control",
  "slog",
  "slog-global",
  "smallvec",
