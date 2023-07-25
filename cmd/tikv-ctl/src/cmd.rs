@@ -627,6 +627,7 @@ pub enum Cmd {
         /// hex end key
         end: String,
     },
+    /// Get diagnosis info about resolved-ts and safe-ts
     GetRegionReadProgress {
         #[structopt(short = "r", long)]
         /// The target region id
