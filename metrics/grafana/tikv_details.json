@@ -38425,7 +38425,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "${DS_TEST-CLUSTER}",
-      "description": "The gap between resolved ts and current time",
+      "description": "The gap between resolved ts (the maximum candidate of safe-ts) and current time.",
       "editable": true,
       "error": false,
       "fieldConfig": {
@@ -38487,7 +38487,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Max Resolved TS gap",
+      "title": "Max gap of resolved-ts",
       "tooltip": {
         "msResolution": false,
         "shared": true,
@@ -38595,7 +38595,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Max Safe TS gap",
+      "title": "Max gap of safe-ts",
       "tooltip": {
         "msResolution": false,
         "shared": true,
@@ -38940,7 +38940,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "${DS_TEST-CLUSTER}",
-      "description": "The gap between resolved tso of leaders and current time",
+      "description": "The gap between resolved ts of leaders and current time",
       "editable": true,
       "error": false,
       "fieldConfig": {
@@ -39004,7 +39004,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Max Leader Resolved TS gap",
+      "title": "Max gap of resolved-ts in region leaders",
       "tooltip": {
         "msResolution": false,
         "shared": true,
