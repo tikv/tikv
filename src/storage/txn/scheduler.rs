@@ -99,7 +99,7 @@ pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
 
-// we only do resource control in txn scheudler, so the cpu time tracked is much
+// we only do resource control in txn scheduler, so the cpu time tracked is much
 // less than the actual cost, so we increase it by a factor.
 const SCHEDULER_CPU_TIME_FACTOR: u32 = 5;
 
