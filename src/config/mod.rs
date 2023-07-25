@@ -5982,6 +5982,7 @@ mod tests {
         default_cfg.rocksdb.writecf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.rocksdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.rocksdb.lockcf.target_file_size_base = Some(ReadableSize::mb(8));
+        default_cfg.rocksdb.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
         default_cfg.raftdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.raft_store.region_compact_check_step = Some(100);
 
