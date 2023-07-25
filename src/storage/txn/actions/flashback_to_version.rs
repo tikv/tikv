@@ -234,7 +234,10 @@ pub fn check_flashback_commit(
     key_to_commit: &Key,
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
+    // Used for debug logging.
     region_id: u64,
+    start_key: &Key,
+    end_key: Option<&Key>,
 ) -> TxnResult<bool> {
     match reader.load_lock(key_to_commit)? {
         // If the lock exists, it means the flashback hasn't been finished.
@@ -248,6 +251,9 @@ pub fn check_flashback_commit(
                 "flashback_start_ts" => flashback_start_ts,
                 "flashback_commit_ts" => flashback_commit_ts,
                 "lock" => ?lock,
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
+                "end_key" => end_key.map(|k| log_wrappers::Value::key(k.as_encoded())),
             );
         }
         // If the lock doesn't exist and the flashback commit record exists, it means the flashback
@@ -265,6 +271,9 @@ pub fn check_flashback_commit(
                 "flashback_start_ts" => flashback_start_ts,
                 "flashback_commit_ts" => flashback_commit_ts,
                 "write" => ?write_res,
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
+                "end_key" => end_key.map(|k| log_wrappers::Value::key(k.as_encoded())),
             );
         }
     }

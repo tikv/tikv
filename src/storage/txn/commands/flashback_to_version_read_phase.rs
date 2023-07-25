@@ -154,12 +154,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         reader.set_allow_in_flashback(true);
-        // Filter out the SST that does not have a newer version than `self.version` in
-        // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
-        // scan. By doing this, we can only flashback those keys that have version
-        // changed since `self.version` as much as possible.
-        reader.set_hint_min_ts(Some(Bound::Excluded(self.version)));
-        let mut start_key = self.start_key.clone();
+        let mut key_to_commit = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
                 let mut key_locks = flashback_to_version_read_lock(
@@ -215,11 +210,10 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 if next_write_key == self.start_key {
                     // The start key from the client is actually a range which is used to limit the
                     // upper bound of this flashback when scanning data, so it may not be a real
-                    // key. In the Prewrite Phase, we make sure that the start
-                    // key is a real key and take this key as a lock for the
-                    // 2pc. So When overwriting the write, we skip the immediate
-                    // write of this key and instead put it after the completion
-                    // of the 2pc.
+                    // key. In the prewrite phase, we make sure that the start key is a real user
+                    // key and take this key as a lock for the 2PC. So When overwriting the write,
+                    // we skip the immediate write of this key and instead put it after the
+                    // completion of the 2PC.
                     next_write_key = if let Some(first_key) = get_first_user_key(
                         &mut reader,
                         &self.start_key,
@@ -232,33 +226,40 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
                     };
-                    // Commit key needs to match the Prewrite key, which is set as the first user
+                    // Commit key needs to match the prewrite key, which is set as the first user
                     // key.
-                    start_key = next_write_key.clone();
+                    key_to_commit = next_write_key.clone();
                     // If the key has already been committed by the flashback, it means that we are
                     // in a retry. It's safe to just return directly.
                     if check_flashback_commit(
                         &mut reader,
-                        &start_key,
+                        &key_to_commit,
                         self.start_ts,
                         self.commit_ts,
                         self.ctx.get_region_id(),
+                        &self.start_key,
+                        self.end_key.as_ref(),
                     )? {
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
                     }
                 }
+                // Filter out the SST that does not have a newer version than `self.version` in
+                // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
+                // scan. By doing this, we can only flashback those keys that have version
+                // changed since `self.version` as much as possible.
+                reader.set_hint_min_ts(Some(Bound::Excluded(self.version)));
                 let mut keys = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
-                    &start_key,
+                    &key_to_commit,
                     self.end_key.as_ref(),
                     self.version,
                     self.commit_ts,
                 )?;
                 if keys.is_empty() {
                     FlashbackToVersionState::Commit {
-                        key_to_commit: start_key.clone(),
+                        key_to_commit: key_to_commit.clone(),
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, keys.len() as f64);
@@ -284,7 +285,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 start_ts: self.start_ts,
                 commit_ts: self.commit_ts,
                 version: self.version,
-                start_key,
+                start_key: key_to_commit,
                 end_key: self.end_key,
                 state: next_state,
             }),
