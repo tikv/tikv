@@ -47400,7 +47400,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Background Resource Group CPU Limit",
+          "title": "Background Task CPU Limit",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -47511,7 +47511,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Background Resource Group IO Limit",
+          "title": "Background Task IO Limit",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -47622,7 +47622,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Background Resource Group CPU Consumption ",
+          "title": "Background Task CPU Consumption ",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -47733,7 +47733,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Background Resource Group IO Consumption ",
+          "title": "Background Task IO Consumption ",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -47844,7 +47844,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Background Resource Group Wait Duration",
+          "title": "Background Task Total Wait Duration",
           "tooltip": {
             "msResolution": false,
             "shared": true,
