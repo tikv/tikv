@@ -16,7 +16,7 @@ use pd_client::{
 use prometheus::local::LocalHistogram;
 use raftstore::store::{
     metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyInspector,
-    UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+    UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
 };
 use slog::{error, info, warn};
 use tikv_util::{
@@ -308,10 +308,11 @@ where
                                         "err" => ?e);
                                 }
                             }
+                        } else {
+                            let _syncer =
+                                UnsafeRecoveryExecutePlanSyncer::new(plan.get_step(), router);
+                            // TODO: handle creates/tombstone/demotes
                         }
-                        // else {
-                        // TODO: handle creates/tombstone/demotes
-                        // }
                     }
 
                     // Attention, as Hibernate Region is eliminated in
