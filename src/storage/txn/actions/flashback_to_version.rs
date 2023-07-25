@@ -53,6 +53,7 @@ pub fn flashback_to_version_read_write(
                 && latest_commit_ts < flashback_commit_ts
         },
         FLASHBACK_BATCH_SIZE,
+        false,
     );
     let (keys, _) = keys_result?;
     Ok(keys)
@@ -296,6 +297,7 @@ pub fn get_first_user_key(
         // Make sure we will get the same first user key each time.
         |_, latest_commit_ts| latest_commit_ts > flashback_version,
         1,
+        true,
     )?;
     Ok(keys_result.pop())
 }

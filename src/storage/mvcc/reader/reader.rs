@@ -142,6 +142,7 @@ pub struct MvccReader<S: EngineSnapshot> {
 
     fill_cache: bool,
 
+    region_id: u64,
     // The term and the epoch version when the snapshot is created. They will be zero
     // if the two properties are not available.
     term: u64,
@@ -165,6 +166,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             scan_mode,
             current_key: None,
             fill_cache,
+            region_id: 0,
             term: 0,
             version: 0,
             allow_in_flashback: false,
@@ -184,6 +186,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             scan_mode,
             current_key: None,
             fill_cache: !ctx.get_not_fill_cache(),
+            region_id: ctx.get_region_id(),
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
             allow_in_flashback: false,
@@ -610,10 +613,19 @@ impl<S: EngineSnapshot> MvccReader<S> {
         end: Option<&Key>,
         filter: F,
         limit: usize,
+        debug_log: bool,
     ) -> Result<(Vec<Key>, bool)>
     where
         F: Fn(&Key /* user key */, TimeStamp /* latest `commit_ts` */) -> bool,
     {
+        if debug_log {
+            info!(
+                "start to scan latest user keys";
+                "region_id" => self.region_id,
+                "start_key" => start.map(|k| log_wrappers::Value::key(k.as_encoded())),
+                "end_key" => end.map(|k| log_wrappers::Value::key(k.as_encoded())),
+            );
+        }
         self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = match start {
@@ -639,6 +651,17 @@ impl<S: EngineSnapshot> MvccReader<S> {
             // To make sure we only check each unique user key once and the filter returns
             // true.
             let is_same_user_key = cur_user_key.as_ref() == Some(&user_key);
+            if debug_log {
+                info!(
+                    "iterate latest user keys";
+                    "region_id" => self.region_id,
+                    "user_key" => log_wrappers::Value::key(user_key.as_encoded()),
+                    "commit_ts" => commit_ts,
+                    "is_same_user_key" => is_same_user_key,
+                    "filter" => filter(&user_key, commit_ts),
+                    "cur_user_key" => cur_user_key.as_ref().map(|k| log_wrappers::Value::key(k.as_encoded())),
+                );
+            }
             if !is_same_user_key {
                 cur_user_key = Some(user_key.clone());
             }
@@ -1944,6 +1967,7 @@ pub mod tests {
                     case.end_key.as_ref(),
                     |_, _| true,
                     case.limit,
+                    false,
                 )
                 .unwrap();
             assert_eq!(res.0, case.expect_res, "case #{}", idx);
