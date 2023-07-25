@@ -217,12 +217,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         // the available resource for background tasks is defined as:
         // (total_resource_quota - foreground_task_used). foreground_task_used
         // resource is calculated by: (resource_current_total_used -
-        // background_consumed_total). We reserve 20% of the free resources for
+        // background_consumed_total). We reserve 10% of the free resources for
         // foreground tasks in case the fore ground traffics increases.
         let mut available_resource_rate = ((resource_stats.total_quota
             - resource_stats.current_used
             + background_consumed_total)
-            * 0.8)
+            * 0.9)
             .max(resource_stats.total_quota * 0.1);
         let mut total_expected_cost = 0.0;
         for g in bg_group_stats.iter_mut() {
