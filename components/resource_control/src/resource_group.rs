@@ -25,7 +25,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{info, time::Instant};
 use yatp::queue::priority::TaskPriorityProvider;
 
-use crate::{resource_limiter::ResourceLimiter, metrics::deregister_metrics};
+use crate::{metrics::deregister_metrics, resource_limiter::ResourceLimiter};
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
