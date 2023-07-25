@@ -39,7 +39,7 @@ use crate::{
     Task,
 };
 
-const MAX_GET_SNAPSHOT_RETRY: usize = 5;
+const MAX_GET_SNAPSHOT_RETRY: usize = 10;
 
 #[derive(Clone)]
 pub struct PendingMemoryQuota(Arc<Semaphore>);
