@@ -294,9 +294,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     tablet_index,
                     flushed_index,
                 } => {
-                    self.fsm
-                        .peer_mut()
-                        .on_data_flushed(cf, tablet_index, flushed_index);
+                    self.fsm.peer_mut().on_data_flushed(
+                        self.store_ctx,
+                        cf,
+                        tablet_index,
+                        flushed_index,
+                    );
                 }
                 PeerMsg::PeerUnreachable { to_peer_id } => {
                     self.fsm.peer_mut().on_peer_unreachable(to_peer_id)
@@ -359,6 +362,27 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::FlushBeforeClose { tx } => {
                     self.fsm.peer_mut().flush_before_close(self.store_ctx, tx)
                 }
+                PeerMsg::EnterForceLeaderState {
+                    syncer,
+                    failed_stores,
+                } => self.fsm.peer_mut().on_enter_pre_force_leader(
+                    self.store_ctx,
+                    syncer,
+                    failed_stores,
+                ),
+                PeerMsg::ExitForceLeaderState => {
+                    self.fsm.peer_mut().on_exit_force_leader(self.store_ctx)
+                }
+                PeerMsg::ExitForceLeaderStateCampaign => {
+                    self.fsm.peer_mut().on_exit_force_leader_campaign()
+                }
+                PeerMsg::UnsafeRecoveryWaitApply(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_wait_apply(syncer)
+                }
+                PeerMsg::UnsafeRecoveryFillOutReport(syncer) => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_fill_out_report(syncer),
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

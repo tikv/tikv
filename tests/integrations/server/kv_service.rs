@@ -32,6 +32,7 @@ use raftstore::{
     store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
@@ -1409,6 +1410,7 @@ fn test_double_run_node() {
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

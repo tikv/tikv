@@ -10,11 +10,12 @@ pub use self::imp::wait_for_signal;
 #[cfg(unix)]
 mod imp {
     use engine_traits::MiscExt;
+    use service::service_event::ServiceEvent;
     use signal_hook::{
         consts::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2},
         iterator::Signals,
     };
-    use tikv_util::metrics;
+    use tikv_util::{metrics, mpsc as TikvMpsc};
 
     use super::*;
 
@@ -23,12 +24,18 @@ mod imp {
         engines: Option<Engines<impl KvEngine, impl RaftEngine>>,
         kv_statistics: Option<Arc<RocksStatistics>>,
         raft_statistics: Option<Arc<RocksStatistics>>,
+        service_event_tx: Option<TikvMpsc::Sender<ServiceEvent>>,
     ) {
         let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
         for signal in &mut signals {
             match signal {
                 SIGTERM | SIGINT | SIGHUP => {
                     info!("receive signal {}, stopping server...", signal);
+                    if let Some(tx) = service_event_tx {
+                        if let Err(e) = tx.send(ServiceEvent::Exit) {
+                            warn!("failed to notify grpc server exit, {:?}", e);
+                        }
+                    }
                     break;
                 }
                 SIGUSR1 => {

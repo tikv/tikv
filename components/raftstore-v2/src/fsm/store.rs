@@ -318,6 +318,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     send_time,
                     inspector,
                 ),
+                StoreMsg::UnsafeRecoveryReport(report) => self
+                    .fsm
+                    .store
+                    .on_unsafe_recovery_report(self.store_ctx, report),
             }
         }
     }

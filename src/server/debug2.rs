@@ -1215,10 +1215,7 @@ mod tests {
         cfg.storage.data_dir = path.to_str().unwrap().to_string();
         cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
         cfg.raft_engine.mut_config().dir = cfg.infer_raft_engine_path(None).unwrap();
-        let cache = cfg
-            .storage
-            .block_cache
-            .build_shared_cache(cfg.storage.engine);
+        let cache = cfg.storage.block_cache.build_shared_cache();
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
@@ -1481,10 +1478,7 @@ mod tests {
         cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
         cfg.raft_engine.mut_config().dir = cfg.infer_raft_engine_path(None).unwrap();
         cfg.gc.enable_compaction_filter = false;
-        let cache = cfg
-            .storage
-            .block_cache
-            .build_shared_cache(cfg.storage.engine);
+        let cache = cfg.storage.block_cache.build_shared_cache();
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();

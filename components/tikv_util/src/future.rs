@@ -16,7 +16,11 @@ use futures::{
     task::{self, ArcWake, Context, Poll},
 };
 
-use crate::{callback::must_call, timer::GLOBAL_TIMER_HANDLE};
+use crate::{
+    callback::must_call,
+    time::{Duration, Instant},
+    timer::GLOBAL_TIMER_HANDLE,
+};
 
 /// Generates a paired future and callback so that when callback is being
 /// called, its result is automatically passed as a future result.
@@ -230,6 +234,29 @@ where
             item = f => Ok(item),
         }
     })
+}
+
+pub struct RescheduleChecker<B> {
+    duration: Duration,
+    start: Instant,
+    future_builder: B,
+}
+
+impl<T: Future, B: Fn() -> T> RescheduleChecker<B> {
+    pub fn new(future_builder: B, duration: Duration) -> Self {
+        Self {
+            duration,
+            start: Instant::now_coarse(),
+            future_builder,
+        }
+    }
+
+    pub async fn check(&mut self) {
+        if self.start.saturating_elapsed() >= self.duration {
+            (self.future_builder)().await;
+            self.start = Instant::now_coarse();
+        }
+    }
 }
 
 #[cfg(test)]

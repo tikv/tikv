@@ -8,6 +8,7 @@ use api_version::KvFormat;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
+use resource_control::ResourceLimiter;
 use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
@@ -30,6 +31,7 @@ pub struct DagHandlerBuilder<S: Store + 'static, F: KvFormat> {
     is_cache_enabled: bool,
     paging_size: Option<u64>,
     quota_limiter: Arc<QuotaLimiter>,
+    resource_limiter: Option<Arc<ResourceLimiter>>,
     _phantom: PhantomData<F>,
 }
 
@@ -44,6 +46,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
         is_cache_enabled: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> Self {
         DagHandlerBuilder {
             req,
@@ -56,6 +59,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             is_cache_enabled,
             paging_size,
             quota_limiter,
+            resource_limiter,
             _phantom: PhantomData,
         }
     }
@@ -79,6 +83,7 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
             self.is_streaming,
             self.paging_size,
             self.quota_limiter,
+            self.resource_limiter,
         )?
         .into_boxed())
     }
@@ -101,6 +106,7 @@ impl BatchDagHandler {
         is_streaming: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
@@ -112,6 +118,7 @@ impl BatchDagHandler {
                 is_streaming,
                 paging_size,
                 quota_limiter,
+                resource_limiter,
             )?,
             data_version,
         })
