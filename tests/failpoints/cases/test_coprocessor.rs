@@ -13,7 +13,6 @@ use more_asserts::{assert_ge, assert_le};
 use protobuf::Message;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
-use test_raftstore::new_server_cluster;
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
@@ -462,7 +461,7 @@ fn test_follower_buckets() {
         assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
     };
     wait_refresh_buckets(endpoint, req.clone(), 0);
-    let reqs=follower_raft_engine!(&mut cluster, "");
+    let reqs = follower_raft_engine!(&mut cluster, "");
     for (engine, ctx) in reqs {
         req.set_context(ctx.clone());
         let (_, endpoint, _) =
