@@ -776,7 +776,7 @@ where
             return;
         }
 
-        if !self.fsm.peer.is_force_leader() {
+        if !self.fsm.peer.is_in_force_leader() {
             error!(
                 "Unsafe recovery, demoting failed voters failed, since this peer is not forced leader";
                 "region_id" => self.region().get_id(),
@@ -1821,7 +1821,9 @@ where
                 info!(
                     "Unsafe recovery, expected live voters:";
                     "voters" => ?expected_alive_voter,
-                    "granted" => granted
+                    "granted" => granted,
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
                 );
                 if granted == expected_alive_voter.len() {
                     self.on_enter_force_leader();
@@ -1966,17 +1968,15 @@ where
                 self.register_check_long_uncommitted_tick();
             }
 
-            if let Some(ForceLeaderState::ForceLeader { .. }) = self.fsm.peer.force_leader {
-                if r != StateRole::Leader {
-                    // for some reason, it's not leader anymore
-                    info!(
-                        "step down in force leader state";
-                        "region_id" => self.fsm.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "state" => ?r,
-                    );
-                    self.on_force_leader_fail();
-                }
+            if self.fsm.peer.is_in_force_leader() && r != StateRole::Leader {
+                // for some reason, it's not leader anymore
+                info!(
+                    "step down in force leader state";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?r,
+                );
+                self.on_force_leader_fail();
             }
         }
     }
@@ -2205,7 +2205,7 @@ where
                         let syncer_clone = syncer.clone();
                         let failed_voters_clone = failed_voters.clone();
                         self.fsm.peer.unsafe_recovery_state = None;
-                        if !self.fsm.peer.is_force_leader() {
+                        if !self.fsm.peer.is_in_force_leader() {
                             error!(
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
                                 "region_id" => self.region().get_id(),
@@ -2224,7 +2224,7 @@ where
                                 "region_id" => self.region().get_id(),
                                 "peer_id" => self.fsm.peer_id(),
                             );
-                            if self.fsm.peer.is_force_leader() {
+                            if self.fsm.peer.is_in_force_leader() {
                                 self.propose_raft_command_internal(
                                     exit_joint_request(self.region(), &self.fsm.peer.peer),
                                     Callback::<EK::Snapshot>::write(Box::new(|resp| {
@@ -3922,7 +3922,8 @@ where
             // until new leader elected, but we can't revert this operation
             // because its result is already persisted in apply worker
             // TODO: should we transfer leader here?
-            let demote_self = is_learner(&self.fsm.peer.peer) && !self.fsm.peer.is_force_leader();
+            let demote_self =
+                is_learner(&self.fsm.peer.peer) && !self.fsm.peer.is_in_force_leader();
             if remove_self || demote_self {
                 warn!(
                     "Removing or demoting leader";
@@ -6472,6 +6473,10 @@ where
             Some(self.fsm.peer.approximate_size.unwrap_or_default() + size);
         self.fsm.peer.approximate_keys =
             Some(self.fsm.peer.approximate_keys.unwrap_or_default() + keys);
+
+        if let Some(buckets) = &mut self.fsm.peer.region_buckets {
+            buckets.ingest_sst(keys, size);
+        }
         // The ingested file may be overlapped with the data in engine, so we need to
         // check it again to get the accurate value.
         self.fsm.peer.may_skip_split_check = false;
