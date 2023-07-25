@@ -878,6 +878,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
+
+            if self.unsafe_recovery_state().is_some() {
+                debug!(self.logger, "unsafe recovery finishes applying a snapshot");
+                self.unsafe_recovery_maybe_finish_wait_apply(false);
+            }
         }
 
         if let Some(flushed_epoch) = flushed_epoch {
