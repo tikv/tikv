@@ -840,12 +840,26 @@ where
                 + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64
                 + SLOW_LOG_GRACE_PERIOD_MS
         {
+            let mut lock_num = None;
+            let mut min_start_ts = None;
+            if let Some(ob) = self.regions.get(&oldest_safe_ts_region) {
+                min_start_ts = ob
+                    .resolver
+                    .locks()
+                    .keys()
+                    .next()
+                    .cloned()
+                    .map(TimeStamp::into_inner);
+                lock_num = Some(ob.resolver.locks_by_key.len());
+            }
             info!(
-                "max safe-ts-gap is large";
+                "the max gap of safe-ts is large";
                 "gap" => safe_ts_gap,
                 "oldest safe-ts" => ?oldest_safe_ts,
                 "region id" => oldest_safe_ts_region,
                 "advance-ts-interval" => ?self.cfg.advance_ts_interval,
+                "lock num" => lock_num,
+                "min start ts" => min_start_ts,
             );
         }
         RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);
