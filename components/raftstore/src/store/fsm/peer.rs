@@ -9,7 +9,7 @@ use std::{
         Bound::{Excluded, Unbounded},
         VecDeque,
     },
-    iter::{FromIterator, Iterator},
+    iter::Iterator,
     mem,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -71,6 +71,7 @@ use crate::{
     coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         cmd_resp::{bind_term, new_error},
+        demote_failed_voters_request,
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
@@ -90,15 +91,16 @@ use crate::{
         region_meta::RegionMeta,
         transport::Transport,
         unsafe_recovery::{
-            ForceLeaderState, SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+            exit_joint_request, ForceLeaderState, SnapshotRecoveryState,
+            SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
         util,
         util::{KeysInfoFormatter, LeaseState},
         worker::{
-            new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
-            GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
+            Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
+            ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
@@ -6803,57 +6805,6 @@ fn new_compact_log_request(
         .set_voter_replicated_index(voter_replicated_index);
     request.set_admin_request(admin);
     request
-}
-
-fn demote_failed_voters_request(
-    region: &metapb::Region,
-    peer: &metapb::Peer,
-    failed_voters: Vec<metapb::Peer>,
-) -> Option<RaftCmdRequest> {
-    let failed_voter_ids = HashSet::from_iter(failed_voters.iter().map(|voter| voter.get_id()));
-    let mut req = new_admin_request(region.get_id(), peer.clone());
-    req.mut_header()
-        .set_region_epoch(region.get_region_epoch().clone());
-    let mut change_peer_reqs: Vec<pdpb::ChangePeer> = region
-        .get_peers()
-        .iter()
-        .filter_map(|peer| {
-            if failed_voter_ids.contains(&peer.get_id())
-                && peer.get_role() == metapb::PeerRole::Voter
-            {
-                let mut peer_clone = peer.clone();
-                peer_clone.set_role(metapb::PeerRole::Learner);
-                let mut cp = pdpb::ChangePeer::default();
-                cp.set_change_type(ConfChangeType::AddLearnerNode);
-                cp.set_peer(peer_clone);
-                return Some(cp);
-            }
-            None
-        })
-        .collect();
-
-    // Promote self if it is a learner.
-    if peer.get_role() == metapb::PeerRole::Learner {
-        let mut cp = pdpb::ChangePeer::default();
-        cp.set_change_type(ConfChangeType::AddNode);
-        let mut promote = peer.clone();
-        promote.set_role(metapb::PeerRole::Voter);
-        cp.set_peer(promote);
-        change_peer_reqs.push(cp);
-    }
-    if change_peer_reqs.is_empty() {
-        return None;
-    }
-    req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
-    Some(req)
-}
-
-fn exit_joint_request(region: &metapb::Region, peer: &metapb::Peer) -> RaftCmdRequest {
-    let mut req = new_admin_request(region.get_id(), peer.clone());
-    req.mut_header()
-        .set_region_epoch(region.get_region_epoch().clone());
-    req.set_admin_request(new_change_peer_v2_request(vec![]));
-    req
 }
 
 impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
