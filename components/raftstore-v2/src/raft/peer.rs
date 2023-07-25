@@ -23,8 +23,8 @@ use raftstore::{
         fsm::ApplyMetrics,
         metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
-        TabletSnapManager, WriteTask,
+        Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue, ReadDelegate,
+        ReadIndexQueue, ReadProgress, TabletSnapManager, WriteTask,
     },
 };
 use slog::{debug, info, Logger};
@@ -125,6 +125,16 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     gc_peer_context: GcPeerContext,
 
     abnormal_peer_context: AbnormalPeerContext,
+
+    /// Force leader state is only used in online recovery when the majority of
+    /// peers are missing. In this state, it forces one peer to become leader
+    /// out of accordance with Raft election rule, and forbids any
+    /// read/write proposals. With that, we can further propose remove
+    /// failed-nodes conf-change, to make the Raft group forms majority and
+    /// works normally later on.
+    ///
+    /// For details, see the comment of `ForceLeaderState`.
+    force_leader_state: Option<ForceLeaderState>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -215,6 +225,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
             abnormal_peer_context: AbnormalPeerContext::default(),
+            force_leader_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -639,10 +650,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group.raft.term
     }
 
-    #[inline]
-    // TODO
-    pub fn has_force_leader(&self) -> bool {
-        false
+    pub fn voters(&self) -> raft::util::Union<'_> {
+        self.raft_group.raft.prs().conf().voters().ids()
     }
 
     pub fn serving(&self) -> bool {
@@ -954,5 +963,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 true
             })
+    }
+
+    pub fn has_force_leader(&self) -> bool {
+        self.force_leader_state.is_some()
+    }
+
+    pub fn is_in_force_leader(&self) -> bool {
+        matches!(
+            self.force_leader_state,
+            Some(ForceLeaderState::ForceLeader { .. })
+        )
+    }
+
+    pub fn force_leader(&self) -> Option<&ForceLeaderState> {
+        self.force_leader_state.as_ref()
+    }
+
+    pub fn force_leader_mut(&mut self) -> &mut Option<ForceLeaderState> {
+        &mut self.force_leader_state
     }
 }

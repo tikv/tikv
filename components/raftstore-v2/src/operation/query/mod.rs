@@ -141,12 +141,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ));
         }
 
-        // TODO: add flashback_state check
-
         // Check whether the store has the right peer to handle the request.
         let request = msg.get_requests();
-
-        // TODO: add force leader
 
         // ReadIndex can be processed on the replicas.
         let is_read_index_request =
@@ -162,6 +158,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Err(e) = util::check_peer_id(msg.get_header(), self.peer_id()) {
             raft_metrics.invalid_proposal.mismatch_peer_id.inc();
             return Err(e);
+        }
+
+        if self.has_force_leader() {
+            raft_metrics.invalid_proposal.force_leader.inc();
+            // in force leader state, forbid requests to make the recovery
+            // progress less error-prone.
+            return Err(Error::RecoveryInProgress(self.region_id()));
         }
 
         // Check whether the peer is initialized.
