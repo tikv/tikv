@@ -11,7 +11,7 @@ pub use self::response_channel::FlushChannel;
 #[cfg(feature = "testexport")]
 pub use self::response_channel::FlushSubscriber;
 pub use self::{
-    imp::RaftRouter,
+    imp::{RaftRouter, UnsafeRecoveryRouter},
     internal_message::ApplyRes,
     message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
     response_channel::{
