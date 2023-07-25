@@ -53,6 +53,7 @@ pub fn flashback_to_version_read_write(
                 && latest_commit_ts < flashback_commit_ts
         },
         FLASHBACK_BATCH_SIZE,
+        false,
     );
     let (keys, _) = keys_result?;
     Ok(keys)
@@ -293,6 +294,8 @@ pub fn get_first_user_key(
     start_key: &Key,
     end_key: Option<&Key>,
     flashback_version: TimeStamp,
+    // Used for debug logging.
+    region_id: u64,
 ) -> TxnResult<Option<Key>> {
     let (mut keys_result, _) = reader.scan_latest_user_keys(
         Some(start_key),
@@ -300,8 +303,10 @@ pub fn get_first_user_key(
         // Make sure we will get the same first user key each time.
         |_, latest_commit_ts| latest_commit_ts > flashback_version,
         1,
+        true,
     )?;
-    info!("get first user key"; "key" => ?keys_result, "flashback_version" => flashback_version, "start_key" => %start_key, "end_key" => ?end_key);
+    info!("get first user key"; "key" => ?keys_result, "flashback_version" => flashback_version, 
+    "start_key" => %start_key, "end_key" => ?end_key, "region_id" => region_id);
     Ok(keys_result.pop())
 }
 
@@ -365,6 +370,8 @@ pub mod tests {
             &Key::from_raw(key),
             Some(Key::from_raw(b"z")).as_ref(),
             version,
+            // Used for pass ci
+            0,
         )
         .unwrap()
         {
@@ -429,6 +436,8 @@ pub mod tests {
             &Key::from_raw(key),
             Some(Key::from_raw(b"z")).as_ref(),
             version,
+            // Used for pass ci
+            0,
         )
         .unwrap()
         .unwrap();
@@ -630,6 +639,8 @@ pub mod tests {
             &Key::from_raw(b""),
             Some(Key::from_raw(b"z")).as_ref(),
             flashback_version,
+            // Used for pass ci
+            0,
         )
         .unwrap_or_else(|_| Some(Key::from_raw(b"")))
         .unwrap();
@@ -693,9 +704,16 @@ pub mod tests {
         must_get_none(&mut engine, k, ts);
         // case 3: for last region, end_key will be None, prewrite key will be valid.
         assert_eq!(
-            get_first_user_key(&mut reader, &Key::from_raw(b"a"), None, flashback_version)
-                .unwrap()
-                .unwrap(),
+            get_first_user_key(
+                &mut reader,
+                &Key::from_raw(b"a"),
+                None,
+                flashback_version,
+                // Used for pass ci
+                0,
+            )
+            .unwrap()
+            .unwrap(),
             Key::from_raw(prewrite_key)
         );
     }
