@@ -425,15 +425,14 @@ fn test_read_index_lock_checking_on_follower() {
     );
 }
 
-#[cfg(feature = "failpoints")]
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_follower_buckets() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
     let product = ProductTable::new();
-    let (raft_engine, ctx) = leader_raft_engine(&mut cluster, "");
+    let (raft_engine, ctx) = leader_raft_engine!(&mut cluster, "");
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
 
@@ -463,7 +462,8 @@ fn test_follower_buckets() {
         assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
     };
     wait_refresh_buckets(endpoint, req.clone(), 0);
-    for (engine, ctx) in follower_raft_engine(&mut cluster, "") {
+    let reqs=follower_raft_engine!(&mut cluster, "");
+    for (engine, ctx) in reqs {
         req.set_context(ctx.clone());
         let (_, endpoint, _) =
             init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
