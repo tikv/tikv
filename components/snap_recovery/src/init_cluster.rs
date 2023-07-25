@@ -91,7 +91,7 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // the follower will believe it holds an eternal lease. So, once the leader
     // reboots, the followers will reject to vote for it again.
     // We need to disable the lease for avoiding that.
-    config.raft_store.unsafe_skip_check_quorum = true;
+    config.raft_store.unsafe_disable_check_quorum = true;
 
     // disable auto compactions during the restore
     config.rocksdb.defaultcf.disable_auto_compactions = true;

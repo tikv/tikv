@@ -103,7 +103,7 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip)]
     #[online_config(skip)]
-    pub unsafe_skip_check_quorum: bool,
+    pub unsafe_disable_check_quorum: bool,
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
@@ -475,7 +475,7 @@ impl Default for Config {
             // TODO: make its value reasonable
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
-            unsafe_skip_check_quorum: false,
+            unsafe_disable_check_quorum: false,
         }
     }
 }
