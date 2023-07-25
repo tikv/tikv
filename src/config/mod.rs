@@ -605,7 +605,7 @@ macro_rules! build_cf_opt {
             $opt.bottommost_zstd_compression_sample_size,
             1, // parallel_threads
         );
-        cf_opts.set_write_buffer_size($opt.write_buffer_size.unwrap().0);
+        cf_opts.set_write_buffer_size($opt.write_buffer_size.unwrap_or(ReadableSize::mb(32)).0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
         cf_opts.set_max_bytes_for_level_base($opt.max_bytes_for_level_base.0);
