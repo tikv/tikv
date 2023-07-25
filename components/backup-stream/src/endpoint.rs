@@ -56,7 +56,7 @@ use crate::{
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
-    subscription_track::SubscriptionTracer,
+    subscription_track::{Ref, RefMut, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, StopWatch, Work},
 };
@@ -474,7 +474,7 @@ where
     }
 
     fn backup_batch(&self, batch: CmdBatch, work: Work) {
-        let mut sw = StopWatch::new();
+        let mut sw = StopWatch::by_now();
 
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
@@ -1079,6 +1079,7 @@ pub enum ObserveOp {
         region: Region,
         handle: ObserveHandle,
         err: Box<Error>,
+        has_failed_for: u8,
     },
     ResolveRegions {
         callback: ResolveRegionsCallback,
@@ -1109,11 +1110,13 @@ impl std::fmt::Debug for ObserveOp {
                 region,
                 handle,
                 err,
+                has_failed_for,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
                 .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
+                .field("has_failed_for", has_failed_for)
                 .finish(),
             Self::ResolveRegions { min_ts, .. } => f
                 .debug_struct("ResolveRegions")

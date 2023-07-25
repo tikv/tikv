@@ -1474,7 +1474,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         });
 
         fail_point!("storage_drop_message", |_| Ok(()));
-        cmd.incr_cmd_metric();
         self.sched.run_cmd(cmd, T::callback(callback));
 
         Ok(())
@@ -1487,7 +1486,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<T>,
     ) {
         let cmd: Command = cmd.into();
-        cmd.incr_cmd_metric();
         sched.run_cmd(cmd, T::callback(callback));
     }
 
@@ -7736,6 +7734,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
@@ -7762,6 +7761,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, LockNotExist),
@@ -7819,6 +7819,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -7864,6 +7865,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
@@ -7875,7 +7877,7 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
                     vec![Mutation::make_put(k.clone(), v)],
-                    k.as_encoded().to_vec(),
+                    k.to_raw().unwrap(),
                     ts(25, 0),
                     100,
                 ),
@@ -7895,6 +7897,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TtlExpire),
@@ -9236,6 +9239,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -9272,6 +9276,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TxnStatus::TtlExpire),
@@ -9663,6 +9668,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
