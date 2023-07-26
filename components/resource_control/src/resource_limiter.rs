@@ -1,40 +1,76 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    fmt,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
+use strum::EnumCount;
 use tikv_util::time::Limiter;
 
+#[derive(Clone, Copy, Eq, PartialEq, EnumCount)]
+#[repr(usize)]
+pub enum ResourceType {
+    Cpu,
+    Io,
+}
+
+impl fmt::Debug for ResourceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            ResourceType::Cpu => write!(f, "cpu"),
+            ResourceType::Io => write!(f, "io"),
+        }
+    }
+}
+
 pub struct ResourceLimiter {
-    #[allow(dead_code)]
-    pub(crate) cpu_limiter: QuotaLimiter,
-    #[allow(dead_code)]
-    pub(crate) io_limiter: QuotaLimiter,
+    version: u64,
+    limiters: [QuotaLimiter; ResourceType::COUNT],
+}
+
+impl std::fmt::Debug for ResourceLimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ResourceLimiter(...)")
+    }
 }
 
 impl ResourceLimiter {
-    pub fn new(cpu_limit: f64, io_limit: f64) -> Self {
+    pub fn new(cpu_limit: f64, io_limit: f64, version: u64) -> Self {
+        let cpu_limiter = QuotaLimiter::new(cpu_limit);
+        let io_limiter = QuotaLimiter::new(io_limit);
         Self {
-            cpu_limiter: QuotaLimiter::new(cpu_limit),
-            io_limiter: QuotaLimiter::new(io_limit),
+            version,
+            limiters: [cpu_limiter, io_limiter],
         }
     }
 
-    #[allow(dead_code)]
     pub fn consume(&self, cpu_time: Duration, io_bytes: u64) -> Duration {
-        let cpu_dur = self.cpu_limiter.consume(cpu_time.as_micros() as u64);
-        let io_dur = self.io_limiter.consume(io_bytes);
+        let cpu_dur =
+            self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64);
+        let io_dur = self.limiters[ResourceType::Io as usize].consume(io_bytes);
         cpu_dur.max(io_dur)
+    }
+
+    #[inline]
+    pub(crate) fn get_limiter(&self, ty: ResourceType) -> &QuotaLimiter {
+        &self.limiters[ty as usize]
+    }
+
+    pub(crate) fn get_limit_statistics(&self, ty: ResourceType) -> GroupStatistics {
+        let (total_consumed, total_wait_dur_us) = self.limiters[ty as usize].get_statistics();
+        GroupStatistics {
+            version: self.version,
+            total_consumed,
+            total_wait_dur_us,
+        }
     }
 }
 
 pub(crate) struct QuotaLimiter {
-    #[allow(dead_code)]
     limiter: Limiter,
     // total waiting duration in us
-    #[allow(dead_code)]
     total_wait_dur_us: AtomicU64,
 }
 
@@ -46,12 +82,10 @@ impl QuotaLimiter {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn get_rate_limit(&self) -> f64 {
         self.limiter.speed_limit()
     }
 
-    #[cfg(test)]
     pub(crate) fn set_rate_limit(&self, mut limit: f64) {
         // treat 0 as infinity.
         if limit <= f64::EPSILON {
@@ -60,15 +94,13 @@ impl QuotaLimiter {
         self.limiter.set_speed_limit(limit);
     }
 
-    #[allow(dead_code)]
-    pub fn get_statistics(&self) -> GroupStatistics {
-        GroupStatistics {
-            total_consumed: self.limiter.total_bytes_consumed() as u64,
-            total_wait_dur_us: self.total_wait_dur_us.load(Ordering::Relaxed),
-        }
+    fn get_statistics(&self) -> (u64, u64) {
+        (
+            self.limiter.total_bytes_consumed() as u64,
+            self.total_wait_dur_us.load(Ordering::Relaxed),
+        )
     }
 
-    #[allow(dead_code)]
     fn consume(&self, value: u64) -> Duration {
         if value == 0 {
             return Duration::ZERO;
@@ -84,6 +116,7 @@ impl QuotaLimiter {
 
 #[derive(Default, Clone, PartialEq, Eq, Copy, Debug)]
 pub struct GroupStatistics {
+    pub version: u64,
     pub total_consumed: u64,
     pub total_wait_dur_us: u64,
 }
@@ -92,8 +125,21 @@ impl std::ops::Sub for GroupStatistics {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
+            version: self.version,
             total_consumed: self.total_consumed.saturating_sub(rhs.total_consumed),
             total_wait_dur_us: self.total_wait_dur_us.saturating_sub(rhs.total_wait_dur_us),
+        }
+    }
+}
+
+impl std::ops::Div<f64> for GroupStatistics {
+    type Output = Self;
+
+    fn div(self, rhs: f64) -> Self::Output {
+        Self {
+            version: self.version,
+            total_consumed: (self.total_consumed as f64 / rhs) as u64,
+            total_wait_dur_us: (self.total_wait_dur_us as f64 / rhs) as u64,
         }
     }
 }

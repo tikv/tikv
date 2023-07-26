@@ -299,7 +299,7 @@
 ## Otherwise, the OOM problem might occur in TiKV.
 ##
 ## If it's not set, 45% of available system memory will be used.
-# capacity = "1GB"
+# capacity = "0B"
 
 [storage.flow-control]
 ## Flow controller is used to throttle the write rate at scheduler level, aiming
@@ -572,7 +572,8 @@
 # max-total-wal-size = "4GB"
 
 ## Dump statistics periodically in information logs.
-## Same as RocksDB's default value (10 min).
+## When storage.engine is "raft-kv", default value is 10m.
+## When storage.engine is "partitioned-raft-kv", default value is 120m.
 # stats-dump-period = "10m"
 
 ## Refer to: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ
@@ -646,7 +647,7 @@
 ## When storage.engine is "raft-kv", default is no limit.
 ## When storage.engine is "partitioned-raft-kv", default value is 25% of available system memory or
 ## 15GiB, whichever is smaller.
-# write-buffer-limit = "1GB"
+# write-buffer-limit = "0B"
 
 ## Options for `Titan`.
 [rocksdb.titan]
