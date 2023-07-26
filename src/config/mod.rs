@@ -68,7 +68,7 @@ use serde::{
 use serde_json::{to_value, Map, Value};
 use tikv_util::{
     config::{
-        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, MIB,
     },
     logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
@@ -111,10 +111,6 @@ const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
 
-const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
-const LOCKCF_MAX_MEM: usize = GIB as usize;
-const RAFT_MIN_MEM: usize = 256 * MIB as usize;
-const RAFT_MAX_MEM: usize = 2 * GIB as usize;
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
@@ -128,18 +124,6 @@ fn bloom_filter_ratio(et: EngineType) -> f64 {
         // TODO: disable it for now until find out the proper ratio
         EngineType::RaftKv2 => 0.0,
     }
-}
-
-fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSize {
-    let (ratio, min, max) = match (is_raft_db, cf) {
-        (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
-        (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
-        (false, CF_LOCK) => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
-        (false, CF_WRITE) => (0.15, 0, usize::MAX),
-        _ => unreachable!(),
-    };
-    let size = ((total_mem as f64 * ratio) as usize).clamp(min, max);
-    ReadableSize::mb(size as u64 / MIB)
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
@@ -300,7 +284,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub block_size: ReadableSize,
             // FIXME: deprecate it and update all tests related to it.
-            pub block_cache_size: ReadableSize,
+            pub block_cache_size: Option<ReadableSize>,
             #[online_config(skip)]
             pub disable_block_cache: bool,
             #[online_config(skip)]
@@ -427,7 +411,7 @@ macro_rules! write_into_metrics {
             .set($cf.block_size.0 as f64);
         $metrics
             .with_label_values(&[$tag, "block_cache_size"])
-            .set($cf.block_cache_size.0 as f64);
+            .set($cf.block_cache_size.map(|s| s.0).unwrap_or_default() as f64);
         $metrics
             .with_label_values(&[$tag, "disable_block_cache"])
             .set(($cf.disable_block_cache as i32).into());
@@ -676,11 +660,9 @@ cf_config!(DefaultCfConfig);
 
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
-        let total_mem = SysQuota::memory_limit_in_bytes();
-
         DefaultCfConfig {
             block_size: ReadableSize::kb(32),
-            block_cache_size: memory_limit_for_cf(false, CF_DEFAULT, total_mem),
+            block_cache_size: None,
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -842,8 +824,6 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
-        let total_mem = SysQuota::memory_limit_in_bytes();
-
         // Setting blob_run_mode=read_only effectively disable Titan.
         let titan = TitanCfConfig {
             blob_run_mode: BlobRunMode::ReadOnly,
@@ -852,7 +832,7 @@ impl Default for WriteCfConfig {
 
         WriteCfConfig {
             block_size: ReadableSize::kb(32),
-            block_cache_size: memory_limit_for_cf(false, CF_WRITE, total_mem),
+            block_cache_size: None,
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -972,8 +952,6 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
-        let total_mem = SysQuota::memory_limit_in_bytes();
-
         // Setting blob_run_mode=read_only effectively disable Titan.
         let titan = TitanCfConfig {
             blob_run_mode: BlobRunMode::ReadOnly,
@@ -982,7 +960,7 @@ impl Default for LockCfConfig {
 
         LockCfConfig {
             block_size: ReadableSize::kb(16),
-            block_cache_size: memory_limit_for_cf(false, CF_LOCK, total_mem),
+            block_cache_size: None,
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -1079,7 +1057,7 @@ impl Default for RaftCfConfig {
         };
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
-            block_cache_size: ReadableSize::mb(128),
+            block_cache_size: None,
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -1612,11 +1590,9 @@ cf_config!(RaftDefaultCfConfig);
 
 impl Default for RaftDefaultCfConfig {
     fn default() -> RaftDefaultCfConfig {
-        let total_mem = SysQuota::memory_limit_in_bytes();
-
         RaftDefaultCfConfig {
             block_size: ReadableSize::kb(64),
-            block_cache_size: memory_limit_for_cf(true, CF_DEFAULT, total_mem),
+            block_cache_size: None,
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -3804,6 +3780,17 @@ impl TikvConfig {
             );
             self.rocksdb.auto_tuned = None;
         }
+        // When shared block cache is enabled, if its capacity is set, it overrides
+        // individual block cache sizes. Otherwise use the sum of block cache
+        // size of all column families as the shared cache size.
+        if let Some(a) = self.rocksdb.defaultcf.block_cache_size
+            && let Some(b) = self.rocksdb.writecf.block_cache_size
+            && let Some(c) = self.rocksdb.lockcf.block_cache_size
+        {
+            let d = self.raftdb.defaultcf.block_cache_size.map(|s| s.0).unwrap_or_default();
+            let sum = a.0 + b.0 + c.0 + d;
+            self.storage.block_cache.capacity = Some(ReadableSize(sum));
+        }
         if self.backup.sst_max_size.0 < default_coprocessor.region_max_size().0 / 10 {
             warn!(
                 "override backup.sst-max-size with min sst-max-size, {:?}",
@@ -4510,7 +4497,7 @@ mod tests {
     use test_util::assert_eq_debug;
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
-        config::VersionTrack,
+        config::{VersionTrack, GIB},
         logger::get_log_level,
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
@@ -4829,7 +4816,7 @@ mod tests {
         let mut incoming = TikvConfig::default();
         incoming.coprocessor.region_split_keys = Some(10000);
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
-        incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
+        incoming.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(500));
         incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
@@ -5095,7 +5082,7 @@ mod tests {
         cfg.rocksdb.max_background_flushes = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(64));
-        cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
+        cfg.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(8));
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.validate().unwrap();

@@ -330,7 +330,7 @@ fn test_serde_custom_tikv_config() {
         write_buffer_flush_oldest_first: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -389,7 +389,7 @@ fn test_serde_custom_tikv_config() {
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -462,7 +462,7 @@ fn test_serde_custom_tikv_config() {
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -535,7 +535,7 @@ fn test_serde_custom_tikv_config() {
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -637,7 +637,7 @@ fn test_serde_custom_tikv_config() {
         wal_bytes_per_sync: ReadableSize::kb(32),
         defaultcf: RaftDefaultCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -900,6 +900,22 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
     "#;
     let cfg: TikvConfig = toml::from_str(content).unwrap();
     assert!(!cfg.readpool.is_unified_pool_enabled());
+}
+
+#[test]
+fn test_block_cache_backward_compatible() {
+    let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
+    let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
+    assert!(cfg.storage.block_cache.capacity.is_none());
+    cfg.compatible_adjust();
+    assert!(cfg.storage.block_cache.capacity.is_some());
+    assert_eq!(
+        cfg.storage.block_cache.capacity.unwrap().0,
+        cfg.rocksdb.defaultcf.block_cache_size.unwrap().0
+            + cfg.rocksdb.writecf.block_cache_size.unwrap().0
+            + cfg.rocksdb.lockcf.block_cache_size.unwrap().0
+            + cfg.raftdb.defaultcf.block_cache_size.unwrap().0
+    );
 }
 
 #[test]

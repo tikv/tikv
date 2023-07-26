@@ -399,9 +399,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
 
-        let status = &mut self.merge_context_mut().prepare_status;
         // Shouldn't enter this call if trim check is already underway.
-        assert!(status.is_none(), "{:?}", status);
+        let status = &mut self.merge_context_mut().prepare_status;
+        if status.is_none() {
+            let logger = self.logger.clone();
+            panic!(
+                "expect empty prepare merge status {}: {:?}",
+                SlogFormat(&logger),
+                self.merge_context_mut().prepare_status
+            );
+        }
         *status = Some(PrepareStatus::WaitForTrimStatus {
             start_time: Instant::now_coarse(),
             pending_peers,
@@ -520,12 +527,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let last_index = self.raft_group().raft.raft_log.last_index();
         if has_locks && self.entry_storage().applied_index() < last_index {
             let status = &mut self.merge_context_mut().prepare_status;
-            assert!(
-                matches!(status, Some(PrepareStatus::WaitForTrimStatus { .. })),
-                "{:?}",
-                status
-            );
-            self.merge_context_mut().prepare_status = Some(PrepareStatus::WaitForFence {
+            if !matches!(status, Some(PrepareStatus::WaitForTrimStatus { .. })) {
+                let logger = self.logger.clone();
+                panic!(
+                    "expect WaitForTrimStatus {}: {:?}",
+                    SlogFormat(&logger),
+                    self.merge_context_mut().prepare_status
+                );
+            }
+            *status = Some(PrepareStatus::WaitForFence {
                 fence: last_index,
                 ctx,
                 req: Some(mem::take(req)),
