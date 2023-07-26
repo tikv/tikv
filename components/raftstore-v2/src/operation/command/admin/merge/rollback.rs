@@ -65,6 +65,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         admin.set_cmd_type(AdminCmdType::RollbackMerge);
         admin.mut_rollback_merge().set_commit(index);
         request.set_admin_request(admin);
+        // TODO: it should propose via on_admin_command, otherwise it may panic
+        //       during force leader.
         if let Err(e) = self.propose(store_ctx, request.write_to_bytes().unwrap()) {
             error!(self.logger, "failed to propose RollbackMerge"; "err" => ?e);
         }

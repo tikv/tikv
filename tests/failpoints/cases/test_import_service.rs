@@ -296,19 +296,20 @@ fn test_delete_sst_v2_after_epoch_stale() {
     // delete sts if the region epoch is stale.
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
-    let region = cluster.get_region(b"zk10");
-    pd_client.must_split_region(
-        region,
-        kvproto::pdpb::CheckPolicy::Usekey,
-        vec![b"random_key1".to_vec()],
-    );
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
     fail::cfg_callback("on_cleanup_import_sst_schedule", move || {
         tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
-    rx.recv_timeout(std::time::Duration::from_millis(1000))
+    let region = cluster.get_region(b"zk10");
+    pd_client.must_split_region(
+        region,
+        kvproto::pdpb::CheckPolicy::Usekey,
+        vec![b"zk10".to_vec()],
+    );
+
+    rx.recv_timeout(std::time::Duration::from_millis(100))
         .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(100));
     assert_eq!(0, sst_file_count(&cluster.paths));

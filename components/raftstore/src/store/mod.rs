@@ -25,6 +25,7 @@ mod replication_mode;
 pub mod simple_write;
 pub mod snap;
 mod txn_ext;
+mod unsafe_recovery;
 mod worker;
 
 #[cfg(any(test, feature = "testexport"))]
@@ -57,8 +58,7 @@ pub use self::{
     peer::{
         can_amend_read, get_sync_log_from_request, make_transfer_leader_response,
         propose_read_index, should_renew_lease, Peer, PeerStat, ProposalContext, ProposalQueue,
-        RequestInspector, RequestPolicy, SnapshotRecoveryWaitApplySyncer,
-        TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        RequestInspector, RequestPolicy, TRANSFER_LEADER_COMMAND_REPLY_CTX,
     },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
@@ -76,6 +76,11 @@ pub use self::{
     },
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
+    unsafe_recovery::{
+        ForceLeaderState, SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+        UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+    },
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         metrics as worker_metrics, AutoSplitController, BatchComponent, Bucket, BucketRange,
