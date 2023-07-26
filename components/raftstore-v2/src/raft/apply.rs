@@ -226,6 +226,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         self.peer.get_id()
     }
 
+    #[allow(unused)]
+    #[inline]
+    pub fn store_id(&self) -> u64 {
+        self.peer.get_store_id()
+    }
+
     /// The tablet can't be public yet, otherwise content of latest tablet
     /// doesn't matches its epoch in both readers and peer fsm.
     #[inline]

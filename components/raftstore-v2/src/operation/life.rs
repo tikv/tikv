@@ -787,10 +787,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.postponed_destroy() {
             return;
         }
+        // No need to wait for the apply anymore.
+        self.unsafe_recovery_maybe_finish_wait_apply(true);
+
+        // Use extra write to ensure these writes are the last writes to raft engine.
         let raft_engine = self.entry_storage().raft_engine();
         let mut region_state = self.storage().region_state().clone();
         let region_id = region_state.get_region().get_id();
-        // Use extra write to ensure these writes are the last writes to raft engine.
         let lb = write_task
             .extra_write
             .ensure_v2(|| raft_engine.log_batch(2));

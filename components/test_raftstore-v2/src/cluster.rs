@@ -436,6 +436,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         self.cfg.server.cluster_id
     }
 
+    pub fn get_node_ids(&self) -> HashSet<u64> {
+        self.sim.rl().get_node_ids()
+    }
+
     pub fn flush_data(&self) {
         for reg in self.tablet_registries.values() {
             reg.for_each_opened_tablet(|_, cached| -> bool {
@@ -1669,12 +1673,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
 
     pub fn refresh_region_bucket_keys(
         &mut self,
-        _region: &metapb::Region,
-        _buckets: Vec<Bucket>,
-        _bucket_ranges: Option<Vec<BucketRange>>,
+        region: &metapb::Region,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
         _expect_buckets: Option<Buckets>,
     ) -> u64 {
-        unimplemented!()
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let refresh_buckets_msg = PeerMsg::RefreshRegionBuckets {
+            region_epoch: region.get_region_epoch().clone(),
+            buckets,
+            bucket_ranges,
+        };
+
+        if let Err(e) = router.send(region.get_id(), refresh_buckets_msg) {
+            panic!("router send refresh buckets msg failed, error: {:?}", e,);
+        }
+        0
     }
 
     pub fn send_half_split_region_message(
