@@ -16,7 +16,7 @@ use pd_client::{
     RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH,
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
 
 use crate::{resource_limiter::ResourceType, ResourceGroupManager};
 
@@ -160,6 +160,10 @@ impl ResourceManagerService {
             .await
         {
             Ok((items, _)) => {
+                if items.is_empty() {
+                    error!("load empty controller config");
+                    return None;
+                }
                 match serde_json::from_slice::<ControllerConfig>(items[0].get_payload()) {
                     Ok(c) => Some(c.request_unit),
                     Err(err) => {
@@ -180,6 +184,7 @@ impl ResourceManagerService {
         let mut last_group_statistics_map: HashMap<String, UploadStatistic> = HashMap::new();
         // load controller config firstly.
         let config = self.load_controller_config().await.unwrap_or_default();
+        info!("load controller config"; "config" => ?config);
 
         loop {
             let background_groups: Vec<_> = self
@@ -246,13 +251,12 @@ impl ResourceManagerService {
                         )
                     };
 
-                    let read_total = (config.read_cpu_ms_cost * cpu_consumed as f64
-                        + config.read_cost_per_byte * io_consumed.0 as f64)
-                        as u64;
-                    let write_total = (config.write_cost_per_byte * io_consumed.1 as f64) as u64;
+                    let read_total = config.read_cpu_ms_cost * cpu_consumed as f64
+                        + config.read_cost_per_byte * io_consumed.0 as f64;
+                    let write_total = config.write_cost_per_byte * io_consumed.1 as f64;
 
-                    report_consumption.set_r_r_u(read_total as f64);
-                    report_consumption.set_w_r_u(write_total as f64);
+                    report_consumption.set_r_r_u(read_total);
+                    report_consumption.set_w_r_u(write_total);
                     report_consumption.set_read_bytes(io_consumed.0 as f64);
                     report_consumption.set_write_bytes(io_consumed.1 as f64);
                     report_consumption.set_total_cpu_time_ms(cpu_consumed as f64);
@@ -276,7 +280,7 @@ impl ResourceManagerService {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct RequestUnitConfig {
     read_base_cost: f64,
@@ -286,11 +290,9 @@ struct RequestUnitConfig {
     read_cpu_ms_cost: f64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-
 struct ControllerConfig {
-    degraded_mode_wait_duration: String,
     request_unit: RequestUnitConfig,
 }
 

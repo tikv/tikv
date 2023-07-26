@@ -464,7 +464,7 @@ impl ResourceController {
 
     pub fn update_min_virtual_time(&self) {
         let start = Instant::now_coarse();
-        let mut min_vt = u64::MAX;
+        let mut min_vt = u64::MAX - 100_000;
         let mut max_vt = 0;
         self.resource_consumptions
             .read()
