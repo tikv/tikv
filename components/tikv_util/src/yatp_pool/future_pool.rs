@@ -114,6 +114,11 @@ impl FuturePool {
     pub fn thread_count_limit(&self) -> (usize, usize) {
         self.inner.pool.thread_count_limit()
     }
+
+    /// Cancel all pending futures and join all threads.
+    pub fn shutdown(&self) {
+        self.inner.pool.shutdown();
+    }
 }
 
 struct PoolInner {
