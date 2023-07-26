@@ -3,16 +3,20 @@
 // #[PerformanceCriticalPath]
 use std::sync::{mpsc::SyncSender, Arc};
 
+use collections::HashSet;
 use kvproto::{
     import_sstpb::SstMeta,
     metapb,
     metapb::RegionEpoch,
+    pdpb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
     util::LatencyInspector, FetchedLogs, GenSnapRes, TabletSnapKey,
+    UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+    UnsafeRecoveryWaitApplySyncer,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
@@ -246,6 +250,20 @@ pub enum PeerMsg {
     },
     /// A message that used to check if a snapshot gc is happened.
     SnapGc(Box<[TabletSnapKey]>),
+
+    /// Let a peer enters force leader state during unsafe recovery.
+    EnterForceLeaderState {
+        syncer: UnsafeRecoveryForceLeaderSyncer,
+        failed_stores: HashSet<u64>,
+    },
+    /// Let a peer exits force leader state.
+    ExitForceLeaderState,
+    /// Let a peer campaign directly after exit force leader.
+    ExitForceLeaderStateCampaign,
+    /// Wait for a peer to apply to the latest commit index.
+    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
+    /// Wait for a peer to fill its status to the report.
+    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
 }
 
 impl ResourceMetered for PeerMsg {}
@@ -346,6 +364,8 @@ pub enum StoreMsg {
         send_time: Instant,
         inspector: LatencyInspector,
     },
+    /// Send a store report for unsafe recovery.
+    UnsafeRecoveryReport(pdpb::StoreReport),
 }
 
 impl ResourceMetered for StoreMsg {}

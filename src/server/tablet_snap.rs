@@ -1040,6 +1040,12 @@ pub fn copy_tablet_snapshot(
     if let Some(m) = recver_snap_mgr.key_manager() {
         m.link_file(recv_path.to_str().unwrap(), final_path.to_str().unwrap())?;
     }
+    // Remove final path to make snapshot retryable.
+    if fs::remove_dir_all(&final_path).is_ok() {
+        if let Some(m) = recver_snap_mgr.key_manager() {
+            let _ = m.remove_dir(&final_path, None);
+        }
+    }
     fs::rename(&recv_path, &final_path).map_err(|e| {
         if let Some(m) = recver_snap_mgr.key_manager() {
             let _ = m.remove_dir(&final_path, Some(&recv_path));

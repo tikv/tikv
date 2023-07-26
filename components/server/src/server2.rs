@@ -66,6 +66,7 @@ use raftstore_v2::{
     router::{PeerMsg, RaftRouter},
     StateStorage,
 };
+use resolved_ts::Task;
 use resource_control::{
     worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION},
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
@@ -252,6 +253,7 @@ struct TikvServer<ER: RaftEngine> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
+    resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
 }
 
@@ -326,23 +328,27 @@ where
 
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::default());
-            let mut resource_mgr_service =
-                ResourceManagerService::new(mgr.clone(), pd_client.clone());
+            let resource_mgr_service = ResourceManagerService::new(mgr.clone(), pd_client.clone());
             // spawn a task to periodically update the minimal virtual time of all resource
             // groups.
             let resource_mgr = mgr.clone();
             background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
                 resource_mgr.advance_min_virtual_time();
             });
+            let mut resource_mgr_service_clone = resource_mgr_service.clone();
             // spawn a task to watch all resource groups update.
             background_worker.spawn_async_task(async move {
-                resource_mgr_service.watch_resource_groups().await;
+                resource_mgr_service_clone.watch_resource_groups().await;
             });
             // spawn a task to auto adjust background quota limiter.
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
             let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
             background_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
                 worker.adjust_quota();
+            });
+            // spawn a task to periodically upload resource usage statistics to PD.
+            background_worker.spawn_async_task(async move {
+                resource_mgr_service.upload_ru_metrics().await;
             });
             Some(mgr)
         } else {
@@ -400,6 +406,7 @@ where
             resource_manager,
             causal_ts_provider,
             tablet_registry: None,
+            resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
@@ -692,6 +699,7 @@ where
                 self.env.clone(),
                 self.security_mgr.clone(),
             );
+            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
             self.core.to_stop.push(rts_worker);
         }
@@ -990,10 +998,27 @@ where
         debugger.set_raft_statistics(self.raft_statistics.clone());
 
         // Debug service.
+        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
         let debug_service = DebugService::new(
             debugger,
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
+            self.router.as_ref().unwrap().store_meta().clone(),
+            Arc::new(
+                move |region_id, log_locks, min_start_ts, callback| -> bool {
+                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                        let res = s.schedule(Task::GetDiagnosisInfo {
+                            region_id,
+                            log_locks,
+                            min_start_ts,
+                            callback,
+                        });
+                        res.is_ok()
+                    } else {
+                        false
+                    }
+                },
+            ),
         );
         if servers
             .server

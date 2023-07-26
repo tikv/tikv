@@ -5,7 +5,10 @@
 use std::sync::Arc;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::metapb::{self, RegionEpoch};
+use kvproto::{
+    metapb::{self, RegionEpoch},
+    raft_serverpb::{ExtraMessageType, RaftMessage, RefreshBuckets},
+};
 use pd_client::{BucketMeta, BucketStat};
 use raftstore::{
     coprocessor::RegionChangeEvent,
@@ -141,7 +144,7 @@ impl BucketStatsInfo {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
-    pub fn on_refresh_region_buckets<T>(
+    pub fn on_refresh_region_buckets<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         region_epoch: RegionEpoch,
@@ -298,6 +301,57 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // it's possible that apply_scheduler is not initialized yet
         if let Some(apply_scheduler) = self.apply_scheduler() {
             apply_scheduler.send(ApplyTask::RefreshBucketStat(region_buckets.meta.clone()));
+        }
+        let version = region_buckets.meta.version;
+        // Notify followers to flush their relevant memtables
+        let peers = self.region().get_peers().to_vec();
+        if !self.is_leader() {
+            return;
+        }
+        for p in peers {
+            if p == *self.peer() || p.is_witness {
+                continue;
+            }
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(self.region_id());
+            msg.set_from_peer(self.peer().clone());
+            msg.set_to_peer(p.clone());
+            msg.set_region_epoch(self.region().get_region_epoch().clone());
+            let extra_msg = msg.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
+            let mut refresh_buckets = RefreshBuckets::new();
+            refresh_buckets.set_version(version);
+            extra_msg.set_refresh_buckets(refresh_buckets);
+            self.send_raft_message(store_ctx, msg);
+        }
+    }
+
+    pub fn on_msg_refresh_buckets<T: Transport>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        msg: &RaftMessage,
+    ) {
+        // leader should not receive this message
+        if self.is_leader() {
+            return;
+        }
+        let extra_msg = msg.get_extra_msg();
+        let version = extra_msg.get_refresh_buckets().get_version();
+        let region_epoch = msg.get_region_epoch();
+
+        let meta = BucketMeta {
+            region_id: self.region_id(),
+            version,
+            region_epoch: region_epoch.clone(),
+            keys: vec![],
+            sizes: vec![],
+        };
+
+        let mut store_meta = store_ctx.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
+            reader
+                .0
+                .update(ReadProgress::region_buckets(Arc::new(meta)));
         }
     }
 

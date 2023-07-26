@@ -27,6 +27,7 @@ impl fmt::Debug for ResourceType {
 }
 
 pub struct ResourceLimiter {
+    version: u64,
     limiters: [QuotaLimiter; ResourceType::COUNT],
 }
 
@@ -37,10 +38,11 @@ impl std::fmt::Debug for ResourceLimiter {
 }
 
 impl ResourceLimiter {
-    pub fn new(cpu_limit: f64, io_limit: f64) -> Self {
+    pub fn new(cpu_limit: f64, io_limit: f64, version: u64) -> Self {
         let cpu_limiter = QuotaLimiter::new(cpu_limit);
         let io_limiter = QuotaLimiter::new(io_limit);
         Self {
+            version,
             limiters: [cpu_limiter, io_limiter],
         }
     }
@@ -55,6 +57,18 @@ impl ResourceLimiter {
     #[inline]
     pub(crate) fn get_limiter(&self, ty: ResourceType) -> &QuotaLimiter {
         &self.limiters[ty as usize]
+    }
+
+    pub(crate) fn get_limit_statistics(&self, ty: ResourceType) -> GroupStatistics {
+        let (total_consumed, total_wait_dur_us, read_consumed, write_consumed) =
+            self.limiters[ty as usize].get_statistics();
+        GroupStatistics {
+            version: self.version,
+            total_consumed,
+            total_wait_dur_us,
+            read_consumed,
+            write_consumed,
+        }
     }
 }
 
@@ -88,13 +102,13 @@ impl QuotaLimiter {
         self.limiter.set_speed_limit(limit);
     }
 
-    pub fn get_statistics(&self) -> GroupStatistics {
-        GroupStatistics {
-            total_consumed: self.limiter.total_bytes_consumed() as u64,
-            total_wait_dur_us: self.total_wait_dur_us.load(Ordering::Relaxed),
-            read_consumed: self.read_bytes.load(Ordering::Relaxed),
-            write_consumed: self.write_bytes.load(Ordering::Relaxed),
-        }
+    pub(crate) fn get_statistics(&self) -> (u64, u64, u64, u64) {
+        (
+            self.limiter.total_bytes_consumed() as u64,
+            self.total_wait_dur_us.load(Ordering::Relaxed),
+            self.read_bytes.load(Ordering::Relaxed),
+            self.write_bytes.load(Ordering::Relaxed),
+        )
     }
 
     fn consume(&self, value: u64) -> Duration {
@@ -129,6 +143,7 @@ impl QuotaLimiter {
 
 #[derive(Default, Clone, PartialEq, Eq, Copy, Debug)]
 pub struct GroupStatistics {
+    pub version: u64,
     pub total_consumed: u64,
     pub total_wait_dur_us: u64,
     pub read_consumed: u64,
@@ -139,6 +154,7 @@ impl std::ops::Sub for GroupStatistics {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
+            version: self.version,
             total_consumed: self.total_consumed.saturating_sub(rhs.total_consumed),
             total_wait_dur_us: self.total_wait_dur_us.saturating_sub(rhs.total_wait_dur_us),
             read_consumed: self.read_consumed.saturating_sub(rhs.read_consumed),
@@ -152,6 +168,7 @@ impl std::ops::Div<f64> for GroupStatistics {
 
     fn div(self, rhs: f64) -> Self::Output {
         Self {
+            version: self.version,
             total_consumed: (self.total_consumed as f64 / rhs) as u64,
             total_wait_dur_us: (self.total_wait_dur_us as f64 / rhs) as u64,
             read_consumed: (self.read_consumed as f64 / rhs) as u64,

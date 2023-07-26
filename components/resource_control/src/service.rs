@@ -2,7 +2,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    ops::Sub,
     sync::Arc,
     time::Duration,
 };
@@ -17,7 +16,7 @@ use pd_client::{
     RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH,
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
 
 use crate::{
     resource_limiter::{GroupStatistics, ResourceType},
@@ -73,9 +72,7 @@ impl ResourceManagerService {
                                                 match protobuf::parse_from_bytes::<ResourceGroup>(
                                                     item.get_payload(),
                                                 ) {
-                                                    Ok(mut group) => {
-                                                        // TODO: for now just for test
-                                                        group.mut_background_settings().mut_job_types().push("lightning".to_owned());
+                                                    Ok(group) => {
                                                         self.manager.add_resource_group(group);
                                                     }
                                                     Err(e) => {
@@ -134,9 +131,7 @@ impl ResourceManagerService {
                     let mut vaild_groups = HashSet::with_capacity(items.len());
                     items.iter().for_each(|g| {
                         match protobuf::parse_from_bytes::<ResourceGroup>(g.get_payload()) {
-                            Ok(mut rg) => {
-                                // TODO: for now just for test
-                                rg.mut_background_settings().mut_job_types().push("lightning".to_owned());
+                            Ok(rg) => {
                                 vaild_groups.insert(rg.get_name().to_ascii_lowercase());
                                 self.manager.add_resource_group(rg);
                             }
@@ -193,10 +188,10 @@ impl ResourceManagerService {
         }
     }
 
-    // upload ru metrics
+    // upload ru metrics periodically.
     pub async fn upload_ru_metrics(&self) {
         let mut last_consumption_map: HashMap<String, Consumption> = HashMap::new();
-        // load controller config firstly
+        // load controller config firstly.
         let config = self.load_controller_config().await.unwrap_or_default();
 
         loop {
@@ -223,42 +218,35 @@ impl ResourceManagerService {
                 continue;
             }
 
-            info!("[upload ru metrics] background_groups len is"; "background_groups" => background_groups.len());
             let mut req = TokenBucketsRequest::default();
             let all_reqs = req.mut_requests();
             background_groups.iter().for_each(|g| {
                 let mut req = TokenBucketRequest::default();
                 req.set_resource_group_name(g.name.clone());
                 req.set_is_background(true);
-                // update statistics
+                // update statistics.
                 let report_consumption = req.mut_consumption_since_last_request();
                 if let Some(last_consumption) = last_consumption_map.get_mut(g.name.as_str()) {
                     let cpu_consumed = g
                         .limiter
-                        .get_limiter(ResourceType::Cpu)
-                        .get_statistics()
+                        .get_limit_statistics(ResourceType::Cpu)
                         .total_consumed as f64;
-                    let io_consumed = g.limiter.get_limiter(ResourceType::Io).get_statistics();
+                    let io_consumed = g.limiter.get_limit_statistics(ResourceType::Io);
                     let read_bytes_consumed = io_consumed.read_consumed as f64;
                     let write_bytes_consumed = io_consumed.write_consumed as f64;
 
                     let read_total = config.cpu_ms_cost * cpu_consumed
-                        + config.read_cost_per_byte * read_bytes_consumed
-                        + config.read_per_batch_base_cost * DEFAULT_AVG_BATCH_PROPORTION;
-                    let write_total = config.write_cost_per_byte * write_bytes_consumed
-                        + config.write_per_batch_base_cost * DEFAULT_AVG_BATCH_PROPORTION;
+                        + config.read_cost_per_byte * read_bytes_consumed;
+                    let write_total = config.write_cost_per_byte * write_bytes_consumed;
 
-                    let cur_rru = read_total.sub(last_consumption.get_r_r_u()).max(0.0);
-                    let cur_wru = write_total.sub(last_consumption.get_w_r_u()).max(0.0);
-                    let cur_read_bytes = read_bytes_consumed
-                        .sub(last_consumption.get_read_bytes())
-                        .max(0.0);
-                    let cur_write_bytes = write_bytes_consumed
-                        .sub(last_consumption.get_write_bytes())
-                        .max(0.0);
-                    let cur_time = cpu_consumed
-                        .sub(last_consumption.get_total_cpu_time_ms())
-                        .max(0.0);
+                    let cur_rru = (read_total - last_consumption.get_r_r_u()).max(0.0);
+                    let cur_wru = (write_total - last_consumption.get_w_r_u()).max(0.0);
+                    let cur_read_bytes =
+                        (read_bytes_consumed - last_consumption.get_read_bytes()).max(0.0);
+                    let cur_write_bytes =
+                        (write_bytes_consumed - last_consumption.get_write_bytes()).max(0.0);
+                    let cur_time =
+                        (cpu_consumed - last_consumption.get_total_cpu_time_ms()).max(0.0);
 
                     report_consumption.set_r_r_u(cur_rru);
                     report_consumption.set_read_bytes(cur_read_bytes);
@@ -278,7 +266,6 @@ impl ResourceManagerService {
                 all_reqs.push(req);
             });
 
-            info!("[upload ru metrics] all_reqs is"; "all_reqs" => ?all_reqs);
             if let Err(e) = self.pd_client.upload_ru_metrics(req).await {
                 error!("upload ru metrics failed"; "err" => ?e);
             }
@@ -296,14 +283,10 @@ impl ResourceManagerService {
 struct RequestUnitConfig {
     #[serde(rename = "read-base-cost")]
     read_base_cost: f64,
-    #[serde(rename = "read-per-batch-base-cost")]
-    read_per_batch_base_cost: f64,
     #[serde(rename = "read-cost-per-byte")]
     read_cost_per_byte: f64,
     #[serde(rename = "write-base-cost")]
     write_base_cost: f64,
-    #[serde(rename = "write-per-batch-base-cost")]
-    write_per_batch_base_cost: f64,
     #[serde(rename = "write-cost-per-byte")]
     write_cost_per_byte: f64,
     #[serde(rename = "read-cpu-ms-cost")]
@@ -318,16 +301,13 @@ struct ControllerConfig {
     request_unit: RequestUnitConfig,
 }
 
-const DEFAULT_AVG_BATCH_PROPORTION: f64 = 0.7;
 impl Default for RequestUnitConfig {
     fn default() -> Self {
         Self {
             // related on doc https://docs.pingcap.com/tidb/dev/tidb-resource-control#what-is-request-unit-ru.
             read_base_cost: 1. / 8.,
-            read_per_batch_base_cost: 1. / 2.,
             read_cost_per_byte: 1. / (64. * 1024.),
             write_base_cost: 1.,
-            write_per_batch_base_cost: 1.,
             write_cost_per_byte: 1. / 1024.,
             cpu_ms_cost: 1. / 3.,
         }
