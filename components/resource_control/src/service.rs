@@ -9,7 +9,7 @@ use std::{
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{
     pdpb::EventType,
-    resource_manager::{Consumption, ResourceGroup, TokenBucketRequest, TokenBucketsRequest},
+    resource_manager::{ResourceGroup, TokenBucketRequest, TokenBucketsRequest},
 };
 use pd_client::{
     Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH,
@@ -18,11 +18,7 @@ use pd_client::{
 use serde::{Deserialize, Serialize};
 use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
 
-use crate::{
-    resource_limiter::{GroupStatistics, ResourceType},
-    worker::GroupStats,
-    ResourceGroupManager,
-};
+use crate::{resource_limiter::ResourceType, ResourceGroupManager};
 
 #[derive(Clone)]
 pub struct ResourceManagerService {
@@ -190,7 +186,7 @@ impl ResourceManagerService {
 
     // upload ru metrics periodically.
     pub async fn upload_ru_metrics(&self) {
-        let mut last_consumption_map: HashMap<String, Consumption> = HashMap::new();
+        let mut last_group_statistics_map: HashMap<String, UploadStatistic> = HashMap::new();
         // load controller config firstly.
         let config = self.load_controller_config().await.unwrap_or_default();
 
@@ -201,15 +197,34 @@ impl ResourceManagerService {
                 .iter()
                 .filter_map(|kv| {
                     let g = kv.value();
-                    g.limiter.as_ref().map(|limiter| GroupStats {
-                        name: g.group.name.clone(),
-                        ru_quota: g.get_ru_quota() as f64,
-                        limiter: limiter.clone(),
-                        stats_per_sec: GroupStatistics::default(),
-                        expect_cost_rate: 0.0,
+                    g.limiter.clone().map(|limiter| {
+                        let io_consumed = limiter.get_limit_statistics(ResourceType::Io);
+                        let read_bytes_consumed = io_consumed.read_consumed;
+                        let write_bytes_consumed = io_consumed.write_consumed;
+                        let cpu_consumed = limiter
+                            .get_limit_statistics(ResourceType::Cpu)
+                            .total_consumed;
+
+                        let read_total = (config.read_cpu_ms_cost * cpu_consumed as f64
+                            + config.read_cost_per_byte * read_bytes_consumed as f64)
+                            as u64;
+                        let write_total =
+                            (config.write_cost_per_byte * write_bytes_consumed as f64) as u64;
+
+                        (
+                            g.group.name.clone(),
+                            UploadStatistic {
+                                read_total,
+                                write_total,
+                                read_bytes_consumed,
+                                write_bytes_consumed,
+                                cpu_consumed,
+                            },
+                        )
                     })
                 })
                 .collect();
+
             if background_groups.is_empty() {
                 let _ = GLOBAL_TIMER_HANDLE
                     .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
@@ -220,51 +235,31 @@ impl ResourceManagerService {
 
             let mut req = TokenBucketsRequest::default();
             let all_reqs = req.mut_requests();
-            background_groups.iter().for_each(|g| {
-                let mut req = TokenBucketRequest::default();
-                req.set_resource_group_name(g.name.clone());
-                req.set_is_background(true);
-                // update statistics.
-                let report_consumption = req.mut_consumption_since_last_request();
-                if let Some(last_consumption) = last_consumption_map.get_mut(g.name.as_str()) {
-                    let cpu_consumed = g
-                        .limiter
-                        .get_limit_statistics(ResourceType::Cpu)
-                        .total_consumed as f64;
-                    let io_consumed = g.limiter.get_limit_statistics(ResourceType::Io);
-                    let read_bytes_consumed = io_consumed.read_consumed as f64;
-                    let write_bytes_consumed = io_consumed.write_consumed as f64;
+            for (name, statistic) in background_groups {
+                if let Some(last_statistic) = last_group_statistics_map.get_mut(name.as_str()) {
+                    if last_statistic == &statistic {
+                        continue;
+                    }
+                    // update statistics.
+                    let mut req = TokenBucketRequest::default();
+                    req.set_resource_group_name(name.clone());
+                    req.set_is_background(true);
 
-                    let read_total = config.cpu_ms_cost * cpu_consumed
-                        + config.read_cost_per_byte * read_bytes_consumed;
-                    let write_total = config.write_cost_per_byte * write_bytes_consumed;
+                    let report_consumption = req.mut_consumption_since_last_request();
+                    let cur_statistic = statistic - *last_statistic;
 
-                    let cur_rru = (read_total - last_consumption.get_r_r_u()).max(0.0);
-                    let cur_wru = (write_total - last_consumption.get_w_r_u()).max(0.0);
-                    let cur_read_bytes =
-                        (read_bytes_consumed - last_consumption.get_read_bytes()).max(0.0);
-                    let cur_write_bytes =
-                        (write_bytes_consumed - last_consumption.get_write_bytes()).max(0.0);
-                    let cur_time =
-                        (cpu_consumed - last_consumption.get_total_cpu_time_ms()).max(0.0);
+                    report_consumption.set_r_r_u(cur_statistic.read_total as f64);
+                    report_consumption.set_read_bytes(cur_statistic.read_bytes_consumed as f64);
+                    report_consumption.set_w_r_u(cur_statistic.write_total as f64);
+                    report_consumption.set_write_bytes(cur_statistic.write_bytes_consumed as f64);
+                    report_consumption.set_total_cpu_time_ms(cur_statistic.cpu_consumed as f64);
 
-                    report_consumption.set_r_r_u(cur_rru);
-                    report_consumption.set_read_bytes(cur_read_bytes);
-                    report_consumption.set_w_r_u(cur_wru);
-                    report_consumption.set_write_bytes(cur_write_bytes);
-                    report_consumption.set_total_cpu_time_ms(cur_time);
-
-                    last_consumption.set_r_r_u(read_total);
-                    last_consumption.set_read_bytes(read_bytes_consumed);
-                    last_consumption.set_w_r_u(write_total);
-                    last_consumption.set_write_bytes(write_bytes_consumed);
-                    last_consumption.set_total_cpu_time_ms(cpu_consumed);
+                    *last_statistic = statistic;
+                    all_reqs.push(req);
                 } else {
-                    last_consumption_map.insert(g.name.clone(), report_consumption.clone());
+                    last_group_statistics_map.insert(name.clone(), statistic);
                 }
-
-                all_reqs.push(req);
-            });
+            }
 
             if let Err(e) = self.pd_client.upload_ru_metrics(req).await {
                 error!("upload ru metrics failed"; "err" => ?e);
@@ -280,17 +275,13 @@ impl ResourceManagerService {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
+#[serde(rename_all = "kebab-case")]
 struct RequestUnitConfig {
-    #[serde(rename = "read-base-cost")]
     read_base_cost: f64,
-    #[serde(rename = "read-cost-per-byte")]
     read_cost_per_byte: f64,
-    #[serde(rename = "write-base-cost")]
     write_base_cost: f64,
-    #[serde(rename = "write-cost-per-byte")]
     write_cost_per_byte: f64,
-    #[serde(rename = "read-cpu-ms-cost")]
-    cpu_ms_cost: f64,
+    read_cpu_ms_cost: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -309,7 +300,29 @@ impl Default for RequestUnitConfig {
             read_cost_per_byte: 1. / (64. * 1024.),
             write_base_cost: 1.,
             write_cost_per_byte: 1. / 1024.,
-            cpu_ms_cost: 1. / 3.,
+            read_cpu_ms_cost: 1. / 3.,
+        }
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq, Debug, Copy)]
+struct UploadStatistic {
+    read_total: u64,
+    write_total: u64,
+    read_bytes_consumed: u64,
+    write_bytes_consumed: u64,
+    cpu_consumed: u64,
+}
+
+impl std::ops::Sub for UploadStatistic {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            read_total: self.read_total - rhs.read_total,
+            write_total: self.write_total - rhs.write_total,
+            read_bytes_consumed: self.read_bytes_consumed - rhs.read_bytes_consumed,
+            write_bytes_consumed: self.write_bytes_consumed - rhs.write_bytes_consumed,
+            cpu_consumed: self.cpu_consumed - rhs.cpu_consumed,
         }
     }
 }
@@ -468,5 +481,35 @@ pub mod tests {
         assert_eq!(groups.len(), 3);
 
         server.stop();
+    }
+
+    #[test]
+    fn check_upload_statistics() {
+        let stas1 = UploadStatistic {
+            read_total: 100,
+            write_total: 100,
+            read_bytes_consumed: 100,
+            write_bytes_consumed: 100,
+            cpu_consumed: 100,
+        };
+        let stas2 = UploadStatistic {
+            read_total: 200,
+            write_total: 200,
+            read_bytes_consumed: 200,
+            write_bytes_consumed: 200,
+            cpu_consumed: 200,
+        };
+
+        let stas3 = stas2 - stas1;
+        let stast4 = UploadStatistic {
+            read_total: 100,
+            write_total: 100,
+            read_bytes_consumed: 100,
+            write_bytes_consumed: 100,
+            cpu_consumed: 100,
+        };
+
+        assert_eq!(stas3, stas1);
+        assert_eq!(stas3, stast4);
     }
 }
