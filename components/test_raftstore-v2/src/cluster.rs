@@ -436,6 +436,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         self.cfg.server.cluster_id
     }
 
+    pub fn get_node_ids(&self) -> HashSet<u64> {
+        self.sim.rl().get_node_ids()
+    }
+
     pub fn flush_data(&self) {
         for reg in self.tablet_registries.values() {
             reg.for_each_opened_tablet(|_, cached| -> bool {

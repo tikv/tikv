@@ -474,6 +474,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // We need to continue to apply after previous page is finished.
             self.set_has_ready();
         }
+        self.check_unsafe_recovery_state();
     }
 }
 
@@ -582,6 +583,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
         fail::fail_point!("on_handle_apply_1003", self.peer_id() == 1003, |_| {});
         fail::fail_point!("on_handle_apply_2", self.peer_id() == 2, |_| {});
+        fail::fail_point!("on_handle_apply_store_1", self.store_id() == 1, |_| {});
         let now = std::time::Instant::now();
         let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
         for (e, ch) in ce.entry_and_proposals {
