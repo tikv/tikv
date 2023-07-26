@@ -476,6 +476,7 @@ mod tests {
                 116, 128, 0, 255, 255, 255, 255, 255, 255, 254, 0, 0, 0, 0, 0, 0, 0, 248,
             ],
         ];
+        bucket.sizes = vec![10];
         track.buckets = Some(Arc::new(bucket));
 
         let mut stat = Statistics::default();

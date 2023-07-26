@@ -8,6 +8,7 @@ mod pd;
 mod query;
 mod ready;
 mod txn_ext;
+mod unsafe_recovery;
 
 pub use command::{
     merge_source_path, AdminCmdResult, ApplyFlowControl, CatchUpLogs, CommittedEntries,

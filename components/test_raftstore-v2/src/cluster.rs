@@ -25,6 +25,7 @@ use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
     metapb::{self, Buckets, PeerRole, RegionEpoch},
+    pdpb,
     raft_cmdpb::{
         AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse,
         Request, Response, StatusCmdType,
@@ -44,7 +45,7 @@ use raftstore::{
     Error, Result,
 };
 use raftstore_v2::{
-    router::{DebugInfoChannel, PeerMsg, QueryResult},
+    router::{DebugInfoChannel, PeerMsg, QueryResult, StoreMsg, StoreTick},
     write_initial_states, SimpleWriteEncoder, StoreMeta, StoreRouter,
 };
 use resource_control::ResourceGroupManager;
@@ -433,6 +434,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
 
     pub fn id(&self) -> u64 {
         self.cfg.server.cluster_id
+    }
+
+    pub fn get_node_ids(&self) -> HashSet<u64> {
+        self.sim.rl().get_node_ids()
     }
 
     pub fn flush_data(&self) {
@@ -1668,12 +1673,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
 
     pub fn refresh_region_bucket_keys(
         &mut self,
-        _region: &metapb::Region,
-        _buckets: Vec<Bucket>,
-        _bucket_ranges: Option<Vec<BucketRange>>,
+        region: &metapb::Region,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
         _expect_buckets: Option<Buckets>,
     ) -> u64 {
-        unimplemented!()
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let refresh_buckets_msg = PeerMsg::RefreshRegionBuckets {
+            region_epoch: region.get_region_epoch().clone(),
+            buckets,
+            bucket_ranges,
+        };
+
+        if let Err(e) = router.send(region.get_id(), refresh_buckets_msg) {
+            panic!("router send refresh buckets msg failed, error: {:?}", e,);
+        }
+        0
     }
 
     pub fn send_half_split_region_message(
@@ -1767,6 +1783,50 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
 
         debug!("all nodes are shut down.");
+    }
+
+    pub fn must_send_store_heartbeat(&self, node_id: u64) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        router
+            .send_control(StoreMsg::Tick(StoreTick::PdStoreHeartbeat))
+            .unwrap();
+    }
+
+    pub fn enter_force_leader(&mut self, region_id: u64, store_id: u64, failed_stores: Vec<u64>) {
+        let mut plan = pdpb::RecoveryPlan::default();
+        let mut force_leader = pdpb::ForceLeader::default();
+        force_leader.set_enter_force_leaders([region_id].to_vec());
+        force_leader.set_failed_stores(failed_stores.to_vec());
+        plan.set_force_leader(force_leader);
+        // Triggers the unsafe recovery plan execution.
+        self.pd_client.must_set_unsafe_recovery_plan(store_id, plan);
+        self.must_send_store_heartbeat(store_id);
+    }
+
+    pub fn must_enter_force_leader(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        failed_stores: Vec<u64>,
+    ) -> pdpb::StoreReport {
+        self.enter_force_leader(region_id, store_id, failed_stores);
+        let mut store_report = None;
+        for _ in 0..20 {
+            store_report = self.pd_client.must_get_store_report(store_id);
+            if store_report.is_some() {
+                break;
+            }
+            sleep_ms(100);
+        }
+        assert_ne!(store_report, None);
+        store_report.unwrap()
+    }
+
+    pub fn exit_force_leader(&mut self, region_id: u64, store_id: u64) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        router
+            .send(region_id, PeerMsg::ExitForceLeaderState)
+            .unwrap();
     }
 
     pub fn must_send_flashback_msg(
