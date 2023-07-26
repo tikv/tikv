@@ -225,7 +225,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "{}",
                 SlogFormat(&self.logger)
             );
-            // todo
             self.take_merge_context();
             self.proposal_control_mut().set_pending_prepare_merge(false);
             let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
