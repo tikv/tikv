@@ -266,7 +266,12 @@ impl ObserveRegion {
     }
 }
 
-pub struct Endpoint<T, E: KvEngine, S> {
+pub struct Endpoint<T, E, S>
+where
+    T: 'static + CdcHandle<E>,
+    E: KvEngine,
+    S: StoreRegionMeta,
+{
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
     advance_notify: Arc<Notify>,
@@ -275,7 +280,7 @@ pub struct Endpoint<T, E: KvEngine, S> {
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task>,
-    advance_worker: AdvanceTsWorker,
+    advance_worker: AdvanceTsWorker<T, E>,
     _phantom: PhantomData<(T, E)>,
 }
 
@@ -304,6 +309,7 @@ where
             pd_client.clone(),
             scheduler.clone(),
             concurrency_manager,
+            cdc_handle.clone(),
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
         let store_resolver_gc_interval = Duration::from_secs(60);
