@@ -1,6 +1,12 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{array, collections::HashMap, io::Result as IoResult, sync::Arc, time::Duration};
+use std::{
+    array,
+    collections::{HashMap, HashSet},
+    io::Result as IoResult,
+    sync::Arc,
+    time::Duration,
+};
 
 use file_system::{fetch_io_bytes, IoBytes, IoType};
 use strum::EnumCount;
@@ -144,6 +150,15 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
 
         self.do_adjust(ResourceType::Cpu, dur_secs, &mut background_groups);
         self.do_adjust(ResourceType::Io, dur_secs, &mut background_groups);
+
+        // clean up deleted group stats
+        if self.prev_stats_by_group[0].len() != background_groups.len() {
+            let name_set: HashSet<_> =
+                HashSet::from_iter(background_groups.iter().map(|g| &g.name));
+            for stat_map in &mut self.prev_stats_by_group {
+                stat_map.retain(|k, _v| !name_set.contains(k));
+            }
+        }
     }
 
     fn do_adjust(
@@ -174,12 +189,17 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let mut has_wait = false;
         for g in bg_group_stats.iter_mut() {
             total_ru_quota += g.ru_quota;
-            let total_stats = g.limiter.get_limiter(resource_type).get_statistics();
-            let stats_delta = total_stats
-                - self.prev_stats_by_group[resource_type as usize]
-                    .insert(g.name.clone(), total_stats)
-                    .unwrap_or_default();
-
+            let total_stats = g.limiter.get_limit_statistics(resource_type);
+            let last_stats = self.prev_stats_by_group[resource_type as usize]
+                .insert(g.name.clone(), total_stats)
+                .unwrap_or_default();
+            // version changes means this is a brand new limiter, so no need to sub the old
+            // statistics.
+            let stats_delta = if total_stats.version == last_stats.version {
+                total_stats - last_stats
+            } else {
+                total_stats
+            };
             BACKGROUND_RESOURCE_CONSUMPTION
                 .with_label_values(&[&g.name, resource_type.as_str()])
                 .inc_by(stats_delta.total_consumed);
@@ -443,5 +463,41 @@ mod tests {
         worker.adjust_quota();
         check_limiter(&limiter, 2.4, 3600.0);
         check_limiter(&bg_limiter, 2.1, 3600.0);
+
+        let bg = new_resource_group_ru("background".into(), 1000, 15);
+        resource_ctl.add_resource_group(bg);
+
+        let new_bg =
+            new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
+        resource_ctl.add_resource_group(new_bg);
+        let new_bg_limiter = resource_ctl
+            .get_resource_limiter("background", "br")
+            .unwrap();
+        assert_ne!(&*bg_limiter as *const _, &*new_bg_limiter as *const _);
+        assert!(
+            new_bg_limiter
+                .get_limit_statistics(ResourceType::Cpu)
+                .version
+                > bg_limiter.get_limit_statistics(ResourceType::Cpu).version
+        );
+        let cpu_stats = new_bg_limiter.get_limit_statistics(ResourceType::Cpu);
+        assert_eq!(cpu_stats.total_consumed, 0);
+        assert_eq!(cpu_stats.total_wait_dur_us, 0);
+        let io_stats = new_bg_limiter.get_limit_statistics(ResourceType::Io);
+        assert_eq!(io_stats.total_consumed, 0);
+        assert_eq!(io_stats.total_wait_dur_us, 0);
+
+        reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
+        worker.adjust_quota();
+        check_limiter(&limiter, 4.8, 6000.0);
+        check_limiter(&new_bg_limiter, 2.4, 3000.0);
+
+        reset_quota(&mut worker, 6.0, 5000.0, Duration::from_secs(1));
+        limiter.consume(Duration::from_millis(1200), 1200);
+        new_bg_limiter.consume(Duration::from_millis(1800), 1800);
+
+        worker.adjust_quota();
+        check_limiter(&limiter, 2.4, 3600.0);
+        check_limiter(&new_bg_limiter, 2.1, 3600.0);
     }
 }
