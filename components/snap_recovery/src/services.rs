@@ -35,7 +35,11 @@ use raftstore::{
 use thiserror::Error;
 use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
 
-use crate::{data_resolver::DataResolverManager, region_meta_collector::RegionMetaCollector};
+use crate::{
+    data_resolver::DataResolverManager,
+    metrics::{CURRENT_WAIT_APPLY_LEADER, CURRENT_WAIT_ELECTION_LEADER, REGION_EVENT_COUNTER},
+    region_meta_collector::RegionMetaCollector,
+};
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -203,7 +207,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         }
         .map(|res: Result<()>| match res {
             Ok(_) => {
-                info!("collect region meta done");
+                debug!("collect region meta done");
             }
             Err(e) => {
                 error!("rcollect region meta failure"; "error" => ?e);
@@ -229,7 +233,10 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             while let Some(req) = stream.next().await {
                 let req = req.map_err(|e| eprintln!("rpc recv fail: {}", e)).unwrap();
                 if req.as_leader {
+                    REGION_EVENT_COUNTER.promote_to_leader.inc();
                     leaders.push(req.region_id);
+                } else {
+                    REGION_EVENT_COUNTER.keep_follower.inc();
                 }
             }
 
@@ -242,8 +249,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                     "err" => ?e);
                     continue;
                 } else {
-                    info!("region starts to campaign";
-                    "region_id" => region_id);
+                    debug!("region starts to campaign"; "region_id" => region_id);
                 }
 
                 let (tx, rx) = sync_channel(1);
@@ -260,12 +266,15 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 rxs.push(Some(rx));
             }
 
+            info!("send assign leader request done"; "count" => %leaders.len());
+
             // leader is campaign and be ensured as leader
-            for (_rid, rx) in leaders.iter().zip(rxs) {
+            for (rid, rx) in leaders.iter().zip(rxs) {
                 if let Some(rx) = rx {
+                    CURRENT_WAIT_ELECTION_LEADER.set(*rid as _);
                     match rx.recv() {
-                        Ok(_id) => {
-                            info!("leader is assigned for region");
+                        Ok(id) => {
+                            debug!("leader is assigned for region"; "region_id" => %id);
                         }
                         Err(e) => {
                             error!("check leader failed"; "error" => ?e);
@@ -273,14 +282,16 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                     }
                 }
             }
+            CURRENT_WAIT_ELECTION_LEADER.set(0);
 
-            info!("all region leader assigned done");
+            info!("all region leader assigned done"; "count" => %leaders.len());
 
             let now = Instant::now();
             // wait apply to the last log
             let mut rx_apply = Vec::with_capacity(leaders.len());
             for &region_id in &leaders {
                 let (tx, rx) = sync_channel(1);
+                REGION_EVENT_COUNTER.start_wait_leader_apply.inc();
                 let wait_apply = SnapshotRecoveryWaitApplySyncer::new(region_id, tx.clone());
                 if let Err(e) = raft_router.significant_send(
                     region_id,
@@ -296,22 +307,25 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             }
 
             // leader apply to last log
-            for (_rid, rx) in leaders.iter().zip(rx_apply) {
+            for (rid, rx) in leaders.iter().zip(rx_apply) {
                 if let Some(rx) = rx {
+                    CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
                     match rx.recv() {
                         Ok(region_id) => {
-                            info!("leader apply to last log"; "error" => region_id);
+                            debug!("leader apply to last log"; "region_id" => region_id);
                         }
                         Err(e) => {
                             error!("leader failed to apply to last log"; "error" => ?e);
                         }
                     }
+                    REGION_EVENT_COUNTER.finish_wait_leader_apply.inc();
                 }
             }
+            CURRENT_WAIT_APPLY_LEADER.set(0);
 
             info!(
                 "all region leader apply to last log";
-                "spent_time" => now.elapsed().as_secs(),
+                "spent_time" => now.elapsed().as_secs(), "count" => %leaders.len(),
             );
 
             let mut resp = RecoverRegionResponse::default();
@@ -337,6 +351,9 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         info!("wait_apply start");
         let task = async move {
             let now = Instant::now();
+            // FIXME: this function will exit once the first region finished apply.
+            // BUT for the flashback resolve KV implementation, that is fine because the
+            // raft log stats is consistent.
             let (tx, rx) = sync_channel(1);
             RecoveryService::wait_apply_last(router, tx.clone());
             match rx.recv() {
