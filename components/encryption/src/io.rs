@@ -757,36 +757,6 @@ mod tests {
         }
     }
 
-<<<<<<< HEAD
-    struct MockCursorReader {
-        cursor: Cursor<Vec<u8>>,
-        read_maxsize_once: usize,
-    }
-
-    impl MockCursorReader {
-        fn new(buff: &mut [u8], size_once: usize) -> MockCursorReader {
-            Self {
-                cursor: Cursor::new(buff.to_vec()),
-                read_maxsize_once: size_once,
-            }
-        }
-    }
-
-    impl AsyncRead for MockCursorReader {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<IoResult<usize>> {
-            let len = min(self.read_maxsize_once, buf.len());
-            let r = self.cursor.read(&mut buf[..len]);
-            assert!(r.is_ok());
-            Poll::Ready(IoResult::Ok(r.unwrap()))
-        }
-    }
-
-=======
->>>>>>> 0774262d17 (encryption: fix offset inconsistency between crypter and file (#15092))
     async fn test_poll_read() {
         use futures::AsyncReadExt;
         let methods = [
@@ -814,18 +784,10 @@ mod tests {
             let mut encrypt_read_len = 0;
 
             loop {
-<<<<<<< HEAD
-                let s = encrypt_reader
-                    .read(&mut encrypt_text[encrypt_read_len..])
-                    .await;
-                assert!(s.is_ok());
-                let read_len = s.unwrap();
-=======
                 let read_len =
                     AsyncReadExt::read(&mut encrypt_reader, &mut encrypt_text[encrypt_read_len..])
                         .await
                         .unwrap();
->>>>>>> 0774262d17 (encryption: fix offset inconsistency between crypter and file (#15092))
                 if read_len == 0 {
                     break;
                 }
@@ -852,18 +814,10 @@ mod tests {
             .unwrap();
 
             loop {
-<<<<<<< HEAD
-                let s = decrypt_reader
-                    .read(&mut decrypt_text[decrypt_read_len..])
-                    .await;
-                assert!(s.is_ok());
-                let read_len = s.unwrap();
-=======
                 let read_len =
                     AsyncReadExt::read(&mut decrypt_reader, &mut decrypt_text[decrypt_read_len..])
                         .await
                         .unwrap();
->>>>>>> 0774262d17 (encryption: fix offset inconsistency between crypter and file (#15092))
                 if read_len == 0 {
                     break;
                 }
