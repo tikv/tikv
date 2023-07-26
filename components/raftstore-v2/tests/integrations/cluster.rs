@@ -28,6 +28,7 @@ use kvproto::{
     metapb::{self, RegionEpoch, Store},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
+    resource_manager::ResourceGroup,
 };
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
@@ -44,6 +45,7 @@ use raftstore_v2::{
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter, StoreMsg},
     Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
+use resource_control::{ResourceController, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use slog::{debug, o, Logger};
@@ -263,6 +265,7 @@ impl RunningState {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
+        resource_ctl: Arc<ResourceController>,
     ) -> (TestRouter, Self) {
         let encryption_cfg = test_util::new_file_security_config(path);
         let key_manager = Some(Arc::new(
@@ -286,6 +289,7 @@ impl RunningState {
             &cfg.value(),
             store_id,
             logger.clone(),
+            Some(resource_ctl.clone()),
         );
         let cf_opts = DATA_CFS
             .iter()
@@ -355,6 +359,7 @@ impl RunningState {
                 importer,
                 key_manager,
                 GrpcServiceManager::dummy(),
+                Some(resource_ctl),
             )
             .unwrap();
 
@@ -385,6 +390,7 @@ pub struct TestNode {
     path: TempDir,
     running_state: Option<RunningState>,
     logger: Logger,
+    resource_manager: Arc<ResourceGroupManager>,
 }
 
 impl TestNode {
@@ -396,6 +402,7 @@ impl TestNode {
             path,
             running_state: None,
             logger,
+            resource_manager: Arc::new(ResourceGroupManager::default()),
         }
     }
 
@@ -405,6 +412,9 @@ impl TestNode {
         cop_cfg: Arc<VersionTrack<CopConfig>>,
         trans: TestTransport,
     ) -> TestRouter {
+        let resource_ctl = self
+            .resource_manager
+            .derive_controller("test-raft".into(), false);
         let (router, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
@@ -414,6 +424,7 @@ impl TestNode {
             ConcurrencyManager::new(1.into()),
             None,
             &self.logger,
+            resource_ctl,
         );
         self.running_state = Some(state);
         router

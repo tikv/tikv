@@ -39,6 +39,7 @@ use raftstore::{
         WriteRouterContext, WriteSenders, WriterContoller,
     },
 };
+use resource_control::ResourceController;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use slog::{warn, Logger};
@@ -620,14 +621,19 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
-    fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
+    fn new(
+        background: Worker,
+        pd: LazyWorker<pd::Task>,
+        purge: Option<Worker>,
+        resource_control: Option<Arc<ResourceController>>,
+    ) -> Self {
         let checkpoint = Builder::new("checkpoint-worker").thread_count(2).create();
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet: Worker::new("tablet-worker"),
             checkpoint,
-            async_write: StoreWriters::new(None),
+            async_write: StoreWriters::new(resource_control),
             purge,
             cleanup_worker: Worker::new("cleanup-worker"),
             background,
@@ -680,6 +686,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
         grpc_service_mgr: GrpcServiceManager,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -772,7 +779,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             None
         };
 
-        let mut workers = Workers::new(background, pd_worker, purge_worker);
+        let mut workers = Workers::new(background, pd_worker, purge_worker, resource_ctl);
         workers
             .async_write
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
@@ -1019,6 +1026,7 @@ pub fn create_store_batch_system<EK, ER>(
     cfg: &Config,
     store_id: u64,
     logger: Logger,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (StoreRouter<EK, ER>, StoreSystem<EK, ER>)
 where
     EK: KvEngine,
@@ -1026,7 +1034,7 @@ where
 {
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm, None);
+        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm, resource_ctl);
     let system = StoreSystem {
         system,
         workers: None,
