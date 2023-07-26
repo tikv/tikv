@@ -401,7 +401,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Shouldn't enter this call if trim check is already underway.
         let status = &mut self.merge_context_mut().prepare_status;
-        if status.is_none() {
+        if status.is_some() {
             let logger = self.logger.clone();
             panic!(
                 "expect empty prepare merge status {}: {:?}",
