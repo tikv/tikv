@@ -87,7 +87,7 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
 
     // Disable prevote so it is possible to regenerate leaders.
     config.raft_store.prevote = false;
-    // Due to we have increased the election tick to inf, once there is a leader,
+    // Because we have increased the election tick to inf, once there is a leader,
     // the follower will believe it holds an eternal lease. So, once the leader
     // reboots, the followers will reject to vote for it again.
     // We need to disable the lease for avoiding that.
