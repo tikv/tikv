@@ -24,7 +24,7 @@ use raftstore::{
         metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue, ReadDelegate,
-        ReadIndexQueue, ReadProgress, TabletSnapManager, WriteTask,
+        ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState, WriteTask,
     },
 };
 use slog::{debug, info, Logger};
@@ -135,6 +135,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     ///
     /// For details, see the comment of `ForceLeaderState`.
     force_leader_state: Option<ForceLeaderState>,
+    unsafe_recovery_state: Option<UnsafeRecoveryState>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -226,6 +227,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             gc_peer_context: GcPeerContext::default(),
             abnormal_peer_context: AbnormalPeerContext::default(),
             force_leader_state: None,
+            unsafe_recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -982,5 +984,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn force_leader_mut(&mut self) -> &mut Option<ForceLeaderState> {
         &mut self.force_leader_state
+    }
+
+    pub fn unsafe_recovery_state(&self) -> Option<&UnsafeRecoveryState> {
+        self.unsafe_recovery_state.as_ref()
+    }
+
+    pub fn unsafe_recovery_state_mut(&mut self) -> &mut Option<UnsafeRecoveryState> {
+        &mut self.unsafe_recovery_state
     }
 }

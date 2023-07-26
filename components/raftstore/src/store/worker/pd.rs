@@ -59,9 +59,10 @@ use crate::{
     store::{
         cmd_resp::new_error,
         metrics::*,
-        peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
         transport::SignificantRouter,
-        unsafe_recovery::UnsafeRecoveryHandle,
+        unsafe_recovery::{
+            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+        },
         util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
         worker::{
             split_controller::{SplitInfo, TOP_N},

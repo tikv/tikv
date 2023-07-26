@@ -267,6 +267,7 @@ fn test_serde_custom_tikv_config() {
         slow_trend_unsensitive_cause: 10.0,
         slow_trend_unsensitive_result: 0.5,
         enable_v2_compatible_learner: false,
+        unsafe_disable_check_quorum: false,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -330,7 +331,7 @@ fn test_serde_custom_tikv_config() {
         write_buffer_flush_oldest_first: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -351,7 +352,7 @@ fn test_serde_custom_tikv_config() {
                 DBCompressionType::Zstd,
                 DBCompressionType::Lz4,
             ],
-            write_buffer_size: ReadableSize::mb(1),
+            write_buffer_size: Some(ReadableSize::mb(1)),
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
@@ -389,7 +390,7 @@ fn test_serde_custom_tikv_config() {
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -410,7 +411,7 @@ fn test_serde_custom_tikv_config() {
                 DBCompressionType::Zstd,
                 DBCompressionType::Lz4,
             ],
-            write_buffer_size: ReadableSize::mb(1),
+            write_buffer_size: Some(ReadableSize::mb(1)),
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
@@ -462,7 +463,7 @@ fn test_serde_custom_tikv_config() {
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -483,7 +484,7 @@ fn test_serde_custom_tikv_config() {
                 DBCompressionType::Zstd,
                 DBCompressionType::Lz4,
             ],
-            write_buffer_size: ReadableSize::mb(1),
+            write_buffer_size: Some(ReadableSize::mb(1)),
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
@@ -535,7 +536,7 @@ fn test_serde_custom_tikv_config() {
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -556,7 +557,7 @@ fn test_serde_custom_tikv_config() {
                 DBCompressionType::Zstd,
                 DBCompressionType::Lz4,
             ],
-            write_buffer_size: ReadableSize::mb(1),
+            write_buffer_size: Some(ReadableSize::mb(1)),
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
@@ -637,7 +638,7 @@ fn test_serde_custom_tikv_config() {
         wal_bytes_per_sync: ReadableSize::kb(32),
         defaultcf: RaftDefaultCfConfig {
             block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
+            block_cache_size: Some(ReadableSize::gb(12)),
             disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
@@ -658,7 +659,7 @@ fn test_serde_custom_tikv_config() {
                 DBCompressionType::Zstd,
                 DBCompressionType::Lz4,
             ],
-            write_buffer_size: ReadableSize::mb(1),
+            write_buffer_size: Some(ReadableSize::mb(1)),
             max_write_buffer_number: 12,
             min_write_buffer_number_to_merge: 12,
             max_bytes_for_level_base: ReadableSize::kb(12),
@@ -911,10 +912,10 @@ fn test_block_cache_backward_compatible() {
     assert!(cfg.storage.block_cache.capacity.is_some());
     assert_eq!(
         cfg.storage.block_cache.capacity.unwrap().0,
-        cfg.rocksdb.defaultcf.block_cache_size.0
-            + cfg.rocksdb.writecf.block_cache_size.0
-            + cfg.rocksdb.lockcf.block_cache_size.0
-            + cfg.raftdb.defaultcf.block_cache_size.0
+        cfg.rocksdb.defaultcf.block_cache_size.unwrap().0
+            + cfg.rocksdb.writecf.block_cache_size.unwrap().0
+            + cfg.rocksdb.lockcf.block_cache_size.unwrap().0
+            + cfg.raftdb.defaultcf.block_cache_size.unwrap().0
     );
 }
 
