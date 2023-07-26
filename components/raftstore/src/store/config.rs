@@ -109,7 +109,7 @@ pub struct Config {
 
     /// Whether to disable checking quorum for the raft group. This will make
     /// leader lease unavailable.
-    /// It cannot be changed in the config file,  the only way to change it is
+    /// It cannot be changed in the config file, the only way to change it is
     /// programmatically change the config structure during bootstrapping
     /// the cluster.
     #[doc(hidden)]
