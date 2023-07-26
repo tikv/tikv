@@ -81,7 +81,7 @@ use tikv_util::{
     time::Instant,
 };
 
-use super::merge_source_path;
+use super::{merge_source_path, PrepareStatus};
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
@@ -155,14 +155,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn start_commit_merge<T: Transport>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         fail::fail_point!("start_commit_merge");
         assert!(self.applied_merge_state().is_some());
-        // Target already committed `CommitMerge`.
-        if let Some(c) = &self.merge_context().unwrap().catch_up_logs {
-            assert!(self.catch_up_logs_ready(c));
-            let c = self.merge_context_mut().catch_up_logs.take().unwrap();
-            self.finish_catch_up_logs(store_ctx, c);
-        } else {
-            self.on_check_merge(store_ctx);
-        }
+        self.on_check_merge(store_ctx);
     }
 
     // Match v1::on_check_merge.
@@ -605,7 +598,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Context would be empty if this peer hasn't applied PrepareMerge.
-        if let Some(cul) = self.merge_context().and_then(|c| c.catch_up_logs.as_ref()) {
+        if let Some(PrepareStatus::CatchUpLogs(cul)) =
+            self.merge_context().and_then(|c| c.prepare_status.as_ref())
+        {
             slog_panic!(
                 self.logger,
                 "get conflicting catch_up_logs";
@@ -613,7 +608,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "current" => ?cul.merge,
             );
         }
-        if !self.catch_up_logs_ready(&catch_up_logs) {
+        if let Some(state) = self.applied_merge_state()
+            && state.get_commit() == commit_of_merge(&catch_up_logs.merge)
+        {
+            assert_eq!(
+                state.get_target().get_id(),
+                catch_up_logs.target_region_id
+            );
+            self.finish_catch_up_logs(store_ctx, catch_up_logs);
+        } else {
             // Directly append these logs to raft log and then commit them.
             match self.maybe_append_merge_entries(&catch_up_logs.merge) {
                 Some(last_index) => {
@@ -629,24 +632,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             catch_up_logs.merge.clear_entries();
-            self.merge_context_mut().catch_up_logs = Some(catch_up_logs);
-        } else {
-            self.finish_catch_up_logs(store_ctx, catch_up_logs);
-        }
-    }
-
-    #[inline]
-    fn catch_up_logs_ready(&self, catch_up_logs: &CatchUpLogs) -> bool {
-        if let Some(state) = self.applied_merge_state()
-            && state.get_commit() == commit_of_merge(&catch_up_logs.merge)
-        {
-            assert_eq!(
-                state.get_target().get_id(),
-                catch_up_logs.target_region_id
-            );
-            true
-        } else {
-            false
+            self.merge_context_mut().prepare_status = Some(PrepareStatus::CatchUpLogs(catch_up_logs));
         }
     }
 
@@ -714,7 +700,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn finish_catch_up_logs<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>, c: CatchUpLogs) {
+    pub fn finish_catch_up_logs<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        c: CatchUpLogs,
+    ) {
         let safe_ts = store_ctx
             .store_meta
             .lock()
@@ -729,7 +719,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "failed to respond to merge target, are we shutting down?"
             );
         }
-        self.take_merge_context();
         self.mark_for_destroy(None);
     }
 }
@@ -833,7 +822,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_ack_commit_merge(&mut self, index: u64, target_id: u64) {
         // We don't check it against merge state because source peer might just restart
         // and haven't replayed `PrepareMerge` yet.
-        info!(self.logger, "destroy self on AckCommitMerge"; "index" => index, "target_id" => target_id);
+        info!(
+            self.logger,
+            "destroy self on AckCommitMerge";
+            "index" => index,
+            "target_id" => target_id,
+            "prepare_status" => ?self.merge_context().and_then(|c| c.prepare_status.as_ref()),
+        );
         self.take_merge_context();
         self.mark_for_destroy(None);
     }
