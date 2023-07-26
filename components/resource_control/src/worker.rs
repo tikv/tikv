@@ -590,7 +590,7 @@ mod tests {
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
         check_limiter(
-            &bg_limiter,
+            &limiter,
             4.8,
             IoBytes {
                 read: 3000,
@@ -598,7 +598,7 @@ mod tests {
             },
         );
         check_limiter(
-            &bg_limiter,
+            &new_bg_limiter,
             2.4,
             IoBytes {
                 read: 1500,
@@ -632,7 +632,7 @@ mod tests {
             },
         );
         check_limiter(
-            &bg_limiter,
+            &new_bg_limiter,
             2.1,
             IoBytes {
                 read: 1800,
