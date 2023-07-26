@@ -102,7 +102,7 @@ impl QuotaLimiter {
         self.limiter.set_speed_limit(limit);
     }
 
-    pub(crate) fn get_statistics(&self) -> (u64, u64, u64, u64) {
+    fn get_statistics(&self) -> (u64, u64, u64, u64) {
         (
             self.limiter.total_bytes_consumed() as u64,
             self.total_wait_dur_us.load(Ordering::Relaxed),
@@ -123,7 +123,6 @@ impl QuotaLimiter {
         dur
     }
 
-    #[allow(dead_code)]
     fn consume_io(&self, value: IoBytes) -> Duration {
         self.read_bytes.fetch_add(value.read, Ordering::Relaxed);
         self.write_bytes.fetch_add(value.write, Ordering::Relaxed);

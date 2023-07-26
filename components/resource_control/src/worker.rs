@@ -277,12 +277,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
     }
 }
 
-pub(crate) struct GroupStats {
-    pub(crate) name: String,
-    pub(crate) limiter: Arc<ResourceLimiter>,
-    pub(crate) ru_quota: f64,
-    pub(crate) stats_per_sec: GroupStatistics,
-    pub(crate) expect_cost_rate: f64,
+struct GroupStats {
+    name: String,
+    limiter: Arc<ResourceLimiter>,
+    ru_quota: f64,
+    stats_per_sec: GroupStatistics,
+    expect_cost_rate: f64,
 }
 
 #[cfg(test)]

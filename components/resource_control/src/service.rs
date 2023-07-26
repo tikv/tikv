@@ -24,12 +24,13 @@ use crate::{resource_limiter::ResourceType, ResourceGroupManager};
 pub struct ResourceManagerService {
     manager: Arc<ResourceGroupManager>,
     pd_client: Arc<RpcClient>,
-    // record watch revision
+    // record watch revision.
     revision: i64,
 }
 
 impl ResourceManagerService {
-    /// Constructs a new `Service` with `ResourceGroupManager` and a `RpcClient`
+    /// Constructs a new `Service` with `ResourceGroupManager` and a
+    /// `RpcClient`.
     pub fn new(
         manager: Arc<ResourceGroupManager>,
         pd_client: Arc<RpcClient>,
@@ -152,34 +153,24 @@ impl ResourceManagerService {
         }
     }
 
-    async fn load_controller_config(&self) -> Result<RequestUnitConfig, ()> {
-        loop {
-            match self
-                .pd_client
-                .load_global_config(RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH.to_string())
-                .await
-            {
-                Ok((items, _)) => {
-                    match serde_json::from_slice::<ControllerConfig>(items[0].get_payload()) {
-                        Ok(c) => return Ok(c.request_unit),
-                        Err(e) => {
-                            error!("parse controller config failed"; "err" => ?e);
-                            let _ = GLOBAL_TIMER_HANDLE
-                                .delay(std::time::Instant::now() + RETRY_INTERVAL)
-                                .compat()
-                                .await;
-                            continue;
-                        }
+    async fn load_controller_config(&self) -> Option<RequestUnitConfig> {
+        match self
+            .pd_client
+            .load_global_config(RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH.to_string())
+            .await
+        {
+            Ok((items, _)) => {
+                match serde_json::from_slice::<ControllerConfig>(items[0].get_payload()) {
+                    Ok(c) => Some(c.request_unit),
+                    Err(err) => {
+                        error!("parse controller config failed"; "err" => ?err);
+                        None
                     }
                 }
-                Err(err) => {
-                    error!("failed to controller config"; "err" => ?err);
-                    let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
-                        .compat()
-                        .await;
-                    continue;
-                }
+            }
+            Err(err) => {
+                error!("failed to load controller config"; "err" => ?err);
+                None
             }
         }
     }
@@ -198,27 +189,17 @@ impl ResourceManagerService {
                 .filter_map(|kv| {
                     let g = kv.value();
                     g.limiter.clone().map(|limiter| {
-                        let io_consumed = limiter.get_limit_statistics(ResourceType::Io);
-                        let read_bytes_consumed = io_consumed.read_consumed;
-                        let write_bytes_consumed = io_consumed.write_consumed;
-                        let cpu_consumed = limiter
-                            .get_limit_statistics(ResourceType::Cpu)
-                            .total_consumed;
-
-                        let read_total = (config.read_cpu_ms_cost * cpu_consumed as f64
-                            + config.read_cost_per_byte * read_bytes_consumed as f64)
-                            as u64;
-                        let write_total =
-                            (config.write_cost_per_byte * write_bytes_consumed as f64) as u64;
+                        let io_statistics = limiter.get_limit_statistics(ResourceType::Io);
+                        let cpu_statistics = limiter.get_limit_statistics(ResourceType::Cpu);
 
                         (
                             g.group.name.clone(),
                             UploadStatistic {
-                                read_total,
-                                write_total,
-                                read_bytes_consumed,
-                                write_bytes_consumed,
-                                cpu_consumed,
+                                io_version: io_statistics.version,
+                                cpu_version: cpu_statistics.version,
+                                read_bytes_consumed: io_statistics.read_consumed,
+                                write_bytes_consumed: io_statistics.write_consumed,
+                                cpu_consumed: cpu_statistics.total_consumed,
                             },
                         )
                     })
@@ -236,25 +217,47 @@ impl ResourceManagerService {
             let mut req = TokenBucketsRequest::default();
             let all_reqs = req.mut_requests();
             for (name, statistic) in background_groups {
-                if let Some(last_statistic) = last_group_statistics_map.get_mut(name.as_str()) {
-                    if last_statistic == &statistic {
+                if let Some(last_stats) = last_group_statistics_map.get_mut(name.as_str()) {
+                    if last_stats == &statistic {
                         continue;
                     }
                     // update statistics.
                     let mut req = TokenBucketRequest::default();
                     req.set_resource_group_name(name.clone());
                     req.set_is_background(true);
-
                     let report_consumption = req.mut_consumption_since_last_request();
-                    let cur_statistic = statistic - *last_statistic;
+                    // version changes means this is a brand new limiter, so no need to sub the old
+                    // statistics.
+                    let cpu_consumed = if statistic.cpu_version == last_stats.cpu_version {
+                        statistic.cpu_consumed - last_stats.cpu_consumed
+                    } else {
+                        statistic.cpu_consumed
+                    };
 
-                    report_consumption.set_r_r_u(cur_statistic.read_total as f64);
-                    report_consumption.set_read_bytes(cur_statistic.read_bytes_consumed as f64);
-                    report_consumption.set_w_r_u(cur_statistic.write_total as f64);
-                    report_consumption.set_write_bytes(cur_statistic.write_bytes_consumed as f64);
-                    report_consumption.set_total_cpu_time_ms(cur_statistic.cpu_consumed as f64);
+                    let io_consumed = if statistic.io_version == last_stats.io_version {
+                        (
+                            statistic.read_bytes_consumed - last_stats.read_bytes_consumed,
+                            statistic.write_bytes_consumed - last_stats.write_bytes_consumed,
+                        )
+                    } else {
+                        (
+                            statistic.read_bytes_consumed,
+                            statistic.write_bytes_consumed,
+                        )
+                    };
 
-                    *last_statistic = statistic;
+                    let read_total = (config.read_cpu_ms_cost * cpu_consumed as f64
+                        + config.read_cost_per_byte * io_consumed.0 as f64)
+                        as u64;
+                    let write_total = (config.write_cost_per_byte * io_consumed.1 as f64) as u64;
+
+                    report_consumption.set_r_r_u(read_total as f64);
+                    report_consumption.set_w_r_u(write_total as f64);
+                    report_consumption.set_read_bytes(io_consumed.0 as f64);
+                    report_consumption.set_write_bytes(io_consumed.1 as f64);
+                    report_consumption.set_total_cpu_time_ms(cpu_consumed as f64);
+
+                    *last_stats = statistic;
                     all_reqs.push(req);
                 } else {
                     last_group_statistics_map.insert(name.clone(), statistic);
@@ -273,8 +276,7 @@ impl ResourceManagerService {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(default)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct RequestUnitConfig {
     read_base_cost: f64,
@@ -284,11 +286,11 @@ struct RequestUnitConfig {
     read_cpu_ms_cost: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+
 struct ControllerConfig {
-    #[serde(rename = "degraded-mode-wait-duration")]
     degraded_mode_wait_duration: String,
-    #[serde(rename = "request-unit")]
     request_unit: RequestUnitConfig,
 }
 
@@ -307,24 +309,11 @@ impl Default for RequestUnitConfig {
 
 #[derive(Default, Clone, PartialEq, Eq, Debug, Copy)]
 struct UploadStatistic {
-    read_total: u64,
-    write_total: u64,
+    io_version: u64,
+    cpu_version: u64,
     read_bytes_consumed: u64,
     write_bytes_consumed: u64,
     cpu_consumed: u64,
-}
-
-impl std::ops::Sub for UploadStatistic {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self {
-            read_total: self.read_total - rhs.read_total,
-            write_total: self.write_total - rhs.write_total,
-            read_bytes_consumed: self.read_bytes_consumed - rhs.read_bytes_consumed,
-            write_bytes_consumed: self.write_bytes_consumed - rhs.write_bytes_consumed,
-            cpu_consumed: self.cpu_consumed - rhs.cpu_consumed,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -481,35 +470,5 @@ pub mod tests {
         assert_eq!(groups.len(), 3);
 
         server.stop();
-    }
-
-    #[test]
-    fn check_upload_statistics() {
-        let stas1 = UploadStatistic {
-            read_total: 100,
-            write_total: 100,
-            read_bytes_consumed: 100,
-            write_bytes_consumed: 100,
-            cpu_consumed: 100,
-        };
-        let stas2 = UploadStatistic {
-            read_total: 200,
-            write_total: 200,
-            read_bytes_consumed: 200,
-            write_bytes_consumed: 200,
-            cpu_consumed: 200,
-        };
-
-        let stas3 = stas2 - stas1;
-        let stast4 = UploadStatistic {
-            read_total: 100,
-            write_total: 100,
-            read_bytes_consumed: 100,
-            write_bytes_consumed: 100,
-            cpu_consumed: 100,
-        };
-
-        assert_eq!(stas3, stas1);
-        assert_eq!(stas3, stast4);
     }
 }
