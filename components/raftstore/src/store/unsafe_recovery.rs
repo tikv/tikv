@@ -91,10 +91,7 @@ impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for Mutex<RaftRouter<EK,
         syncer: UnsafeRecoveryExecutePlanSyncer,
     ) -> Result<()> {
         let router = self.lock().unwrap();
-        match router.significant_send(
-            region_id,
-            SignificantMsg::UnsafeRecoveryDestroy(syncer),
-        ) {
+        match router.significant_send(region_id, SignificantMsg::UnsafeRecoveryDestroy(syncer)) {
             // The peer may be destroy already.
             Err(crate::Error::RegionNotFound(_)) => Ok(()),
             res => res,
