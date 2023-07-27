@@ -68,7 +68,7 @@ pub trait KvEngine:
         _is_timeout: bool,
         _new_batch: bool,
         _region_id: u64,
-        _queue_size: u64,
+        _queue_size: usize,
     ) -> bool {
         true
     }
