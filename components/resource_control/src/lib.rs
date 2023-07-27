@@ -46,12 +46,12 @@ impl Default for Config {
     }
 }
 
-pub fn start(
+pub fn start_periodic_tasks(
+    mgr: &Arc<ResourceGroupManager>,
     pd_client: Arc<RpcClient>,
     bg_worker: &Worker,
     io_bandwidth: u64,
-) -> Arc<ResourceGroupManager> {
-    let mgr = Arc::new(ResourceGroupManager::default());
+) {
     let resource_mgr_service = ResourceManagerService::new(mgr.clone(), pd_client);
     // spawn a task to periodically update the minimal virtual time of all resource
     // groups.
@@ -73,5 +73,4 @@ pub fn start(
     bg_worker.spawn_async_task(async move {
         resource_mgr_service.upload_ru_metrics().await;
     });
-    mgr
 }

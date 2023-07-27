@@ -337,12 +337,15 @@ where
             .create();
 
         let resource_manager = if config.resource_control.enabled {
+            let mgr = Arc::new(ResourceGroupManager::default());
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
-            Some(resource_control::start(
+            resource_control::start_periodic_tasks(
+                &mgr,
                 pd_client.clone(),
                 &background_worker,
                 io_bandwidth,
-            ))
+            );
+            Some(mgr)
         } else {
             None
         };

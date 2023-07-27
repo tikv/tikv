@@ -44,7 +44,7 @@ impl ResourceManagerService {
 }
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
-pub const BACKGROUND_RU_UPLOAD_DURATION: Duration = Duration::from_secs(5); // to consistent with pd_client
+pub const BACKGROUND_RU_UPLOAD_DURATION: Duration = Duration::from_secs(5);
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
@@ -153,28 +153,47 @@ impl ResourceManagerService {
         }
     }
 
-    async fn load_controller_config(&self) -> Option<RequestUnitConfig> {
-        match self
-            .pd_client
-            .load_global_config(RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH.to_string())
-            .await
-        {
-            Ok((items, _)) => {
-                if items.is_empty() {
-                    error!("load empty controller config");
-                    return None;
-                }
-                match serde_json::from_slice::<ControllerConfig>(items[0].get_payload()) {
-                    Ok(c) => Some(c.request_unit),
-                    Err(err) => {
-                        error!("parse controller config failed"; "err" => ?err);
-                        None
+    async fn load_controller_config(&self) -> Result<RequestUnitConfig, ()> {
+        let begin = std::time::Instant::now();
+        loop {
+            if std::time::Instant::now() - begin > Duration::from_secs(60) {
+                error!("attempt to load controller config timeout");
+                return Err(());
+            }
+            match self
+                .pd_client
+                .load_global_config(RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH.to_string())
+                .await
+            {
+                Ok((items, _)) => {
+                    if items.is_empty() {
+                        error!("server does not save config, load config failed.");
+                        let _ = GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
+                            .compat()
+                            .await;
+                        continue;
+                    }
+                    match serde_json::from_slice::<ControllerConfig>(items[0].get_payload()) {
+                        Ok(c) => return Ok(c.request_unit),
+                        Err(err) => {
+                            error!("parse controller config failed"; "err" => ?err);
+                            let _ = GLOBAL_TIMER_HANDLE
+                                .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
+                                .compat()
+                                .await;
+                            continue;
+                        }
                     }
                 }
-            }
-            Err(err) => {
-                error!("failed to load controller config"; "err" => ?err);
-                None
+                Err(err) => {
+                    error!("failed to load controller config"; "err" => ?err);
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
+                        .compat()
+                        .await;
+                    continue;
+                }
             }
         }
     }
@@ -222,7 +241,8 @@ impl ResourceManagerService {
             let mut req = TokenBucketsRequest::default();
             let all_reqs = req.mut_requests();
             for (name, statistic) in background_groups.into_iter() {
-                // check if the entry exists in the map or create a new one.
+                // check if the entry exists in the map or create a new one with u64::MAX
+                // version to avoid losing the first upload.
                 let last_stats = last_group_statistics_map
                     .entry(name.clone())
                     .or_insert_with(|| UploadStatistic::new(u64::MAX));
@@ -488,6 +508,7 @@ pub mod tests {
         assert!(s.manager.get_resource_group("TEST1").is_none());
         let group = s.manager.get_resource_group("TEST2").unwrap();
         assert_eq!(group.get_ru_quota(), 50);
+
         server.stop();
     }
 
@@ -527,10 +548,6 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        // Load default controller config.
-        let config = block_on(s.load_controller_config()).unwrap_or_default();
-        assert_eq!(config.read_base_cost, 1. / 8.);
-
         // Set controller config.
         let cfg = ControllerConfig {
             request_unit: RequestUnitConfig {
