@@ -1655,6 +1655,26 @@ impl RegionReadProgressCore {
     pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
         &self.leader_info
     }
+
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index
+    }
+
+    pub fn paused(&self) -> bool {
+        self.pause
+    }
+
+    pub fn pending_items(&self) -> &VecDeque<ReadState> {
+        &self.pending_items
+    }
+
+    pub fn read_state(&self) -> &ReadState {
+        &self.read_state
+    }
+
+    pub fn discarding(&self) -> bool {
+        self.discard
+    }
 }
 
 /// Represent the duration of all stages of raftstore recorded by one

@@ -1474,14 +1474,14 @@ fn test_node_split_during_read_index() {
         true,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (msg, sub) = raftstore_v2::router::PeerMsg::raft_query(request.clone());
+    let (msg, sub) = raftstore_v2::router::PeerMsg::raft_query(request);
     cluster
         .sim
         .rl()
         .async_peer_msg_on_node(1, region.get_id(), msg)
         .unwrap();
 
-    cluster.split_region(&region, b"a", Callback::None);
+    cluster.must_split(&region, b"a");
 
     // Enable read index
     cluster.clear_recv_filter_on_node(2);

@@ -107,6 +107,16 @@ pub struct Config {
     #[online_config(skip)]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
+    /// Whether to disable checking quorum for the raft group. This will make
+    /// leader lease unavailable.
+    /// It cannot be changed in the config file, the only way to change it is
+    /// programmatically change the config structure during bootstrapping
+    /// the cluster.
+    #[doc(hidden)]
+    #[serde(skip)]
+    #[online_config(skip)]
+    pub unsafe_disable_check_quorum: bool,
+
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
     /// When size change of region exceed the diff since last check, it
@@ -403,7 +413,7 @@ impl Default for Config {
             raft_log_gc_size_limit: None,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
-            max_manual_flush_rate: 2.0,
+            max_manual_flush_rate: 3.0,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
@@ -501,6 +511,7 @@ impl Default for Config {
             // TODO: make its value reasonable
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
+            unsafe_disable_check_quorum: false,
         }
     }
 }

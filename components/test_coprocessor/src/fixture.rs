@@ -176,6 +176,7 @@ fn init_data_with_details_impl<E: Engine>(
         cm,
         ResourceTagFactory::new_for_test(),
         limiter.clone(),
+        None,
     );
     (store, copr, limiter)
 }

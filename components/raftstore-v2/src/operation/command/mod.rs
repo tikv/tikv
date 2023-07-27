@@ -23,6 +23,7 @@ use std::{
 };
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
+use fail::fail_point;
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
@@ -195,6 +196,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             return Err(e);
         }
+        if self.has_force_leader() {
+            metrics.invalid_proposal.force_leader.inc();
+            // in force leader state, forbid requests to make the recovery
+            // progress less error-prone.
+            if !(admin_type.is_some()
+                && (admin_type.unwrap() == AdminCmdType::ChangePeer
+                    || admin_type.unwrap() == AdminCmdType::ChangePeerV2))
+            {
+                return Err(Error::RecoveryInProgress(self.region_id()));
+            }
+        }
         // Check whether the region is in the flashback state and the request could be
         // proposed. Skip the not prepared error because the
         // `self.region().is_in_flashback` may not be the latest right after applying
@@ -237,6 +249,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         data: Vec<u8>,
         proposal_ctx: Vec<u8>,
     ) -> Result<u64> {
+        // Should not propose normal in force leader state.
+        // In `pre_propose_raft_command`, it rejects all the requests expect
+        // conf-change if in force leader state.
+        if self.has_force_leader() {
+            store_ctx.raft_metrics.invalid_proposal.force_leader.inc();
+            panic!(
+                "[{}] {} propose normal in force leader state {:?}",
+                self.region_id(),
+                self.peer_id(),
+                self.force_leader()
+            );
+        };
+
         store_ctx.raft_metrics.propose.normal.inc();
         store_ctx
             .raft_metrics
@@ -449,6 +474,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // We need to continue to apply after previous page is finished.
             self.set_has_ready();
         }
+        self.check_unsafe_recovery_state();
     }
 }
 
@@ -557,6 +583,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
         fail::fail_point!("on_handle_apply_1003", self.peer_id() == 1003, |_| {});
         fail::fail_point!("on_handle_apply_2", self.peer_id() == 2, |_| {});
+        fail::fail_point!("on_handle_apply_store_1", self.store_id() == 1, |_| {});
         let now = std::time::Instant::now();
         let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
         for (e, ch) in ce.entry_and_proposals {
@@ -839,7 +866,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.metrics = mem::take(&mut self.metrics);
         apply_res.bucket_stat = self.buckets.clone();
         let written_bytes = apply_res.metrics.written_bytes;
-        self.res_reporter().report(apply_res);
+
+        let skip_report = || -> bool {
+            fail_point!("before_report_apply_res", |_| { true });
+            false
+        }();
+        if !skip_report {
+            self.res_reporter().report(apply_res);
+        }
         if let Some(buckets) = &mut self.buckets {
             buckets.clear_stats();
         }

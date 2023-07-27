@@ -20,6 +20,7 @@ use raftstore::{
     Result,
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -112,6 +113,7 @@ fn start_raftstore(
             CollectorRegHandle::new_for_test(),
             None,
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
 
