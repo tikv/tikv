@@ -36,7 +36,7 @@ use kvproto::{
     },
     raft_serverpb::{
         ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
-        RaftTruncatedState, RegionLocalState,
+        RaftTruncatedState, RefreshBuckets, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -2027,6 +2027,11 @@ where
     }
 
     #[inline]
+    fn peer(&self) -> &metapb::Peer {
+        &self.fsm.peer.peer
+    }
+
+    #[inline]
     fn store_id(&self) -> u64 {
         self.fsm.peer.peer.get_store_id()
     }
@@ -2831,9 +2836,8 @@ where
                 }
             }
             // It's v2 only message and ignore does no harm.
-            ExtraMessageType::MsgGcPeerResponse
-            | ExtraMessageType::MsgFlushMemtable
-            | ExtraMessageType::MsgRefreshBuckets => (),
+            ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
+            ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
         }
     }
 
@@ -6018,14 +6022,35 @@ where
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.fsm.peer.get_role(),
         );
-        let old_region_buckets = self.fsm.peer.region_buckets.replace(region_buckets);
+        let old_region_buckets: Option<BucketStat> =
+            self.fsm.peer.region_buckets.replace(region_buckets);
         self.fsm.peer.last_region_buckets = old_region_buckets;
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
+        let version = self.fsm.peer.region_buckets.as_ref().unwrap().meta.version;
         if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
             reader.update(ReadProgress::region_buckets(
                 self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
             ));
         }
+
+        // Notify followers to refresh their buckets version
+        if self.fsm.peer.is_leader() {
+            let peers = self.region().get_peers().to_vec();
+            for p in peers {
+                if &p == self.peer() || p.is_witness {
+                    continue;
+                }
+                let mut extra_msg = ExtraMessage::default();
+                extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
+                let mut refresh_buckets = RefreshBuckets::new();
+                refresh_buckets.set_version(version);
+                extra_msg.set_refresh_buckets(refresh_buckets);
+                self.fsm
+                    .peer
+                    .send_extra_message(extra_msg, &mut self.ctx.trans, &p);
+            }
+        }
+
         debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
@@ -6038,6 +6063,28 @@ where
             _cb,
             self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
         );
+    }
+
+    pub fn on_msg_refresh_buckets(&mut self, msg: RaftMessage) {
+        // leader should not receive this message
+        if self.fsm.peer.is_leader() {
+            return;
+        }
+        let version = msg.get_extra_msg().get_refresh_buckets().get_version();
+        let region_epoch = msg.get_region_epoch().clone();
+
+        let meta = BucketMeta {
+            region_id: self.region_id(),
+            version,
+            region_epoch,
+            keys: vec![],
+            sizes: vec![],
+        };
+
+        let mut store_meta = self.ctx.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
+            reader.update(ReadProgress::region_buckets(Arc::new(meta)));
+        }
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {

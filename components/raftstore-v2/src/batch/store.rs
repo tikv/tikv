@@ -376,6 +376,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         trans: T,
         router: StoreRouter<EK, ER>,
         schedulers: Schedulers<EK, ER>,
+        high_priority_pool: FuturePool,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
         shutdown: Arc<AtomicBool>,
@@ -394,11 +395,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             .thread_count(1, pool_size, max_pool_size)
             .after_start(move || set_io_type(IoType::ForegroundWrite))
             .name_prefix("apply")
-            .build_future_pool();
-        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default())
-            .thread_count(1, 1, 1)
-            .after_start(move || set_io_type(IoType::ForegroundWrite))
-            .name_prefix("store-bg")
             .build_future_pool();
         let global_stat = GlobalStoreStat::default();
         StorePollerBuilder {
@@ -618,6 +614,10 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
     // Following is not maintained by raftstore itself.
     background: Worker,
+
+    // A background pool used for high-priority works. We need to hold a reference to shut it down
+    // manually.
+    high_priority_pool: FuturePool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
@@ -636,8 +636,13 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
             async_write: StoreWriters::new(resource_control),
             purge,
             cleanup_worker: Worker::new("cleanup-worker"),
-            background,
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            background,
+            high_priority_pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .thread_count(1, 1, 1)
+                .after_start(move || set_io_type(IoType::ForegroundWrite))
+                .name_prefix("store-bg")
+                .build_future_pool(),
         }
     }
 
@@ -651,6 +656,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         if let Some(w) = self.purge {
             w.stop();
         }
+        self.high_priority_pool.shutdown();
     }
 }
 
@@ -853,6 +859,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             trans.clone(),
             router.clone(),
             schedulers.clone(),
+            workers.high_priority_pool.clone(),
             self.logger.clone(),
             store_meta.clone(),
             self.shutdown.clone(),

@@ -499,6 +499,11 @@ impl ReadDelegate {
                 self.leader_lease = leader_lease;
             }
             Progress::RegionBuckets(bucket_meta) => {
+                if let Some(meta) = &self.bucket_meta {
+                    if meta.version >= bucket_meta.version {
+                        return;
+                    }
+                }
                 self.bucket_meta = Some(bucket_meta);
             }
             Progress::WaitData(wait_data) => {
@@ -561,6 +566,7 @@ impl ReadDelegate {
 
     pub fn check_stale_read_safe(&self, read_ts: u64) -> std::result::Result<(), RaftCmdResponse> {
         let safe_ts = self.read_progress.safe_ts();
+        fail_point!("skip_check_stale_read_safe", |_| Ok(()));
         if safe_ts >= read_ts {
             return Ok(());
         }

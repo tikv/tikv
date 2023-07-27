@@ -37,7 +37,6 @@ pub fn merge_source_path<EK>(
 #[derive(Default)]
 pub struct MergeContext {
     prepare_status: Option<PrepareStatus>,
-    catch_up_logs: Option<CatchUpLogs>,
 }
 
 impl MergeContext {
@@ -90,8 +89,8 @@ impl MergeContext {
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn update_merge_progress_on_became_follower(&mut self) {
-        if let Some(ctx) = self.merge_context()
-            && matches!(ctx.prepare_status, Some(PrepareStatus::WaitForFence { .. }))
+        if let Some(MergeContext { prepare_status: Some(status) }) = self.merge_context()
+            && matches!(status, PrepareStatus::WaitForTrimStatus { .. } | PrepareStatus::WaitForFence { .. })
         {
             self.take_merge_context();
             self.proposal_control_mut().set_pending_prepare_merge(false);
