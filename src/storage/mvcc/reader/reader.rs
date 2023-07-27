@@ -668,13 +668,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
             keys.push(user_key.clone());
 
-            info!(
-                "scan latest user keys";
-                "region_id" => self.region_id,
-                "user_key" => log_wrappers::Value::key(user_key.as_encoded()),
-                "write_record" => ?WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned(),
-                "commit_ts" => commit_ts,
-            );
+            if debug_log {
+                info!(
+                    "scan latest user keys";
+                    "region_id" => self.region_id,
+                    "user_key" => log_wrappers::Value::key(user_key.as_encoded()),
+                    "write_record" => ?WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned(),
+                    "commit_ts" => commit_ts,
+                );
+            }
             if limit > 0 && keys.len() == limit {
                 has_remain = true;
                 break;
