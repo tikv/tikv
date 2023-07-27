@@ -53,6 +53,7 @@ pub fn flashback_to_version_read_write(
                 && latest_commit_ts < flashback_commit_ts
         },
         FLASHBACK_BATCH_SIZE,
+        false,
     );
     let (keys, _) = keys_result?;
     Ok(keys)
@@ -149,6 +150,7 @@ pub fn prewrite_flashback_key(
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
+    info!("prewrite flashback key"; "key" => %key_to_lock, "start_ts" => flashback_start_ts, "version" => flashback_version);
     if reader.load_lock(key_to_lock)?.is_some() {
         return Ok(());
     }
@@ -156,11 +158,13 @@ pub fn prewrite_flashback_key(
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
     // `WriteType::Put` without the short value.
     if let Some(old_write) = old_write.as_ref() {
+        info!("prewrite flashback check old_write"; "old_write" => ?old_write);
         if old_write.write_type == WriteType::Put
             && old_write.short_value.is_none()
             // If the value with `flashback_start_ts` already exists, we don't need to write again.
             && reader.get_value(key_to_lock, flashback_start_ts)?.is_none()
         {
+            info!("prewrite flashback to put value");
             txn.put_value(
                 key_to_lock.clone(),
                 flashback_start_ts,
@@ -197,6 +201,7 @@ pub fn commit_flashback_key(
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
+    info!("commit flashback key"; "key" => %key_to_commit, "flashback_start_ts" => flashback_start_ts, "flashback_commit_ts" => flashback_commit_ts);
     if let Some(mut lock) = reader.load_lock(key_to_commit)? {
         txn.put_write(
             key_to_commit.clone(),
@@ -232,8 +237,13 @@ pub fn check_flashback_commit(
     key_to_commit: &Key,
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
+    // Used for debug logging.
     region_id: u64,
+    start_key: &Key,
+    end_key: Option<&Key>,
 ) -> TxnResult<bool> {
+    info!("check flashback commit"; "key" => %key_to_commit, "flashback_start_ts" => flashback_start_ts, "flashback_commit_ts" => flashback_commit_ts, 
+    "region_id" => region_id, "start_key" => %start_key, "end_key" => end_key.map(|k| log_wrappers::Value::key(k.as_encoded())));
     match reader.load_lock(key_to_commit)? {
         // If the lock exists, it means the flashback hasn't been finished.
         Some(lock) => {
@@ -246,6 +256,9 @@ pub fn check_flashback_commit(
                 "flashback_start_ts" => flashback_start_ts,
                 "flashback_commit_ts" => flashback_commit_ts,
                 "lock" => ?lock,
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
+                "end_key" => end_key.map(|k| log_wrappers::Value::key(k.as_encoded())),
             );
         }
         // If the lock doesn't exist and the flashback commit record exists, it means the flashback
@@ -263,6 +276,9 @@ pub fn check_flashback_commit(
                 "flashback_start_ts" => flashback_start_ts,
                 "flashback_commit_ts" => flashback_commit_ts,
                 "write" => ?write_res,
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
+                "end_key" => end_key.map(|k| log_wrappers::Value::key(k.as_encoded())),
             );
         }
     }
@@ -278,6 +294,8 @@ pub fn get_first_user_key(
     start_key: &Key,
     end_key: Option<&Key>,
     flashback_version: TimeStamp,
+    // Used for debug logging.
+    region_id: u64,
 ) -> TxnResult<Option<Key>> {
     let (mut keys_result, _) = reader.scan_latest_user_keys(
         Some(start_key),
@@ -285,7 +303,10 @@ pub fn get_first_user_key(
         // Make sure we will get the same first user key each time.
         |_, latest_commit_ts| latest_commit_ts > flashback_version,
         1,
+        true,
     )?;
+    info!("get first user key"; "key" => ?keys_result, "flashback_version" => flashback_version, 
+    "start_key" => %start_key, "end_key" => ?end_key, "region_id" => region_id);
     Ok(keys_result.pop())
 }
 
@@ -349,6 +370,8 @@ pub mod tests {
             &Key::from_raw(key),
             Some(Key::from_raw(b"z")).as_ref(),
             version,
+            // Used for pass ci
+            0,
         )
         .unwrap()
         {
@@ -413,6 +436,8 @@ pub mod tests {
             &Key::from_raw(key),
             Some(Key::from_raw(b"z")).as_ref(),
             version,
+            // Used for pass ci
+            0,
         )
         .unwrap()
         .unwrap();
@@ -614,6 +639,8 @@ pub mod tests {
             &Key::from_raw(b""),
             Some(Key::from_raw(b"z")).as_ref(),
             flashback_version,
+            // Used for pass ci
+            0,
         )
         .unwrap_or_else(|_| Some(Key::from_raw(b"")))
         .unwrap();
@@ -677,9 +704,16 @@ pub mod tests {
         must_get_none(&mut engine, k, ts);
         // case 3: for last region, end_key will be None, prewrite key will be valid.
         assert_eq!(
-            get_first_user_key(&mut reader, &Key::from_raw(b"a"), None, flashback_version)
-                .unwrap()
-                .unwrap(),
+            get_first_user_key(
+                &mut reader,
+                &Key::from_raw(b"a"),
+                None,
+                flashback_version,
+                // Used for pass ci
+                0,
+            )
+            .unwrap()
+            .unwrap(),
             Key::from_raw(prewrite_key)
         );
     }
