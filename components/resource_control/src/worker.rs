@@ -217,12 +217,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         // the available resource for background tasks is defined as:
         // (total_resource_quota - foreground_task_used). foreground_task_used
         // resource is calculated by: (resource_current_total_used -
-        // background_consumed_total). We reserve 10% of the free resources for
+        // background_consumed_total). We reserve 20% of the free resources for
         // foreground tasks in case the fore ground traffics increases.
         let mut available_resource_rate = ((resource_stats.total_quota
             - resource_stats.current_used
             + background_consumed_total)
-            * 0.9)
+            * 0.8)
             .max(resource_stats.total_quota * 0.1);
         let mut total_expected_cost = 0.0;
         for g in bg_group_stats.iter_mut() {
@@ -406,10 +406,10 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            7.2,
+            6.4,
             IoBytes {
-                read: 4500,
-                write: 4500,
+                read: 4000,
+                write: 4000,
             },
         );
 
@@ -417,10 +417,10 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            7.2,
+            6.4,
             IoBytes {
-                read: 4500,
-                write: 4500,
+                read: 4000,
+                write: 4000,
             },
         );
 
@@ -428,10 +428,10 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            3.6,
+            3.2,
             IoBytes {
-                read: 3600,
-                write: 3600,
+                read: 3200,
+                write: 3200,
             },
         );
 
@@ -446,10 +446,10 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            3.6,
+            3.2,
             IoBytes {
-                read: 3600,
-                write: 3600,
+                read: 3200,
+                write: 3200,
             },
         );
 
@@ -475,10 +475,10 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            2.25,
+            2.0,
             IoBytes {
-                read: 1125,
-                write: 1125,
+                read: 1000,
+                write: 1000,
             },
         );
 
@@ -493,10 +493,10 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            2.25,
+            2.0,
             IoBytes {
-                read: 1125,
-                write: 1125,
+                read: 1000,
+                write: 1000,
             },
         );
 
@@ -516,18 +516,18 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            1.8,
+            1.6,
             IoBytes {
-                read: 900,
-                write: 900,
+                read: 800,
+                write: 800,
             },
         );
         check_limiter(
             &bg_limiter,
-            0.9,
+            0.8,
             IoBytes {
-                read: 450,
-                write: 450,
+                read: 400,
+                write: 400,
             },
         );
 
@@ -551,13 +551,13 @@ mod tests {
             &limiter,
             2.4,
             IoBytes {
-                read: 1800,
-                write: 1800,
+                read: 1400,
+                write: 1400,
             },
         );
         check_limiter(
             &bg_limiter,
-            2.1,
+            1.6,
             IoBytes {
                 read: 1800,
                 write: 1800,
@@ -591,18 +591,18 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            4.8,
+            4.27,
             IoBytes {
-                read: 3000,
-                write: 3000,
+                read: 2667,
+                write: 2667,
             },
         );
         check_limiter(
             &new_bg_limiter,
-            2.4,
+            2.13,
             IoBytes {
-                read: 1500,
-                write: 1500,
+                read: 1334,
+                write: 1334,
             },
         );
 
@@ -627,13 +627,13 @@ mod tests {
             &limiter,
             2.4,
             IoBytes {
-                read: 1800,
-                write: 1800,
+                read: 1400,
+                write: 1400,
             },
         );
         check_limiter(
             &new_bg_limiter,
-            2.1,
+            1.6,
             IoBytes {
                 read: 1800,
                 write: 1800,

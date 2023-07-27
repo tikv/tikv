@@ -3,12 +3,13 @@
 use std::{
     fmt,
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use file_system::IoBytes;
+use futures::compat::Future01CompatExt;
 use strum::EnumCount;
-use tikv_util::time::Limiter;
+use tikv_util::{time::Limiter, timer::GLOBAL_TIMER_HANDLE};
 
 #[derive(Clone, Copy, Eq, PartialEq, EnumCount)]
 #[repr(usize)]
@@ -52,6 +53,17 @@ impl ResourceLimiter {
             self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64);
         let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes);
         cpu_dur.max(io_dur)
+    }
+
+    pub async fn async_consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {
+        let dur = self.consume(cpu_time, io_bytes);
+        if !dur.is_zero() {
+            _ = GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + dur)
+                .compat()
+                .await;
+        }
+        dur
     }
 
     #[inline]
