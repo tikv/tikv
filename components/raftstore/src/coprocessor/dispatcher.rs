@@ -676,10 +676,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn cancel_apply_snapshot(&self, region_id: u64, peer_id: u64, queue_size: u64) {
+    pub fn cancel_apply_snapshot(&self, region_id: u64, peer_id: u64) {
         for observer in &self.registry.apply_snapshot_observers {
             let observer = observer.observer.inner();
-            observer.cancel_apply_snapshot(region_id, peer_id, queue_size);
+            observer.cancel_apply_snapshot(region_id, peer_id);
         }
     }
 

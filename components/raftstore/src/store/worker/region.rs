@@ -529,7 +529,7 @@ where
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
                 self.coprocessor_host
-                    .cancel_apply_snapshot(region_id, peer_id, current_size);
+                    .cancel_apply_snapshot(region_id, peer_id);
                 assert_eq!(
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
