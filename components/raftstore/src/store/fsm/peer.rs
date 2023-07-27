@@ -6022,20 +6022,12 @@ where
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.fsm.peer.get_role(),
         );
+        let keys = region_buckets.meta.keys.clone();
         let old_region_buckets: Option<BucketStat> =
             self.fsm.peer.region_buckets.replace(region_buckets);
         self.fsm.peer.last_region_buckets = old_region_buckets;
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
         let version = self.fsm.peer.region_buckets.as_ref().unwrap().meta.version;
-        let keys = self
-            .fsm
-            .peer
-            .region_buckets
-            .as_ref()
-            .unwrap()
-            .meta
-            .keys
-            .clone();
         if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
             reader.update(ReadProgress::region_buckets(
                 self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),

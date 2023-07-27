@@ -324,6 +324,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             refresh_buckets.set_version(version);
             refresh_buckets.set_keys(keys.clone().into());
             extra_msg.set_refresh_buckets(refresh_buckets);
+            self.send_raft_message(store_ctx, msg);
         }
     }
 
