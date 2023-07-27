@@ -668,12 +668,18 @@ impl<E: KvEngine> CoprocessorHost<E> {
         peer_id: u64,
         snap_key: &crate::store::SnapKey,
         snap: Option<&crate::store::Snapshot>,
-        current_size: u64,
     ) {
         let mut ctx = ObserverContext::new(region);
         for observer in &self.registry.apply_snapshot_observers {
             let observer = observer.observer.inner();
-            observer.post_apply_snapshot(&mut ctx, peer_id, snap_key, snap, current_size);
+            observer.post_apply_snapshot(&mut ctx, peer_id, snap_key, snap);
+        }
+    }
+
+    pub fn cancel_apply_snapshot(&self, region_id: u64, peer_id: u64, queue_size: u64) {
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            observer.cancel_apply_snapshot(region_id, peer_id, queue_size);
         }
     }
 
@@ -1116,7 +1122,6 @@ mod tests {
             _: u64,
             _: &crate::store::SnapKey,
             _: Option<&Snapshot>,
-            _: u64,
         ) {
             self.called
                 .fetch_add(ObserverIndex::PostApplySnapshot as usize, Ordering::SeqCst);
@@ -1299,7 +1304,7 @@ mod tests {
         index += ObserverIndex::PreApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
 
-        host.post_apply_snapshot(&region, 0, &key, None, 0);
+        host.post_apply_snapshot(&region, 0, &key, None);
         index += ObserverIndex::PostApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
 
