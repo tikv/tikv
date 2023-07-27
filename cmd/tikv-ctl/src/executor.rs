@@ -83,9 +83,9 @@ pub fn new_debug_executor(
     data_dir: Option<&str>,
     host: Option<&str>,
     mgr: Arc<SecurityManager>,
-) -> Box<dyn DebugExecutor> {
+) -> Box<dyn DebugExecutor + Send> {
     if let Some(remote) = host {
-        return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
+        return Box::new(new_debug_client(remote, mgr)) as Box<_>;
     }
 
     // TODO: perhaps we should allow user skip specifying data path.
@@ -128,7 +128,7 @@ pub fn new_debug_executor(
         let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
             DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
 
-        Box::new(debugger) as Box<dyn DebugExecutor>
+        Box::new(debugger) as Box<_>
     } else {
         let mut config = cfg.raft_engine.config();
         config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
@@ -146,14 +146,14 @@ pub fn new_debug_executor(
 
                 let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
                     DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
-                Box::new(debugger) as Box<dyn DebugExecutor>
+                Box::new(debugger) as Box<_>
             }
             EngineType::RaftKv2 => {
                 let registry =
                     TabletRegistry::new(Box::new(factory), Path::new(data_dir).join("tablets"))
                         .unwrap_or_else(|e| fatal!("failed to create tablet registry {:?}", e));
                 let debugger = DebuggerImplV2::new(registry, raft_db, cfg_controller);
-                Box::new(debugger) as Box<dyn DebugExecutor>
+                Box::new(debugger) as Box<_>
             }
         }
     }

@@ -181,7 +181,6 @@ fn test_flashback_to_version() {
         write_and_read_key(&kv_client, &ctx, &mut ts, k.clone(), v.clone());
     }
 
-    // prepare flashback.
     let req = GetAllRegionsInStoreRequest::default();
     let regions = debug_client.get_all_regions_in_store(&req).unwrap().regions;
     println!("regions: {:?}", regions);
@@ -248,7 +247,9 @@ fn test_flashback_to_version_with_mismatch_ts() {
     assert_eq!(res.is_ok(), true);
 
     // use mismatch ts.
-    match flashback_to_version(&debug_client, regions, flashback_version, ts + 2, ts + 3).unwrap_err() {
+    match flashback_to_version(&debug_client, regions, flashback_version, ts + 2, ts + 3)
+        .unwrap_err()
+    {
         grpcio::Error::RpcFailure(status) => {
             assert_eq!(status.code(), grpcio::RpcStatusCode::UNKNOWN);
             assert_eq!(status.message(), "not in flashback state");
