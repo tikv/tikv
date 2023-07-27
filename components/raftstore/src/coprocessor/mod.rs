@@ -203,6 +203,7 @@ pub trait ApplySnapshotObserver: Coprocessor {
         _: u64,
         _: &crate::store::SnapKey,
         _snapshot: Option<&crate::store::Snapshot>,
+        _: u64,
     ) {
     }
 

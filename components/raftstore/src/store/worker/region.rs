@@ -451,7 +451,13 @@ where
     }
 
     /// Applies snapshot data of the Region.
-    fn apply_snap(&mut self, region_id: u64, peer_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
+    fn apply_snap(
+        &mut self,
+        region_id: u64,
+        peer_id: u64,
+        abort: Arc<AtomicUsize>,
+        current_size: u64,
+    ) -> Result<()> {
         info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
@@ -489,8 +495,13 @@ where
             ingest_copy_symlink: self.ingest_copy_symlink,
         };
         s.apply(options)?;
-        self.coprocessor_host
-            .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
+        self.coprocessor_host.post_apply_snapshot(
+            &region,
+            peer_id,
+            &snap_key,
+            Some(&s),
+            current_size,
+        );
 
         // delete snapshot state.
         let mut wb = self.engine.write_batch();
@@ -510,7 +521,13 @@ where
 
     /// Tries to apply the snapshot of the specified Region. It calls
     /// `apply_snap` to do the actual work.
-    fn handle_apply(&mut self, region_id: u64, peer_id: u64, status: Arc<AtomicUsize>) {
+    fn handle_apply(
+        &mut self,
+        region_id: u64,
+        peer_id: u64,
+        status: Arc<AtomicUsize>,
+        current_size: u64,
+    ) {
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
             JOB_STATUS_RUNNING,
@@ -521,13 +538,20 @@ where
 
         let start = Instant::now();
 
-        match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
+        match self.apply_snap(region_id, peer_id, Arc::clone(&status), current_size) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
+                self.coprocessor_host.post_apply_snapshot(
+                    &region,
+                    peer_id,
+                    &snap_key,
+                    None,
+                    current_size,
+                );
                 assert_eq!(
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
@@ -795,7 +819,7 @@ where
                 }) = self.pending_applies.pop_front()
                 {
                     new_batch = false;
-                    self.handle_apply(region_id, peer_id, status);
+                    self.handle_apply(region_id, peer_id, status, self.pending_applies.len());
                 }
             }
         }
@@ -1488,6 +1512,7 @@ pub(crate) mod tests {
             peer_id: u64,
             key: &crate::store::SnapKey,
             snapshot: Option<&crate::store::Snapshot>,
+            _: u64,
         ) {
             let code =
                 snapshot.unwrap().total_size() + key.term + key.region_id + key.idx + peer_id;

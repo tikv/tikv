@@ -826,6 +826,7 @@ impl ApplySnapshotObserver for MockApplySnapshotObserver {
         peer_id: u64,
         _: &raftstore::store::SnapKey,
         snap: Option<&raftstore::store::Snapshot>,
+        _: u64,
     ) {
         let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
         match self.tablet_snap_paths.lock().unwrap().entry(peer_id) {
