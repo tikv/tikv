@@ -28,7 +28,6 @@ use kvproto::{
     metapb::{self, RegionEpoch, Store},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
-    resource_manager::ResourceGroup,
 };
 use pd_client::RpcClient;
 use raft::eraftpb::MessageType;
