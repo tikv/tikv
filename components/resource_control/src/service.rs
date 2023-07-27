@@ -200,8 +200,8 @@ impl ResourceManagerService {
                         (
                             g.group.name.clone(),
                             UploadStatistic {
-                                io_version: io_statistics.version,
-                                cpu_version: cpu_statistics.version,
+                                // io statistics and cpu statistics should have the same version.
+                                version: io_statistics.version,
                                 read_bytes_consumed: io_statistics.read_consumed,
                                 write_bytes_consumed: io_statistics.write_consumed,
                                 cpu_consumed: cpu_statistics.total_consumed,
@@ -221,59 +221,77 @@ impl ResourceManagerService {
 
             let mut req = TokenBucketsRequest::default();
             let all_reqs = req.mut_requests();
-            for (name, statistic) in background_groups {
-                if let Some(last_stats) = last_group_statistics_map.get_mut(name.as_str()) {
-                    if last_stats == &statistic {
+            for (name, statistic) in background_groups.into_iter() {
+                // check if the entry exists in the map or create a new one.
+                let last_stats = last_group_statistics_map
+                    .entry(name.clone())
+                    .or_insert_with(|| UploadStatistic::new(u64::MAX));
+                // version changes means this is a brand new limiter, so no need to sub the old
+                // statistics.
+                let (cpu_consumed, io_consumed) = if statistic.version == last_stats.version {
+                    if statistic == *last_stats {
                         continue;
                     }
-                    // update statistics.
-                    let mut req = TokenBucketRequest::default();
-                    req.set_resource_group_name(name.clone());
-                    req.set_is_background(true);
-                    let report_consumption = req.mut_consumption_since_last_request();
-                    // version changes means this is a brand new limiter, so no need to sub the old
-                    // statistics.
-                    let cpu_consumed = if statistic.cpu_version == last_stats.cpu_version {
-                        statistic.cpu_consumed - last_stats.cpu_consumed
-                    } else {
-                        statistic.cpu_consumed
-                    };
-
-                    let io_consumed = if statistic.io_version == last_stats.io_version {
+                    (
+                        statistic.cpu_consumed - last_stats.cpu_consumed,
                         (
                             statistic.read_bytes_consumed - last_stats.read_bytes_consumed,
                             statistic.write_bytes_consumed - last_stats.write_bytes_consumed,
-                        )
-                    } else {
+                        ),
+                    )
+                } else {
+                    (
+                        statistic.cpu_consumed,
                         (
                             statistic.read_bytes_consumed,
                             statistic.write_bytes_consumed,
-                        )
-                    };
+                        ),
+                    )
+                };
+                // update ru statistics.
+                let mut req = TokenBucketRequest::default();
+                req.set_resource_group_name(name.clone());
+                req.set_is_background(true);
+                let report_consumption = req.mut_consumption_since_last_request();
 
-                    let read_total = config.read_cpu_ms_cost * cpu_consumed as f64
-                        + config.read_cost_per_byte * io_consumed.0 as f64;
-                    let write_total = config.write_cost_per_byte * io_consumed.1 as f64;
+                let read_total = config.read_cpu_ms_cost * cpu_consumed as f64
+                    + config.read_cost_per_byte * io_consumed.0 as f64;
+                let write_total = config.write_cost_per_byte * io_consumed.1 as f64;
 
-                    report_consumption.set_r_r_u(read_total);
-                    report_consumption.set_w_r_u(write_total);
-                    report_consumption.set_read_bytes(io_consumed.0 as f64);
-                    report_consumption.set_write_bytes(io_consumed.1 as f64);
-                    report_consumption.set_total_cpu_time_ms(cpu_consumed as f64);
+                report_consumption.set_r_r_u(read_total);
+                report_consumption.set_w_r_u(write_total);
+                report_consumption.set_read_bytes(io_consumed.0 as f64);
+                report_consumption.set_write_bytes(io_consumed.1 as f64);
+                report_consumption.set_total_cpu_time_ms(cpu_consumed as f64);
 
-                    *last_stats = statistic;
-                    all_reqs.push(req);
-                } else {
-                    last_group_statistics_map.insert(name.clone(), statistic);
+                all_reqs.push(req);
+                // replace the previous statistics.
+                *last_stats = statistic;
+            }
+
+            if !all_reqs.is_empty() {
+                if let Err(e) = self.pd_client.upload_ru_metrics(req).await {
+                    error!("upload ru metrics failed"; "err" => ?e);
                 }
             }
 
-            if let Err(e) = self.pd_client.upload_ru_metrics(req).await {
-                error!("upload ru metrics failed"; "err" => ?e);
-            }
+            let dur = if cfg!(feature = "failpoints") {
+                (|| {
+                    fail::fail_point!("set_upload_duration", |v| {
+                        let dur = v
+                            .expect("should provide delay time (in ms)")
+                            .parse::<u64>()
+                            .expect("should be number (in ms)");
+                        std::time::Duration::from_millis(dur)
+                    });
+                    std::time::Duration::from_millis(100)
+                })()
+            } else {
+                BACKGROUND_RU_UPLOAD_DURATION
+            };
 
             let _ = GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
+                .delay(std::time::Instant::now() + dur)
                 .compat()
                 .await;
         }
@@ -309,19 +327,28 @@ impl Default for RequestUnitConfig {
     }
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Debug, Copy)]
+#[derive(PartialEq, Eq, Debug, Clone, Default)]
 struct UploadStatistic {
-    io_version: u64,
-    cpu_version: u64,
+    version: u64,
     read_bytes_consumed: u64,
     write_bytes_consumed: u64,
     cpu_consumed: u64,
+}
+
+impl UploadStatistic {
+    fn new(version: u64) -> Self {
+        Self {
+            version,
+            ..Default::default()
+        }
+    }
 }
 
 #[cfg(test)]
 pub mod tests {
     use std::time::Duration;
 
+    use file_system::IoBytes;
     use futures::executor::block_on;
     use kvproto::pdpb::GlobalConfigItem;
     use pd_client::RpcClient;
@@ -329,7 +356,9 @@ pub mod tests {
     use test_pd::{mocker::Service, util::*, Server as MockServer};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
-    use crate::resource_group::tests::{new_resource_group, new_resource_group_ru};
+    use crate::resource_group::tests::{
+        new_background_resource_group_ru, new_resource_group, new_resource_group_ru,
+    };
 
     fn new_test_server_and_client(
         update_interval: ReadableDuration,
@@ -364,6 +393,24 @@ pub mod tests {
         futures::executor::block_on(async move {
             pd_client
                 .store_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), vec![item])
+                .await
+        })
+        .unwrap();
+    }
+
+    fn store_controller_config(pd_client: Arc<RpcClient>, config: ControllerConfig) {
+        let mut item = GlobalConfigItem::default();
+        item.set_kind(EventType::Put);
+        item.set_name("controller_config".to_string());
+        let buf = serde_json::to_vec(&config).unwrap();
+        item.set_payload(buf);
+
+        futures::executor::block_on(async move {
+            pd_client
+                .store_global_config(
+                    RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH.to_string(),
+                    vec![item],
+                )
                 .await
         })
         .unwrap();
@@ -421,7 +468,7 @@ pub mod tests {
         background_worker.spawn_async_task(async move {
             s_clone.watch_resource_groups().await;
         });
-        // Mock add
+        // Mock add.
         let group1 = new_resource_group_ru("TEST1".into(), 100, 0);
         add_resource_group(s.pd_client.clone(), group1);
         let group2 = new_resource_group_ru("TEST2".into(), 100, 0);
@@ -431,10 +478,10 @@ pub mod tests {
         add_resource_group(s.pd_client.clone(), group2);
         wait_watch_ready(&s, 3);
 
-        // Mock delete
+        // Mock delete.
         delete_resource_group(s.pd_client.clone(), "TEST1");
 
-        // Wait for watcher
+        // Wait for watcher.
         wait_watch_ready(&s, 2);
         let groups = s.manager.get_all_resource_groups();
         assert_eq!(groups.len(), 2);
@@ -455,22 +502,99 @@ pub mod tests {
         background_worker.spawn_async_task(async move {
             s_clone.watch_resource_groups().await;
         });
-        // Mock add
+        // Mock add.
         let group1 = new_resource_group_ru("TEST1".into(), 100, 0);
         add_resource_group(s.pd_client.clone(), group1);
-        // Mock reboot watch server
+        // Mock reboot watch server.
         let watch_global_config_fp = "watch_global_config_return";
         fail::cfg(watch_global_config_fp, "return").unwrap();
         std::thread::sleep(Duration::from_millis(100));
         fail::remove(watch_global_config_fp);
-        // Mock add after rebooting will success
+        // Mock add after rebooting will success.
         let group2 = new_resource_group_ru("TEST2".into(), 100, 0);
         add_resource_group(s.pd_client.clone(), group2);
-        // Wait watcher update
+        // Wait watcher update.
         std::thread::sleep(Duration::from_secs(1));
         let groups = s.manager.get_all_resource_groups();
         assert_eq!(groups.len(), 3);
 
+        server.stop();
+    }
+
+    #[test]
+    fn load_controller_config_test() {
+        let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+        let resource_manager = ResourceGroupManager::default();
+
+        let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
+        // Load default controller config.
+        let config = block_on(s.load_controller_config()).unwrap_or_default();
+        assert_eq!(config.read_base_cost, 1. / 8.);
+
+        // Set controller config.
+        let cfg = ControllerConfig {
+            request_unit: RequestUnitConfig {
+                read_base_cost: 1. / 10.,
+                read_cost_per_byte: 1. / (64. * 1024.),
+                write_base_cost: 1.,
+                write_cost_per_byte: 1. / 1024.,
+                read_cpu_ms_cost: 1. / 3.,
+            },
+        };
+        store_controller_config(s.clone().pd_client, cfg);
+        let config = block_on(s.load_controller_config()).unwrap();
+        assert_eq!(config.read_base_cost, 1. / 10.);
+
+        server.stop();
+    }
+
+    #[test]
+    fn upload_ru_metrics_test() {
+        let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+        let resource_manager = ResourceGroupManager::default();
+
+        let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
+        let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
+        s.manager.add_resource_group(bg);
+
+        fail::cfg("set_upload_duration", "return(10)").unwrap();
+        let background_worker = Builder::new("background").thread_count(1).create();
+        let s_clone = s.clone();
+        background_worker.spawn_async_task(async move {
+            s_clone.upload_ru_metrics().await;
+        });
+        // Mock consume.
+        let bg_limiter = s.manager.get_resource_limiter("background", "br").unwrap();
+        bg_limiter.consume(
+            Duration::from_secs(2),
+            IoBytes {
+                read: 1000,
+                write: 1000,
+            },
+        );
+        // Wait for upload ru metrics.
+        std::thread::sleep(Duration::from_millis(100));
+        // Mock update version.
+        let bg = new_resource_group_ru("background".into(), 1000, 15);
+        s.manager.add_resource_group(bg);
+
+        let background_group =
+            new_background_resource_group_ru("background".into(), 500, 8, vec!["lightning".into()]);
+        s.manager.add_resource_group(background_group);
+        let new_bg_limiter = s
+            .manager
+            .get_resource_limiter("background", "lightning")
+            .unwrap();
+        new_bg_limiter.consume(
+            Duration::from_secs(5),
+            IoBytes {
+                read: 2000,
+                write: 2000,
+            },
+        );
+        // Wait for upload ru metrics.
+        std::thread::sleep(Duration::from_millis(100));
+        fail::remove("set_upload_duration");
         server.stop();
     }
 }

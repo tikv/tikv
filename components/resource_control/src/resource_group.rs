@@ -464,7 +464,7 @@ impl ResourceController {
 
     pub fn update_min_virtual_time(&self) {
         let start = Instant::now_coarse();
-        let mut min_vt = u64::MAX - 100_000;
+        let mut min_vt = u64::MAX;
         let mut max_vt = 0;
         self.resource_consumptions
             .read()
@@ -477,7 +477,7 @@ impl ResourceController {
 
         // TODO: use different threshold for different resource type
         // needn't do update if the virtual different is less than 100ms/100KB.
-        if min_vt + 100_000 >= max_vt && max_vt < RESET_VT_THRESHOLD {
+        if min_vt.wrapping_add(100_000) >= max_vt && max_vt < RESET_VT_THRESHOLD {
             return;
         }
 
