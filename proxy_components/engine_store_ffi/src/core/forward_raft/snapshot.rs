@@ -170,14 +170,30 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         match self.apply_snap_pool.as_ref() {
             Some(p) => {
                 let (sender, receiver) = mpsc::channel();
-                let task = Arc::new(PrehandleTask::new(receiver, peer_id));
+                let task = Arc::new(PrehandleTask::new(receiver, peer_id, snap_key.idx));
                 {
                     let mut lock = match self.pre_handle_snapshot_ctx.lock() {
                         Ok(l) => l,
                         Err(_) => fatal!("pre_apply_snapshot poisoned"),
                     };
                     let ctx = lock.deref_mut();
-                    ctx.tracer.insert(snap_key.clone(), task.clone());
+                    if let Some(o) = ctx.tracer.insert(snap_key.clone(), task.clone()) {
+                        let _prev = self
+                            .engine
+                            .proxy_ext
+                            .pending_applies_count
+                            .fetch_sub(1, Ordering::SeqCst);
+                        info!("replace apply snapshot";
+                            "peer_id" => peer_id,
+                            "region_id" => region_id,
+                            "snap_key" => ?snap_key,
+                            "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
+                            "new_snapshot" => ?snap,
+                            "old_snapshot_index" => o.snapshot_index,
+                        );
+                        // TODO elegantly stop the previous task.
+                        drop(o);
+                    }
                 }
 
                 let engine_store_server_helper = self.engine_store_server_helper;
@@ -294,9 +310,10 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             ctx.tracer.remove(snap_key)
         };
 
+        let post_apply_start = tikv_util::time::Instant::now();
         let need_retry = match maybe_prehandle_task {
             Some(t) => {
-                let neer_retry = match t.recv.recv() {
+                let need_retry = match t.recv.recv() {
                     Ok(snap_ptr) => {
                         info!("get prehandled snapshot success";
                             "peer_id" => peer_id,
@@ -304,6 +321,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             "region_id" => ob_region.get_id(),
                             "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
                         );
+                        // We must fetch snapshot here, as a consumer.
                         if !should_skip {
                             self.engine_store_server_helper
                                 .apply_pre_handled_snapshot(snap_ptr.0);
@@ -331,18 +349,23 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 #[cfg(any(test, feature = "testexport"))]
                 assert!(_prev > 0);
 
-                info!("apply snapshot finished";
-                    "peer_id" => peer_id,
-                    "snap_key" => ?snap_key,
-                    "region" => ?ob_region,
-                    "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
-                );
-                neer_retry
+                if !need_retry {
+                    info!("apply snapshot finished";
+                        "mode" => "normal",
+                        "peer_id" => peer_id,
+                        "snap_key" => ?snap_key,
+                        "region" => ?ob_region,
+                        "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
+                        "elapsed" => post_apply_start.saturating_elapsed().as_millis(),
+                    );
+                }
+                need_retry
             }
             None => {
                 // We can't find background pre-handle task, maybe:
-                // 1. we can't get snapshot from snap manager at that time.
-                // 2. we disabled background pre handling.
+                // 1. We can't get snapshot from snap manager at that time.
+                //    This is abnormal case.
+                // 2. We disabled background pre handling.
                 info!("pre-handled snapshot not found";
                     "peer_id" => peer_id,
                     "snap_key" => ?snap_key,
@@ -371,10 +394,12 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             self.engine_store_server_helper
                 .apply_pre_handled_snapshot(ptr.0);
             info!("apply snapshot finished";
+                "mode" => "blockgen",
                 "peer_id" => peer_id,
                 "snap_key" => ?snap_key,
                 "region" => ?ob_region,
                 "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
+                "elapsed" => post_apply_start.saturating_elapsed().as_millis(),
             );
         }
     }

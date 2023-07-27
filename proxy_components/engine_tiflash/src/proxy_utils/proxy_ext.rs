@@ -84,10 +84,12 @@ impl ProxyEngineExt {
                 };
             }
         }
-        // is called after calling observer's pre_handle_snapshot
+        // Is called after calling observer's pre_handle_snapshot
         let in_queue = self.pending_applies_count.load(Ordering::SeqCst);
         if is_timeout && new_batch {
-            // If queue is full, we should begin to handle
+            // We pre handle snapshot when:
+            // 1. Timtout.
+            // 2. We have already have a batch to fill the threadpool.
             true
         } else {
             // Otherwise, we wait until the queue is full.

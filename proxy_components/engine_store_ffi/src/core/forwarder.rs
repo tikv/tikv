@@ -19,11 +19,16 @@ pub struct PrehandleContext {
 pub struct PrehandleTask {
     pub recv: mpsc::Receiver<PtrWrapper>,
     pub peer_id: u64,
+    pub snapshot_index: u64,
 }
 
 impl PrehandleTask {
-    pub fn new(recv: mpsc::Receiver<PtrWrapper>, peer_id: u64) -> Self {
-        PrehandleTask { recv, peer_id }
+    pub fn new(recv: mpsc::Receiver<PtrWrapper>, peer_id: u64, snapshot_index: u64) -> Self {
+        PrehandleTask {
+            recv,
+            peer_id,
+            snapshot_index,
+        }
     }
 }
 unsafe impl Send for PrehandleTask {}

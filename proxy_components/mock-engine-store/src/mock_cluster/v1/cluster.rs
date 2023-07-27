@@ -762,7 +762,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             return resp;
         }
         if panic_when_timeout {
-            panic!("request timeout");
+            panic!("request timeout {:?}", reqs);
         }
         RaftCmdResponse::default()
     }
