@@ -591,7 +591,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok((locks, has_remain))
     }
 
-    /// Scan the writes to get all the latest user keys. The return type is:
+    /// Scan the writes to get all the latest user keys. This scan will skip
+    /// `WriteType::Lock` and `WriteType::Rollback`, only return the key that
+    /// has a latest `WriteType::Put` or `WriteType::Delete` record. The return
+    /// type is:
     /// * `(Vec<key>, has_remain)`.
     ///   - `key` is the encoded user key without `commit_ts`.
     ///   - `has_remain` indicates whether there MAY be remaining user keys that
@@ -633,6 +636,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
             let commit_ts = key.decode_ts()?;
             let user_key = key.truncate_ts()?;
+            // Skip the key if its latest write type is `WriteType::Lock` or
+            // `WriteType::Rollback`.
+            let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?;
+            if write.write_type != WriteType::Put && write.write_type != WriteType::Delete {
+                cursor.next(&mut self.statistics.write);
+                continue;
+            }
             // To make sure we only check each unique user key once and the filter returns
             // true.
             let is_same_user_key = cur_user_key.as_ref() == Some(&user_key);
@@ -1895,7 +1905,6 @@ pub mod tests {
                     Key::from_raw(b"k1"),
                     Key::from_raw(b"k2"),
                     Key::from_raw(b"k3"),
-                    Key::from_raw(b"k4"),
                 ],
                 expect_is_remain: false,
             },
@@ -1904,11 +1913,7 @@ pub mod tests {
                 start_key: Some(Key::from_raw(b"k2")),
                 end_key: None,
                 limit: 4,
-                expect_res: vec![
-                    Key::from_raw(b"k2"),
-                    Key::from_raw(b"k3"),
-                    Key::from_raw(b"k4"),
-                ],
+                expect_res: vec![Key::from_raw(b"k2"), Key::from_raw(b"k3")],
                 expect_is_remain: false,
             },
             Case {
