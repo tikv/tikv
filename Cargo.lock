@@ -2956,7 +2956,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=async-init-6.5#48da3513487055504fd071df07bcf13a28530efe"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2975,7 +2975,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=async-init-6.5#48da3513487055504fd071df07bcf13a28530efe"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4087,9 +4087,9 @@ checksum = "369a6ed065f249a159e06c45752c780bda2fb53c995718f9e484d08daa9eb42e"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.47"
+version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ea3d908b0e36316caf9e9e2c4625cdde190a7e6f440d794667ed17a1855e725"
+checksum = "18fb31db3f9bddb2ea821cde30a9f70117e3f119938b5ee630b7403aa6e2ead9"
 dependencies = [
  "unicode-ident",
 ]
@@ -4266,9 +4266,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.18"
+version = "1.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1feb54ed693b93a84e14094943b84b7c4eae204c512b7ccb95ab0c66d278ad1"
+checksum = "50f3b39ccfb720540debaa0164757101c08ecb8d326b15358ce76a62c7e85965"
 dependencies = [
  "proc-macro2",
 ]
@@ -4851,7 +4851,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=async-init-6.5#48da3513487055504fd071df07bcf13a28530efe"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
