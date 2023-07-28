@@ -17,6 +17,7 @@ use tikv_util::{
 };
 
 use crate::{
+    metrics::*,
     resource_group::ResourceGroupManager,
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
 };
@@ -199,6 +200,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             } else {
                 total_stats
             };
+            BACKGROUND_RESOURCE_CONSUMPTION
+                .with_label_values(&[&g.name, resource_type.as_str()])
+                .inc_by(stats_delta.total_consumed);
             let stats_per_sec = stats_delta / dur_secs;
             background_consumed_total += stats_per_sec.total_consumed as f64;
             g.stats_per_sec = stats_per_sec;
@@ -254,6 +258,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                     .expect_cost_rate
                     .max(available_resource_rate / total_ru_quota * g.ru_quota);
                 g.limiter.get_limiter(resource_type).set_rate_limit(limit);
+                BACKGROUND_QUOTA_LIMIT_VEC
+                    .with_label_values(&[&g.name, resource_type.as_str()])
+                    .set(limit as i64);
                 available_resource_rate -= limit;
                 total_ru_quota -= g.ru_quota;
             }
@@ -271,6 +278,9 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 .expect_cost_rate
                 .min(available_resource_rate / total_ru_quota * g.ru_quota);
             g.limiter.get_limiter(resource_type).set_rate_limit(limit);
+            BACKGROUND_QUOTA_LIMIT_VEC
+                .with_label_values(&[&g.name, resource_type.as_str()])
+                .set(limit as i64);
             available_resource_rate -= limit;
             total_ru_quota -= g.ru_quota;
         }

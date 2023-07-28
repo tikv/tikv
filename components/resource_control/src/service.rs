@@ -153,13 +153,8 @@ impl ResourceManagerService {
         }
     }
 
-    async fn load_controller_config(&self) -> Result<RequestUnitConfig, ()> {
-        let begin = std::time::Instant::now();
+    async fn load_controller_config(&self) -> RequestUnitConfig {
         loop {
-            if std::time::Instant::now() - begin > Duration::from_secs(60) {
-                error!("attempt to load controller config timeout");
-                return Err(());
-            }
             match self
                 .pd_client
                 .load_global_config(RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH.to_string())
@@ -169,17 +164,17 @@ impl ResourceManagerService {
                     if items.is_empty() {
                         error!("server does not save config, load config failed.");
                         let _ = GLOBAL_TIMER_HANDLE
-                            .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
+                            .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
                             .await;
                         continue;
                     }
                     match serde_json::from_slice::<ControllerConfig>(items[0].get_payload()) {
-                        Ok(c) => return Ok(c.request_unit),
+                        Ok(c) => return c.request_unit,
                         Err(err) => {
                             error!("parse controller config failed"; "err" => ?err);
                             let _ = GLOBAL_TIMER_HANDLE
-                                .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
+                                .delay(std::time::Instant::now() + RETRY_INTERVAL)
                                 .compat()
                                 .await;
                             continue;
@@ -189,7 +184,7 @@ impl ResourceManagerService {
                 Err(err) => {
                     error!("failed to load controller config"; "err" => ?err);
                     let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
+                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
                         .compat()
                         .await;
                     continue;
@@ -202,7 +197,7 @@ impl ResourceManagerService {
     pub async fn upload_ru_metrics(&self) {
         let mut last_group_statistics_map: HashMap<String, UploadStatistic> = HashMap::new();
         // load controller config firstly.
-        let config = self.load_controller_config().await.unwrap_or_default();
+        let config = self.load_controller_config().await;
         info!("load controller config"; "config" => ?config);
 
         loop {
@@ -332,19 +327,6 @@ struct RequestUnitConfig {
 #[serde(rename_all = "kebab-case")]
 struct ControllerConfig {
     request_unit: RequestUnitConfig,
-}
-
-impl Default for RequestUnitConfig {
-    fn default() -> Self {
-        Self {
-            // related on doc https://docs.pingcap.com/tidb/dev/tidb-resource-control#what-is-request-unit-ru
-            read_base_cost: 1. / 8.,
-            read_cost_per_byte: 1. / (64. * 1024.),
-            write_base_cost: 1.,
-            write_cost_per_byte: 1. / 1024.,
-            read_cpu_ms_cost: 1. / 3.,
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Default)]
@@ -551,7 +533,7 @@ pub mod tests {
         // Set controller config.
         let cfg = ControllerConfig {
             request_unit: RequestUnitConfig {
-                read_base_cost: 1. / 10.,
+                read_base_cost: 1. / 8.,
                 read_cost_per_byte: 1. / (64. * 1024.),
                 write_base_cost: 1.,
                 write_cost_per_byte: 1. / 1024.,
@@ -559,8 +541,8 @@ pub mod tests {
             },
         };
         store_controller_config(s.clone().pd_client, cfg);
-        let config = block_on(s.load_controller_config()).unwrap();
-        assert_eq!(config.read_base_cost, 1. / 10.);
+        let config = block_on(s.load_controller_config());
+        assert_eq!(config.read_base_cost, 1. / 8.);
 
         server.stop();
     }
@@ -573,6 +555,18 @@ pub mod tests {
         let s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
         s.manager.add_resource_group(bg);
+
+        // Set controller config.
+        let cfg = ControllerConfig {
+            request_unit: RequestUnitConfig {
+                read_base_cost: 1. / 8.,
+                read_cost_per_byte: 1. / (64. * 1024.),
+                write_base_cost: 1.,
+                write_cost_per_byte: 1. / 1024.,
+                read_cpu_ms_cost: 1. / 3.,
+            },
+        };
+        store_controller_config(s.clone().pd_client, cfg);
 
         fail::cfg("set_upload_duration", "return(10)").unwrap();
         let background_worker = Builder::new("background").thread_count(1).create();

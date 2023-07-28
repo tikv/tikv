@@ -30,6 +30,8 @@ mod resource_limiter;
 pub use resource_limiter::ResourceLimiter;
 use tikv_util::worker::Worker;
 use worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION};
+
+mod metrics;
 pub mod worker;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
