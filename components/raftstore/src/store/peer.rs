@@ -5,10 +5,9 @@ use std::{
     cell::RefCell,
     cmp,
     collections::VecDeque,
-    fmt, mem,
+    mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::SyncSender,
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -29,7 +28,7 @@ use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb::{self, PeerRole},
-    pdpb::{self, PeerStats},
+    pdpb::PeerStats,
     raft_cmdpb::{
         self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, PutRequest, RaftCmdRequest,
         RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
@@ -89,14 +88,15 @@ use crate::{
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         fsm::{
             apply::{self, CatchUpLogs},
-            store::{PollContext, RaftRouter},
+            store::PollContext,
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{CasualMessage, ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
         txn_ext::LocksStatus,
+        unsafe_recovery::{ForceLeaderState, SnapshotRecoveryState, UnsafeRecoveryState},
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
             HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
@@ -486,91 +486,6 @@ pub struct ReadyResult {
     pub has_write_ready: bool,
 }
 
-#[derive(Debug)]
-/// ForceLeader process would be:
-/// - If it's hibernated, enter wait ticks state, and wake up the peer
-/// - Enter pre force leader state, become candidate and send request vote to
-///   all peers
-/// - Wait for the responses of the request vote, no reject should be received.
-/// - Enter force leader state, become leader without leader lease
-/// - Execute recovery plan(some remove-peer commands)
-/// - After the plan steps are all applied, exit force leader state
-pub enum ForceLeaderState {
-    WaitTicks {
-        syncer: UnsafeRecoveryForceLeaderSyncer,
-        failed_stores: HashSet<u64>,
-        ticks: usize,
-    },
-    PreForceLeader {
-        syncer: UnsafeRecoveryForceLeaderSyncer,
-        failed_stores: HashSet<u64>,
-    },
-    ForceLeader {
-        time: TiInstant,
-        failed_stores: HashSet<u64>,
-    },
-}
-
-// Following shared states are used while reporting to PD for unsafe recovery
-// and shared among all the regions per their life cycle.
-// The work flow is like:
-// 1. report phase
-//   - start_unsafe_recovery_report
-//      - broadcast wait-apply commands
-//      - wait for all the peers' apply indices meet their targets
-//      - broadcast fill out report commands
-//      - wait for all the peers fill out the reports for themselves
-//      - send a store report (through store heartbeat)
-// 2. force leader phase
-//   - dispatch force leader commands
-//     - wait for all the peers that received the command become force leader
-//     - start_unsafe_recovery_report
-// 3. plan execution phase
-//   - dispatch recovery plans
-//     - wait for all the creates, deletes and demotes to finish, for the
-//       demotes, procedures are:
-//       - exit joint state if it is already in joint state
-//       - demote failed voters, and promote self to be a voter if it is a
-//         learner
-//       - exit joint state
-//     - start_unsafe_recovery_report
-
-// A wrapper of a closure that will be invoked when it is dropped.
-// This design has two benefits:
-//   1. Using a closure (dynamically dispatched), so that it can avoid having
-//      generic member fields like RaftRouter, thus avoid having Rust generic
-//      type explosion problem.
-//   2. Invoke on drop, so that it can be easily and safely used (together with
-//      Arc) as a coordinator between all concerning peers. Each of the peers
-//      holds a reference to the same strcuture, and whoever finishes the task
-//      drops its reference. Once the last reference is dropped, indicating all
-//      the peers have finished their own tasks, the closure is invoked.
-pub struct InvokeClosureOnDrop(Box<dyn Fn() + Send + Sync>);
-
-impl fmt::Debug for InvokeClosureOnDrop {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InvokeClosureOnDrop")
-    }
-}
-
-impl Drop for InvokeClosureOnDrop {
-    fn drop(&mut self) {
-        self.0();
-    }
-}
-
-pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
-    router: &RaftRouter<EK, ER>,
-    report_id: u64,
-    exit_force_leader: bool,
-) {
-    let wait_apply =
-        UnsafeRecoveryWaitApplySyncer::new(report_id, router.clone(), exit_force_leader);
-    router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryWaitApply(wait_apply.clone()))
-    });
-}
-
 // Propose a read index request to the raft group, return the request id and
 // whether this request had dropped silently
 // #[RaftstoreCommon], copied from Peer::propose_read_index
@@ -647,202 +562,6 @@ pub fn can_amend_read<C>(
         _ => {}
     }
     false
-}
-
-#[derive(Clone, Debug)]
-pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
-
-impl UnsafeRecoveryForceLeaderSyncer {
-    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
-        let thread_safe_router = Mutex::new(router);
-        let inner = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, force leader finished.");
-            let router_ptr = thread_safe_router.lock().unwrap();
-            start_unsafe_recovery_report(&*router_ptr, report_id, false);
-        }));
-        UnsafeRecoveryForceLeaderSyncer(Arc::new(inner))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct UnsafeRecoveryExecutePlanSyncer {
-    _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
-}
-
-impl UnsafeRecoveryExecutePlanSyncer {
-    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
-        let thread_safe_router = Mutex::new(router);
-        let abort = Arc::new(Mutex::new(false));
-        let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, plan execution finished");
-            if *abort_clone.lock().unwrap() {
-                warn!("Unsafe recovery, plan execution aborted");
-                return;
-            }
-            let router_ptr = thread_safe_router.lock().unwrap();
-            start_unsafe_recovery_report(&*router_ptr, report_id, true);
-        }));
-        UnsafeRecoveryExecutePlanSyncer {
-            _closure: Arc::new(closure),
-            abort,
-        }
-    }
-
-    pub fn abort(&self) {
-        *self.abort.lock().unwrap() = true;
-    }
-}
-// Syncer only send to leader in 2nd BR restore
-#[derive(Clone, Debug)]
-pub struct SnapshotRecoveryWaitApplySyncer {
-    _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
-}
-
-impl SnapshotRecoveryWaitApplySyncer {
-    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
-        let thread_safe_router = Mutex::new(sender);
-        let abort = Arc::new(Mutex::new(false));
-        let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("region {} wait apply finished", region_id);
-            if *abort_clone.lock().unwrap() {
-                warn!("wait apply aborted");
-                return;
-            }
-            let router_ptr = thread_safe_router.lock().unwrap();
-
-            _ = router_ptr.send(region_id).map_err(|_| {
-                warn!("reply waitapply states failure.");
-            });
-        }));
-        SnapshotRecoveryWaitApplySyncer {
-            _closure: Arc::new(closure),
-            abort,
-        }
-    }
-
-    pub fn abort(&self) {
-        *self.abort.lock().unwrap() = true;
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct UnsafeRecoveryWaitApplySyncer {
-    _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
-}
-
-impl UnsafeRecoveryWaitApplySyncer {
-    pub fn new(
-        report_id: u64,
-        router: RaftRouter<impl KvEngine, impl RaftEngine>,
-        exit_force_leader: bool,
-    ) -> Self {
-        let thread_safe_router = Mutex::new(router);
-        let abort = Arc::new(Mutex::new(false));
-        let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, wait apply finished");
-            if *abort_clone.lock().unwrap() {
-                warn!("Unsafe recovery, wait apply aborted");
-                return;
-            }
-            let router_ptr = thread_safe_router.lock().unwrap();
-            if exit_force_leader {
-                (*router_ptr).broadcast_normal(|| {
-                    PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState)
-                });
-            }
-            let fill_out_report =
-                UnsafeRecoveryFillOutReportSyncer::new(report_id, (*router_ptr).clone());
-            (*router_ptr).broadcast_normal(|| {
-                PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryFillOutReport(
-                    fill_out_report.clone(),
-                ))
-            });
-        }));
-        UnsafeRecoveryWaitApplySyncer {
-            _closure: Arc::new(closure),
-            abort,
-        }
-    }
-
-    pub fn abort(&self) {
-        *self.abort.lock().unwrap() = true;
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct UnsafeRecoveryFillOutReportSyncer {
-    _closure: Arc<InvokeClosureOnDrop>,
-    reports: Arc<Mutex<Vec<pdpb::PeerReport>>>,
-}
-
-impl UnsafeRecoveryFillOutReportSyncer {
-    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
-        let thread_safe_router = Mutex::new(router);
-        let reports = Arc::new(Mutex::new(vec![]));
-        let reports_clone = reports.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, peer reports collected");
-            let mut store_report = pdpb::StoreReport::default();
-            {
-                let mut reports_ptr = reports_clone.lock().unwrap();
-                store_report.set_peer_reports(mem::take(&mut *reports_ptr).into());
-            }
-            store_report.set_step(report_id);
-            let router_ptr = thread_safe_router.lock().unwrap();
-            if let Err(e) = (*router_ptr).send_control(StoreMsg::UnsafeRecoveryReport(store_report))
-            {
-                error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e);
-            }
-        }));
-        UnsafeRecoveryFillOutReportSyncer {
-            _closure: Arc::new(closure),
-            reports,
-        }
-    }
-
-    pub fn report_for_self(&self, report: pdpb::PeerReport) {
-        let mut reports_ptr = self.reports.lock().unwrap();
-        (*reports_ptr).push(report);
-    }
-}
-
-pub enum SnapshotRecoveryState {
-    // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
-    // and force forward to last index once follower appended and then it also is checked
-    // every time this peer applies a the last index, if the last index is met, this state is
-    // reset / droppeds. The syncer is droped and send the response to the invoker, triggers
-    // the next step of recovery process.
-    WaitLogApplyToLast {
-        target_index: u64,
-        syncer: SnapshotRecoveryWaitApplySyncer,
-    },
-}
-
-pub enum UnsafeRecoveryState {
-    // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
-    // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
-    // new entry or a snapshot, if the target index is met, this state is reset / droppeds. The
-    // syncer holds a reference counted inner object that is shared among all the peers, whose
-    // destructor triggers the next step of unsafe recovery report process.
-    WaitApply {
-        target_index: u64,
-        syncer: UnsafeRecoveryWaitApplySyncer,
-    },
-    DemoteFailedVoters {
-        syncer: UnsafeRecoveryExecutePlanSyncer,
-        failed_voters: Vec<metapb::Peer>,
-        target_index: u64,
-        // Failed regions may be stuck in joint state, if that is the case, we need to ask the
-        // region to exit joint state before proposing the demotion.
-        demote_after_exit: bool,
-    },
-    Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
 #[derive(Getters, MutGetters)]
@@ -1106,7 +825,7 @@ where
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
-            check_quorum: true,
+            check_quorum: !cfg.unsafe_disable_check_quorum,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
@@ -3279,7 +2998,7 @@ where
             let persist_index = self.raft_group.raft.raft_log.persisted;
             self.mut_store().update_cache_persisted(persist_index);
 
-            if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
+            if self.is_in_force_leader() {
                 // forward commit index, the committed entries will be applied in the next raft
                 // base tick round
                 self.maybe_force_forward_commit_index();
@@ -3322,7 +3041,7 @@ where
         self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
-        if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
+        if self.is_in_force_leader() {
             // forward commit index, the committed entries will be applied in the next raft
             // base tick round
             self.maybe_force_forward_commit_index();
@@ -4793,7 +4512,7 @@ where
             &self.peer,
             changes.as_ref(),
             &cc,
-            self.is_force_leader(),
+            self.is_in_force_leader(),
         )?;
 
         ctx.raft_metrics.propose.conf_change.inc();
@@ -5154,7 +4873,7 @@ where
     }
 
     #[inline]
-    pub fn is_force_leader(&self) -> bool {
+    pub fn is_in_force_leader(&self) -> bool {
         matches!(
             self.force_leader,
             Some(ForceLeaderState::ForceLeader { .. })
@@ -5166,7 +4885,7 @@ where
             &self.unsafe_recovery_state
         {
             if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                if self.is_force_leader() {
+                if self.is_in_force_leader() {
                     info!(
                         "Unsafe recovery, finish wait apply";
                         "region_id" => self.region().get_id(),

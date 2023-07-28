@@ -95,19 +95,19 @@ fn test_default_no_config_item() {
     );
     assert_eq!(
         config.raftdb.defaultcf.block_cache_size,
-        memory_limit_for_cf(true, CF_DEFAULT, total_mem)
+        Some(memory_limit_for_cf(true, CF_DEFAULT, total_mem))
     );
     assert_eq!(
         config.rocksdb.defaultcf.block_cache_size,
-        memory_limit_for_cf(false, CF_DEFAULT, total_mem)
+        Some(memory_limit_for_cf(false, CF_DEFAULT, total_mem))
     );
     assert_eq!(
         config.rocksdb.writecf.block_cache_size,
-        memory_limit_for_cf(false, CF_WRITE, total_mem)
+        Some(memory_limit_for_cf(false, CF_WRITE, total_mem))
     );
     assert_eq!(
         config.rocksdb.lockcf.block_cache_size,
-        memory_limit_for_cf(false, CF_LOCK, total_mem)
+        Some(memory_limit_for_cf(false, CF_LOCK, total_mem))
     );
     assert_eq!(config.storage.reserve_space, ReadableSize::gb(1));
 

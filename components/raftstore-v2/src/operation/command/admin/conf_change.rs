@@ -104,7 +104,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.peer(),
             changes.as_ref(),
             &cc,
-            false,
+            self.is_in_force_leader(),
         )?;
 
         // TODO: check if the new peer is already in history record.
@@ -279,7 +279,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                         self.apply_single_change(kind, cp, &mut new_region)
                     };
                     if let Err(e) = res {
-                        error!(self.logger, "failed to apply conf change"; 
+                        error!(self.logger, "failed to apply conf change";
                         "changes" => ?changes,
                         "legacy" => legacy,
                         "original region" => ?region, "err" => ?e);

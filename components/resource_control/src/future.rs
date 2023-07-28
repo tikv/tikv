@@ -266,7 +266,7 @@ mod tests {
             .name_prefix("test")
             .build_future_pool();
 
-        let resource_limiter = Arc::new(ResourceLimiter::new(f64::INFINITY, 1000.0));
+        let resource_limiter = Arc::new(ResourceLimiter::new("".into(), f64::INFINITY, 1000.0, 0));
 
         fn spawn_and_wait<F>(pool: &FuturePool, f: F, limiter: Arc<ResourceLimiter>)
         where
@@ -285,7 +285,7 @@ mod tests {
         loop {
             i += 1;
             spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            stats = resource_limiter.get_limiter(Io).get_statistics();
+            stats = resource_limiter.get_limit_statistics(Io);
             assert_eq!(stats.total_consumed, i * 150);
             if stats.total_wait_dur_us > 0 {
                 break;
@@ -294,7 +294,7 @@ mod tests {
 
         let start = Instant::now();
         spawn_and_wait(&pool, empty(), resource_limiter.clone());
-        let new_stats = resource_limiter.get_limiter(Io).get_statistics();
+        let new_stats = resource_limiter.get_limit_statistics(Io);
         let delta = new_stats - stats;
         let dur = start.saturating_elapsed();
         assert_eq!(delta.total_consumed, 150);
@@ -306,7 +306,7 @@ mod tests {
         {
             fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
             spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            assert_eq!(resource_limiter.get_limiter(Io).get_statistics(), new_stats);
+            assert_eq!(resource_limiter.get_limit_statistics(Io), new_stats);
             fail::remove("failed_to_get_thread_io_bytes_stats");
         }
     }

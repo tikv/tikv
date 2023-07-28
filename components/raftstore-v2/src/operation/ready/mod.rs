@@ -229,6 +229,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
         self.retry_pending_reads(&store_ctx.cfg);
+        self.check_force_leader(store_ctx);
         self.raft_group_mut().tick()
     }
 
@@ -333,6 +334,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         msg.get_from_peer().get_id(),
                         msg.get_extra_msg(),
                     );
+                    return;
+                }
+                ExtraMessageType::MsgRefreshBuckets => {
+                    self.on_msg_refresh_buckets(ctx, &msg);
                     return;
                 }
                 _ => (),
@@ -877,6 +882,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
+
+            if self.unsafe_recovery_state().is_some() {
+                debug!(self.logger, "unsafe recovery finishes applying a snapshot");
+                self.unsafe_recovery_maybe_finish_wait_apply(false);
+            }
         }
 
         if let Some(flushed_epoch) = flushed_epoch {
@@ -886,6 +896,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
+
+        if self.is_in_force_leader() {
+            // forward commit index, the committed entries will be applied in
+            // the next raft tick round.
+            self.maybe_force_forward_commit_index();
+        }
+
         if !self.destroy_progress().started() {
             // We may need to check if there is persisted committed logs.
             self.set_has_ready();
@@ -1049,6 +1066,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+
+            if self.is_in_force_leader() && ss.raft_state != StateRole::Leader {
+                // for some reason, it's not leader anymore
+                info!(self.logger,
+                    "step down in force leader state";
+                    "state" => ?ss.raft_state,
+                );
+                self.on_force_leader_fail();
+            }
+
             self.read_progress()
                 .update_leader_info(ss.leader_id, term, self.region());
             let target = self.refresh_leader_transferee();

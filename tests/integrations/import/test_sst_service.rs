@@ -8,6 +8,7 @@ use pd_client::PdClient;
 use tempfile::Builder;
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
+use tikv_util::config::ReadableSize;
 
 use super::util::*;
 
@@ -87,13 +88,21 @@ fn test_write_and_ingest_with_tde() {
 #[test]
 fn test_ingest_sst() {
     let mut cfg = TikvConfig::default();
+    let cleanup_interval = Duration::from_millis(10);
+    cfg.raft_store.split_region_check_tick_interval.0 = cleanup_interval;
+    cfg.raft_store.pd_heartbeat_tick_interval.0 = cleanup_interval;
+    cfg.raft_store.report_region_buckets_tick_interval.0 = cleanup_interval;
+    cfg.coprocessor.enable_region_bucket = Some(true);
+    cfg.coprocessor.region_bucket_size = ReadableSize(200);
+    cfg.raft_store.region_split_check_diff = Some(ReadableSize(200));
+    cfg.server.addr = "127.0.0.1:0".to_owned();
     cfg.server.grpc_concurrency = 1;
-    let (_cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
+    let (cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
 
     let sst_path = temp_dir.path().join("test.sst");
-    let sst_range = (0, 100);
+    let sst_range = (0, 255);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
 
     // No region id and epoch.
@@ -118,6 +127,27 @@ fn test_ingest_sst() {
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
+
+    for _ in 0..10 {
+        let region_keys = cluster
+            .pd_client
+            .get_region_approximate_keys(ctx.get_region_id())
+            .unwrap_or_default();
+        if region_keys != 255 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
+        }
+
+        let buckets = cluster
+            .pd_client
+            .get_buckets(ctx.get_region_id())
+            .unwrap_or_default();
+        if buckets.meta.keys.len() <= 2 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        return;
+    }
+    panic!("region keys is not 255 or buckets keys len less than 2")
 }
 
 fn switch_mode(import: &ImportSstClient, range: Range, mode: SwitchMode) {

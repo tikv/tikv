@@ -25,7 +25,7 @@ use tikv_util::{
     Either,
 };
 
-const DEFAULT_HIGH_PRI_POOL_SIZE: usize = 1;
+const DEFAULT_HIGH_PRI_POOL_SIZE: usize = 2;
 const DEFAULT_LOW_PRI_POOL_SIZE: usize = 6;
 
 pub enum Task<EK> {
@@ -357,10 +357,11 @@ impl<EK: KvEngine> Runner<EK> {
         cb: Option<Box<dyn FnOnce() + Send>>,
     ) {
         let path = self.pause_background_work(tablet);
-        self.waiting_destroy_tasks
-            .entry(region_id)
-            .or_default()
-            .push((path, wait_for_persisted, cb));
+        let list = self.waiting_destroy_tasks.entry(region_id).or_default();
+        if list.iter().any(|(p, ..)| p == &path) {
+            return;
+        }
+        list.push((path, wait_for_persisted, cb));
     }
 
     fn destroy(&mut self, region_id: u64, persisted: u64) {
@@ -390,12 +391,16 @@ impl<EK: KvEngine> Runner<EK> {
     /// Returns true if task is consumed. Failure is considered consumed.
     fn process_destroy_task(logger: &Logger, registry: &TabletRegistry<EK>, path: &Path) -> bool {
         match EK::locked(path.to_str().unwrap()) {
-            Err(e) => warn!(
-                logger,
-                "failed to check whether the tablet path is locked";
-                "err" => ?e,
-                "path" => path.display(),
-            ),
+            Err(e) if !e.to_string().contains("No such file or directory") => {
+                warn!(
+                    logger,
+                    "failed to check whether the tablet path is locked";
+                    "err" => ?e,
+                    "path" => path.display(),
+                );
+                return false;
+            }
+            Err(_) => (),
             Ok(false) => {
                 let (_, region_id, tablet_index) =
                     registry.parse_tablet_name(path).unwrap_or(("", 0, 0));
@@ -414,13 +419,13 @@ impl<EK: KvEngine> Runner<EK> {
                             "path" => path.display(),
                         )
                     });
-                return true;
             }
             Ok(true) => {
                 debug!(logger, "ignore locked tablet"; "path" => path.display());
+                return false;
             }
         }
-        false
+        true
     }
 
     fn cleanup_ssts(&self, ssts: Box<[SstMeta]>) {
@@ -470,7 +475,7 @@ impl<EK: KvEngine> Runner<EK> {
             let logger = self.logger.clone();
             let now = Instant::now();
             let pool = if high_priority
-                && self.low_pri_pool.get_running_task_count() > DEFAULT_LOW_PRI_POOL_SIZE / 2
+                && self.low_pri_pool.get_running_task_count() >= DEFAULT_LOW_PRI_POOL_SIZE - 2
             {
                 &self.high_pri_pool
             } else {
@@ -758,5 +763,56 @@ mod tests {
         registry.remove(r_2);
         runner.on_timeout();
         assert!(!path2.exists());
+    }
+
+    #[test]
+    fn test_destroy_missing() {
+        let dir = Builder::new()
+            .prefix("test_destroy_missing")
+            .tempdir()
+            .unwrap();
+        let factory = Box::new(TestTabletFactory::new(
+            DbOptions::default(),
+            vec![("default", CfOptions::default())],
+        ));
+        let registry = TabletRegistry::new(factory, dir.path()).unwrap();
+        let logger = slog_global::borrow_global().new(slog::o!());
+        let (_dir, importer) = create_tmp_importer();
+        let snap_dir = dir.path().join("snap");
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
+        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
+
+        let mut region = Region::default();
+        let r_1 = 1;
+        region.set_id(r_1);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"b".to_vec());
+        let tablet = registry
+            .load(TabletContext::new(&region, Some(1)), true)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+        let path = PathBuf::from(tablet.path());
+        // submit for destroy twice.
+        runner.run(Task::prepare_destroy(tablet.clone(), r_1, 10));
+        runner.run(Task::destroy(r_1, 100));
+        runner.run(Task::prepare_destroy(tablet, r_1, 10));
+        runner.run(Task::destroy(r_1, 100));
+        assert!(path.exists());
+        registry.remove(r_1);
+        runner.on_timeout();
+        assert!(!path.exists());
+        assert!(runner.pending_destroy_tasks.is_empty());
+
+        // submit a non-existing path.
+        runner.run(Task::prepare_destroy_path(
+            dir.path().join("missing"),
+            r_1,
+            200,
+        ));
+        runner.run(Task::destroy(r_1, 500));
+        runner.on_timeout();
+        assert!(runner.pending_destroy_tasks.is_empty());
     }
 }

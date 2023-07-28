@@ -424,6 +424,7 @@ impl ServerCluster {
             resource_manager
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            resource_manager.clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -500,7 +501,13 @@ impl ServerCluster {
             None,
         );
         let debug_thread_handle = debug_thread_pool.handle().clone();
-        let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
+        let debug_service = DebugService::new(
+            debugger,
+            debug_thread_handle,
+            extension,
+            store_meta.clone(),
+            Arc::new(|_, _, _, _| false),
+        );
 
         let apply_router = system.apply_router();
         // Create node.

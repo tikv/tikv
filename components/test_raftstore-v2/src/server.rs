@@ -386,7 +386,14 @@ impl<EK: KvEngine> ServerCluster<EK> {
             )
             .unwrap();
 
-        let mut node = NodeV2::new(&cfg.server, self.pd_client.clone(), None);
+        let mut node = NodeV2::new(
+            &cfg.server,
+            self.pd_client.clone(),
+            None,
+            resource_manager
+                .as_ref()
+                .map(|r| r.derive_controller("raft-v2".into(), false)),
+        );
         node.try_bootstrap_store(&raft_store, &raft_engine).unwrap();
         assert_eq!(node.id(), node_id);
 
@@ -521,6 +528,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             resource_manager
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            resource_manager.clone(),
         )?;
         self.storages.insert(node_id, raft_kv_v2.clone());
 
@@ -1083,12 +1091,15 @@ pub fn must_new_cluster_and_debug_client() -> (
             DebuggerImplV2::new(tablet_registry, raft_engine, ConfigController::default());
 
         sim.pending_debug_service = Some(Box::new(move |cluster, debug_thread_handle| {
-            let raft_extension = cluster.storages.get(&1).unwrap().raft_extension();
+            let raftkv = cluster.storages.get(&1).unwrap();
+            let raft_extension = raftkv.raft_extension();
 
             create_debug(DebugService::new(
                 debugger.clone(),
                 debug_thread_handle,
                 raft_extension,
+                raftkv.raftkv.router().store_meta().clone(),
+                Arc::new(|_, _, _, _| false),
             ))
         }));
     }
