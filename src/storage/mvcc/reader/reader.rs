@@ -638,10 +638,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let user_key = key.truncate_ts()?;
             // Skip the key if its latest write type is `WriteType::Lock` or
             // `WriteType::Rollback`.
-            let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?;
-            if write.write_type != WriteType::Put && write.write_type != WriteType::Delete {
-                cursor.next(&mut self.statistics.write);
-                continue;
+            match WriteRef::parse(cursor.value(&mut self.statistics.write))?.write_type {
+                WriteType::Put | WriteType::Delete => {}
+                WriteType::Lock | WriteType::Rollback => {
+                    cursor.next(&mut self.statistics.write);
+                    continue;
+                }
             }
             // To make sure we only check each unique user key once and the filter returns
             // true.
