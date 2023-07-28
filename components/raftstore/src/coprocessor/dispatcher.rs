@@ -1136,6 +1136,13 @@ mod tests {
             );
             false
         }
+
+        fn cancel_apply_snapshot(&self, _: u64, _: u64) {
+            self.called.fetch_add(
+                ObserverIndex::CancelApplySnapshot as usize,
+                Ordering::SeqCst,
+            );
+        }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
