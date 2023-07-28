@@ -1507,7 +1507,7 @@ pub(crate) mod tests {
         }
 
         fn cancel_apply_snapshot(&self, _: u64, _: u64) {
-            self.cancel_apply.fetch_add(1, Ordering::SeqCst)
+            self.cancel_apply.fetch_add(1, Ordering::SeqCst);
         }
     }
 }
