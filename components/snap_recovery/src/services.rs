@@ -36,7 +36,8 @@ use thiserror::Error;
 use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
 
 use crate::{
-    data_resolver::DataResolverManager, leader_keeper::LeaderKeeper,
+    data_resolver::DataResolverManager,
+    leader_keeper::LeaderKeeper,
     metrics::{CURRENT_WAIT_APPLY_LEADER, CURRENT_WAIT_ELECTION_LEADER, REGION_EVENT_COUNTER},
     region_meta_collector::RegionMetaCollector,
 };
