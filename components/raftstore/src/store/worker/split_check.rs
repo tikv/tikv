@@ -269,13 +269,13 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             bucket.set_end_key(range.1.clone());
             let bucket_entry = host.approximate_bucket_keys(&bucket, tablet)?;
             debug!(
-                "bucket_entry size {} keys count {}",
+                "bucket_entry size {} keys count {}, region_id {}",
                 bucket_entry.size,
-                bucket_entry.keys.len()
+                bucket_entry.keys.len(),
+                region.get_id(),
             );
             buckets.push(bucket_entry);
         }
-
         self.on_buckets_created(&mut buckets, region, &ranges);
         self.refresh_region_buckets(buckets, region, bucket_ranges);
         Ok(())

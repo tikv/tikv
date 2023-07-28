@@ -314,6 +314,9 @@ async fn cleanup_cache(
             }
         }
         fs::remove_file(entry.path())?;
+        if let Some(m) = key_manager {
+            m.delete_file(entry.path().to_str().unwrap(), None)?;
+        }
     }
     let mut missing = vec![];
     loop {
@@ -329,7 +332,10 @@ async fn cleanup_cache(
                     continue;
                 }
                 // We should not write to the file directly as it's hard linked.
-                fs::remove_file(p)?;
+                fs::remove_file(&p)?;
+                if let Some(m) = key_manager {
+                    m.delete_file(p.to_str().unwrap(), None)?;
+                }
             }
             missing.push(meta.file_name);
         }
@@ -338,7 +344,10 @@ async fn cleanup_cache(
         }
     }
     for (_, p) in exists {
-        fs::remove_file(p)?;
+        fs::remove_file(&p)?;
+        if let Some(m) = key_manager {
+            m.delete_file(p.to_str().unwrap(), None)?;
+        }
     }
     let mut resp = TabletSnapshotResponse::default();
     resp.mut_files().set_file_name(missing.clone().into());
@@ -1030,6 +1039,12 @@ pub fn copy_tablet_snapshot(
     let final_path = recver_snap_mgr.final_recv_path(&recv_context.key);
     if let Some(m) = recver_snap_mgr.key_manager() {
         m.link_file(recv_path.to_str().unwrap(), final_path.to_str().unwrap())?;
+    }
+    // Remove final path to make snapshot retryable.
+    if fs::remove_dir_all(&final_path).is_ok() {
+        if let Some(m) = recver_snap_mgr.key_manager() {
+            let _ = m.remove_dir(&final_path, None);
+        }
     }
     fs::rename(&recv_path, &final_path).map_err(|e| {
         if let Some(m) = recver_snap_mgr.key_manager() {

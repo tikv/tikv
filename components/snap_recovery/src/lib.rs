@@ -10,4 +10,5 @@ pub use services::RecoveryService;
 
 mod data_resolver;
 mod leader_keeper;
+mod metrics;
 mod region_meta_collector;

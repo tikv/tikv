@@ -45,6 +45,7 @@ use raftstore::{
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -423,6 +424,7 @@ impl ServerCluster {
             resource_manager
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            resource_manager.clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -449,6 +451,7 @@ impl ServerCluster {
             LocalTablets::Singleton(engines.kv.clone()),
             Arc::clone(&importer),
             None,
+            resource_manager.clone(),
         );
 
         // Create deadlock service.
@@ -478,6 +481,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             res_tag_factory,
             quota_limiter,
+            resource_manager.clone(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
@@ -497,7 +501,13 @@ impl ServerCluster {
             None,
         );
         let debug_thread_handle = debug_thread_pool.handle().clone();
-        let debug_service = DebugService::new(debugger, debug_thread_handle, extension);
+        let debug_service = DebugService::new(
+            debugger,
+            debug_thread_handle,
+            extension,
+            store_meta.clone(),
+            Arc::new(|_, _, _, _| false),
+        );
 
         let apply_router = system.apply_router();
         // Create node.
@@ -607,6 +617,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
+            GrpcServiceManager::dummy(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

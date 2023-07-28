@@ -125,6 +125,11 @@ impl BucketMeta {
         self.keys.remove(idx);
         self.sizes.remove(idx);
     }
+
+    // total size of the whole buckets
+    pub fn total_size(&self) -> u64 {
+        self.sizes.iter().sum()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +195,18 @@ impl BucketStat {
         }
         if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
             *bytes += key.len() as u64 + value_size;
+        }
+    }
+
+    // Notice: It's not evenly distributed, so we update all buckets after ingest
+    // sst. Generally, sst file size is region split size, and this region is
+    // empty region.
+    pub fn ingest_sst(&mut self, key_count: u64, value_size: u64) {
+        for stat in self.stats.mut_write_bytes() {
+            *stat += value_size;
+        }
+        for stat in self.stats.mut_write_keys() {
+            *stat += key_count;
         }
     }
 

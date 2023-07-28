@@ -36,7 +36,7 @@ use kvproto::{
     },
     raft_serverpb::{
         ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
-        RaftTruncatedState, RegionLocalState,
+        RaftTruncatedState, RefreshBuckets, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -84,13 +84,16 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, SnapshotRecoveryState,
-            SnapshotRecoveryWaitApplySyncer, StaleState, UnsafeRecoveryExecutePlanSyncer,
-            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+            ConsistencyState, Peer, PersistSnapshotResult, StaleState,
+            TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
         transport::Transport,
+        unsafe_recovery::{
+            ForceLeaderState, SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer,
+            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+        },
         util,
         util::{KeysInfoFormatter, LeaseState},
         worker::{
@@ -776,7 +779,7 @@ where
             return;
         }
 
-        if !self.fsm.peer.is_force_leader() {
+        if !self.fsm.peer.is_in_force_leader() {
             error!(
                 "Unsafe recovery, demoting failed voters failed, since this peer is not forced leader";
                 "region_id" => self.region().get_id(),
@@ -1821,7 +1824,9 @@ where
                 info!(
                     "Unsafe recovery, expected live voters:";
                     "voters" => ?expected_alive_voter,
-                    "granted" => granted
+                    "granted" => granted,
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
                 );
                 if granted == expected_alive_voter.len() {
                     self.on_enter_force_leader();
@@ -1966,17 +1971,15 @@ where
                 self.register_check_long_uncommitted_tick();
             }
 
-            if let Some(ForceLeaderState::ForceLeader { .. }) = self.fsm.peer.force_leader {
-                if r != StateRole::Leader {
-                    // for some reason, it's not leader anymore
-                    info!(
-                        "step down in force leader state";
-                        "region_id" => self.fsm.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "state" => ?r,
-                    );
-                    self.on_force_leader_fail();
-                }
+            if self.fsm.peer.is_in_force_leader() && r != StateRole::Leader {
+                // for some reason, it's not leader anymore
+                info!(
+                    "step down in force leader state";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "state" => ?r,
+                );
+                self.on_force_leader_fail();
             }
         }
     }
@@ -2021,6 +2024,11 @@ where
     #[inline]
     fn region(&self) -> &Region {
         self.fsm.peer.region()
+    }
+
+    #[inline]
+    fn peer(&self) -> &metapb::Peer {
+        &self.fsm.peer.peer
     }
 
     #[inline]
@@ -2205,7 +2213,7 @@ where
                         let syncer_clone = syncer.clone();
                         let failed_voters_clone = failed_voters.clone();
                         self.fsm.peer.unsafe_recovery_state = None;
-                        if !self.fsm.peer.is_force_leader() {
+                        if !self.fsm.peer.is_in_force_leader() {
                             error!(
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
                                 "region_id" => self.region().get_id(),
@@ -2224,7 +2232,7 @@ where
                                 "region_id" => self.region().get_id(),
                                 "peer_id" => self.fsm.peer_id(),
                             );
-                            if self.fsm.peer.is_force_leader() {
+                            if self.fsm.peer.is_in_force_leader() {
                                 self.propose_raft_command_internal(
                                     exit_joint_request(self.region(), &self.fsm.peer.peer),
                                     Callback::<EK::Snapshot>::write(Box::new(|resp| {
@@ -2684,6 +2692,10 @@ where
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgAvailabilityResponse);
         resp.wait_data = self.fsm.peer.wait_data;
+        let report = resp.mut_availability_context();
+        report.set_from_region_id(self.region_id());
+        report.set_from_region_epoch(self.region().get_region_epoch().clone());
+        report.set_trimmed(true);
         self.fsm
             .peer
             .send_extra_message(resp, &mut self.ctx.trans, from);
@@ -2825,6 +2837,7 @@ where
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
+            ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
         }
     }
 
@@ -3916,7 +3929,8 @@ where
             // until new leader elected, but we can't revert this operation
             // because its result is already persisted in apply worker
             // TODO: should we transfer leader here?
-            let demote_self = is_learner(&self.fsm.peer.peer) && !self.fsm.peer.is_force_leader();
+            let demote_self =
+                is_learner(&self.fsm.peer.peer) && !self.fsm.peer.is_in_force_leader();
             if remove_self || demote_self {
                 warn!(
                     "Removing or demoting leader";
@@ -6008,14 +6022,35 @@ where
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.fsm.peer.get_role(),
         );
-        let old_region_buckets = self.fsm.peer.region_buckets.replace(region_buckets);
+        let old_region_buckets: Option<BucketStat> =
+            self.fsm.peer.region_buckets.replace(region_buckets);
         self.fsm.peer.last_region_buckets = old_region_buckets;
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
+        let version = self.fsm.peer.region_buckets.as_ref().unwrap().meta.version;
         if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
             reader.update(ReadProgress::region_buckets(
                 self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
             ));
         }
+
+        // Notify followers to refresh their buckets version
+        if self.fsm.peer.is_leader() {
+            let peers = self.region().get_peers().to_vec();
+            for p in peers {
+                if &p == self.peer() || p.is_witness {
+                    continue;
+                }
+                let mut extra_msg = ExtraMessage::default();
+                extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
+                let mut refresh_buckets = RefreshBuckets::new();
+                refresh_buckets.set_version(version);
+                extra_msg.set_refresh_buckets(refresh_buckets);
+                self.fsm
+                    .peer
+                    .send_extra_message(extra_msg, &mut self.ctx.trans, &p);
+            }
+        }
+
         debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
@@ -6028,6 +6063,28 @@ where
             _cb,
             self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
         );
+    }
+
+    pub fn on_msg_refresh_buckets(&mut self, msg: RaftMessage) {
+        // leader should not receive this message
+        if self.fsm.peer.is_leader() {
+            return;
+        }
+        let version = msg.get_extra_msg().get_refresh_buckets().get_version();
+        let region_epoch = msg.get_region_epoch().clone();
+
+        let meta = BucketMeta {
+            region_id: self.region_id(),
+            version,
+            region_epoch,
+            keys: vec![],
+            sizes: vec![],
+        };
+
+        let mut store_meta = self.ctx.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
+            reader.update(ReadProgress::region_buckets(Arc::new(meta)));
+        }
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
@@ -6466,6 +6523,10 @@ where
             Some(self.fsm.peer.approximate_size.unwrap_or_default() + size);
         self.fsm.peer.approximate_keys =
             Some(self.fsm.peer.approximate_keys.unwrap_or_default() + keys);
+
+        if let Some(buckets) = &mut self.fsm.peer.region_buckets {
+            buckets.ingest_sst(keys, size);
+        }
         // The ingested file may be overlapped with the data in engine, so we need to
         // check it again to get the accurate value.
         self.fsm.peer.may_skip_split_check = false;

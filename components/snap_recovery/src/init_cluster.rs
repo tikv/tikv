@@ -87,6 +87,11 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
 
     // Disable prevote so it is possible to regenerate leaders.
     config.raft_store.prevote = false;
+    // Because we have increased the election tick to inf, once there is a leader,
+    // the follower will believe it holds an eternal lease. So, once the leader
+    // reboots, the followers will reject to vote for it again.
+    // We need to disable the lease for avoiding that.
+    config.raft_store.unsafe_disable_check_quorum = true;
 
     // disable auto compactions during the restore
     config.rocksdb.defaultcf.disable_auto_compactions = true;
@@ -322,10 +327,7 @@ pub fn create_local_engine_service(
     let env = config
         .build_shared_rocks_env(key_manager.clone(), None)
         .map_err(|e| format!("build shared rocks env: {}", e))?;
-    let block_cache = config
-        .storage
-        .block_cache
-        .build_shared_cache(config.storage.engine);
+    let block_cache = config.storage.block_cache.build_shared_cache();
 
     // init rocksdb / kv db
     let factory =

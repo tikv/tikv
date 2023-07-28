@@ -192,6 +192,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             self.start_pre_flush(
                                 ctx,
                                 "split",
+                                false,
                                 &self.region().clone(),
                                 Box::new(on_flush_finish),
                             );
@@ -221,7 +222,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                 }
                 AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
-                AdminCmdType::UpdateGcPeer => {
+                AdminCmdType::UpdateGcPeer | AdminCmdType::RollbackMerge => {
                     let data = req.write_to_bytes().unwrap();
                     self.propose(ctx, data)
                 }
@@ -261,6 +262,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         reason: &'static str,
+        high_priority: bool,
         target: &Region,
         on_local_flushed: Box<dyn FnOnce() + Send>,
     ) {
@@ -274,6 +276,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Err(e) = ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
             region_id: target_id,
             reason,
+            high_priority,
             threshold: Some(std::time::Duration::from_secs(10)),
             cb: Some(on_local_flushed),
         }) {

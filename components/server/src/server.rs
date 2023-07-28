@@ -69,11 +69,13 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use resolved_ts::LeadershipResolver;
+use resolved_ts::{LeadershipResolver, Task};
 use resource_control::{
+    worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION},
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 use security::SecurityManager;
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
@@ -109,6 +111,7 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
+    mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
@@ -128,9 +131,12 @@ use crate::{
 };
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let mut tikv = TikvServer::<CER, F>::init(config);
-
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
+    let mut tikv = TikvServer::<CER, F>::init(config, service_event_tx.clone());
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.core.config.memory_usage_high_water * memory_limit as f64) as u64;
@@ -152,17 +158,45 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.run_status_server();
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-    signal_handler::wait_for_signal(
-        Some(tikv.engines.take().unwrap().engines),
-        tikv.kv_statistics.clone(),
-        tikv.raft_statistics.clone(),
-    );
+    // Build a background worker for handling signals.
+    {
+        let engines = tikv.engines.take().unwrap().engines;
+        let kv_statistics = tikv.kv_statistics.clone();
+        let raft_statistics = tikv.raft_statistics.clone();
+        std::thread::spawn(move || {
+            signal_handler::wait_for_signal(
+                Some(engines),
+                kv_statistics,
+                raft_statistics,
+                Some(service_event_tx),
+            )
+        });
+    }
+    loop {
+        if let Ok(service_event) = service_event_rx.recv() {
+            match service_event {
+                ServiceEvent::PauseGrpc => {
+                    tikv.pause();
+                }
+                ServiceEvent::ResumeGrpc => {
+                    tikv.resume();
+                }
+                ServiceEvent::Exit => {
+                    break;
+                }
+            }
+        }
+    }
     tikv.stop();
 }
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TikvConfig) {
+pub fn run_tikv(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -183,9 +217,9 @@ pub fn run_tikv(config: TikvConfig) {
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config)
+            run_impl::<RocksEngine, API>(config, service_event_tx, service_event_rx)
         } else {
-            run_impl::<RaftLogEngine, API>(config)
+            run_impl::<RaftLogEngine, API>(config, service_event_tx, service_event_rx)
         }
     })
 }
@@ -219,6 +253,8 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
+    resolved_ts_scheduler: Option<Scheduler<Task>>,
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -247,7 +283,7 @@ where
     ER: RaftEngine,
     F: KvFormat,
 {
-    fn init(mut config: TikvConfig) -> TikvServer<ER, F> {
+    fn init(mut config: TikvConfig, tx: TikvMpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -316,6 +352,12 @@ where
             // spawn a task to watch all resource groups update.
             background_worker.spawn_async_task(async move {
                 resource_mgr_service.watch_resource_groups().await;
+            });
+            // spawn a task to auto adjust background quota limiter.
+            let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
+            let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
+            background_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
+                worker.adjust_quota();
             });
             Some(mgr)
         } else {
@@ -400,6 +442,8 @@ where
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
+            resolved_ts_scheduler: None,
+            grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
 
@@ -604,6 +648,7 @@ where
             self.resource_manager
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -758,6 +803,7 @@ where
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
                 self.quota_limiter.clone(),
+                self.resource_manager.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
@@ -923,6 +969,7 @@ where
             self.concurrency_manager.clone(),
             collector_reg_handle,
             self.causal_ts_provider.clone(),
+            self.grpc_service_mgr.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -985,6 +1032,7 @@ where
                 server.env(),
                 self.security_mgr.clone(),
             );
+            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
             self.core.to_stop.push(rts_worker);
         }
@@ -1033,6 +1081,7 @@ where
             LocalTablets::Singleton(engines.engines.kv.clone()),
             servers.importer.clone(),
             None,
+            self.resource_manager.clone(),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1050,10 +1099,27 @@ where
             .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
 
         // Debug service.
+        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
         let debug_service = DebugService::new(
             servers.debugger.clone(),
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
+            self.engines.as_ref().unwrap().store_meta.clone(),
+            Arc::new(
+                move |region_id, log_locks, min_start_ts, callback| -> bool {
+                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                        let res = s.schedule(Task::GetDiagnosisInfo {
+                            region_id,
+                            log_locks,
+                            min_start_ts,
+                            callback,
+                        });
+                        res.is_ok()
+                    } else {
+                        false
+                    }
+                },
+            ),
         );
         info!("start register debug service");
         if servers
@@ -1120,6 +1186,7 @@ where
             self.concurrency_manager.clone(),
             self.core.config.storage.api_version(),
             self.causal_ts_provider.clone(),
+            self.resource_manager.clone(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,
@@ -1390,6 +1457,7 @@ where
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.core.store_path.clone(),
                 self.resource_manager.clone(),
+                self.grpc_service_mgr.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1425,6 +1493,26 @@ where
 
         self.core.to_stop.into_iter().for_each(|s| s.stop());
     }
+
+    fn pause(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        if let Err(e) = server.server.pause() {
+            warn!(
+                "failed to pause the server";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn resume(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        if let Err(e) = server.server.resume() {
+            warn!(
+                "failed to resume the server";
+                "err" => ?e
+            );
+        }
+    }
 }
 
 impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
@@ -1432,12 +1520,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
-        let block_cache = self
-            .core
-            .config
-            .storage
-            .block_cache
-            .build_shared_cache(self.core.config.storage.engine);
+        let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
             .core
             .config
@@ -1555,10 +1638,8 @@ mod test {
         config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
-        let cache = config
-            .storage
-            .block_cache
-            .build_shared_cache(config.storage.engine);
+        config.validate().unwrap();
+        let cache = config.storage.block_cache.build_shared_cache();
 
         let factory = KvEngineFactoryBuilder::new(env, &config, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), path.path().join("tablets")).unwrap();
