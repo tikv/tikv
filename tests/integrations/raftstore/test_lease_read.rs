@@ -10,7 +10,7 @@ use std::{
 };
 
 use engine_rocks::RocksSnapshot;
-use kvproto::{kvrpcpb::Op, metapb};
+use kvproto::{kvrpcpb::Op, metapb, raft_serverpb::RaftMessage};
 use more_asserts::assert_le;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -871,4 +871,83 @@ fn test_stale_read_with_ts0() {
             .is_some()
     );
     assert!(leader_client.kv_read(b"key1".to_vec(), 0).not_found);
+}
+
+#[test]
+fn test_node_lease_restart_during_isolation() {
+    let mut cluster = new_node_cluster(0, 3);
+    let election_timeout = configure_for_lease_read(&mut cluster, Some(500), Some(3));
+    cluster.cfg.raft_store.allow_unsafe_vote_after_start = false;
+    cluster.run();
+    sleep_ms(election_timeout.as_millis() as _);
+    let mut region;
+    let start = Instant::now_coarse();
+    let key = b"k";
+    loop {
+        region = cluster.get_region(key);
+        if region.get_peers().len() == 3
+            && region
+                .get_peers()
+                .iter()
+                .all(|p| p.get_role() == metapb::PeerRole::Voter)
+        {
+            break;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("timeout");
+        }
+    }
+
+    let region_id = region.get_id();
+    let peer1 = find_peer(&region, 1).unwrap();
+    let peer2 = find_peer(&region, 2).unwrap();
+
+    cluster.must_put(key, b"v0");
+    cluster.must_transfer_leader(region_id, peer1.clone());
+    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v0");
+    cluster.must_transfer_leader(region_id, peer2.clone());
+    must_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, b"v0");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    // Restart node 3.
+    cluster.stop_node(3);
+    cluster.run_node(3).unwrap();
+
+    // Let peer1 start election.
+    let mut timeout = RaftMessage::default();
+    timeout.mut_message().set_to(peer1.get_id());
+    timeout
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    timeout
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    timeout.set_region_id(region.get_id());
+    timeout.set_from_peer(peer2.clone());
+    timeout.set_to_peer(peer1.clone());
+    timeout.set_region_epoch(region.get_region_epoch().clone());
+    cluster.send_raft_msg(timeout).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let append_resp_notifier = Box::new(MessageTypeNotifier::new(
+        MessageType::MsgAppendResponse,
+        tx,
+        Arc::from(AtomicBool::new(true)),
+    ));
+    cluster.sim.wl().add_send_filter(3, append_resp_notifier);
+    let timeout = Duration::from_secs(5);
+    rx.recv_timeout(timeout).unwrap();
+
+    let mut put = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cmd(key, b"v1")],
+        false,
+    );
+    put.mut_header().set_peer(peer1.clone());
+    let resp = cluster.call_command(put, timeout).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v1");
+    must_error_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, timeout);
 }
