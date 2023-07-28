@@ -4,7 +4,6 @@ use api_version::{keyspace::KvPair, ApiV1};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use resource_control::{with_resource_limiter, ResourceLimiter};
 use tidb_query_common::storage::{
     scanner::{RangesScanner, RangesScannerOptions},
     Range,
@@ -21,7 +20,6 @@ use crate::{
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
     scanner: RangesScanner<TikvStorage<SnapshotStore<S>>, ApiV1>,
-    resource_limiter: Option<Arc<ResourceLimiter>>,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -31,7 +29,6 @@ impl<S: Snapshot> ChecksumContext<S> {
         start_ts: u64,
         snap: S,
         req_ctx: &ReqContext,
-        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
@@ -52,14 +49,13 @@ impl<S: Snapshot> ChecksumContext<S> {
             is_key_only: false,
             is_scanned_range_aware: false,
         });
-        Ok(Self {
-            req,
-            scanner,
-            resource_limiter,
-        })
+        Ok(Self { req, scanner })
     }
+}
 
-    async fn do_handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
+#[async_trait]
+impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
@@ -98,14 +94,6 @@ impl<S: Snapshot> ChecksumContext<S> {
         let mut resp = Response::default();
         resp.set_data(data);
         Ok(resp.into())
-    }
-}
-
-#[async_trait]
-impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
-    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
-        let limiter = self.resource_limiter.clone();
-        with_resource_limiter(self.do_handle_request(), limiter).await
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {

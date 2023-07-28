@@ -190,18 +190,9 @@ impl<E: Engine> Endpoint<E> {
 
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
-        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
-            r.get_resource_limiter(
-                context
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
-                context.get_request_source(),
-            )
-        });
 
         let mut req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
-
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -270,7 +261,6 @@ impl<E: Engine> Endpoint<E> {
                         req.get_is_cache_enabled(),
                         paging_size,
                         quota_limiter,
-                        resource_limiter,
                     )
                     .data_version(data_version)
                     .build()
@@ -317,7 +307,6 @@ impl<E: Engine> Endpoint<E> {
                         snap,
                         req_ctx,
                         quota_limiter,
-                        resource_limiter,
                     )
                     .map(|h| h.into_boxed())
                 });
@@ -363,7 +352,6 @@ impl<E: Engine> Endpoint<E> {
                         start_ts,
                         snap,
                         req_ctx,
-                        resource_limiter,
                     )
                     .map(|h| h.into_boxed())
                 });
@@ -502,6 +490,15 @@ impl<E: Engine> Endpoint<E> {
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
+        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req_ctx.context.get_request_source(),
+            )
+        });
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -513,6 +510,7 @@ impl<E: Engine> Endpoint<E> {
                 priority,
                 task_id,
                 metadata,
+                resource_limiter,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -737,6 +735,15 @@ impl<E: Engine> Endpoint<E> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
+        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req_ctx.context.get_request_source(),
+            )
+        });
         let key_ranges = req_ctx
             .ranges
             .iter()
@@ -760,6 +767,7 @@ impl<E: Engine> Endpoint<E> {
                 priority,
                 task_id,
                 metadata,
+                resource_limiter,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)

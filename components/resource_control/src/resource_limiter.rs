@@ -3,11 +3,12 @@
 use std::{
     fmt,
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
+use futures::compat::Future01CompatExt;
 use strum::EnumCount;
-use tikv_util::time::Limiter;
+use tikv_util::{time::Limiter, timer::GLOBAL_TIMER_HANDLE};
 
 use crate::metrics::BACKGROUND_TASKS_WAIT_DURATION;
 
@@ -65,6 +66,17 @@ impl ResourceLimiter {
             .with_label_values(&[&self.name])
             .inc_by(wait_dur.as_micros() as u64);
         wait_dur
+    }
+
+    pub async fn async_consume(&self, cpu_time: Duration, io_bytes: u64) -> Duration {
+        let dur = self.consume(cpu_time, io_bytes);
+        if !dur.is_zero() {
+            _ = GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + dur)
+                .compat()
+                .await;
+        }
+        dur
     }
 
     #[inline]

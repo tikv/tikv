@@ -288,17 +288,12 @@
 [storage.block-cache]
 
 ## Size of the shared block cache. Normally it should be tuned to 30%-50% of system's total memory.
-## When the config is not set, it is decided by the sum of the following fields or their default
-## value:
-##   * rocksdb.defaultcf.block-cache-size or 25% of system's total memory
-##   * rocksdb.writecf.block-cache-size   or 15% of system's total memory
-##   * rocksdb.lockcf.block-cache-size    or  2% of system's total memory
-##   * raftdb.defaultcf.block-cache-size  or  2% of system's total memory
 ##
 ## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
 ## Otherwise, the OOM problem might occur in TiKV.
 ##
-## If it's not set, 45% of available system memory will be used.
+## When storage.engine is "raft-kv", default value is 45% of available system memory.
+## When storage.engine is "partitioned-raft-kv", default value is 30% of available system memory.
 # capacity = "0B"
 
 [storage.flow-control]
@@ -573,7 +568,7 @@
 
 ## Dump statistics periodically in information logs.
 ## When storage.engine is "raft-kv", default value is 10m.
-## When storage.engine is "partitioned-raft-kv", default value is 120m.
+## When storage.engine is "partitioned-raft-kv", default value is 0.
 # stats-dump-period = "10m"
 
 ## Refer to: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ
@@ -824,7 +819,7 @@
 
 ## The lower bound of SST file size when compaction guard is enabled. The config prevent SST files
 ## being too small when compaction guard is enabled.
-# compaction-guard-min-output-file-size = "1M"
+# compaction-guard-min-output-file-size = "8M"
 
 ## The upper bound of SST file size when compaction guard is enabled. The config prevent SST files
 ## being too large when compaction guard is enabled. This config overrides target-file-size-base
@@ -986,7 +981,7 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
 # enable-compaction-guard = true
-# compaction-guard-min-output-file-size = "1M"
+# compaction-guard-min-output-file-size = "8M"
 # compaction-guard-max-output-file-size = "128M"
 # format-version = 2
 # prepopulate-block-cache = "disabled"
