@@ -47,7 +47,8 @@ pub enum Task {
     // In store.rs.
     StoreHeartbeat {
         stats: pdpb::StoreStats,
-        // TODO: StoreReport, StoreDrAutoSyncStatus
+        report: Option<pdpb::StoreReport>,
+        // TODO: StoreDrAutoSyncStatus
     },
     UpdateStoreInfos {
         cpu_usages: RecordPairVec,
@@ -303,8 +304,8 @@ where
     fn run(&mut self, task: Task) {
         self.maybe_schedule_heartbeat_receiver();
         match task {
-            Task::StoreHeartbeat { stats } => {
-                self.handle_store_heartbeat(stats, false /* is_fake_hb */)
+            Task::StoreHeartbeat { stats, report } => {
+                self.handle_store_heartbeat(stats, false /* is_fake_hb */, report)
             }
             Task::UpdateStoreInfos {
                 cpu_usages,

@@ -950,6 +950,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             self.resource_manager
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -1375,6 +1376,8 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             servers.debugger.clone(),
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
+            self.engines.as_ref().unwrap().store_meta.clone(),
+            Arc::new(|_, _, _, _| false),
         );
         if servers
             .server

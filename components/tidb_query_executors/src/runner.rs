@@ -7,7 +7,6 @@ use fail::fail_point;
 use itertools::Itertools;
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
-use resource_control::{with_resource_limiter, ResourceLimiter};
 use tidb_query_common::{
     execute_stats::ExecSummary,
     metrics::*,
@@ -80,7 +79,6 @@ pub struct BatchExecutorsRunner<SS> {
     paging_size: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
-    resource_limiter: Option<Arc<ResourceLimiter>>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling
@@ -161,6 +159,9 @@ impl BatchExecutorsRunner<()> {
                 }
                 ExecType::TypeExpand => {
                     other_err!("Expand executor not implemented");
+                }
+                ExecType::TypeExpand2 => {
+                    other_err!("Expand2 executor not implemented");
                 }
             }
         }
@@ -430,7 +431,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         is_streaming: bool,
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
-        resource_limiter: Option<Arc<ResourceLimiter>>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -480,7 +480,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             encode_type,
             paging_size,
             quota_limiter,
-            resource_limiter,
         })
     }
 
@@ -506,18 +505,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         loop {
             let mut chunk = Chunk::default();
             let mut sample = self.quota_limiter.new_sample(true);
-            let resource_limiter = self.resource_limiter.clone();
             let (drained, record_len) = {
                 let (cpu_time, res) = sample
-                    .observe_cpu_async(with_resource_limiter(
-                        self.internal_handle_request(
-                            false,
-                            batch_size,
-                            &mut chunk,
-                            &mut warnings,
-                            &mut ctx,
-                        ),
-                        resource_limiter,
+                    .observe_cpu_async(self.internal_handle_request(
+                        false,
+                        batch_size,
+                        &mut chunk,
+                        &mut warnings,
+                        &mut ctx,
                     ))
                     .await;
                 sample.add_cpu_time(cpu_time);

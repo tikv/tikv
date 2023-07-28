@@ -142,9 +142,15 @@ impl KvEngine for RocksEngine {
         self.rocks.bad_downcast()
     }
 
-    fn can_apply_snapshot(&self, is_timeout: bool, new_batch: bool, region_id: u64) -> bool {
+    fn can_apply_snapshot(
+        &self,
+        is_timeout: bool,
+        new_batch: bool,
+        region_id: u64,
+        queue_size: usize,
+    ) -> bool {
         self.proxy_ext
-            .can_apply_snapshot(is_timeout, new_batch, region_id)
+            .can_apply_snapshot(is_timeout, new_batch, region_id, queue_size)
     }
 
     #[cfg(any(test, feature = "testexport"))]

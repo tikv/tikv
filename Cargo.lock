@@ -287,6 +287,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
+name = "autotools"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aef8da1805e028a172334c3b680f93e71126f2327622faef2ec3d893c0a4ad77"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "aws"
 version = "0.0.1"
 dependencies = [
@@ -3088,12 +3097,12 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#92075f193814dbc00f347b4589743a36bf624f34"
+source = "git+https://github.com/pingcap/kvproto.git#770f7183434ca05887a3f63265b8745017130e1f"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build 0.14.1",
+ "protobuf-build",
  "raft-proto",
 ]
 
@@ -3217,7 +3226,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3236,7 +3245,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4365,14 +4374,14 @@ version = "0.3.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e30165d31df606f5726b090ec7592c308a0eaf61721ff64c9a3018e344a8753e"
 dependencies = [
- "portable-atomic 1.4.1",
+ "portable-atomic 1.4.2",
 ]
 
 [[package]]
 name = "portable-atomic"
-version = "1.4.1"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edc55135a600d700580e406b4de0d59cb9ad25e344a3a091a97ded2622ec4ec6"
+checksum = "f32154ba0af3a075eefa1eda8bb414ee928f62303a54ea85b8d6638ff1a6ee9e"
 
 [[package]]
 name = "pprof"
@@ -4608,26 +4617,15 @@ dependencies = [
 
 [[package]]
 name = "protobuf-build"
-version = "0.13.0"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b2be70fa994657539e3c872cc54363c9bf28b0d7a7f774df70e9fd760df3bc4"
-dependencies = [
- "bitflags",
- "protobuf",
- "protobuf-codegen",
- "regex",
-]
-
-[[package]]
-name = "protobuf-build"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2df9942df2981178a930a72d442de47e2f0df18ad68e50a30f816f1848215ad0"
+checksum = "c852d9625b912c3e50480cdc701f60f49890b5d7ad46198dd583600f15e7c6ec"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
  "protobuf",
  "protobuf-codegen",
+ "protobuf-src",
  "regex",
 ]
 
@@ -4648,6 +4646,15 @@ checksum = "00993dc5fbbfcf9d8a005f6b6c29fd29fd6d86deba3ae3f41fd20c624c414616"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
+]
+
+[[package]]
+name = "protobuf-src"
+version = "1.1.0+21.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7ac8852baeb3cc6fb83b93646fb93c0ffe5d14bf138c945ceb4b9948ee0e3c1"
+dependencies = [
+ "autotools",
 ]
 
 [[package]]
@@ -4876,7 +4883,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
+source = "git+https://github.com/tikv/raft-rs?branch=master#9d360a3b0cdb691da8e500a4f73c457b605a1d73"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4924,11 +4931,11 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
+source = "git+https://github.com/tikv/raft-rs?branch=master#9d360a3b0cdb691da8e500a4f73c457b605a1d73"
 dependencies = [
  "bytes",
  "protobuf",
- "protobuf-build 0.14.1",
+ "protobuf-build",
 ]
 
 [[package]]
@@ -5474,7 +5481,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -6051,9 +6058,9 @@ checksum = "c111b5bd5695e56cffe5129854aa230b39c93a305372fdbb2668ca2394eea9f8"
 
 [[package]]
 name = "slog"
-version = "2.7.0"
+version = "2.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8347046d4ebd943127157b94d63abb990fcf729dc4e9978927fdf4ac3c998d06"
+checksum = "1cc9c640a4adbfbcc11ffb95efe5aa7af7309e002adab54b185507dbf2377b99"
 
 [[package]]
 name = "slog-async"
@@ -6133,8 +6140,11 @@ dependencies = [
  "grpcio",
  "keys",
  "kvproto",
+ "lazy_static",
  "log",
  "pd_client",
+ "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "raft_log_engine",
  "raftstore",
@@ -6980,7 +6990,6 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "protobuf",
- "resource_control",
  "slog",
  "slog-global",
  "smallvec",
@@ -7380,12 +7389,12 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#955fbdc879517f16b7a2f5967f143b92a6ab03dd"
+source = "git+https://github.com/pingcap/tipb.git#55b921cfdca1e29bcc29a83c1532bfdf53f88c51"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build 0.13.0",
+ "protobuf-build",
 ]
 
 [[package]]

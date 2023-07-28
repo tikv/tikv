@@ -56,7 +56,7 @@ use tikv_util::{
 };
 use txn_types::WriteBatchFlags;
 
-use super::merge_source_path;
+use super::{merge_source_path, CatchUpLogs};
 use crate::{
     batch::StoreContext,
     fsm::ApplyResReporter,
@@ -67,13 +67,35 @@ use crate::{
 
 const TRIM_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PreProposeContext {
     pub min_matched: u64,
     lock_size_limit: usize,
 }
 
+/// FSM Graph (forward):
+///
+///  +-------+------------------+
+///  |       |                  v
+/// None -> (1) -> (2) ------> (4) -> None(destroyed)
+///  |       |      |           ^
+///  +-------+------+--> (3) ---+
+///
+/// - None->1: `start_check_trim_status`
+/// - 1->2: `check_pessimistic_locks`
+/// - *->3: `on_catch_up_logs`
+/// - *->4: `on_apply_res_prepare_merge` / `Peer::new`
+/// - 4->None: `on_ack_commit_merge`
+///
+/// Additional backward paths to None:
+///
+/// - 1->None: `maybe_clean_up_stale_merge_context` /
+///   `merge_on_availability_response`
+/// - 1/2->None: `update_merge_progress_on_became_follower` /
+///   `propose_prepare_merge`
+/// - *->None: `rollback_merge`
 pub enum PrepareStatus {
+    /// (1)
     WaitForTrimStatus {
         start_time: Instant,
         // Peers that we are not sure if trimmed.
@@ -82,6 +104,7 @@ pub enum PrepareStatus {
         // callback.
         req: Option<RaftCmdRequest>,
     },
+    /// (2)
     /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
     /// command `cmd` until all writes before `idx` are applied (2) reject all
     /// in-coming write proposals.
@@ -99,9 +122,42 @@ pub enum PrepareStatus {
         ctx: PreProposeContext,
         req: Option<RaftCmdRequest>,
     },
+    /// (3)
+    /// Catch up logs after source has committed `PrepareMerge` and target has
+    /// committed `CommitMerge`.
+    CatchUpLogs(CatchUpLogs),
+    /// (4)
     /// In this state, all write proposals except for `RollbackMerge` will be
     /// rejected.
     Applied(MergeState),
+}
+
+impl std::fmt::Debug for PrepareStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Self::WaitForTrimStatus {
+                start_time,
+                pending_peers,
+                req,
+            } => f
+                .debug_struct("PrepareStatus::WaitForTrimStatus")
+                .field("start_time", start_time)
+                .field("pending_peers", pending_peers)
+                .field("req", req)
+                .finish(),
+            Self::WaitForFence { fence, ctx, req } => f
+                .debug_struct("PrepareStatus::WaitForFence")
+                .field("fence", fence)
+                .field("ctx", ctx)
+                .field("req", req)
+                .finish(),
+            Self::CatchUpLogs(cul) => cul.fmt(f),
+            Self::Applied(state) => f
+                .debug_struct("PrepareStatus::Applied")
+                .field("state", state)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -343,9 +399,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
 
-        let status = &mut self.merge_context_mut().prepare_status;
         // Shouldn't enter this call if trim check is already underway.
-        assert!(status.is_none());
+        let status = &mut self.merge_context_mut().prepare_status;
+        if status.is_some() {
+            let logger = self.logger.clone();
+            panic!(
+                "expect empty prepare merge status {}: {:?}",
+                SlogFormat(&logger),
+                self.merge_context_mut().prepare_status
+            );
+        }
         *status = Some(PrepareStatus::WaitForTrimStatus {
             start_time: Instant::now_coarse(),
             pending_peers,
@@ -463,7 +526,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         let last_index = self.raft_group().raft.raft_log.last_index();
         if has_locks && self.entry_storage().applied_index() < last_index {
-            self.merge_context_mut().prepare_status = Some(PrepareStatus::WaitForFence {
+            let status = &mut self.merge_context_mut().prepare_status;
+            if !matches!(status, Some(PrepareStatus::WaitForTrimStatus { .. })) {
+                let logger = self.logger.clone();
+                panic!(
+                    "expect WaitForTrimStatus {}: {:?}",
+                    SlogFormat(&logger),
+                    self.merge_context_mut().prepare_status
+                );
+            }
+            *status = Some(PrepareStatus::WaitForFence {
                 fence: last_index,
                 ctx,
                 req: Some(mem::take(req)),
@@ -486,6 +558,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .as_ref()
             .and_then(|c| c.prepare_status.as_ref())
         {
+            Some(PrepareStatus::WaitForTrimStatus { .. }) | None => Ok(None),
             Some(PrepareStatus::WaitForFence { fence, ctx, .. }) => {
                 if applied_index < *fence {
                     info!(
@@ -499,11 +572,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     Ok(Some(ctx.clone()))
                 }
             }
+            Some(PrepareStatus::CatchUpLogs(cul)) => {
+                Err(box_err!("catch up logs is in-progress: {:?}.", cul))
+            }
             Some(PrepareStatus::Applied(state)) => Err(box_err!(
                 "another merge is in-progress, merge_state: {:?}.",
                 state
             )),
-            _ => Ok(None),
         }
     }
 
@@ -727,7 +802,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         self.proposal_control_mut()
             .enter_prepare_merge(res.state.get_commit());
-        self.merge_context_mut().prepare_status = Some(PrepareStatus::Applied(res.state));
+        if let Some(PrepareStatus::CatchUpLogs(cul)) = self
+            .merge_context_mut()
+            .prepare_status
+            .replace(PrepareStatus::Applied(res.state))
+        {
+            self.finish_catch_up_logs(store_ctx, cul);
+        }
 
         self.start_commit_merge(store_ctx);
     }

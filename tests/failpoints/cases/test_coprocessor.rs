@@ -1,15 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, thread, time::Duration};
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
+    coprocessor::Request,
     kvrpcpb::{Context, IsolationLevel},
     tikvpb::TikvClient,
 };
 use more_asserts::{assert_ge, assert_le};
 use protobuf::Message;
+use raftstore::store::Bucket;
 use test_coprocessor::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
@@ -420,4 +422,50 @@ fn test_read_index_lock_checking_on_follower() {
         "{:?}",
         resp
     );
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_follower_buckets() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.run();
+    fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
+    let product = ProductTable::new();
+    let (raft_engine, ctx) = leader_raft_engine!(cluster, "");
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+
+    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
+    let resp = handle_request(&endpoint, req.clone());
+    assert_eq!(resp.get_latest_buckets_version(), 0);
+
+    let mut bucket_key = product.get_record_range_all().get_start().to_owned();
+    bucket_key.push(0);
+    let region = cluster.get_region(&bucket_key);
+    let bucket = Bucket {
+        keys: vec![bucket_key],
+        size: 1024,
+    };
+
+    cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
+    thread::sleep(Duration::from_millis(1000));
+    let wait_refresh_buckets = |endpoint, req: Request, old_buckets_ver| {
+        let mut resp = Default::default();
+        for _ in 0..10 {
+            resp = handle_request(&endpoint, req.clone());
+            if resp.get_latest_buckets_version() != old_buckets_ver {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
+    };
+    wait_refresh_buckets(endpoint, req.clone(), 0);
+    for (engine, ctx) in follower_raft_engine!(cluster, "") {
+        req.set_context(ctx.clone());
+        let (_, endpoint, _) =
+            init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
+        wait_refresh_buckets(endpoint, req.clone(), 0);
+    }
+    fail::remove("skip_check_stale_read_safe");
 }

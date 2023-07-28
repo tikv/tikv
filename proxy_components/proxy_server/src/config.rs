@@ -137,21 +137,21 @@ pub fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> Readab
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DefaultCfConfig {
-    pub block_cache_size: ReadableSize,
+    pub block_cache_size: Option<ReadableSize>,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct LockCfConfig {
-    pub block_cache_size: ReadableSize,
+    pub block_cache_size: Option<ReadableSize>,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct WriteCfConfig {
-    pub block_cache_size: ReadableSize,
+    pub block_cache_size: Option<ReadableSize>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
@@ -167,7 +167,7 @@ impl Default for RaftDbConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         RaftDbConfig {
             defaultcf: DefaultCfConfig {
-                block_cache_size: memory_limit_for_cf(true, CF_DEFAULT, total_mem),
+                block_cache_size: Some(memory_limit_for_cf(true, CF_DEFAULT, total_mem)),
             },
         }
     }
@@ -190,13 +190,13 @@ impl Default for RocksDbConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         RocksDbConfig {
             defaultcf: DefaultCfConfig {
-                block_cache_size: memory_limit_for_cf(false, CF_DEFAULT, total_mem),
+                block_cache_size: Some(memory_limit_for_cf(false, CF_DEFAULT, total_mem)),
             },
             writecf: WriteCfConfig {
-                block_cache_size: memory_limit_for_cf(false, CF_WRITE, total_mem),
+                block_cache_size: Some(memory_limit_for_cf(false, CF_WRITE, total_mem)),
             },
             lockcf: LockCfConfig {
-                block_cache_size: memory_limit_for_cf(false, CF_LOCK, total_mem),
+                block_cache_size: Some(memory_limit_for_cf(false, CF_LOCK, total_mem)),
             },
         }
     }

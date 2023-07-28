@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
+use std::{cmp, sync::Arc};
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::pdpb;
@@ -14,7 +14,10 @@ use pd_client::{
     PdClient,
 };
 use prometheus::local::LocalHistogram;
-use raftstore::store::{metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyInspector};
+use raftstore::store::{
+    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyInspector,
+    UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+};
 use slog::{error, info, warn};
 use tikv_util::{
     metrics::RecordPairVec,
@@ -24,7 +27,7 @@ use tikv_util::{
 };
 
 use super::Runner;
-use crate::router::StoreMsg;
+use crate::router::{StoreMsg, UnsafeRecoveryRouter};
 
 const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
@@ -175,7 +178,12 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
-    pub fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, is_fake_hb: bool) {
+    pub fn handle_store_heartbeat(
+        &mut self,
+        mut stats: pdpb::StoreStats,
+        is_fake_hb: bool,
+        store_report: Option<pdpb::StoreReport>,
+    ) {
         let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
@@ -268,13 +276,44 @@ where
         // Update slowness statistics
         self.update_slowness_in_store_stats(&mut stats, last_query_sum);
 
-        let resp = self.pd_client.store_heartbeat(stats, None, None);
+        let resp = self.pd_client.store_heartbeat(stats, store_report, None);
         let logger = self.logger.clone();
+        let router = self.router.clone();
         let mut grpc_service_manager = self.grpc_service_manager.clone();
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
-                    // TODO: unsafe recovery
+                    // TODO: handle replication_status
+
+                    if let Some(plan) = resp.recovery_plan.take() {
+                        let router = Arc::new(UnsafeRecoveryRouter::new(router));
+                        info!(logger, "Unsafe recovery, received a recovery plan");
+                        if plan.has_force_leader() {
+                            let mut failed_stores = HashSet::default();
+                            for failed_store in plan.get_force_leader().get_failed_stores() {
+                                failed_stores.insert(*failed_store);
+                            }
+                            let syncer = UnsafeRecoveryForceLeaderSyncer::new(
+                                plan.get_step(),
+                                router.clone(),
+                            );
+                            for region in plan.get_force_leader().get_enter_force_leaders() {
+                                if let Err(e) = router.send_enter_force_leader(
+                                    *region,
+                                    syncer.clone(),
+                                    failed_stores.clone(),
+                                ) {
+                                    error!(logger,
+                                        "fail to send force leader message for recovery";
+                                        "err" => ?e);
+                                }
+                            }
+                        } else {
+                            let _syncer =
+                                UnsafeRecoveryExecutePlanSyncer::new(plan.get_step(), router);
+                            // TODO: handle creates/tombstone/demotes
+                        }
+                    }
 
                     // Attention, as Hibernate Region is eliminated in
                     // raftstore-v2, followings just mock the awaken
@@ -338,7 +377,7 @@ where
 
         // And here, the `is_fake_hb` should be marked with `True` to represent that
         // this heartbeat message is a fake one.
-        self.handle_store_heartbeat(stats, true);
+        self.handle_store_heartbeat(stats, true, None);
         warn!(self.logger, "scheduling store_heartbeat timeout, force report store slow score to pd.";
             "store_id" => self.store_id,
         );

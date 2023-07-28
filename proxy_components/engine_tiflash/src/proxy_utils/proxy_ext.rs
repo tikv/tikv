@@ -56,7 +56,13 @@ impl ProxyEngineExt {
     // 2. When `handle_pending_applies` is called when we receive a
     // new task, or when `handle_pending_applies` need to handle multiple snapshots.
     // We need to compare to what's in queue.
-    pub fn can_apply_snapshot(&self, is_timeout: bool, new_batch: bool, region_id: u64) -> bool {
+    pub fn can_apply_snapshot(
+        &self,
+        is_timeout: bool,
+        new_batch: bool,
+        region_id: u64,
+        queue_size: usize,
+    ) -> bool {
         fail::fail_point!("on_can_apply_snapshot", |e| e
             .unwrap()
             .parse::<bool>()
@@ -85,16 +91,17 @@ impl ProxyEngineExt {
             }
         }
         // Is called after calling observer's pre_handle_snapshot
-        let in_queue = self.pending_applies_count.load(Ordering::SeqCst);
+        let in_queue = queue_size;
         if is_timeout && new_batch {
-            // We pre handle snapshot when:
-            // 1. Timtout.
-            // 2. We have already have a batch to fill the threadpool.
+            // We pre handle snapshot when both:
+            // 1. Timeout.
+            // 2. We are the first in the pre-handing iteration.
+            // This is to ensure that we will always handle one, when timeout.
             true
         } else {
             // Otherwise, we wait until the queue is full.
             // In order to batch more tasks.
-            in_queue > (self.pool_capacity as isize)
+            in_queue > self.pool_capacity
         }
     }
 }

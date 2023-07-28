@@ -222,7 +222,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                 }
                 AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
-                AdminCmdType::UpdateGcPeer => {
+                AdminCmdType::UpdateGcPeer | AdminCmdType::RollbackMerge => {
                     let data = req.write_to_bytes().unwrap();
                     self.propose(ctx, data)
                 }

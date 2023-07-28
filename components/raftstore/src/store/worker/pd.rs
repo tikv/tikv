@@ -8,7 +8,7 @@ use std::{
     sync::{
         atomic::Ordering,
         mpsc::{self, Receiver, Sender},
-        Arc,
+        Arc, Mutex,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -59,8 +59,10 @@ use crate::{
     store::{
         cmd_resp::new_error,
         metrics::*,
-        peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
         transport::SignificantRouter,
+        unsafe_recovery::{
+            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+        },
         util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
         worker::{
             split_controller::{SplitInfo, TOP_N},
@@ -1385,17 +1387,16 @@ where
                             for failed_store in plan.get_force_leader().get_failed_stores() {
                                 failed_stores.insert(*failed_store);
                             }
+                            let router = Arc::new(Mutex::new(router.clone()));
                             let syncer = UnsafeRecoveryForceLeaderSyncer::new(
                                 plan.get_step(),
                                 router.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
-                                if let Err(e) = router.significant_send(
+                                if let Err(e) = router.send_enter_force_leader(
                                     *region,
-                                    SignificantMsg::EnterForceLeaderState {
-                                        syncer: syncer.clone(),
-                                        failed_stores: failed_stores.clone(),
-                                    },
+                                    syncer.clone(),
+                                    failed_stores.clone(),
                                 ) {
                                     error!("fail to send force leader message for recovery"; "err" => ?e);
                                 }
@@ -1403,7 +1404,7 @@ where
                         } else {
                             let syncer = UnsafeRecoveryExecutePlanSyncer::new(
                                 plan.get_step(),
-                                router.clone(),
+                                Arc::new(Mutex::new(router.clone())),
                             );
                             for create in plan.take_creates().into_iter() {
                                 if let Err(e) =
