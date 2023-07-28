@@ -639,8 +639,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
             let commit_ts = key.decode_ts()?;
             let user_key = key.truncate_ts()?;
-            // Skip the key if its latest write type is `WriteType::Lock` or
-            // `WriteType::Rollback`.
+            // Skip the key if its latest write type is not `WriteType::Put` or
+            // `WriteType::Delete`.
             match WriteRef::parse(cursor.value(&mut self.statistics.write))?.write_type {
                 WriteType::Put | WriteType::Delete => {}
                 WriteType::Lock | WriteType::Rollback => {
