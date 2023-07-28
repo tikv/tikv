@@ -917,6 +917,7 @@ mod tests {
         PrePersist = 24,
         PreWriteApplyState = 25,
         OnRaftMessage = 26,
+        CancelApplySnapshot = 27,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -1323,6 +1324,10 @@ mod tests {
         let msg = RaftMessage::default();
         host.on_raft_message(&msg);
         index += ObserverIndex::OnRaftMessage as usize;
+        assert_all!([&ob.called], &[index]);
+
+        host.cancel_apply_snapshot(region.get_id(), 0);
+        index += ObserverIndex::CancelApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
     }
 
