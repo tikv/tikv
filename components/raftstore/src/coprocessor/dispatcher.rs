@@ -557,6 +557,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn cancel_apply_snapshot(&self, region_id: u64, peer_id: u64) {
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            observer.cancel_apply_snapshot(region_id, peer_id);
+        }
+    }
+
     pub fn new_split_checker_host<'a>(
         &'a self,
         region: &Region,
@@ -779,6 +786,11 @@ mod tests {
         OnUpdateSafeTs = 23,
         PrePersist = 24,
         PreWriteApplyState = 25,
+<<<<<<< HEAD
+=======
+        OnRaftMessage = 26,
+        CancelApplySnapshot = 27,
+>>>>>>> 0cb091d3c9 (raftstore: Observe when applying snapshot is cancelled (#15226))
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -997,6 +1009,13 @@ mod tests {
             );
             false
         }
+
+        fn cancel_apply_snapshot(&self, _: u64, _: u64) {
+            self.called.fetch_add(
+                ObserverIndex::CancelApplySnapshot as usize,
+                Ordering::SeqCst,
+            );
+        }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
@@ -1171,6 +1190,18 @@ mod tests {
         host.pre_write_apply_state(&region);
         index += ObserverIndex::PreWriteApplyState as usize;
         assert_all!([&ob.called], &[index]);
+<<<<<<< HEAD
+=======
+
+        let msg = RaftMessage::default();
+        host.on_raft_message(&msg);
+        index += ObserverIndex::OnRaftMessage as usize;
+        assert_all!([&ob.called], &[index]);
+
+        host.cancel_apply_snapshot(region.get_id(), 0);
+        index += ObserverIndex::CancelApplySnapshot as usize;
+        assert_all!([&ob.called], &[index]);
+>>>>>>> 0cb091d3c9 (raftstore: Observe when applying snapshot is cancelled (#15226))
     }
 
     #[test]
