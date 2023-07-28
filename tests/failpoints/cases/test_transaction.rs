@@ -801,5 +801,5 @@ fn test_next_last_change_info_called_when_gc() {
 
     fail::remove("before_get_write_in_next_last_change_info");
 
-    assert_eq!(h.join().unwrap().unwrap().as_ref(), b"v");
+    assert_eq!(h.join().unwrap().unwrap().as_slice(), b"v");
 }
