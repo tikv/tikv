@@ -236,14 +236,13 @@ impl ResourceManagerService {
             let mut req = TokenBucketsRequest::default();
             let all_reqs = req.mut_requests();
             for (name, statistic) in background_groups.into_iter() {
-                // check if the entry exists in the map or create a new one with u64::MAX
-                // version to avoid losing the first upload.
-                let last_stats = last_group_statistics_map
-                    .entry(name.clone())
-                    .or_insert_with(|| UploadStatistic::new(u64::MAX));
-                // version changes means this is a brand new limiter, so no need to sub the old
-                // statistics.
-                let (cpu_consumed, io_consumed) = if statistic.version == last_stats.version {
+                // Non-existence or version change means this is a brand new limiter, so no need
+                // to sub the old statistics.
+                let (cpu_consumed, io_consumed) = if let Some(last_stats) =
+                    last_group_statistics_map
+                        .get(&name)
+                        .filter(|stats| statistic.version == stats.version)
+                {
                     if statistic == *last_stats {
                         continue;
                     }
@@ -263,6 +262,8 @@ impl ResourceManagerService {
                         ),
                     )
                 };
+                // replace the previous statistics.
+                last_group_statistics_map.insert(name.clone(), statistic);
                 // update ru statistics.
                 let mut req = TokenBucketRequest::default();
                 req.set_resource_group_name(name.clone());
@@ -280,8 +281,6 @@ impl ResourceManagerService {
                 report_consumption.set_total_cpu_time_ms(cpu_consumed as f64);
 
                 all_reqs.push(req);
-                // replace the previous statistics.
-                *last_stats = statistic;
             }
 
             if !all_reqs.is_empty() {
@@ -329,21 +328,12 @@ struct ControllerConfig {
     request_unit: RequestUnitConfig,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Default)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 struct UploadStatistic {
     version: u64,
     read_bytes_consumed: u64,
     write_bytes_consumed: u64,
     cpu_consumed: u64,
-}
-
-impl UploadStatistic {
-    fn new(version: u64) -> Self {
-        Self {
-            version,
-            ..Default::default()
-        }
-    }
 }
 
 #[cfg(test)]
