@@ -337,7 +337,7 @@ struct ControllerConfig {
 impl Default for RequestUnitConfig {
     fn default() -> Self {
         Self {
-            // related on doc https://docs.pingcap.com/tidb/dev/tidb-resource-control#what-is-request-unit-ru.
+            // related on doc https://docs.pingcap.com/tidb/dev/tidb-resource-control#what-is-request-unit-ru
             read_base_cost: 1. / 8.,
             read_cost_per_byte: 1. / (64. * 1024.),
             write_base_cost: 1.,
