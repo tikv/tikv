@@ -33,6 +33,7 @@ make_static_metric! {
         store_heartbeat,
         tso,
         scan_regions,
+        get_members,
 
         meta_storage_put,
         meta_storage_get,

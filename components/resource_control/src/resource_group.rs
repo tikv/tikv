@@ -4,6 +4,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     cmp::{max, min},
+    collections::HashSet,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -24,7 +25,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{info, time::Instant};
 use yatp::queue::priority::TaskPriorityProvider;
 
-use crate::resource_limiter::ResourceLimiter;
+use crate::{metrics::deregister_metrics, resource_limiter::ResourceLimiter};
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -59,6 +60,9 @@ pub enum ResourceConsumeType {
 pub struct ResourceGroupManager {
     pub(crate) resource_groups: DashMap<String, ResourceGroup>,
     registry: RwLock<Vec<Arc<ResourceController>>>,
+    // auto incremental version generator used for mark the background
+    // resource limiter has changed.
+    version_generator: AtomicU64,
 }
 
 impl Default for ResourceGroupManager {
@@ -66,6 +70,7 @@ impl Default for ResourceGroupManager {
         let manager = Self {
             resource_groups: Default::default(),
             registry: Default::default(),
+            version_generator: AtomicU64::new(0),
         };
 
         // init the default resource group by default.
@@ -117,27 +122,35 @@ impl ResourceGroupManager {
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
         info!("add resource group"; "name"=> &rg.name, "ru" => rg.get_r_u_settings().get_r_u().get_settings().get_fill_rate());
-        let limiter = match self.resource_groups.get(&rg.name) {
-            Some(g) => g.limiter.clone(),
-            None => Self::build_resource_limiter(&rg),
-        };
+        // try to reuse the quota limit when update resource group settings.
+        let prev_limiter = self
+            .resource_groups
+            .get(&rg.name)
+            .and_then(|g| g.limiter.clone());
+        let limiter = self.build_resource_limiter(&rg, prev_limiter);
 
         self.resource_groups
             .insert(group_name, ResourceGroup::new(rg, limiter));
     }
 
-    fn build_resource_limiter(rg: &PbResourceGroup) -> Option<Arc<ResourceLimiter>> {
-        #[cfg(test)]
-        {
-            if rg.name.contains("background") {
-                return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
-            }
+    fn build_resource_limiter(
+        &self,
+        rg: &PbResourceGroup,
+        old_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> Option<Arc<ResourceLimiter>> {
+        if !rg.get_background_settings().get_job_types().is_empty() {
+            old_limiter.or_else(|| {
+                let version = self.version_generator.fetch_add(1, Ordering::Relaxed);
+                Some(Arc::new(ResourceLimiter::new(
+                    rg.name.clone(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    version,
+                )))
+            })
+        } else {
+            None
         }
-        // TODO: only the "default" resource group support background tasks currently.
-        if rg.name == DEFAULT_RESOURCE_GROUP_NAME {
-            return Some(Arc::new(ResourceLimiter::new(f64::INFINITY, f64::INFINITY)));
-        }
-        None
     }
 
     pub fn remove_resource_group(&self, name: &str) {
@@ -145,8 +158,10 @@ impl ResourceGroupManager {
         self.registry.read().iter().for_each(|controller| {
             controller.remove_resource_group(group_name.as_bytes());
         });
-        info!("remove resource group"; "name"=> name);
-        self.resource_groups.remove(&group_name);
+        if self.resource_groups.remove(&group_name).is_some() {
+            deregister_metrics(name);
+            info!("remove resource group"; "name"=> name);
+        }
     }
 
     pub fn retain(&self, mut f: impl FnMut(&String, &PbResourceGroup) -> bool) {
@@ -159,6 +174,7 @@ impl ResourceGroupManager {
             let ret = f(k, &v.group);
             if !ret {
                 removed_names.push(k.clone());
+                deregister_metrics(k);
             }
             ret
         });
@@ -218,26 +234,43 @@ impl ResourceGroupManager {
         }
     }
 
-    pub fn get_resource_limiter(&self, rg: &str) -> Option<Arc<ResourceLimiter>> {
-        if let Some(g) = self.resource_groups.get(rg) {
-            return g.limiter.clone();
+    pub fn get_resource_limiter(
+        &self,
+        rg: &str,
+        request_source: &str,
+    ) -> Option<Arc<ResourceLimiter>> {
+        if let Some(group) = self.resource_groups.get(rg) {
+            if !group.fallback_default {
+                return group.get_resource_limiter(request_source);
+            }
         }
 
-        // fallback to the default resource group if target group doesn't exist.
         self.resource_groups
             .get(DEFAULT_RESOURCE_GROUP_NAME)
-            .and_then(|g| g.limiter.clone())
+            .and_then(|g| g.get_resource_limiter(request_source))
     }
 }
 
 pub(crate) struct ResourceGroup {
     pub group: PbResourceGroup,
     pub limiter: Option<Arc<ResourceLimiter>>,
+    background_source_types: HashSet<String>,
+    // whether to fallback background resource control to `default` group.
+    fallback_default: bool,
 }
 
 impl ResourceGroup {
     fn new(group: PbResourceGroup, limiter: Option<Arc<ResourceLimiter>>) -> Self {
-        Self { group, limiter }
+        let background_source_types =
+            HashSet::from_iter(group.get_background_settings().get_job_types().to_owned());
+        let fallback_default =
+            !group.has_background_settings() && group.name != DEFAULT_RESOURCE_GROUP_NAME;
+        Self {
+            group,
+            limiter,
+            background_source_types,
+            fallback_default,
+        }
     }
 
     pub(crate) fn get_ru_quota(&self) -> u64 {
@@ -247,6 +280,22 @@ impl ResourceGroup {
             .get_r_u()
             .get_settings()
             .get_fill_rate()
+    }
+
+    fn get_resource_limiter(&self, request_source: &str) -> Option<Arc<ResourceLimiter>> {
+        self.limiter.as_ref().and_then(|limiter| {
+            // the source task name is the last part of `request_source` separated by "_"
+            // the request_source is
+            // {extrenal|internal}_{tidb_req_source}_{source_task_name}
+            let source_task_name = request_source.rsplit('_').next().unwrap_or("");
+            if !source_task_name.is_empty()
+                && self.background_source_types.contains(source_task_name)
+            {
+                Some(limiter.clone())
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -644,6 +693,18 @@ pub(crate) mod tests {
         new_resource_group(name, true, ru, ru, group_priority)
     }
 
+    pub fn new_background_resource_group_ru(
+        name: String,
+        ru: u64,
+        group_priority: u32,
+        task_types: Vec<String>,
+    ) -> PbResourceGroup {
+        let mut rg = new_resource_group(name, true, ru, ru, group_priority);
+        rg.mut_background_settings()
+            .set_job_types(task_types.into());
+        rg
+    }
+
     pub fn new_resource_group(
         name: String,
         is_ru_mode: bool,
@@ -755,6 +816,20 @@ pub(crate) mod tests {
         // test resource gorup resource limiter.
         let group1 = resource_manager.get_resource_group("test").unwrap();
         assert!(group1.limiter.is_none());
+        assert!(
+            resource_manager
+                .get_resource_group("default")
+                .unwrap()
+                .limiter
+                .is_none()
+        );
+        let new_default = new_background_resource_group_ru(
+            "default".into(),
+            10000,
+            MEDIUM_PRIORITY,
+            vec!["br".into()],
+        );
+        resource_manager.add_resource_group(new_default);
         let default_group = resource_manager.get_resource_group("default").unwrap();
         let limiter = default_group.limiter.as_ref().unwrap().clone();
         assert!(limiter.get_limiter(Cpu).get_rate_limit().is_infinite());
@@ -764,9 +839,13 @@ pub(crate) mod tests {
         drop(group1);
         drop(default_group);
 
-        let new_default = new_resource_group_ru("default".into(), 100, LOW_PRIORITY);
+        let new_default = new_background_resource_group_ru(
+            "default".into(),
+            100,
+            LOW_PRIORITY,
+            vec!["lightning".into()],
+        );
         resource_manager.add_resource_group(new_default);
-
         let default_group = resource_manager.get_resource_group("default").unwrap();
         assert_eq!(default_group.get_ru_quota(), 100);
         let new_limiter = default_group.limiter.as_ref().unwrap().clone();
@@ -774,6 +853,18 @@ pub(crate) mod tests {
         assert_eq!(new_limiter.get_limiter(Cpu).get_rate_limit(), 100.0);
         assert_eq!(new_limiter.get_limiter(Io).get_rate_limit(), 200.0);
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
+        drop(default_group);
+
+        // remove background setting, quota limiter should be none.
+        let new_default = new_resource_group_ru("default".into(), 100, LOW_PRIORITY);
+        resource_manager.add_resource_group(new_default);
+        assert!(
+            resource_manager
+                .get_resource_group("default")
+                .unwrap()
+                .limiter
+                .is_none()
+        );
     }
 
     #[test]
