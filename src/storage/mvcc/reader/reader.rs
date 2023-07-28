@@ -1868,13 +1868,27 @@ pub mod tests {
             8,
         );
         engine.commit(b"k3", 8, 9);
-        // Prewrite and rollback k4.
+        // Prewrite and commit k4.
         engine.prewrite(
             Mutation::make_put(Key::from_raw(b"k4"), b"v4@1".to_vec()),
             b"k4",
             10,
         );
-        engine.rollback(b"k4", 10);
+        engine.commit(b"k4", 10, 11);
+        // Prewrite and rollback k4.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k4"), b"v4@2".to_vec()),
+            b"k4",
+            12,
+        );
+        engine.rollback(b"k4", 12);
+        // Prewrite and rollback k5.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k5"), b"v5@1".to_vec()),
+            b"k5",
+            13,
+        );
+        engine.rollback(b"k5", 13);
 
         // Current MVCC keys in `CF_WRITE` should be:
         // PUT      k0 -> v0@999
@@ -1886,7 +1900,9 @@ pub mod tests {
         // PUT      k3 -> v3@8
         // ROLLBACK k3 -> v3@7
         // PUT      k3 -> v3@5
-        // ROLLBACK k4 -> v4@1
+        // ROLLBACK k4 -> v4@2
+        // PUT      k4 -> v4@1
+        // ROLLBACK k5 -> v5@1
 
         struct Case {
             start_key: Option<Key>,
@@ -1914,6 +1930,7 @@ pub mod tests {
                     Key::from_raw(b"k1"),
                     Key::from_raw(b"k2"),
                     Key::from_raw(b"k3"),
+                    Key::from_raw(b"k4"),
                 ],
                 expect_is_remain: false,
             },
@@ -1922,7 +1939,11 @@ pub mod tests {
                 start_key: Some(Key::from_raw(b"k2")),
                 end_key: None,
                 limit: 4,
-                expect_res: vec![Key::from_raw(b"k2"), Key::from_raw(b"k3")],
+                expect_res: vec![
+                    Key::from_raw(b"k2"),
+                    Key::from_raw(b"k3"),
+                    Key::from_raw(b"k4"),
+                ],
                 expect_is_remain: false,
             },
             Case {
