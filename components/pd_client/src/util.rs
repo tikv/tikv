@@ -310,7 +310,7 @@ impl Client {
         F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
-            remain_reconnect_count: retry,
+            remain_request_count: retry,
             request_sent: 0,
             client: self.clone(),
             req,
@@ -404,7 +404,7 @@ impl Client {
 
 /// The context of sending requets.
 pub struct Request<Req, F> {
-    remain_reconnect_count: usize,
+    remain_request_count: usize,
     request_sent: usize,
     client: Arc<Client>,
     req: Req,
@@ -419,15 +419,11 @@ where
     F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
 {
     async fn reconnect_if_needed(&mut self) -> Result<()> {
-        debug!("reconnecting ..."; "remain" => self.remain_reconnect_count);
-        if self.request_sent < MAX_REQUEST_COUNT {
+        debug!("reconnecting ..."; "remain" => self.remain_request_count);
+        if self.request_sent < MAX_REQUEST_COUNT && self.request_sent < self.remain_request_count {
             return Ok(());
         }
-        if self.remain_reconnect_count == 0 {
-            return Err(box_err!("request retry exceeds limit"));
-        }
         // Updating client.
-        self.remain_reconnect_count -= 1;
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
         match self.client.reconnect(true).await {
@@ -447,18 +443,22 @@ where
     }
 
     async fn send_and_receive(&mut self) -> Result<Resp> {
+        if self.remain_request_count == 0 {
+            return Err(box_err!("request retry exceeds limit"));
+        }
         self.request_sent += 1;
+        self.remain_request_count -= 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
         (self.func)(&self.client, r).await
     }
 
-    fn should_not_retry(resp: &Result<Resp>) -> bool {
+    fn should_not_retry(&self, resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
             Err(err) => {
                 // these errors are not caused by network, no need to retry
-                if err.retryable() {
+                if err.retryable() && self.remain_request_count > 0 {
                     error!(?*err; "request failed, retry");
                     false
                 } else {
@@ -475,7 +475,7 @@ where
             loop {
                 {
                     let resp = self.send_and_receive().await;
-                    if Self::should_not_retry(&resp) {
+                    if self.should_not_retry(&resp) {
                         return resp;
                     }
                 }
@@ -621,10 +621,14 @@ impl PdConnector {
         });
         let client = PdClientStub::new(channel.clone());
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+        let timer = Instant::now();
         let response = client
             .get_members_async_opt(&GetMembersRequest::default(), option)
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
             .await;
+        PD_REQUEST_HISTOGRAM_VEC
+            .get_members
+            .observe(timer.saturating_elapsed_secs());
         match response {
             Ok(resp) => Ok((client, resp)),
             Err(e) => Err(Error::Grpc(e)),
@@ -789,7 +793,7 @@ impl PdConnector {
         Ok((None, has_network_error))
     }
 
-    pub async fn reconnect_leader(
+    async fn reconnect_leader(
         &self,
         leader: &Member,
     ) -> Result<(Option<(PdClientStub, String)>, bool)> {
@@ -835,6 +839,7 @@ impl PdConnector {
                     let client_urls = leader.get_client_urls();
                     for leader_url in client_urls {
                         let target = TargetInfo::new(leader_url.clone(), &ep);
+                        let timer = Instant::now();
                         let response = client
                             .get_members_async_opt(
                                 &GetMembersRequest::default(),
@@ -846,6 +851,9 @@ impl PdConnector {
                                 panic!("fail to request PD {} err {:?}", "get_members", e)
                             })
                             .await;
+                        PD_REQUEST_HISTOGRAM_VEC
+                            .get_members
+                            .observe(timer.saturating_elapsed_secs());
                         match response {
                             Ok(_) => return Ok(Some((client, target))),
                             Err(_) => continue,
