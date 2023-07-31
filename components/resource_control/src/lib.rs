@@ -73,6 +73,6 @@ pub fn start_periodic_tasks(
     });
     // spawn a task to periodically upload resource usage statistics to PD.
     bg_worker.spawn_async_task(async move {
-        resource_mgr_service.upload_ru_metrics().await;
+        resource_mgr_service.report_ru_metrics().await;
     });
 }

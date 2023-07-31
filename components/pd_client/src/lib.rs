@@ -541,7 +541,7 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
-    fn upload_ru_metrics(&self, _req: TokenBucketsRequest) -> PdFuture<()> {
+    fn report_ru_metrics(&self, _req: TokenBucketsRequest) -> PdFuture<()> {
         unimplemented!();
     }
 }

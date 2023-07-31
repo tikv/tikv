@@ -221,7 +221,7 @@ pub trait PdMocker {
         None
     }
 
-    fn upload_ru_metrics(&self, req: &TokenBucketsRequest) -> Option<Result<TokenBucketsResponse>> {
+    fn report_ru_metrics(&self, req: &TokenBucketsRequest) -> Option<Result<TokenBucketsResponse>> {
         req.get_requests().iter().for_each(|r| {
             assert_eq!(r.get_is_background(), true);
         });

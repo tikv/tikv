@@ -641,8 +641,8 @@ impl<C: PdMocker + Send + Sync + 'static> resource_manager::ResourceManager for 
                 let resp = mock
                     .case
                     .as_ref()
-                    .and_then(|case| case.upload_ru_metrics(&req))
-                    .or_else(|| mock.default_handler.upload_ru_metrics(&req));
+                    .and_then(|case| case.report_ru_metrics(&req))
+                    .or_else(|| mock.default_handler.report_ru_metrics(&req));
                 match resp {
                     None => future::ok(None),
                     Some(Ok(resp)) => future::ok(Some((resp, WriteFlags::default()))),

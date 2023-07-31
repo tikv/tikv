@@ -44,7 +44,7 @@ impl ResourceManagerService {
 }
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
-pub const BACKGROUND_RU_UPLOAD_DURATION: Duration = Duration::from_secs(5);
+const BACKGROUND_RU_REPORT_DURATION: Duration = Duration::from_secs(5);
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
@@ -193,9 +193,9 @@ impl ResourceManagerService {
         }
     }
 
-    // upload ru metrics periodically.
-    pub async fn upload_ru_metrics(&self) {
-        let mut last_group_statistics_map: HashMap<String, UploadStatistic> = HashMap::new();
+    // report ru metrics periodically.
+    pub async fn report_ru_metrics(&self) {
+        let mut last_group_statistics_map: HashMap<String, ReportStatistic> = HashMap::new();
         // load controller config firstly.
         let config = self.load_controller_config().await;
         info!("load controller config"; "config" => ?config);
@@ -213,7 +213,7 @@ impl ResourceManagerService {
 
                         (
                             g.group.name.clone(),
-                            UploadStatistic {
+                            ReportStatistic {
                                 // io statistics and cpu statistics should have the same version.
                                 version: io_statistics.version,
                                 read_bytes_consumed: io_statistics.read_consumed,
@@ -227,7 +227,7 @@ impl ResourceManagerService {
 
             if background_groups.is_empty() {
                 let _ = GLOBAL_TIMER_HANDLE
-                    .delay(std::time::Instant::now() + BACKGROUND_RU_UPLOAD_DURATION)
+                    .delay(std::time::Instant::now() + BACKGROUND_RU_REPORT_DURATION)
                     .compat()
                     .await;
                 continue;
@@ -264,7 +264,7 @@ impl ResourceManagerService {
                 };
                 // replace the previous statistics.
                 last_group_statistics_map.insert(name.clone(), statistic);
-                // update ru statistics.
+                // report ru statistics.
                 let mut req = TokenBucketRequest::default();
                 req.set_resource_group_name(name.clone());
                 req.set_is_background(true);
@@ -284,14 +284,14 @@ impl ResourceManagerService {
             }
 
             if !all_reqs.is_empty() {
-                if let Err(e) = self.pd_client.upload_ru_metrics(req).await {
-                    error!("upload ru metrics failed"; "err" => ?e);
+                if let Err(e) = self.pd_client.report_ru_metrics(req).await {
+                    error!("report ru metrics failed"; "err" => ?e);
                 }
             }
 
             let dur = if cfg!(feature = "failpoints") {
                 (|| {
-                    fail::fail_point!("set_upload_duration", |v| {
+                    fail::fail_point!("set_report_duration", |v| {
                         let dur = v
                             .expect("should provide delay time (in ms)")
                             .parse::<u64>()
@@ -301,7 +301,7 @@ impl ResourceManagerService {
                     std::time::Duration::from_millis(100)
                 })()
             } else {
-                BACKGROUND_RU_UPLOAD_DURATION
+                BACKGROUND_RU_REPORT_DURATION
             };
 
             let _ = GLOBAL_TIMER_HANDLE
@@ -329,7 +329,7 @@ struct ControllerConfig {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-struct UploadStatistic {
+struct ReportStatistic {
     version: u64,
     read_bytes_consumed: u64,
     write_bytes_consumed: u64,
@@ -538,7 +538,7 @@ pub mod tests {
     }
 
     #[test]
-    fn upload_ru_metrics_test() {
+    fn report_ru_metrics_test() {
         let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
         let resource_manager = ResourceGroupManager::default();
 
@@ -558,11 +558,11 @@ pub mod tests {
         };
         store_controller_config(s.clone().pd_client, cfg);
 
-        fail::cfg("set_upload_duration", "return(10)").unwrap();
+        fail::cfg("set_report_duration", "return(10)").unwrap();
         let background_worker = Builder::new("background").thread_count(1).create();
         let s_clone = s.clone();
         background_worker.spawn_async_task(async move {
-            s_clone.upload_ru_metrics().await;
+            s_clone.report_ru_metrics().await;
         });
         // Mock consume.
         let bg_limiter = s.manager.get_resource_limiter("background", "br").unwrap();
@@ -573,7 +573,7 @@ pub mod tests {
                 write: 1000,
             },
         );
-        // Wait for upload ru metrics.
+        // Wait for report ru metrics.
         std::thread::sleep(Duration::from_millis(100));
         // Mock update version.
         let bg = new_resource_group_ru("background".into(), 1000, 15);
@@ -593,9 +593,9 @@ pub mod tests {
                 write: 2000,
             },
         );
-        // Wait for upload ru metrics.
+        // Wait for report ru metrics.
         std::thread::sleep(Duration::from_millis(100));
-        fail::remove("set_upload_duration");
+        fail::remove("set_report_duration");
         server.stop();
     }
 }
