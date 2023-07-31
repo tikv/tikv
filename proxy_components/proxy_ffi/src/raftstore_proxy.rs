@@ -141,11 +141,41 @@ impl RaftStoreProxy {
 
         // We don't use information stored in `GlobalReplicationState` to decouple.
         *self.cluster_raftstore_ver.write().unwrap() = RaftstoreVer::Uncertain;
-        let stores = match self.pd_client.as_ref().unwrap().get_all_stores(false) {
-            Ok(stores) => stores,
-            Err(e) => {
-                tikv_util::info!("get_all_stores error {:?}", e);
-                return false;
+        let mut retry_count: u64 = 0;
+        const RETRY_LIMIT: u64 = 15;
+        let stores = loop {
+            match self.pd_client.as_ref().unwrap().get_all_stores(false) {
+                Ok(stores) => break stores,
+                Err(e) => {
+                    if retry_count >= RETRY_LIMIT {
+                        tikv_util::error!(
+                            "get_all_stores error {:?} after {}/{} retries, quit",
+                            e,
+                            retry_count,
+                            RETRY_LIMIT
+                        );
+                        return false;
+                    } else {
+                        match e {
+                            pd_client::Error::ClusterNotBootstrapped(_) => {
+                                tikv_util::info!(
+                                    "get_all_stores error {:?} after {}/{} retries",
+                                    e,
+                                    retry_count,
+                                    RETRY_LIMIT
+                                );
+                                // For ClusterNotBootstrapped, we should wait for the bootstrap.
+                                std::thread::sleep(std::time::Duration::from_millis(1000))
+                            }
+                            _ => {
+                                // For other error, we don't wait.
+                                tikv_util::error!("get_all_stores error {:?}", e,);
+                                return false;
+                            }
+                        }
+                    }
+                    retry_count += 1
+                }
             }
         };
 
