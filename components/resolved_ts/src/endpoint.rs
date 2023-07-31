@@ -599,6 +599,29 @@ where
             meta.store_id
         })
     }
+
+    fn handle_get_diagnosis_info(
+        &self,
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
+    ) {
+        if let Some(r) = self.regions.get(&region_id) {
+            if log_locks {
+                r.resolver.log_locks(min_start_ts);
+            }
+            callback(Some((
+                r.resolver.stopped(),
+                r.resolver.resolved_ts().into_inner(),
+                r.resolver.tracked_index(),
+                r.resolver.num_locks(),
+                r.resolver.num_transactions(),
+            )));
+        } else {
+            callback(None);
+        }
+    }
 }
 
 pub enum Task {
@@ -633,6 +656,12 @@ pub enum Task {
     },
     ChangeConfig {
         change: ConfigChange,
+    },
+    GetDiagnosisInfo {
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
     },
 }
 
@@ -691,6 +720,11 @@ impl fmt::Debug for Task {
                 .field("name", &"change_config")
                 .field("change", &change)
                 .finish(),
+            Task::GetDiagnosisInfo { region_id, .. } => de
+                .field("name", &"get_diagnosis_info")
+                .field("region_id", &region_id)
+                .field("callback", &"callback")
+                .finish(),
         }
     }
 }
@@ -734,6 +768,12 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::ChangeConfig { change } => self.handle_change_config(change),
+            Task::GetDiagnosisInfo {
+                region_id,
+                log_locks,
+                min_start_ts,
+                callback,
+            } => self.handle_get_diagnosis_info(region_id, log_locks, min_start_ts, callback),
         }
     }
 }
