@@ -28,6 +28,7 @@ pub fn next_last_change_info<S: Snapshot>(
                 )),
                 LastChange::NotExist => Ok(LastChange::NotExist),
                 LastChange::Unknown => {
+                    fail_point!("before_get_write_in_next_last_change_info");
                     // We do not know the last change info, probably
                     // because it comes from an older version TiKV. To support data
                     // from old TiKV, we iterate to the last change to find it.
@@ -49,7 +50,7 @@ pub fn next_last_change_info<S: Snapshot>(
                             assert!(matches!(w.write_type, WriteType::Put));
                             Ok(LastChange::make_exist(
                                 last_change_ts,
-                                stat.write.next as u64,
+                                stat.write.next as u64 + 1,
                             ))
                         }
                     }
