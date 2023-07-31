@@ -493,7 +493,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn already_checked_trim_status(&mut self, req: &RaftCmdRequest) -> Result<bool> {
-        let finished = !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+        let flushed = !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
             .contains(WriteBatchFlags::PRE_FLUSH_FINISHED);
         match self
             .merge_context()
@@ -501,17 +501,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .and_then(|c| c.prepare_status.as_ref())
         {
             Some(PrepareStatus::WaitForTrimStatus { pending_peers, .. }) => {
-                if pending_peers.is_empty() {
-                    if !finished {
-                        return Err(Error::PendingPrepareMerge);
-                    }
+                // We should wait for the request sent from flush callback.
+                if pending_peers.is_empty() && flushed {
                     Ok(true)
                 } else {
                     Err(Error::PendingPrepareMerge)
                 }
             }
             None => {
-                if finished {
+                // Pre-flush can only be triggered when the request has checked trim status.
+                if flushed {
                     self.merge_context_mut().prepare_status =
                         Some(PrepareStatus::WaitForTrimStatus {
                             start_time: Instant::now_coarse(),
@@ -613,7 +612,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // callback, it will either trigger a state transition to `WaitForFence` or
         // abort. If we see the state here, it means the req never made it to
         // `propose_prepare_merge`.
-        // If the req is still inflight and reaches `propose_prepare_merge`,
+        // If the req is still inflight and reaches `propose_prepare_merge` later,
         // `already_checked_trim_status` will restore the status.
         if let Some(PrepareStatus::WaitForTrimStatus {
             start_time, ..
