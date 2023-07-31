@@ -171,7 +171,6 @@ fn test_compact() {
 
 #[test]
 fn test_flashback_to_version() {
-    // test_util::init_log_for_test();
     let (mut _cluster, kv_client, debug_client, ctx) =
         test_raftstore::must_new_cluster_kv_client_and_debug_client();
     let mut ts = 0;
@@ -280,7 +279,7 @@ fn flashback_to_version(
         req.set_version(version);
         req.set_region_id(region_id);
         req.set_start_key(r.get_start_key().to_vec());
-        req.set_end_key(r.get_start_key().to_vec());
+        req.set_end_key(r.get_end_key().to_vec());
         req.set_start_ts(start_ts);
         req.set_commit_ts(commit_ts);
         client.flashback_to_version(&req)?;
