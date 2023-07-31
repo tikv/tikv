@@ -386,7 +386,14 @@ impl<EK: KvEngine> ServerCluster<EK> {
             )
             .unwrap();
 
-        let mut node = NodeV2::new(&cfg.server, self.pd_client.clone(), None);
+        let mut node = NodeV2::new(
+            &cfg.server,
+            self.pd_client.clone(),
+            None,
+            resource_manager
+                .as_ref()
+                .map(|r| r.derive_controller("raft-v2".into(), false)),
+        );
         node.try_bootstrap_store(&raft_store, &raft_engine).unwrap();
         assert_eq!(node.id(), node_id);
 

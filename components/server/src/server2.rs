@@ -1456,7 +1456,14 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         .sst_recovery_sender(self.init_sst_recovery_sender())
         .flow_listener(flow_listener);
 
-        let mut node = NodeV2::new(&self.core.config.server, self.pd_client.clone(), None);
+        let mut node = NodeV2::new(
+            &self.core.config.server,
+            self.pd_client.clone(),
+            None,
+            self.resource_manager
+                .as_ref()
+                .map(|r| r.derive_controller("raft-v2".into(), false)),
+        );
         node.try_bootstrap_store(&self.core.config.raft_store, &raft_engine)
             .unwrap_or_else(|e| fatal!("failed to bootstrap store: {:?}", e));
         assert_ne!(node.id(), 0);
