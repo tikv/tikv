@@ -196,6 +196,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .lock()
             .unwrap()
             .set_region(self.region(), true, &self.logger);
+        // Update leader's peer list after conf change.
+        self.read_progress()
+            .update_leader_info(self.leader_id(), self.term(), self.region());
         ctx.coprocessor_host.on_region_changed(
             self.region(),
             RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
