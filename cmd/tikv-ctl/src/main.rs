@@ -835,7 +835,7 @@ fn flashback_whole_cluster(
         .unwrap();
 
     block_on(runtime.spawn(async move {
-        // Get all stores related debug executor.
+        // Pre-create the debug executors for all stores.
         let stores = match pd_client.get_all_stores(false) {
             Ok(stores) => stores,
             Err(e) => {
@@ -855,20 +855,20 @@ fn flashback_whole_cluster(
             .collect::<HashMap<_, _>>());
         // Prepare flashback.
         let start_ts = pd_client.get_tso().await.unwrap();
-        let prepare_key_range = RwLock::new(load_key_range(&pd_client, start_key, end_key));
+        let key_range_to_prepare = RwLock::new(load_key_range(&pd_client, start_key, end_key));
         // Need to retry if all regions are not finish.
-        let mut need_finish_key_range = prepare_key_range.read().unwrap().clone();
+        let mut key_range_to_finish = key_range_to_prepare.read().unwrap().clone();
         loop {
             // Traverse all regions and prepare flashback.
             let mut futures = Vec::default();
-            let read_result = prepare_key_range.read().unwrap().clone();
+            let read_result = key_range_to_prepare.read().unwrap().clone();
             read_result.into_iter().
             filter(|(_, (region_id, _))| {
                 region_ids.is_empty() || region_ids.contains(region_id)
             })
             .for_each(|((start_key, end_key), (region_id, store_id))| {
                 let debuggers = &debuggers;
-                let prepare_key_range = &prepare_key_range;
+                let key_range_to_prepare = &key_range_to_prepare;
                 let key_range = build_key_range(&start_key, &end_key, false);
                 let f = async move {
                     let debuggers = debuggers.lock().unwrap();
@@ -880,7 +880,7 @@ fn flashback_whole_cluster(
                         0,
                     ) {
                         Ok(_) => {
-                            prepare_key_range
+                            key_range_to_prepare
                                 .write()
                                 .unwrap()
                                 .remove(&(start_key, end_key));
@@ -909,16 +909,16 @@ fn flashback_whole_cluster(
                     if let Err(key_range) = res {
                         // Retry specific key range to prepare flashback.
                         let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
-                        let mut prepare_key_range = prepare_key_range.write().unwrap();
+                        let mut key_range_to_prepare = key_range_to_prepare.write().unwrap();
                         // Remove stale key range.
-                        prepare_key_range.remove(&stale_key_range);
-                        need_finish_key_range.remove(&stale_key_range);
+                        key_range_to_prepare.remove(&stale_key_range);
+                        key_range_to_finish.remove(&stale_key_range);
                         load_key_range(&pd_client, stale_key_range.0.clone(), stale_key_range.1.clone())
                             .into_iter().for_each(|(key_range, region_info)| {
-                                // Need to update `prepare_key_range` to replace stale key range.
-                                prepare_key_range.insert(key_range.clone(), region_info);
-                                // Need to update `need_finish_key_range` as well.
-                                need_finish_key_range.insert(key_range, region_info);
+                                // Need to update `key_range_to_prepare` to replace stale key range.
+                                key_range_to_prepare.insert(key_range.clone(), region_info);
+                                // Need to update `key_range_to_finish` as well.
+                                key_range_to_finish.insert(key_range, region_info);
                             });
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
                         continue;
@@ -937,17 +937,17 @@ fn flashback_whole_cluster(
 
         // Flashback for all regions.
         let commit_ts = pd_client.get_tso().await.unwrap();
-        let need_finish_key_range = RwLock::new(need_finish_key_range);
+        let key_range_to_finish = RwLock::new(key_range_to_finish);
         loop {
             let mut futures = Vec::default();
-            let read_result = need_finish_key_range.read().unwrap().clone();
+            let read_result = key_range_to_finish.read().unwrap().clone();
             read_result.into_iter()
             .filter(|(_, (region_id, _))| {
                 region_ids.is_empty() || region_ids.contains(region_id)
             })
             .for_each(|((start_key, end_key), (region_id, store_id))| {
                 let debuggers = &debuggers;
-                let need_finish_key_range = &need_finish_key_range;
+                let key_range_to_finish = &key_range_to_finish;
                 let key_range = build_key_range(&start_key, &end_key, false);
                 let f = async move {
                     let debuggers = debuggers.lock().unwrap();
@@ -959,7 +959,7 @@ fn flashback_whole_cluster(
                         commit_ts.into_inner(),
                     ) {
                         Ok(_) => {
-                            need_finish_key_range
+                            key_range_to_finish
                                 .write()
                                 .unwrap()
                                 .remove(&(start_key, end_key));
