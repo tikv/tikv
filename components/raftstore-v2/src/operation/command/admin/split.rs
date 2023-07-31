@@ -788,6 +788,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 _ => unreachable!(),
             }
         }
+        info!(
+            self.logger,
+            "on_apply_res_split";
+            "new_ids" => ?new_ids,
+        );
         self.split_trace_mut().push((res.tablet_index, new_ids));
         let region_state = self.storage().region_state().clone();
         self.state_changes_mut()
@@ -908,7 +913,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut found = false;
         for (_, ids) in self.split_trace_mut() {
             if ids.remove(&region_id) {
+                let ids_len = ids.len();
                 found = true;
+                info!(
+                    self.logger,
+                    "region init finished after split";
+                    "split_region_id" => region_id,
+                    "remaining_region_count" => ids_len,
+                );
                 break;
             }
         }
