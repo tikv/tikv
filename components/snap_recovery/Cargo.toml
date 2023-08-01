@@ -14,12 +14,8 @@ engine_traits = { workspace = true }
 futures = { version = "0.3", features = ["executor"] }
 grpcio = { workspace = true }
 keys = { workspace = true }
-<<<<<<< HEAD
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-6.5" }
-=======
-kvproto = { workspace = true }
 lazy_static = "1.4"
->>>>>>> 9f9283ebaa (snap_recovery: added some metrics (#15111))
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", default_features = false, features = ["nightly"] }
