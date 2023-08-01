@@ -27,7 +27,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{
         fsm::RaftRouter,
-        msg::{Callback, CasualMessage, PeerMsg, SignificantMsg},
+        msg::{PeerMsg, SignificantMsg},
         transport::SignificantRouter,
         SnapshotRecoveryWaitApplySyncer,
     },
@@ -37,7 +37,8 @@ use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
 
 use crate::{
     data_resolver::DataResolverManager,
-    metrics::{CURRENT_WAIT_APPLY_LEADER, CURRENT_WAIT_ELECTION_LEADER, REGION_EVENT_COUNTER},
+    leader_keeper::LeaderKeeper,
+    metrics::{CURRENT_WAIT_APPLY_LEADER, REGION_EVENT_COUNTER},
     region_meta_collector::RegionMetaCollector,
 };
 
@@ -240,50 +241,16 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 }
             }
 
-            let mut rxs = Vec::with_capacity(leaders.len());
-            for &region_id in &leaders {
-                if let Err(e) = raft_router.send_casual_msg(region_id, CasualMessage::Campaign) {
-                    // TODO: retry may necessay
-                    warn!("region fails to campaign: ";
-                    "region_id" => region_id, 
-                    "err" => ?e);
-                    continue;
-                } else {
-                    debug!("region starts to campaign"; "region_id" => region_id);
-                }
-
-                let (tx, rx) = sync_channel(1);
-                let callback = Callback::read(Box::new(move |_| {
-                    if tx.send(1).is_err() {
-                        error!("response failed"; "region_id" => region_id);
-                    }
-                }));
-                if let Err(e) = raft_router
-                    .significant_send(region_id, SignificantMsg::LeaderCallback(callback))
-                {
-                    warn!("LeaderCallback failed"; "err" => ?e, "region_id" => region_id);
-                }
-                rxs.push(Some(rx));
-            }
-
-            info!("send assign leader request done"; "count" => %leaders.len());
-
-            // leader is campaign and be ensured as leader
-            for (rid, rx) in leaders.iter().zip(rxs) {
-                if let Some(rx) = rx {
-                    CURRENT_WAIT_ELECTION_LEADER.set(*rid as _);
-                    match rx.recv() {
-                        Ok(id) => {
-                            debug!("leader is assigned for region"; "region_id" => %id);
-                        }
-                        Err(e) => {
-                            error!("check leader failed"; "error" => ?e);
-                        }
-                    }
-                }
-            }
-            CURRENT_WAIT_ELECTION_LEADER.set(0);
-
+            let mut lk = LeaderKeeper::new(raft_router.clone(), leaders.clone());
+            // We must use the tokio runtime here because there isn't a `block_in_place`
+            // like thing in the futures executor. It simply panics when block
+            // on the block_on context.
+            // It is also impossible to directly `await` here, because that will make
+            // borrowing to the raft router crosses the await point.
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("failed to build temporary tokio runtime.")
+                .block_on(lk.elect_and_wait_all_ready());
             info!("all region leader assigned done"; "count" => %leaders.len());
 
             let now = Instant::now();
