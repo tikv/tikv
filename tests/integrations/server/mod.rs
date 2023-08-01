@@ -9,13 +9,13 @@ mod security;
 mod server;
 mod status_server;
 
-use std::sync::Arc;
+use std::{ffi::CString, sync::Arc};
 
 use ::security::{SecurityConfig, SecurityManager};
 use grpcio::*;
 use kvproto::tikvpb::{create_tikv, Tikv};
 
-fn tikv_service<T>(kv: T, ip: &str, port: u16) -> Result<Server>
+fn tikv_service<T>(kv: T, addr: &str) -> Result<Server>
 where
     T: Tikv + Clone + Send + 'static,
 {
@@ -28,9 +28,12 @@ where
         .max_send_message_len(-1)
         .build_args();
 
-    let mut sb = ServerBuilder::new(Arc::clone(&env))
+    let mut server = ServerBuilder::new(Arc::clone(&env))
         .channel_args(channel_args)
-        .register_service(create_tikv(kv));
-    sb = security_mgr.bind(sb, ip, port);
-    sb.build()
+        .register_service(create_tikv(kv))
+        .build()?;
+    if let Err(e) = security_mgr.bind(&mut server, addr) {
+        return Err(Error::BindFail(CString::new(format!("{:?}", e)).unwrap()));
+    }
+    Ok(server)
 }

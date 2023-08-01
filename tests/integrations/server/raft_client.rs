@@ -283,7 +283,7 @@ where
 {
     for port in min_port..max_port {
         let kv = service.clone();
-        let mut mock_server = match tikv_service(kv, "localhost", port) {
+        let mut mock_server = match tikv_service(kv, &format!("localhost:{}", port)) {
             Ok(s) => s,
             Err(_) => continue,
         };
@@ -299,7 +299,7 @@ fn create_mock_server_on<T>(service: T, port: u16) -> Option<Server>
 where
     T: Tikv + Clone + Send + 'static,
 {
-    let mut mock_server = match tikv_service(service, "localhost", port) {
+    let mut mock_server = match tikv_service(service, &format!("localhost:{}", port)) {
         Ok(s) => s,
         Err(_) => return None,
     };

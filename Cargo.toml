@@ -195,14 +195,15 @@ fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
 sysinfo ={ git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
+grpcio = { git = "https://github.com/tikv/grpc-rs", branch = "metrics" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-# [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = { git = "https://github.com/overvenus/kvproto", branch = "lock"}
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
@@ -362,9 +363,9 @@ tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
-grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+grpcio = { version = "0.12.1", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly", "stats"] }
+grpcio-health = { version = "0.12.1", default-features = false, features = ["protobuf-codec"] }
+tipb = { git = "https://github.com/pingcap/tipb.git", branch = "lock" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }

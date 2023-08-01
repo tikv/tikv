@@ -2459,16 +2459,15 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
+version = "0.12.1"
+source = "git+https://github.com/tikv/grpc-rs?branch=metrics#8be47811e4ca4604f17b0ddc105532df3914829c"
 dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio-sys",
  "libc 0.2.146",
  "log",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.1",
  "protobuf",
 ]
 
@@ -2483,9 +2482,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-health"
-version = "0.10.4"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a37eae605cd21f144b7c7fd0e64e57af9f73d132756fef5b706db110c3ec7ea0"
+checksum = "e680f3b3a1a73cdca1cbf5d463ecdc1f03c4e5682bfebf4272e7e8a2217d413d"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2496,9 +2495,8 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.10.3+1.44.0-patched"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
+version = "0.12.1+1.56.2-patched"
+source = "git+https://github.com/tikv/grpc-rs?branch=metrics#8be47811e4ca4604f17b0ddc105532df3914829c"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
@@ -2976,7 +2974,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#770f7183434ca05887a3f63265b8745017130e1f"
+source = "git+https://github.com/overvenus/kvproto?branch=lock#ba1cfb0170d1579b65258f76ffba243d2e75be9f"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5569,6 +5567,7 @@ dependencies = [
  "hex 0.4.2",
  "keys",
  "kvproto",
+ "lazy_static",
  "libc 0.2.146",
  "log",
  "log_wrappers",
@@ -7090,7 +7089,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#55b921cfdca1e29bcc29a83c1532bfdf53f88c51"
+source = "git+https://github.com/pingcap/tipb.git?branch=lock#ef6027b0040f8640ea3f550a7335e8f693afa240"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

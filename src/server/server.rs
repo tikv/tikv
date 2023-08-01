@@ -55,6 +55,8 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 pub trait GrpcBuilderFactory {
     fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder>;
+    fn bind(&self, svr: &mut grpcio::Server) -> Result<u16>;
+    fn host_ip(&self) -> Result<IpAddr>;
 }
 
 struct BuilderFactory<S: Tikv + Send + Clone + 'static> {
@@ -88,8 +90,7 @@ where
     S: Tikv + Send + Clone + 'static,
 {
     fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder> {
-        let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
-        let ip: String = format!("{}", addr.ip());
+        let _ = SocketAddr::from_str(&self.cfg.value().addr)?;
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
@@ -107,7 +108,15 @@ where
             .channel_args(channel_args)
             .register_service(create_tikv(self.kv_service.clone()))
             .register_service(create_health(self.health_service.clone()));
-        Ok(self.security_mgr.bind(sb, &ip, addr.port()))
+        Ok(self.security_mgr.add_checker(sb))
+    }
+
+    fn bind(&self, svr: &mut grpcio::Server) -> Result<u16> {
+        Ok(self.security_mgr.bind(svr, &self.cfg.value().addr)?)
+    }
+
+    fn host_ip(&self) -> Result<IpAddr> {
+        Ok(SocketAddr::from_str(&self.cfg.value().addr)?.ip())
     }
 }
 
@@ -287,9 +296,10 @@ where
     /// Build gRPC server and bind to address.
     pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
         let sb = self.builder_or_server.take().unwrap().left().unwrap();
-        let server = sb.build()?;
-        let (host, port) = server.bind_addrs().next().unwrap();
-        let addr = SocketAddr::new(IpAddr::from_str(host)?, port);
+        let mut server = sb.build()?;
+        let port = self.builder_factory.bind(&mut server)?;
+        let ip = self.builder_factory.host_ip().unwrap();
+        let addr = SocketAddr::new(ip, port);
         self.local_addr = addr;
         self.builder_or_server = Some(Either::Right(server));
         Ok(addr)

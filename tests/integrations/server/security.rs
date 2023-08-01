@@ -21,7 +21,9 @@ fn test_check_cn_success() {
 
     let env = Arc::new(Environment::new(1));
     let cred = test_util::new_channel_cred();
-    let channel = ChannelBuilder::new(env).secure_connect(&addr, cred);
+    let channel = ChannelBuilder::new(env)
+        .set_credentials(cred)
+        .connect(&addr);
 
     let client = TikvClient::new(channel);
     client.kv_get(&GetRequest::default()).unwrap();
@@ -40,7 +42,9 @@ fn test_check_cn_fail() {
 
     let env = Arc::new(Environment::new(1));
     let cred = test_util::new_channel_cred();
-    let channel = ChannelBuilder::new(env).secure_connect(&addr, cred);
+    let channel = ChannelBuilder::new(env)
+        .set_credentials(cred)
+        .connect(&addr);
 
     let client = TikvClient::new(channel);
     let status = client.kv_get(&GetRequest::default());

@@ -42,14 +42,14 @@ pub fn setup_for_ci() {
         .unwrap();
 
     if env::var("CI").is_ok() {
-        // HACK! Use `epollex` as the polling engine for gRPC when running CI tests on
+        // HACK! Use `epoll1` as the polling engine for gRPC when running CI tests on
         // Linux and it hasn't been set before.
-        // See more: https://github.com/grpc/grpc/blob/v1.17.2/src/core/lib/iomgr/ev_posix.cc#L124
+        // See more: https://github.com/grpc/grpc/blob/v1.56.0/src/core/lib/iomgr/ev_posix.cc#L95
         // See more: https://grpc.io/grpc/core/md_doc_core_grpc-polling-engines.html
         #[cfg(target_os = "linux")]
         {
             if env::var("GRPC_POLL_STRATEGY").is_err() {
-                env::set_var("GRPC_POLL_STRATEGY", "epollex");
+                env::set_var("GRPC_POLL_STRATEGY", "epoll1");
             }
         }
 

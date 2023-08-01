@@ -84,7 +84,9 @@ pub fn open_cluster_and_tikv_import_client(
 
         if cfg.security != SecurityConfig::default() {
             let creds = test_util::new_channel_cred();
-            builder.secure_connect(&cluster.sim.rl().get_addr(node), creds)
+            builder
+                .set_credentials(creds)
+                .connect(&cluster.sim.rl().get_addr(node))
         } else {
             builder.connect(&cluster.sim.rl().get_addr(node))
         }
@@ -124,7 +126,9 @@ pub fn open_cluster_and_tikv_import_client_v2(
 
         if cfg.security != SecurityConfig::default() {
             let creds = test_util::new_channel_cred();
-            builder.secure_connect(&cluster.sim.rl().get_addr(node), creds)
+            builder
+                .set_credentials(creds)
+                .connect(&cluster.sim.rl().get_addr(node))
         } else {
             builder.connect(&cluster.sim.rl().get_addr(node))
         }

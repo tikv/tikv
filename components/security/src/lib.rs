@@ -15,8 +15,8 @@ use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
-    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
-    ServerCredentialsFetcher,
+    RpcContext, RpcStatus, RpcStatusCode, Server, ServerBuilder, ServerChecker, ServerCredentials,
+    ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -163,30 +163,38 @@ impl SecurityManager {
                 .root_cert(ca)
                 .cert(cert, key)
                 .build();
-            cb.secure_connect(addr, cred)
+            cb.set_credentials(cred).connect(addr)
         }
     }
 
-    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        if self.cfg.ca_path.is_empty() {
-            sb.bind(addr, port)
+    pub fn add_checker(&self, sb: ServerBuilder) -> ServerBuilder {
+        if !self.cfg.ca_path.is_empty() && !self.cfg.cert_allowed_cn.is_empty() {
+            let cn_checker = CnChecker {
+                allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
+            };
+            sb.add_checker(cn_checker)
         } else {
-            if !self.cfg.cert_allowed_cn.is_empty() {
-                let cn_checker = CnChecker {
-                    allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
-                };
-                sb = sb.add_checker(cn_checker);
-            }
+            sb
+        }
+    }
+
+    pub fn bind(&self, svr: &mut Server, addr: &str) -> Result<u16, Box<dyn Error + Send + Sync>> {
+        if self.cfg.ca_path.is_empty() {
+            let port = svr.add_listening_port(addr, ServerCredentials::insecure())?;
+            Ok(port)
+        } else {
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
                 last_modified_time: Arc::new(Mutex::new(None)),
             });
-            sb.bind_with_fetcher(
+            let port = svr.add_listening_port(
                 addr,
-                port,
-                fetcher,
-                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
-            )
+                ServerCredentials::with_fetcher(
+                    fetcher,
+                    CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+                ),
+            )?;
+            Ok(port)
         }
     }
 

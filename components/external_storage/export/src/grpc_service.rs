@@ -31,12 +31,11 @@ pub fn new_service() -> io::Result<SocketService> {
         let socket_path = std::path::PathBuf::from(grpc_socket_path);
         // Keep the listener in scope: otherwise the socket is destroyed
         let listener = bind_socket(&socket_path).context("GRPC new service create socket")?;
-        let mut server = builder
-            .bind(socket_addr, 0)
-            .build()
-            .context("GRPC build server")?;
+        let mut server = builder.build().context("GRPC build server")?;
+        let _ = server
+            .add_listening_port(&socket_path, ServerCredentials::insecure())
+            .context("GRPC bind server")?;
         server.start();
-        let (..) = server.bind_addrs().next().context("GRPC bind server")?;
         Ok(SocketService { server, listener })
     })()
     .context("new service")
