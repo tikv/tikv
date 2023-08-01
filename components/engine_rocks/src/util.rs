@@ -497,8 +497,11 @@ impl CompactionFilter for RangeCompactionFilter {
         _value: &[u8],
         _value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
-        if key < self.0.start_key.as_ref() || key >= self.0.end_key.as_ref() {
-            CompactionFilterDecision::Remove
+        if key < self.0.start_key.as_ref() {
+            CompactionFilterDecision::RemoveAndSkipUntil(self.0.start_key.to_vec())
+        } else if key >= self.0.end_key.as_ref() {
+            assert!(key < keys::DATA_MAX_KEY);
+            CompactionFilterDecision::RemoveAndSkipUntil(keys::DATA_MAX_KEY.to_vec())
         } else {
             CompactionFilterDecision::Keep
         }
