@@ -121,7 +121,10 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
+    common::{
+        ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, GrpcMetricsManager,
+        TikvServerCore,
+    },
     memory::*,
     setup::*,
     signal_handler,
@@ -1096,6 +1099,7 @@ where
         );
         let mut io_metrics = IoMetricsManager::new(fetcher);
         let engines_info_clone = engines_info.clone();
+        let grpc_metrics = GrpcMetricsManager::new();
 
         // region_id -> (suffix, tablet)
         // `update` of EnginesResourceInfo is called perodically which needs this map
@@ -1110,6 +1114,7 @@ where
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
                 engines_info_clone.update(now, &mut cached_latest_tablets);
+                grpc_metrics.flush();
             },
         );
         if let Some(limiter) = get_io_rate_limiter() {

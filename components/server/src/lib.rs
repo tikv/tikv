@@ -11,6 +11,7 @@ extern crate tikv_util;
 pub mod setup;
 pub mod common;
 pub mod memory;
+pub mod metrics;
 pub mod raft_engine_switch;
 pub mod server;
 pub mod server2;

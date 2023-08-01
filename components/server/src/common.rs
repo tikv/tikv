@@ -27,8 +27,9 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
-use grpcio::Environment;
+use grpcio::{stats, Environment};
 use pd_client::{PdClient, RpcClient};
+use prometheus::{Gauge, IntGauge};
 use raft_log_engine::RaftLogEngine;
 use security::SecurityManager;
 use tikv::{
@@ -45,7 +46,7 @@ use tikv_util::{
     worker::{LazyWorker, Worker},
 };
 
-use crate::{raft_engine_switch::*, setup::validate_and_persist_config};
+use crate::{metrics::*, raft_engine_switch::*, setup::validate_and_persist_config};
 
 // minimum number of core kept for background requests
 const BACKGROUND_REQUEST_CORE_LOWER_BOUND: f64 = 1.0;
@@ -859,6 +860,222 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
                 s.reset();
             }
             self.last_reset = now;
+        }
+    }
+}
+
+pub struct GrpcMetricsManager {
+    counters: Vec<(stats::Counter, IntGauge)>,
+    histograms: Vec<(stats::Histogram, f64, Gauge)>,
+}
+
+impl GrpcMetricsManager {
+    pub fn new() -> GrpcMetricsManager {
+        let counters = vec![
+            (
+                stats::Counter::CLIENT_CALLS_CREATED,
+                GRPC_CLIENT_CALLS_CREATED.clone(),
+            ),
+            (
+                stats::Counter::SERVER_CALLS_CREATED,
+                GRPC_SERVER_CALLS_CREATED.clone(),
+            ),
+            (
+                stats::Counter::CLIENT_CHANNELS_CREATED,
+                GRPC_CLIENT_CHANNELS_CREATED.clone(),
+            ),
+            (
+                stats::Counter::CLIENT_SUBCHANNELS_CREATED,
+                GRPC_CLIENT_SUBCHANNELS_CREATED.clone(),
+            ),
+            (
+                stats::Counter::SERVER_CHANNELS_CREATED,
+                GRPC_SERVER_CHANNELS_CREATED.clone(),
+            ),
+            (
+                stats::Counter::INSECURE_CONNECTIONS_CREATED,
+                GRPC_INSECURE_CONNECTIONS_CREATED.clone(),
+            ),
+            (stats::Counter::SYSCALL_WRITE, GRPC_SYSCALL_WRITE.clone()),
+            (stats::Counter::SYSCALL_READ, GRPC_SYSCALL_READ.clone()),
+            (
+                stats::Counter::TCP_READ_ALLOC_8K,
+                GRPC_TCP_READ_ALLOC_8K.clone(),
+            ),
+            (
+                stats::Counter::TCP_READ_ALLOC_64K,
+                GRPC_TCP_READ_ALLOC_64K.clone(),
+            ),
+            (
+                stats::Counter::HTTP2_SETTINGS_WRITES,
+                GRPC_HTTP2_SETTINGS_WRITES.clone(),
+            ),
+            (
+                stats::Counter::HTTP_2PINGS_SENT,
+                GRPC_HTTP_2PINGS_SENT.clone(),
+            ),
+            (
+                stats::Counter::HTTP2_WRITES_BEGUN,
+                GRPC_HTTP2_WRITES_BEGUN.clone(),
+            ),
+            (
+                stats::Counter::HTTP2_TRANSPORT_STALLS,
+                GRPC_HTTP2_TRANSPORT_STALLS.clone(),
+            ),
+            (
+                stats::Counter::HTTP2_STREAM_STALLS,
+                GRPC_HTTP2_STREAM_STALLS.clone(),
+            ),
+            (
+                stats::Counter::CQ_PLUCK_CREATES,
+                GRPC_CQ_PLUCK_CREATES.clone(),
+            ),
+            (
+                stats::Counter::CQ_NEXT_CREATES,
+                GRPC_CQ_NEXT_CREATES.clone(),
+            ),
+            (
+                stats::Counter::CQ_CALLBACK_CREATES,
+                GRPC_CQ_CALLBACK_CREATES.clone(),
+            ),
+        ];
+        let histograms = vec![
+            (
+                stats::Histogram::CALL_INITIAL_SIZE,
+                0.8,
+                GRPC_CALL_INITIAL_SIZE.with_label_values(&["0.8"]),
+            ),
+            (
+                stats::Histogram::CALL_INITIAL_SIZE,
+                0.99,
+                GRPC_CALL_INITIAL_SIZE.with_label_values(&["0.99"]),
+            ),
+            (
+                stats::Histogram::CALL_INITIAL_SIZE,
+                0.9999,
+                GRPC_CALL_INITIAL_SIZE.with_label_values(&["0.9999"]),
+            ),
+            (
+                stats::Histogram::TCP_WRITE_SIZE,
+                0.8,
+                GRPC_TCP_WRITE_SIZE.with_label_values(&["0.8"]),
+            ),
+            (
+                stats::Histogram::TCP_WRITE_SIZE,
+                0.99,
+                GRPC_TCP_WRITE_SIZE.with_label_values(&["0.99"]),
+            ),
+            (
+                stats::Histogram::TCP_WRITE_SIZE,
+                0.9999,
+                GRPC_TCP_WRITE_SIZE.with_label_values(&["0.9999"]),
+            ),
+            (
+                stats::Histogram::TCP_WRITE_IOV_SIZE,
+                0.8,
+                GRPC_TCP_WRITE_IOV_SIZE.with_label_values(&["0.8"]),
+            ),
+            (
+                stats::Histogram::TCP_WRITE_IOV_SIZE,
+                0.99,
+                GRPC_TCP_WRITE_IOV_SIZE.with_label_values(&["0.99"]),
+            ),
+            (
+                stats::Histogram::TCP_WRITE_IOV_SIZE,
+                0.9999,
+                GRPC_TCP_WRITE_IOV_SIZE.with_label_values(&["0.9999"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_SIZE,
+                0.8,
+                GRPC_TCP_READ_SIZE.with_label_values(&["0.8"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_SIZE,
+                0.99,
+                GRPC_TCP_READ_SIZE.with_label_values(&["0.99"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_SIZE,
+                0.9999,
+                GRPC_TCP_READ_SIZE.with_label_values(&["0.9999"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_OFFER,
+                0.8,
+                GRPC_TCP_READ_OFFER.with_label_values(&["0.8"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_OFFER,
+                0.99,
+                GRPC_TCP_READ_OFFER.with_label_values(&["0.99"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_OFFER,
+                0.9999,
+                GRPC_TCP_READ_OFFER.with_label_values(&["0.9999"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_OFFER_IOV_SIZE,
+                0.8,
+                GRPC_TCP_READ_OFFER_IOV_SIZE.with_label_values(&["0.8"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_OFFER_IOV_SIZE,
+                0.99,
+                GRPC_TCP_READ_OFFER_IOV_SIZE.with_label_values(&["0.99"]),
+            ),
+            (
+                stats::Histogram::TCP_READ_OFFER_IOV_SIZE,
+                0.9999,
+                GRPC_TCP_READ_OFFER_IOV_SIZE.with_label_values(&["0.9999"]),
+            ),
+            (
+                stats::Histogram::HTTP2_SEND_MESSAGE_SIZE,
+                0.8,
+                GRPC_HTTP2_SEND_MESSAGE_SIZE.with_label_values(&["0.8"]),
+            ),
+            (
+                stats::Histogram::HTTP2_SEND_MESSAGE_SIZE,
+                0.99,
+                GRPC_HTTP2_SEND_MESSAGE_SIZE.with_label_values(&["0.99"]),
+            ),
+            (
+                stats::Histogram::HTTP2_SEND_MESSAGE_SIZE,
+                0.9999,
+                GRPC_HTTP2_SEND_MESSAGE_SIZE.with_label_values(&["0.9999"]),
+            ),
+            (
+                stats::Histogram::HTTP2_METADATA_SIZE,
+                0.8,
+                GRPC_HTTP2_METADATA_SIZE.with_label_values(&["0.8"]),
+            ),
+            (
+                stats::Histogram::HTTP2_METADATA_SIZE,
+                0.99,
+                GRPC_HTTP2_METADATA_SIZE.with_label_values(&["0.99"]),
+            ),
+            (
+                stats::Histogram::HTTP2_METADATA_SIZE,
+                0.9999,
+                GRPC_HTTP2_METADATA_SIZE.with_label_values(&["0.9999"]),
+            ),
+        ];
+        GrpcMetricsManager {
+            counters,
+            histograms,
+        }
+    }
+
+    pub fn flush(&self) {
+        let stats = grpcio::stats::Stats::collect();
+        for (counter, m) in &self.counters {
+            let v = stats.counter(*counter);
+            m.set(v as _);
+        }
+        for (histogram, percentile, m) in &self.histograms {
+            let v = stats.histogram_percentile(*histogram, *percentile);
+            m.set(v);
         }
     }
 }
