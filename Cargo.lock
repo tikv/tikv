@@ -2976,7 +2976,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#770f7183434ca05887a3f63265b8745017130e1f"
+source = "git+https://github.com/pingcap/kvproto.git#ee4a4ff68ac385bd61ea9da868b4b6a6c0dadcec"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5003,6 +5003,7 @@ dependencies = [
  "protobuf",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "strum 0.20.0",
