@@ -545,6 +545,9 @@ where
         let report_min_resolved_ts_interval = self
             .report_min_resolved_ts_interval
             .div_duration_f64(tick_interval) as u64;
+        info!("report min resolved ts interval";
+            "report_min_resolved_ts_interval" => report_min_resolved_ts_interval,
+        );
 
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
@@ -682,10 +685,15 @@ where
         store_id: u64,
         scheduler: &Scheduler<Task<EK, ER>>,
     ) {
+        let min_resolved_ts = region_read_progress.get_min_resolved_ts();
         let task = Task::ReportMinResolvedTs {
             store_id,
-            min_resolved_ts: region_read_progress.get_min_resolved_ts(),
+            min_resolved_ts,
         };
+        info!("report min resolved ts";
+            "store_id" => store_id,
+            "min_resolved_ts" => min_resolved_ts,
+        );
         if let Err(e) = scheduler.schedule(task) {
             error!(
                 "failed to send min resolved ts to pd worker";
