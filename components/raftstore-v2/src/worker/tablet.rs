@@ -921,7 +921,7 @@ mod tests {
 
         let snap = tablet.snapshot();
         let (tx, rx) = std::sync::mpsc::channel();
-        runner.run(Task::trim(tablet.clone(), &region, move || {
+        runner.run(Task::trim(tablet, &region, move || {
             tx.send(()).unwrap()
         }));
         rx.try_recv().unwrap_err();
