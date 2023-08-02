@@ -3208,8 +3208,7 @@ where
                 self.response_read(&mut read, ctx, false);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
                 self.response_read(&mut read, ctx, true);
-            } else if self.get_store().applied_index()
-                + ctx.cfg.raft_log_gc_count_limit()
+            } else if self.get_store().applied_index() + ctx.cfg.raft_log_gc_count_limit()
                 <= read.read_index.unwrap()
             {
                 let mut response = cmd_resp::new_error(Error::FollowerNotReady {

@@ -31,15 +31,19 @@ use test_raftstore::{
     configure_for_lease_read, new_learner_peer, new_server_cluster, try_kv_prewrite,
     DropMessageFilter,
 };
-use tikv::storage::{
-    self,
-    kv::SnapshotExt,
-    lock_manager::MockLockManager,
-    txn::tests::{
-        must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
-        must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
+use tikv::{
+    server::gc_worker::gc_by_compact,
+    storage::{
+        self,
+        kv::SnapshotExt,
+        lock_manager::MockLockManager,
+        txn::tests::{
+            must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_return_value, must_commit,
+            must_pessimistic_prewrite_put, must_pessimistic_prewrite_put_err, must_prewrite_put,
+            must_prewrite_put_err, must_rollback,
+        },
+        Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
     },
-    Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
 use tikv_util::{
     store::{new_peer, peer::new_incoming_voter},
@@ -772,4 +776,30 @@ fn test_proposal_concurrent_with_conf_change_and_transfer_leader() {
     cluster.clear_send_filter_on_node(4);
 
     handle.join().unwrap();
+}
+
+#[test]
+fn test_next_last_change_info_called_when_gc() {
+    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let k = b"zk";
+
+    must_prewrite_put(&mut engine, k, b"v", k, 5);
+    must_commit(&mut engine, k, 5, 6);
+
+    must_rollback(&mut engine, k, 10, true);
+
+    fail::cfg("before_get_write_in_next_last_change_info", "pause").unwrap();
+
+    let mut engine2 = engine.clone();
+    let h = thread::spawn(move || {
+        must_acquire_pessimistic_lock_return_value(&mut engine2, k, k, 30, 30, false)
+    });
+    thread::sleep(Duration::from_millis(200));
+    assert!(!h.is_finished());
+
+    gc_by_compact(&mut engine, &[], 20);
+
+    fail::remove("before_get_write_in_next_last_change_info");
+
+    assert_eq!(h.join().unwrap().unwrap().as_slice(), b"v");
 }
