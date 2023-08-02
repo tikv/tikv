@@ -286,6 +286,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.respond_read_index(&mut read);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
                 self.respond_replica_read(&mut read);
+            } else if self.storage().apply_state().get_applied_index()
+                + ctx.cfg.raft_log_gc_count_limit()
+                <= read.read_index.unwrap()
+            {
+                let mut response = cmd_resp::new_error(Error::FollowerNotReady {
+                    region_id: self.region_id(),
+                    peer_id: self.peer_id(),
+                    apply_index: self.storage().apply_state().get_applied_index(),
+                    read_index: read.read_index.unwrap(),
+                });
+                cmd_resp::bind_term(&mut response, self.term());
+                self.respond_replica_read_error(&mut read, response);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
                 self.pending_reads_mut().push_front(read);
