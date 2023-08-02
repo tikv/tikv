@@ -243,7 +243,7 @@ struct TrimJob<EK> {
     start_time: Instant,
     slow_threshold: Duration,
     // Tablet's latest seqno when this job is created. We should wait for the release of all
-    // checkpoint before this fence.
+    // snapshots before this fence.
     // In reality, all dirty tablet is created from checkpoint. There shouldn't be any stale
     // snapshot.
     seqno_fence: u64,
@@ -921,9 +921,7 @@ mod tests {
 
         let snap = tablet.snapshot();
         let (tx, rx) = std::sync::mpsc::channel();
-        runner.run(Task::trim(tablet.clone(), &region, move || {
-            tx.send(()).unwrap()
-        }));
+        runner.run(Task::trim(tablet, &region, move || tx.send(()).unwrap()));
         rx.try_recv().unwrap_err();
 
         drop(snap);

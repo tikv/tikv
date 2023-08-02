@@ -749,6 +749,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
 
+        info!(
+            self.logger,
+            "execute PrepareMerge";
+            "index" => log_index,
+            "target_region" => ?prepare_merge.get_target(),
+        );
+
         let _ = self.flush();
         let reg = self.tablet_registry();
         let path = merge_source_path(reg, self.region_id(), log_index);
