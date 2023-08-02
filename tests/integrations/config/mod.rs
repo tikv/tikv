@@ -255,14 +255,7 @@ fn test_serde_custom_tikv_config() {
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
         check_peers_availability_interval: ReadableDuration::secs(30),
-<<<<<<< HEAD
-=======
-        check_request_snapshot_interval: ReadableDuration::minutes(1),
-        slow_trend_unsensitive_cause: 10.0,
-        slow_trend_unsensitive_result: 0.5,
-        enable_v2_compatible_learner: false,
         unsafe_disable_check_quorum: false,
->>>>>>> 2a5adec17f (snap-restore: added the config for temporarily disable check quorum (#15196))
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

@@ -448,13 +448,7 @@ impl Default for Config {
             unreachable_backoff: ReadableDuration::secs(10),
             // TODO: make its value reasonable
             check_peers_availability_interval: ReadableDuration::secs(30),
-<<<<<<< HEAD
-=======
-            // TODO: make its value reasonable
-            check_request_snapshot_interval: ReadableDuration::minutes(1),
-            enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
->>>>>>> 2a5adec17f (snap-restore: added the config for temporarily disable check quorum (#15196))
         }
     }
 }
