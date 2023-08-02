@@ -436,7 +436,7 @@ pub struct StackingCompactionFilter<A: CompactionFilter, B: CompactionFilter> {
 }
 
 impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingCompactionFilter<A, B> {
-    fn featured_filter(
+    fn unsafe_filter(
         &mut self,
         level: usize,
         key: &[u8],
@@ -445,12 +445,12 @@ impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingComp
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
         if let Some(outer) = self.outer.as_mut()
-            && let r = outer.featured_filter(level, key, seqno, value, value_type)
+            && let r = outer.unsafe_filter(level, key, seqno, value, value_type)
             && !matches!(r, CompactionFilterDecision::Keep)
         {
             r
         } else if let Some(inner) = self.inner.as_mut() {
-            inner.featured_filter(level, key, seqno, value, value_type)
+            inner.unsafe_filter(level, key, seqno, value, value_type)
         } else {
             CompactionFilterDecision::Keep
         }
@@ -489,7 +489,7 @@ impl CompactionFilterFactory for RangeCompactionFilterFactory {
 pub struct RangeCompactionFilter(Arc<OwnedRange>);
 
 impl CompactionFilter for RangeCompactionFilter {
-    fn featured_filter(
+    fn unsafe_filter(
         &mut self,
         _level: usize,
         key: &[u8],
