@@ -5,11 +5,6 @@
 #[macro_use]
 extern crate log;
 
-mod cmd;
-mod executor;
-mod fork_readonly_tikv;
-mod util;
-
 use std::{
     borrow::ToOwned,
     fs::{self, File, OpenOptions},
@@ -57,6 +52,11 @@ use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildW
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
+
+mod cmd;
+mod executor;
+mod fork_readonly_tikv;
+mod util;
 
 fn main() {
     let opt = Opt::from_args();
@@ -639,6 +639,17 @@ fn main() {
                     debug_executor.dump_cluster_info();
                 }
                 Cmd::ResetToVersion { version } => debug_executor.reset_to_version(version),
+                Cmd::GetRegionReadProgress {
+                    region,
+                    log,
+                    min_start_ts,
+                } => {
+                    debug_executor.get_region_read_progress(
+                        region,
+                        log,
+                        min_start_ts.unwrap_or_default(),
+                    );
+                }
                 _ => {
                     unreachable!()
                 }
