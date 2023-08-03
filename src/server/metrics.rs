@@ -483,6 +483,7 @@ make_auto_flush_static_metric! {
         write,
         snapshot,
         snapshot_local,
+        engine_snap_duration,
         snapshot_read_index_propose_wait,
         snapshot_read_index_confirm,
     }
