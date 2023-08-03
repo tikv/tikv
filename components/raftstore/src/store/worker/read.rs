@@ -938,6 +938,7 @@ where
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.redirect.inc());
         match ProposalRouter::send(&self.router, cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
