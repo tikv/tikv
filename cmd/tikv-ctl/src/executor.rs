@@ -54,9 +54,9 @@ pub fn new_debug_executor(
     skip_paranoid_checks: bool,
     host: Option<&str>,
     mgr: Arc<SecurityManager>,
-) -> Box<dyn DebugExecutor> {
+) -> Box<dyn DebugExecutor + Send> {
     if let Some(remote) = host {
-        return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
+        return Box::new(new_debug_client(remote, mgr)) as Box<_>;
     }
 
     // TODO: perhaps we should allow user skip specifying data path.
@@ -104,7 +104,7 @@ pub fn new_debug_executor(
         raft_db.set_shared_block_cache(shared_block_cache);
         let debugger: Debugger<_, MockEngine, MockLockManager, ApiV1> =
             Debugger::new(Engines::new(kv_db, raft_db), cfg_controller, None);
-        Box::new(debugger) as Box<dyn DebugExecutor>
+        Box::new(debugger) as Box<_>
     } else {
         let mut config = cfg.raft_engine.config();
         config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
@@ -115,7 +115,7 @@ pub fn new_debug_executor(
         let raft_db = RaftLogEngine::new(config, key_manager, None /* io_rate_limiter */).unwrap();
         let debugger: Debugger<_, MockEngine, MockLockManager, ApiV1> =
             Debugger::new(Engines::new(kv_db, raft_db), cfg_controller, None);
-        Box::new(debugger) as Box<dyn DebugExecutor>
+        Box::new(debugger) as Box<_>
     }
 }
 
