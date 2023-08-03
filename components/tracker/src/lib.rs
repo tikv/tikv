@@ -134,6 +134,7 @@ pub struct RequestMetrics {
     pub read_index_confirm_wait_nanos: u64,
     pub read_pool_schedule_wait_nanos: u64,
     pub local_read: bool,
+    pub engine_snap_duration: u64,
     pub block_cache_hit_count: u64,
     pub block_read_count: u64,
     pub block_read_byte: u64,

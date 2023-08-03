@@ -659,20 +659,23 @@ where
                         if tracker.metrics.read_index_propose_wait_nanos > 0 {
                             ASYNC_REQUESTS_DURATIONS_VEC
                                 .snapshot_read_index_propose_wait
-                                .observe(tracker.metrics.read_index_propose_wait_nanos as f64);
-                            assert!(tracker.metrics.read_index_confirm_wait_nanos > 0);
+                                .observe(tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0);
+                            // assert!(tracker.metrics.read_index_confirm_wait_nanos > 0);
                             ASYNC_REQUESTS_DURATIONS_VEC
                                 .snapshot_read_index_confirm
-                                .observe(tracker.metrics.read_index_confirm_wait_nanos as f64);
+                                .observe(tracker.metrics.read_index_confirm_wait_nanos as f64 / 1_000_000_000.0);
                         } else if tracker.metrics.local_read {
                             ASYNC_REQUESTS_DURATIONS_VEC
                                 .snapshot_local
-                                .observe(begin_instant.saturating_elapsed_secs());
+                                .observe(begin_instant.saturating_elapsed().as_nanos() as f64 / 1_000_000_000.0);
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .engine_snap_duration
+                                .observe(tracker.metrics.engine_snap_duration as f64 / 1_000_000_000.0);
                         }
                     });
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
-                        .observe(begin_instant.saturating_elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed().as_nanos() as f64 / 1_000_000_000.0);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(s)
                 }

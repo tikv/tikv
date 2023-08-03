@@ -406,28 +406,28 @@ slog = { version = "2.3", features = [
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 
 [profile.dev.package.grpcio-sys]
-debug = false
-opt-level = 1
+debug = true
+opt-level = 0
 
 [profile.dev.package.librocksdb_sys]
-debug = false
-opt-level = 1
+debug = true
+opt-level = 0
 
 [profile.dev.package.libtitan_sys]
-debug = false
-opt-level = 1
+debug = true
+opt-level = 0
 
 [profile.dev.package.tirocks-sys]
-debug = false
-opt-level = 1
+debug = true
+opt-level = 0
 
 [profile.dev.package.tests]
-debug = 1
-opt-level = 1
+debug = true
+opt-level = 0
 
 [profile.dev]
+debug = true
 opt-level = 0
-debug = 0
 codegen-units = 4
 lto = false
 incremental = true
@@ -452,8 +452,8 @@ opt-level = 1
 codegen-units = 4
 
 [profile.test]
+debug = true
 opt-level = 0
-debug = 0
 codegen-units = 16
 lto = false
 incremental = true
