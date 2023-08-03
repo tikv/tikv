@@ -482,6 +482,9 @@ make_auto_flush_static_metric! {
     pub label_enum RequestTypeKind {
         write,
         snapshot,
+        snapshot_local,
+        snapshot_read_index_propose_wait,
+        snapshot_read_index_confirm,
     }
 
     pub struct AsyncRequestsCounterVec: LocalIntCounter {

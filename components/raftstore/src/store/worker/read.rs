@@ -29,6 +29,7 @@ use tikv_util::{
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
+use tracker::GLOBAL_TRACKERS;
 use txn_types::TimeStamp;
 
 use super::metrics::*;
@@ -1057,6 +1058,11 @@ where
                     snap.bucket_meta = delegate.bucket_meta.clone();
                 }
                 response.txn_extra_op = delegate.txn_extra_op.load();
+                cb.read_tracker().map(|tracker| {
+                    GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                        t.metrics.local_read = true;
+                    })
+                });
                 cb.set_result(response);
             }
             // Forward to raftstore.
