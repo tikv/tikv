@@ -486,6 +486,8 @@ make_auto_flush_static_metric! {
         engine_snap_duration,
         snapshot_read_index_propose_wait,
         snapshot_read_index_confirm,
+        snapshot_pre_duration,
+        snapshot_post_duration,
     }
 
     pub struct AsyncRequestsCounterVec: LocalIntCounter {

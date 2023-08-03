@@ -127,8 +127,11 @@ pub enum RequestType {
     CoprocessorChecksum,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct RequestMetrics {
+    pub snapshot_begin_time: time::Timespec,
+    pub snapshot_pre_duration_nanos: u64,
+    pub snap_end_time: time::Timespec,
     pub get_snapshot_nanos: u64,
     pub read_index_propose_wait_nanos: u64,
     pub read_index_confirm_wait_nanos: u64,
@@ -168,4 +171,15 @@ pub struct RequestMetrics {
     pub apply_thread_wait_nanos: u64,
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
+}
+
+
+impl Default for RequestMetrics {
+    fn default() -> Self {
+        Self {
+            snapshot_begin_time: time::Timespec::new(0, 0),
+            snap_end_time: time::Timespec::new(0, 0),
+            ..Default::default()
+        }
+    }
 }
