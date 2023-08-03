@@ -44,6 +44,7 @@ use raftstore_v2::{
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter, StoreMsg},
     Bootstrap, SimpleWriteEncoder, StateStorage, StoreSystem,
 };
+use resource_control::{ResourceController, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use slog::{debug, o, Logger};
@@ -263,6 +264,7 @@ impl RunningState {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
+        resource_ctl: Arc<ResourceController>,
     ) -> (TestRouter, Self) {
         let encryption_cfg = test_util::new_file_security_config(path);
         let key_manager = Some(Arc::new(
@@ -286,6 +288,7 @@ impl RunningState {
             &cfg.value(),
             store_id,
             logger.clone(),
+            Some(resource_ctl.clone()),
         );
         let cf_opts = DATA_CFS
             .iter()
@@ -355,6 +358,7 @@ impl RunningState {
                 importer,
                 key_manager,
                 GrpcServiceManager::dummy(),
+                Some(resource_ctl),
             )
             .unwrap();
 
@@ -385,6 +389,7 @@ pub struct TestNode {
     path: TempDir,
     running_state: Option<RunningState>,
     logger: Logger,
+    resource_manager: Arc<ResourceGroupManager>,
 }
 
 impl TestNode {
@@ -396,6 +401,7 @@ impl TestNode {
             path,
             running_state: None,
             logger,
+            resource_manager: Arc::new(ResourceGroupManager::default()),
         }
     }
 
@@ -405,6 +411,9 @@ impl TestNode {
         cop_cfg: Arc<VersionTrack<CopConfig>>,
         trans: TestTransport,
     ) -> TestRouter {
+        let resource_ctl = self
+            .resource_manager
+            .derive_controller("test-raft".into(), false);
         let (router, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
@@ -414,6 +423,7 @@ impl TestNode {
             ConcurrencyManager::new(1.into()),
             None,
             &self.logger,
+            resource_ctl,
         );
         self.running_state = Some(state);
         router
@@ -732,7 +742,7 @@ pub mod split_helper {
         req
     }
 
-    pub fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
+    pub fn must_split(region_id: u64, req: RaftCmdRequest, router: &TestRouter) {
         let (msg, sub) = PeerMsg::admin_command(req);
         router.send(region_id, msg).unwrap();
         block_on(sub.result()).unwrap();
@@ -742,7 +752,7 @@ pub mod split_helper {
         thread::sleep(Duration::from_secs(1));
     }
 
-    pub fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
+    pub fn put(router: &TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
         let header = Box::new(router.new_request_for(region_id).take_header());
         let mut put = SimpleWriteEncoder::with_capacity(64);
         put.put(CF_DEFAULT, key, b"v1");
@@ -752,7 +762,7 @@ pub mod split_helper {
     // Split the region according to the parameters
     // return the updated original region
     pub fn split_region<'a>(
-        router: &'a mut TestRouter,
+        router: &'a TestRouter,
         region: metapb::Region,
         peer: metapb::Peer,
         split_region_id: u64,
@@ -820,7 +830,7 @@ pub mod split_helper {
     // This is to simulate the case when the splitted peer's storage is not
     // initialized yet when refresh bucket happens
     pub fn split_region_and_refresh_bucket(
-        router: &mut TestRouter,
+        router: &TestRouter,
         region: metapb::Region,
         peer: metapb::Peer,
         split_region_id: u64,

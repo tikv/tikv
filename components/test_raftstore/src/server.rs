@@ -8,7 +8,7 @@ use std::{
     usize,
 };
 
-use api_version::{dispatch_api_version, ApiV1, KvFormat};
+use api_version::{dispatch_api_version, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -67,8 +67,7 @@ use tikv::{
     },
     storage::{
         self,
-        kv::{FakeExtension, LocalTablets, MockEngine, SnapContext},
-        lock_manager::MockLockManager,
+        kv::{FakeExtension, LocalTablets, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
@@ -424,6 +423,7 @@ impl ServerCluster {
             resource_manager
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
+            resource_manager.clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -494,10 +494,10 @@ impl ServerCluster {
                 .unwrap(),
         );
 
-        let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> = DebuggerImpl::new(
+        let debugger = DebuggerImpl::new(
             engines.clone(),
             ConfigController::new(cfg.tikv.clone()),
-            None,
+            Some(store.clone()),
         );
         let debug_thread_handle = debug_thread_pool.handle().clone();
         let debug_service = DebugService::new(
@@ -936,6 +936,20 @@ pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClie
     let client = DebugClient::new(channel);
 
     (cluster, client, leader.get_store_id())
+}
+
+pub fn must_new_cluster_kv_client_and_debug_client()
+-> (Cluster<ServerCluster>, TikvClient, DebugClient, Context) {
+    let (cluster, leader, ctx) = must_new_cluster_mul(1);
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+
+    let kv_client = TikvClient::new(channel.clone());
+    let debug_client = DebugClient::new(channel);
+
+    (cluster, kv_client, debug_client, ctx)
 }
 
 pub fn must_new_and_configure_cluster_and_kv_client(
