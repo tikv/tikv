@@ -285,8 +285,8 @@ where
                 Ok(mut resp) => {
                     // TODO: handle replication_status
 
-                    if let Some(plan) = resp.recovery_plan.take() {
-                        let router = Arc::new(UnsafeRecoveryRouter::new(router));
+                    if let Some(mut plan) = resp.recovery_plan.take() {
+                        let handle = Arc::new(UnsafeRecoveryRouter::new(router));
                         info!(logger, "Unsafe recovery, received a recovery plan");
                         if plan.has_force_leader() {
                             let mut failed_stores = HashSet::default();
@@ -295,10 +295,10 @@ where
                             }
                             let syncer = UnsafeRecoveryForceLeaderSyncer::new(
                                 plan.get_step(),
-                                router.clone(),
+                                handle.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
-                                if let Err(e) = router.send_enter_force_leader(
+                                if let Err(e) = handle.send_enter_force_leader(
                                     *region,
                                     syncer.clone(),
                                     failed_stores.clone(),
@@ -309,9 +309,26 @@ where
                                 }
                             }
                         } else {
-                            let _syncer =
-                                UnsafeRecoveryExecutePlanSyncer::new(plan.get_step(), router);
-                            // TODO: handle creates/tombstone/demotes
+                            let syncer = UnsafeRecoveryExecutePlanSyncer::new(
+                                plan.get_step(),
+                                handle.clone(),
+                            );
+                            for create in plan.take_creates().into_iter() {
+                                if let Err(e) = handle.send_create_peer(create, syncer.clone()) {
+                                    error!(logger,
+                                        "fail to send create peer message for recovery";
+                                        "err" => ?e);
+                                }
+                            }
+                            for tombstone in plan.take_tombstones().into_iter() {
+                                if let Err(e) = handle.send_destroy_peer(tombstone, syncer.clone())
+                                {
+                                    error!(logger,
+                                        "fail to send destroy peer message for recovery";
+                                        "err" => ?e);
+                                }
+                            }
+                            // TODO: handle demotes
                         }
                     }
 

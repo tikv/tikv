@@ -15,8 +15,8 @@ use kvproto::{
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
     util::LatencyInspector, FetchedLogs, GenSnapRes, TabletSnapKey,
-    UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-    UnsafeRecoveryWaitApplySyncer,
+    UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+    UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
@@ -264,6 +264,10 @@ pub enum PeerMsg {
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     /// Wait for a peer to fill its status to the report.
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
+    /// Wait for a peer to be initialized.
+    UnsafeRecoveryWaitInitialized(UnsafeRecoveryExecutePlanSyncer),
+    /// Destroy a peer.
+    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
 impl ResourceMetered for PeerMsg {}
@@ -366,6 +370,11 @@ pub enum StoreMsg {
     },
     /// Send a store report for unsafe recovery.
     UnsafeRecoveryReport(pdpb::StoreReport),
+    /// Create a peer for unsafe recovery.
+    UnsafeRecoveryCreatePeer {
+        region: metapb::Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    },
 }
 
 impl ResourceMetered for StoreMsg {}

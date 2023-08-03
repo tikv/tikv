@@ -1382,18 +1382,18 @@ where
                     }
                     if let Some(mut plan) = resp.recovery_plan.take() {
                         info!("Unsafe recovery, received a recovery plan");
+                        let handle = Arc::new(Mutex::new(router.clone()));
                         if plan.has_force_leader() {
                             let mut failed_stores = HashSet::default();
                             for failed_store in plan.get_force_leader().get_failed_stores() {
                                 failed_stores.insert(*failed_store);
                             }
-                            let router = Arc::new(Mutex::new(router.clone()));
                             let syncer = UnsafeRecoveryForceLeaderSyncer::new(
                                 plan.get_step(),
-                                router.clone(),
+                                handle.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
-                                if let Err(e) = router.send_enter_force_leader(
+                                if let Err(e) = handle.send_enter_force_leader(
                                     *region,
                                     syncer.clone(),
                                     failed_stores.clone(),
@@ -1404,24 +1404,16 @@ where
                         } else {
                             let syncer = UnsafeRecoveryExecutePlanSyncer::new(
                                 plan.get_step(),
-                                Arc::new(Mutex::new(router.clone())),
+                                handle.clone(),
                             );
                             for create in plan.take_creates().into_iter() {
-                                if let Err(e) =
-                                    router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
-                                        syncer: syncer.clone(),
-                                        create,
-                                    })
-                                {
+                                if let Err(e) = handle.send_create_peer(create, syncer.clone()) {
                                     error!("fail to send create peer message for recovery"; "err" => ?e);
                                 }
                             }
                             for delete in plan.take_tombstones().into_iter() {
-                                if let Err(e) = router.significant_send(
-                                    delete,
-                                    SignificantMsg::UnsafeRecoveryDestroy(syncer.clone()),
-                                ) {
-                                    error!("fail to send delete peer message for recovery"; "err" => ?e);
+                                if let Err(e) = handle.send_destroy_peer(delete, syncer.clone()) {
+                                    error!("fail to send destroy peer message for recovery"; "err" => ?e);
                                 }
                             }
                             for mut demote in plan.take_demotes().into_iter() {

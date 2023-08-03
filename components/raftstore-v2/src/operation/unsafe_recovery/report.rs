@@ -106,6 +106,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Some(UnsafeRecoveryState::WaitApply { .. }) => {
                 self.unsafe_recovery_maybe_finish_wait_apply(false)
             }
+            Some(UnsafeRecoveryState::WaitInitialize { .. }) => {
+                self.unsafe_recovery_maybe_finish_wait_initialized(false)
+            }
             Some(UnsafeRecoveryState::DemoteFailedVoters { .. }) => {
                 // TODO: support demote.
             }
