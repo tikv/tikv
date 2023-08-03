@@ -340,6 +340,10 @@ impl Store {
     /// When a message's recipient doesn't exist, it will be redirected to
     /// store. Store is responsible for checking if it's neccessary to create
     /// a peer to handle the message.
+    ///
+    /// Return true if the peer is created by the message, false indicates
+    /// either the message is invalid or the peer had already been created
+    /// before the message.
     #[inline]
     pub fn on_raft_message<EK, ER, T>(
         &mut self,
