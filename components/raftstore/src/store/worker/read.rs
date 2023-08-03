@@ -26,10 +26,9 @@ use tikv_util::{
     debug, error,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{monotonic_raw_now, ThreadReadId},
+    time::{monotonic_raw_now, Instant, ThreadReadId},
 };
 use time::Timespec;
-use tikv_util::time::Instant;
 use tracker::GLOBAL_TRACKERS;
 use txn_types::TimeStamp;
 
@@ -979,17 +978,15 @@ where
             Ok(Some((mut delegate, policy))) => {
                 let snap_updated;
                 let last_valid_ts = delegate.last_valid_ts;
-                let mut engine_snap_duration = 0;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
                         let mut local_read_ctx =
                             LocalReadContext::new(&mut self.snap_cache, read_id);
 
-                        let begin = Instant::now();
+                        let begin = Instant::now_coarse();
                         snap_updated = local_read_ctx
                             .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-                        engine_snap_duration = begin.saturating_elapsed().as_nanos() as u64;
 
                         let snapshot_ts = local_read_ctx.snapshot_ts().unwrap();
                         if !delegate.is_in_leader_lease(snapshot_ts) {
@@ -998,6 +995,22 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
+
+                        let coarse_now = Instant::now_coarse();
+                        cb.read_tracker().map(|tracker| {
+                            GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                                t.metrics.local_read = true;
+                                t.metrics.engine_snap_duration =
+                                    coarse_now.saturating_duration_since(begin).as_nanos() as u64;
+                                t.metrics.snapshot_pre_duration_nanos = begin
+                                    .saturating_duration_since(Instant::MonotonicCoarse(
+                                        t.metrics.snapshot_begin_time,
+                                    ))
+                                    .as_nanos()
+                                    as u64;
+                                t.metrics.snap_end_time = coarse_now.timespec();
+                            })
+                        });
 
                         let region = Arc::clone(&delegate.region);
                         let mut response =
@@ -1062,12 +1075,7 @@ where
                     snap.bucket_meta = delegate.bucket_meta.clone();
                 }
                 response.txn_extra_op = delegate.txn_extra_op.load();
-                cb.read_tracker().map(|tracker| {
-                    GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                        t.metrics.local_read = true;
-                        t.metrics.engine_snap_duration = engine_snap_duration;
-                    })
-                });
+
                 cb.set_result(response);
             }
             // Forward to raftstore.

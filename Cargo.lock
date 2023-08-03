@@ -6934,6 +6934,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "slab",
+ "time 0.1.42",
 ]
 
 [[package]]

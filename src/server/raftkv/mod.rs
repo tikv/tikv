@@ -625,6 +625,9 @@ where
             cb(on_read_result(resp).map_err(Error::into));
         }));
         let tracker = store_cb.read_tracker().unwrap();
+        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+            tracker.metrics.snapshot_begin_time = begin_instant.timespec()
+        });
         if res.is_ok() {
             res = self
                 .router
@@ -655,27 +658,49 @@ where
                     Err(e)
                 }
                 Ok(CmdRes::Snap(s)) => {
+                    let coarse_now = Instant::now_coarse();
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         if tracker.metrics.read_index_propose_wait_nanos > 0 {
                             ASYNC_REQUESTS_DURATIONS_VEC
                                 .snapshot_read_index_propose_wait
-                                .observe(tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0);
+                                .observe(
+                                    tracker.metrics.read_index_propose_wait_nanos as f64
+                                        / 1_000_000_000.0,
+                                );
                             // assert!(tracker.metrics.read_index_confirm_wait_nanos > 0);
                             ASYNC_REQUESTS_DURATIONS_VEC
                                 .snapshot_read_index_confirm
-                                .observe(tracker.metrics.read_index_confirm_wait_nanos as f64 / 1_000_000_000.0);
+                                .observe(
+                                    tracker.metrics.read_index_confirm_wait_nanos as f64
+                                        / 1_000_000_000.0,
+                                );
                         } else if tracker.metrics.local_read {
-                            ASYNC_REQUESTS_DURATIONS_VEC
-                                .snapshot_local
-                                .observe(begin_instant.saturating_elapsed().as_nanos() as f64 / 1_000_000_000.0);
-                            ASYNC_REQUESTS_DURATIONS_VEC
-                                .engine_snap_duration
-                                .observe(tracker.metrics.engine_snap_duration as f64 / 1_000_000_000.0);
+                            ASYNC_REQUESTS_DURATIONS_VEC.snapshot_pre_duration.observe(
+                                tracker.metrics.snapshot_pre_duration_nanos as f64
+                                    / 1_000_000_000.0,
+                            );
+                            ASYNC_REQUESTS_DURATIONS_VEC.snapshot_post_duration.observe(
+                                coarse_now
+                                    .saturating_duration_since(Instant::MonotonicCoarse(
+                                        tracker.metrics.snap_end_time,
+                                    ))
+                                    .as_secs_f64(),
+                            );
+                            ASYNC_REQUESTS_DURATIONS_VEC.snapshot_local.observe(
+                                coarse_now
+                                    .saturating_duration_since(begin_instant)
+                                    .as_secs_f64(),
+                            );
+                            ASYNC_REQUESTS_DURATIONS_VEC.engine_snap_duration.observe(
+                                tracker.metrics.engine_snap_duration as f64 / 1_000_000_000.0,
+                            );
                         }
                     });
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .snapshot
-                        .observe(begin_instant.saturating_elapsed().as_nanos() as f64 / 1_000_000_000.0);
+                    ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(
+                        coarse_now
+                            .saturating_duration_since(begin_instant)
+                            .as_secs_f64(),
+                    );
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(s)
                 }
