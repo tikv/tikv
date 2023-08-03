@@ -45,7 +45,7 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
         self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts,
-        ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
+        ReadCallback, ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
@@ -55,6 +55,7 @@ use tikv_util::{
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
+use tracker::GLOBAL_TRACKERS;
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -620,16 +621,14 @@ where
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
+        let store_cb = StoreCallback::read(Box::new(move |resp| {
+            cb(on_read_result(resp).map_err(Error::into));
+        }));
+        let tracker = store_cb.read_tracker().unwrap();
         if res.is_ok() {
             res = self
                 .router
-                .read(
-                    ctx.read_id,
-                    cmd,
-                    StoreCallback::read(Box::new(move |resp| {
-                        cb(on_read_result(resp).map_err(Error::into));
-                    })),
-                )
+                .read(ctx.read_id, cmd, store_cb)
                 .map_err(kv::Error::from);
         }
         async move {
@@ -656,6 +655,21 @@ where
                     Err(e)
                 }
                 Ok(CmdRes::Snap(s)) => {
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        if tracker.metrics.read_index_propose_wait_nanos > 0 {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_read_index_propose_wait
+                                .observe(tracker.metrics.read_index_propose_wait_nanos as f64);
+                            assert!(tracker.metrics.read_index_confirm_wait_nanos > 0);
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_read_index_confirm
+                                .observe(tracker.metrics.read_index_confirm_wait_nanos as f64);
+                        } else if tracker.metrics.local_read {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_local
+                                .observe(begin_instant.saturating_elapsed_secs());
+                        }
+                    });
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
                         .observe(begin_instant.saturating_elapsed_secs());
