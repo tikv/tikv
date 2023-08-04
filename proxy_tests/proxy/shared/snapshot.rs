@@ -449,3 +449,47 @@ fn test_many_concurrent_snapshot() {
 
     cluster.shutdown();
 }
+
+#[test]
+fn test_apply_cancelled_pre_handle() {
+    tikv_util::set_panic_hook(true, "./");
+    let (mut cluster, pd_client) = new_mock_cluster_snap(0, 3);
+    assert_eq!(cluster.cfg.proxy_cfg.raft_store.snap_handle_pool_size, 2);
+
+    disable_auto_gen_compact_log(&mut cluster);
+
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v");
+    let eng_ids = cluster
+        .engines
+        .iter()
+        .map(|e| e.0.to_owned())
+        .collect::<Vec<_>>();
+    tikv_util::info!("engine_2 is {}", eng_ids[1]);
+
+    fail::cfg("on_ob_cancel_after_pre_handle_snapshot", "return").unwrap();
+    pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
+
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+
+    let new_states = maybe_collect_states(&cluster.cluster_ext, r1, None);
+    assert!(new_states.get(&eng_ids[1]).is_some());
+
+    // We can re generate pre handled snapshots if the region must be applied after
+    // cancel, though we haven't found a situation for this.
+    check_key(
+        &cluster,
+        b"k1",
+        b"v",
+        Some(true),
+        None,
+        Some(vec![eng_ids[1]]),
+    );
+
+    fail::remove("on_ob_cancel_after_pre_handle_snapshot");
+    cluster.shutdown();
+}

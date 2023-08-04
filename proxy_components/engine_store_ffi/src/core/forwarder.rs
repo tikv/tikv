@@ -9,25 +9,28 @@ pub struct PtrWrapper(pub RawCppPtr);
 unsafe impl Send for PtrWrapper {}
 unsafe impl Sync for PtrWrapper {}
 
+// Previously we use SnapKey, however, region_id is enough here.
+pub type PreHandleKey = u64;
+
 #[derive(Default, Debug)]
 pub struct PrehandleContext {
     // tracer holds ptr of snapshot prehandled by TiFlash side.
-    pub tracer: HashMap<SnapKey, Arc<PrehandleTask>>,
+    pub tracer: HashMap<PreHandleKey, Arc<PrehandleTask>>,
 }
 
 #[derive(Debug)]
 pub struct PrehandleTask {
     pub recv: mpsc::Receiver<PtrWrapper>,
     pub peer_id: u64,
-    pub snapshot_index: u64,
+    pub snap_key: SnapKey,
 }
 
 impl PrehandleTask {
-    pub fn new(recv: mpsc::Receiver<PtrWrapper>, peer_id: u64, snapshot_index: u64) -> Self {
+    pub fn new(recv: mpsc::Receiver<PtrWrapper>, peer_id: u64, snap_key: SnapKey) -> Self {
         PrehandleTask {
             recv,
             peer_id,
-            snapshot_index,
+            snap_key,
         }
     }
 }

@@ -170,14 +170,14 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         match self.apply_snap_pool.as_ref() {
             Some(p) => {
                 let (sender, receiver) = mpsc::channel();
-                let task = Arc::new(PrehandleTask::new(receiver, peer_id, snap_key.idx));
+                let task = Arc::new(PrehandleTask::new(receiver, peer_id, snap_key.clone()));
                 {
                     let mut lock = match self.pre_handle_snapshot_ctx.lock() {
                         Ok(l) => l,
                         Err(_) => fatal!("pre_apply_snapshot poisoned"),
                     };
                     let ctx = lock.deref_mut();
-                    if let Some(o) = ctx.tracer.insert(snap_key.clone(), task.clone()) {
+                    if let Some(o) = ctx.tracer.insert(snap_key.region_id, task.clone()) {
                         let _prev = self
                             .engine
                             .proxy_ext
@@ -189,7 +189,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             "snap_key" => ?snap_key,
                             "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
                             "new_snapshot" => ?snap,
-                            "old_snapshot_index" => o.snapshot_index,
+                            "old_snapshot_index" => o.snap_key.idx,
                         );
                         // TODO elegantly stop the previous task.
                         drop(o);
@@ -237,6 +237,10 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 );
             }
         }
+
+        fail::fail_point!("on_ob_cancel_after_pre_handle_snapshot", |_| {
+            self.cancel_apply_snapshot(region_id, peer_id)
+        });
     }
 
     pub fn post_apply_snapshot(
@@ -307,12 +311,21 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 Err(_) => fatal!("post_apply_snapshot poisoned"),
             };
             let ctx = lock.deref_mut();
-            ctx.tracer.remove(snap_key)
+            ctx.tracer.remove(&region_id)
         };
 
         let post_apply_start = tikv_util::time::Instant::now();
         let need_retry = match maybe_prehandle_task {
             Some(t) => {
+                if &t.snap_key != snap_key {
+                    panic!(
+                        "mismatched prehandled snapshot [region_id={}] [peer_id={}] [snap_key={:?}] [snap_key={:?}]",
+                        ob_region.get_id(),
+                        peer_id,
+                        snap_key,
+                        t.snap_key,
+                    );
+                }
                 let need_retry = match t.recv.recv() {
                     Ok(snap_ptr) => {
                         info!("get prehandled snapshot success";
@@ -406,5 +419,60 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
 
     pub fn should_pre_apply_snapshot(&self) -> bool {
         true
+    }
+
+    pub fn cancel_apply_snapshot(&self, region_id: u64, peer_id: u64) {
+        info!("start cancel apply snapshot";
+            "peer_id" => peer_id,
+            "region_id" => region_id,
+        );
+        // Notify TiFlash to stop pre handling snapshot. No blocking wait.
+        let maybe_prehandle_task = {
+            let mut lock = match self.pre_handle_snapshot_ctx.lock() {
+                Ok(l) => l,
+                Err(_) => fatal!("cancel_apply_snapshot poisoned"),
+            };
+            let ctx = lock.deref_mut();
+            ctx.tracer.remove(&region_id)
+        };
+        if let Some(t) = maybe_prehandle_task {
+            // If `cancel_applying_snap` is called, applying snapshot is cancelled.
+            // It will happen only if the peer is scheduled away.
+            // However, if the region will somehow request for a prehandled snapshot,
+            // We can still reply on regenerate snapshot though it will take much time.
+            // See `test_apply_cancelled_pre_handle`.
+            self.engine_store_server_helper
+                .abort_pre_handle_snapshot(region_id, peer_id);
+
+            let current_cnt = self
+                .engine
+                .proxy_ext
+                .pending_applies_count
+                .fetch_sub(1, Ordering::SeqCst)
+                - 1;
+            match t.recv.recv() {
+                Ok(f) => {
+                    info!("cancel apply snapshot start cancel pre handled snapshot";
+                        "peer_id" => peer_id,
+                        "region_id" => region_id,
+                        "pending_applies_count" => current_cnt,
+                    );
+                    self.engine_store_server_helper
+                        .release_pre_handled_snapshot(f.0);
+                }
+                Err(e) => {
+                    info!("cancel apply snapshot find error in prehandle task {:?}", e;
+                        "peer_id" => peer_id,
+                        "region_id" => region_id,
+                        "pending_applies_count" => current_cnt,
+                    );
+                }
+            }
+        } else {
+            info!("cancel apply snapshot find no prehandle task";
+                "peer_id" => peer_id,
+                "region_id" => region_id,
+            );
+        }
     }
 }

@@ -274,6 +274,19 @@ unsafe extern "C" fn ffi_set_pb_msg_by_bytes(
     }
 }
 
+unsafe extern "C" fn ffi_abort_pre_handle_snapshot(
+    _: *mut interfaces_ffi::EngineStoreServerWrap,
+    _: u64,
+    _: u64,
+) {
+}
+unsafe extern "C" fn ffi_release_pre_handled_snapshot(
+    _: *mut interfaces_ffi::EngineStoreServerWrap,
+    _: interfaces_ffi::RawVoidPtr,
+    _: interfaces_ffi::RawCppPtrType,
+) {
+}
+
 pub fn gen_engine_store_server_helper(
     wrap: Pin<&EngineStoreServerWrap>,
 ) -> EngineStoreServerHelper {
@@ -293,6 +306,8 @@ pub fn gen_engine_store_server_helper(
         fn_handle_get_engine_store_server_status: None,
         fn_pre_handle_snapshot: Some(ffi_pre_handle_snapshot),
         fn_apply_pre_handled_snapshot: Some(ffi_apply_pre_handled_snapshot),
+        fn_abort_pre_handle_snapshot: Some(ffi_abort_pre_handle_snapshot),
+        fn_release_pre_handled_snapshot: Some(ffi_release_pre_handled_snapshot),
         fn_handle_http_request: None,
         fn_check_http_uri_available: None,
         fn_gc_raw_cpp_ptr: Some(ffi_gc_raw_cpp_ptr),

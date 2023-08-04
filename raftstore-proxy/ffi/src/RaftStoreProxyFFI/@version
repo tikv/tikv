@@ -1,3 +1,3 @@
 #pragma once
 #include <cstdint>
-namespace DB { constexpr uint64_t RAFT_STORE_PROXY_VERSION = 9421202721206258776ull; }
+namespace DB { constexpr uint64_t RAFT_STORE_PROXY_VERSION = 7385737401255952460ull; }

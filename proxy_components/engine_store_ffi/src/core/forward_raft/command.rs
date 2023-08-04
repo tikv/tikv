@@ -229,6 +229,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                     "term" => cmd.term,
                     "index" => cmd.index,
                     "type" => ?cmd_type,
+                    "region_epoch" => ?ob_region.get_region_epoch(),
                 );
             }
             _ => {
@@ -238,7 +239,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                     "peer_id" => region_state.peer_id,
                     "term" => cmd.term,
                     "index" => cmd.index,
-                    "command" => ?request
+                    "command" => ?request,
+                    "region_epoch" => ?ob_region.get_region_epoch(),
                 );
             }
         }

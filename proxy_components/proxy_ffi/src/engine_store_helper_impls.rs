@@ -205,6 +205,18 @@ impl EngineStoreServerHelper {
         }
     }
 
+    pub fn abort_pre_handle_snapshot(&self, region_id: u64, peer_id: u64) {
+        debug_assert!(self.fn_abort_pre_handle_snapshot.is_some());
+        unsafe { (self.fn_abort_pre_handle_snapshot.into_inner())(self.inner, region_id, peer_id) }
+    }
+
+    pub fn release_pre_handled_snapshot(&self, snap: RawCppPtr) {
+        debug_assert!(self.fn_release_pre_handled_snapshot.is_some());
+        unsafe {
+            (self.fn_release_pre_handled_snapshot.into_inner())(self.inner, snap.ptr, snap.type_)
+        }
+    }
+
     pub fn handle_ingest_sst(
         &self,
         snaps: Vec<(&[u8], ColumnFamilyType)>,

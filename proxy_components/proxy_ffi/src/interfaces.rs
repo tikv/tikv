@@ -565,6 +565,20 @@ pub mod root {
                     arg3: root::DB::RawCppPtrType,
                 ),
             >,
+            pub fn_abort_pre_handle_snapshot: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    arg2: u64,
+                    arg3: u64,
+                ),
+            >,
+            pub fn_release_pre_handled_snapshot: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    arg2: root::DB::RawVoidPtr,
+                    arg3: root::DB::RawCppPtrType,
+                ),
+            >,
             pub fn_handle_http_request: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: *mut root::DB::EngineStoreServerWrap,
@@ -634,7 +648,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 9421202721206258776;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 7385737401255952460;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

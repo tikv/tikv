@@ -231,6 +231,10 @@ impl<T: Transport + 'static, ER: RaftEngine> ApplySnapshotObserver for TiFlashOb
     fn should_pre_apply_snapshot(&self) -> bool {
         self.forwarder.should_pre_apply_snapshot()
     }
+
+    fn cancel_apply_snapshot(&self, region_id: u64, peer_id: u64) {
+        self.forwarder.cancel_apply_snapshot(region_id, peer_id)
+    }
 }
 
 impl<T: Transport + 'static, ER: RaftEngine> RoleObserver for TiFlashObserver<T, ER> {

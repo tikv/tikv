@@ -295,6 +295,10 @@ struct EngineStoreServerHelper {
                                       uint64_t, SSTViewVec, uint64_t, uint64_t);
   void (*fn_apply_pre_handled_snapshot)(EngineStoreServerWrap *, RawVoidPtr,
                                         RawCppPtrType);
+  void (*fn_abort_pre_handle_snapshot)(EngineStoreServerWrap *, uint64_t,
+                                       uint64_t);
+  void (*fn_release_pre_handled_snapshot)(EngineStoreServerWrap *, RawVoidPtr,
+                                          RawCppPtrType);
   HttpRequestRes (*fn_handle_http_request)(EngineStoreServerWrap *,
                                            BaseBuffView path,
                                            BaseBuffView query,
