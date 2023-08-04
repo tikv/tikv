@@ -12,7 +12,7 @@ use std::{
     iter::{FromIterator, Iterator},
     mem,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
     u64,
 };
 
@@ -888,11 +888,12 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't wait apply, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -919,11 +920,12 @@ where
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
     fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
-        if self.fsm.peer.snapshot_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -6292,13 +6294,16 @@ where
         if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
             // Clean up the force leader state after a timeout, since the PD recovery
             // process may have been aborted for some reasons.
-            if time.saturating_elapsed()
-                > cmp::max(
-                    self.ctx.cfg.peer_stale_state_check_interval.0,
-                    Duration::from_secs(60),
-                )
-            {
+            if time.saturating_elapsed() > self.ctx.cfg.peer_stale_state_check_interval.0 {
                 self.on_exit_force_leader();
+            }
+        }
+        if let Some(state) = &mut self.fsm.peer.unsafe_recovery_state {
+            // Clean up the unsafe recovery state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if state.check_timeout(self.ctx.cfg.peer_stale_state_check_interval.0) {
+                info!("timeout, abort unsafe recovery"; "state" => ?state);
+                state.abort();
             }
         }
 
