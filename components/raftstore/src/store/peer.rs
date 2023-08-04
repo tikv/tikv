@@ -20,6 +20,7 @@ use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
     Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
+    CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -81,7 +82,10 @@ use super::{
     DestroyPeerJob, LocalReadContext,
 };
 use crate::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
+    coprocessor::{
+        split_observer::NO_VALID_SPLIT_KEY, CoprocessorHost, RegionChangeEvent, RegionChangeReason,
+        RoleChange,
+    },
     errors::RAFTSTORE_IS_BUSY,
     router::RaftStoreRouter,
     store::{
@@ -99,8 +103,8 @@ use crate::{
         unsafe_recovery::{ForceLeaderState, SnapshotRecoveryState, UnsafeRecoveryState},
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
-            HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
-            SplitCheckTask,
+            CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
+            ReadProgress, RegionTask, SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
@@ -4090,7 +4094,34 @@ where
         poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
-        poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
+        poll_ctx
+            .coprocessor_host
+            .pre_propose(self.region(), req)
+            .map_err(|e| {
+                // If the error of prepropose contains str `NO_VALID_SPLIT_KEY`, it may mean the
+                // split_key of the split request is the region start key which
+                // means we may have so many potential duplicate mvcc versions
+                // that we can not manage to get a valid split key. So, we
+                // trigger a compaction to handle it.
+                if e.to_string().contains(NO_VALID_SPLIT_KEY) {
+                    let task = CompactTask::Compact {
+                        cf_name: String::from(CF_WRITE),
+                        start_key: Some(self.region().get_start_key().to_vec()),
+                        end_key: Some(self.region().get_end_key().to_vec()),
+                    };
+                    if let Err(e) = poll_ctx
+                        .cleanup_scheduler
+                        .schedule(CleanupTask::Compact(task))
+                    {
+                        error!(
+                            "schedule compact write cf task failed";
+                            "region_id" => self.region_id,
+                            "err" => ?e,
+                        );
+                    }
+                }
+                e
+            })?;
         let mut ctx = ProposalContext::empty();
 
         if get_sync_log_from_request(req) {

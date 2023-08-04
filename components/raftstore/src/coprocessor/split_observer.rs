@@ -10,6 +10,8 @@ use tikv_util::{box_err, box_try, codec::bytes, error, warn};
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::{store::util, Error};
 
+pub const NO_VALID_SPLIT_KEY: &str = "no valid key found for split.";
+
 pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     let mut slice = key.as_slice();
     let strip_len = match bytes::decode_bytes(&mut slice, false) {
@@ -90,7 +92,7 @@ impl SplitObserver {
             .collect::<Vec<_>>();
 
         if ajusted_splits.is_empty() {
-            Err("no valid key found for split.".to_owned())
+            Err(NO_VALID_SPLIT_KEY.to_owned())
         } else {
             // Rewrite the splits.
             *splits = ajusted_splits;

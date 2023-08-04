@@ -3,7 +3,7 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, channel},
+        mpsc::{self, channel, sync_channel},
         Arc, Mutex,
     },
     thread,
@@ -1355,4 +1355,27 @@ fn test_not_reset_has_dirty_data_due_to_slow_split() {
     cluster.run_node(1).unwrap();
 
     cluster.must_put(b"k00001", b"val");
+}
+
+#[test]
+fn test_split_region_with_no_valid_split_keys() {
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize::kb(1));
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(500);
+    cluster.run();
+
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_compact_range_cf", move || {
+        let _ = tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    for _ in 0..100 {
+        cluster.must_put(
+            b"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+            b"val",
+        );
+    }
+
+    rx.recv_timeout(Duration::from_secs(2)).unwrap();
 }
