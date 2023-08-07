@@ -10,11 +10,16 @@ use crossbeam::channel::SendError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
-    pdpb::{PeerReport, StoreReport},
+    pdpb::{ChangePeer, PeerReport, StoreReport},
+    raft_cmdpb::RaftCmdRequest,
 };
+use raft::eraftpb::ConfChangeType;
 use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
 
-use super::{PeerMsg, RaftRouter, SignificantMsg, SignificantRouter, StoreMsg};
+use super::{
+    fsm::new_admin_request, worker::new_change_peer_v2_request, PeerMsg, RaftRouter,
+    SignificantMsg, SignificantRouter, StoreMsg,
+};
 use crate::Result;
 
 /// A handle for PD to schedule online unsafe recovery commands back to
@@ -38,6 +43,13 @@ pub trait UnsafeRecoveryHandle: Sync + Send {
     fn send_destroy_peer(
         &self,
         region_id: u64,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()>;
+
+    fn send_demote_peers(
+        &self,
+        region_id: u64,
+        failed_voters: Vec<metapb::Peer>,
         syncer: UnsafeRecoveryExecutePlanSyncer,
     ) -> Result<()>;
 
@@ -96,6 +108,22 @@ impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for Mutex<RaftRouter<EK,
             Err(crate::Error::RegionNotFound(_)) => Ok(()),
             res => res,
         }
+    }
+
+    fn send_demote_peers(
+        &self,
+        region_id: u64,
+        failed_voters: Vec<metapb::Peer>,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()> {
+        let router = self.lock().unwrap();
+        router.significant_send(
+            region_id,
+            SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
+                syncer,
+                failed_voters,
+            },
+        )
     }
 
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer) {
@@ -385,4 +413,55 @@ pub enum UnsafeRecoveryState {
     },
     Destroy(UnsafeRecoveryExecutePlanSyncer),
     WaitInitialize(UnsafeRecoveryExecutePlanSyncer),
+}
+
+pub fn exit_joint_request(region: &metapb::Region, peer: &metapb::Peer) -> RaftCmdRequest {
+    let mut req = new_admin_request(region.get_id(), peer.clone());
+    req.mut_header()
+        .set_region_epoch(region.get_region_epoch().clone());
+    req.set_admin_request(new_change_peer_v2_request(vec![]));
+    req
+}
+
+pub fn demote_failed_voters_request(
+    region: &metapb::Region,
+    peer: &metapb::Peer,
+    failed_voters: Vec<metapb::Peer>,
+) -> Option<RaftCmdRequest> {
+    let failed_voter_ids = HashSet::from_iter(failed_voters.iter().map(|voter| voter.get_id()));
+    let mut req = new_admin_request(region.get_id(), peer.clone());
+    req.mut_header()
+        .set_region_epoch(region.get_region_epoch().clone());
+    let mut change_peer_reqs: Vec<ChangePeer> = region
+        .get_peers()
+        .iter()
+        .filter_map(|peer| {
+            if failed_voter_ids.contains(&peer.get_id())
+                && peer.get_role() == metapb::PeerRole::Voter
+            {
+                let mut peer_clone = peer.clone();
+                peer_clone.set_role(metapb::PeerRole::Learner);
+                let mut cp = ChangePeer::default();
+                cp.set_change_type(ConfChangeType::AddLearnerNode);
+                cp.set_peer(peer_clone);
+                return Some(cp);
+            }
+            None
+        })
+        .collect();
+
+    // Promote self if it is a learner.
+    if peer.get_role() == metapb::PeerRole::Learner {
+        let mut cp = ChangePeer::default();
+        cp.set_change_type(ConfChangeType::AddNode);
+        let mut promote = peer.clone();
+        promote.set_role(metapb::PeerRole::Voter);
+        cp.set_peer(promote);
+        change_peer_reqs.push(cp);
+    }
+    if change_peer_reqs.is_empty() {
+        return None;
+    }
+    req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
+    Some(req)
 }

@@ -885,7 +885,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             if self.unsafe_recovery_state().is_some() {
                 debug!(self.logger, "unsafe recovery finishes applying a snapshot");
-                self.check_unsafe_recovery_state();
+                self.check_unsafe_recovery_state(ctx);
             }
         }
 

@@ -26,9 +26,10 @@ macro_rules! confirm_quorum_is_lost {
     }};
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_demote_failed_voters() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -81,9 +82,10 @@ fn test_unsafe_recovery_demote_failed_voters() {
 }
 
 // Demote non-exist voters will not work, but TiKV should still report to PD.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_demote_non_exist_voters() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -146,9 +148,10 @@ fn test_unsafe_recovery_demote_non_exist_voters() {
     assert_eq!(demoted, false);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_auto_promote_learner() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -168,7 +171,7 @@ fn test_unsafe_recovery_auto_promote_learner() {
         .must_remove_peer(region.get_id(), peer_on_store0.clone());
     cluster.pd_client.must_add_peer(
         region.get_id(),
-        new_learner_peer(nodes[0], peer_on_store0.get_id()),
+        new_learner_peer(nodes[0], cluster.pd_client.alloc_id().unwrap()),
     );
     // Sleep 100 ms to wait for the new learner to be initialized.
     sleep_ms(100);
@@ -219,9 +222,10 @@ fn test_unsafe_recovery_auto_promote_learner() {
     assert!(promoted);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_already_in_joint_state() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -238,10 +242,10 @@ fn test_unsafe_recovery_already_in_joint_state() {
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), peer_on_store2.clone());
-    cluster.pd_client.must_add_peer(
-        region.get_id(),
-        new_learner_peer(nodes[2], peer_on_store2.get_id()),
-    );
+    let new_peer_id = cluster.pd_client.alloc_id().unwrap();
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), new_learner_peer(nodes[2], new_peer_id));
     // Wait the new learner to be initialized.
     sleep_ms(100);
     pd_client.must_joint_confchange(
@@ -251,10 +255,7 @@ fn test_unsafe_recovery_already_in_joint_state() {
                 ConfChangeType::AddLearnerNode,
                 new_learner_peer(nodes[0], peer_on_store0.get_id()),
             ),
-            (
-                ConfChangeType::AddNode,
-                new_peer(nodes[2], peer_on_store2.get_id()),
-            ),
+            (ConfChangeType::AddNode, new_peer(nodes[2], new_peer_id)),
         ],
     );
     cluster.stop_node(nodes[1]);
@@ -264,6 +265,7 @@ fn test_unsafe_recovery_already_in_joint_state() {
     confirm_quorum_is_lost!(cluster, region);
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     let to_be_removed: Vec<metapb::Peer> = region
         .get_peers()
         .iter()
@@ -308,9 +310,10 @@ fn test_unsafe_recovery_already_in_joint_state() {
 // Tests whether unsafe recovery behaves correctly when the failed region is
 // already in the middle of a joint state, once exit, it recovers itself without
 // any further demotions.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_early_return_after_exit_joint_state() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -329,16 +332,18 @@ fn test_unsafe_recovery_early_return_after_exit_joint_state() {
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), peer_on_store0.clone());
+    let new_peer_id_store0 = cluster.pd_client.alloc_id().unwrap();
     cluster.pd_client.must_add_peer(
         region.get_id(),
-        new_learner_peer(nodes[0], peer_on_store0.get_id()),
+        new_learner_peer(nodes[0], new_peer_id_store0),
     );
+    let new_peer_id_store2 = cluster.pd_client.alloc_id().unwrap();
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), peer_on_store2.clone());
     cluster.pd_client.must_add_peer(
         region.get_id(),
-        new_learner_peer(nodes[2], peer_on_store2.get_id()),
+        new_learner_peer(nodes[2], new_peer_id_store2),
     );
     // Wait the new learner to be initialized.
     sleep_ms(100);
@@ -347,7 +352,7 @@ fn test_unsafe_recovery_early_return_after_exit_joint_state() {
         vec![
             (
                 ConfChangeType::AddNode,
-                new_peer(nodes[0], peer_on_store0.get_id()),
+                new_peer(nodes[0], new_peer_id_store0),
             ),
             (
                 ConfChangeType::AddLearnerNode,
@@ -362,6 +367,7 @@ fn test_unsafe_recovery_early_return_after_exit_joint_state() {
     confirm_quorum_is_lost!(cluster, region);
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     let to_be_removed: Vec<metapb::Peer> = region
         .get_peers()
         .iter()
