@@ -365,7 +365,7 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/lcwangchao/kvproto.git", branch = "sql_trace" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -393,7 +393,7 @@ opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = 0
+debug = true
 codegen-units = 4
 lto = false
 incremental = true

@@ -264,6 +264,8 @@ impl<E: Engine> Tracker<E> {
                     .unwrap_or_default()
             });
 
+            let trace_ctx = self.req_ctx.context.get_trace_context();
+            let sql_trace = trace_ctx.get_sql_trace_info();  
             with_tls_tracker(|tracker| {
                 info!(#"slow_log", "slow-query";
                     "region_id" => &self.req_ctx.context.get_region_id(),
@@ -278,6 +280,8 @@ impl<E: Engine> Tracker<E> {
                     "txn_start_ts" => self.req_ctx.txn_start_ts,
                     "table_id" => some_table_id,
                     "tag" => self.req_ctx.tag.get_str(),
+                    "connection_id" => sql_trace.get_connection_id(),
+                    "session_alias" => sql_trace.get_session_alias(),
                     "scan.is_desc" => self.req_ctx.is_desc_scan,
                     "scan.processed" => total_storage_stats.write.processed_keys,
                     "scan.processed_size" => total_storage_stats.processed_size,
