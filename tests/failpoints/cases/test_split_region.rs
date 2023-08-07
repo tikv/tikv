@@ -1371,17 +1371,15 @@ fn test_split_region_with_no_valid_split_keys() {
     .unwrap();
 
     let mut raw_key = String::new();
-    let _ = (0..100).map(|i: u8| {
-        raw_key.push(i as char);
-    }).collect::<Vec<_>>();
+    let _ = (0..100)
+        .map(|i: u8| {
+            raw_key.push(i as char);
+        })
+        .collect::<Vec<_>>();
     for i in 0..100 {
         let key = Key::from_raw(raw_key.as_bytes());
         let key = key.append_ts(TimeStamp::new(i));
-        cluster.must_put_cf(
-            CF_WRITE,
-            key.as_encoded(),
-            b"val",
-        );
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
     }
 
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
