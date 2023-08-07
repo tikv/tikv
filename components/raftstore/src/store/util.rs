@@ -2424,6 +2424,9 @@ mod tests {
         let mut peer = Peer::default();
         peer.set_id(1);
         header.set_peer(peer);
+        // match
+        assert!(check_peer_id(&header, 1).is_ok());
+        // mismatch
         let err = check_peer_id(&header, 2).unwrap_err();
         let region_err: Error = err.into();
         assert!(region_err.has_mismatch_peer_id());
