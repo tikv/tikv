@@ -148,7 +148,7 @@ pub enum Error {
     MismatchPeerId {
         request_peer_id: u64,
         store_peer_id: u64,
-    }
+    },
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -278,7 +278,10 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_is_witness(e);
             }
-            Error::MismatchPeerId { request_peer_id, store_peer_id } => {
+            Error::MismatchPeerId {
+                request_peer_id,
+                store_peer_id,
+            } => {
                 let mut e = errorpb::MismatchPeerId::default();
                 e.set_request_peer_id(request_peer_id);
                 e.set_store_peer_id(store_peer_id);
