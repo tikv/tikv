@@ -77,7 +77,8 @@ pub use self::{
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     unsafe_recovery::{
-        ForceLeaderState, SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+        demote_failed_voters_request, exit_joint_request, ForceLeaderState,
+        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
         UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
         UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
     },

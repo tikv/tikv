@@ -59,7 +59,6 @@ use crate::{
     store::{
         cmd_resp::new_error,
         metrics::*,
-        transport::SignificantRouter,
         unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
         },
@@ -69,7 +68,7 @@ use crate::{
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
         Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
+        RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
 };
 
@@ -1417,12 +1416,10 @@ where
                                 }
                             }
                             for mut demote in plan.take_demotes().into_iter() {
-                                if let Err(e) = router.significant_send(
+                                if let Err(e) = handle.send_demote_peers(
                                     demote.get_region_id(),
-                                    SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
-                                        syncer: syncer.clone(),
-                                        failed_voters: demote.take_failed_voters().into_vec(),
-                                    },
+                                    demote.take_failed_voters().into_vec(),
+                                    syncer.clone(),
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
                                 }
