@@ -39,7 +39,7 @@ use tikv_util::{
     time::Instant,
     HandyRwLock,
 };
-use txn_types::{Key, LastChange, PessimisticLock};
+use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_follower_slow_split() {
@@ -1366,16 +1366,23 @@ fn test_split_region_with_no_valid_split_keys() {
 
     let (tx, rx) = sync_channel(1);
     fail::cfg_callback("on_compact_range_cf", move || {
-        let _ = tx.send(true).unwrap();
+        tx.send(true).unwrap();
     })
     .unwrap();
 
-    for _ in 0..100 {
-        cluster.must_put(
-            b"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+    let mut raw_key = String::new();
+    let _ = (0..100).map(|i: u8| {
+        raw_key.push(i as char);
+    }).collect::<Vec<_>>();
+    for i in 0..100 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(
+            CF_WRITE,
+            key.as_encoded(),
             b"val",
         );
     }
 
-    rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 }
