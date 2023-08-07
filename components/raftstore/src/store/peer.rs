@@ -18,10 +18,7 @@ use bitflags::bitflags;
 use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
-    CF_WRITE,
-};
+use engine_traits::{Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK, CF_WRITE, CF_DEFAULT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
@@ -765,6 +762,7 @@ where
     pub region_merge_proposal_index: u64,
 
     pub read_progress: Arc<RegionReadProgress>,
+    last_recorded_safe_ts: u64,
 
     pub memtrace_raft_entries: usize,
     /// Used for sending write msg.
@@ -920,6 +918,7 @@ where
                 REGION_READ_PROGRESS_CAP,
                 peer_id,
             )),
+            last_recorded_safe_ts: 0,
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
@@ -4104,20 +4103,46 @@ where
                 // that we can not manage to get a valid split key. So, we
                 // trigger a compaction to handle it.
                 if e.to_string().contains(NO_VALID_SPLIT_KEY) {
-                    let task = CompactTask::Compact {
-                        cf_name: String::from(CF_WRITE),
-                        start_key: Some(self.region().get_start_key().to_vec()),
-                        end_key: Some(self.region().get_end_key().to_vec()),
-                    };
-                    if let Err(e) = poll_ctx
-                        .cleanup_scheduler
-                        .schedule(CleanupTask::Compact(task))
-                    {
-                        error!(
-                            "schedule compact write cf task failed";
+                    // Not trigger compaction range if safe ts is not changed.
+                    let safe_ts = self.read_progress.safe_ts();
+                    if safe_ts <= self.last_recorded_safe_ts {
+                        return e;
+                    }
+                    self.last_recorded_safe_ts = safe_ts;
+
+                    let region_start_key = self.region().get_start_key();
+                    let region_end_key = self.region().get_end_key();
+
+                    let mut all_scheduled = true;
+                    for cf in [CF_WRITE, CF_DEFAULT] {
+                        let task = CompactTask::Compact {
+                            cf_name: String::from(cf),
+                            start_key: Some(region_start_key.to_vec()),
+                            end_key: Some(region_end_key.to_vec()),
+                        };
+
+                        if let Err(e) = poll_ctx
+                            .cleanup_scheduler
+                            .schedule(CleanupTask::Compact(task))
+                        {
+                            error!(
+                                "schedule compact range task failed";
+                                "region_id" => self.region_id,
+                                "cf" => ?cf,
+                                "err" => ?e,
+                            );
+                            all_scheduled = false;
+                            break;
+                        }
+                    }
+
+                    if all_scheduled {
+                        info!(
+                            "schedule compact range due to no valid split keys";
                             "region_id" => self.region_id,
-                            "err" => ?e,
-                        );
+                            "region_start_key" => log_wrappers::Value::key(region_start_key),
+                            "region_end_key" => log_wrappers::Value::key(region_end_key),
+                        )
                     }
                 }
                 e
