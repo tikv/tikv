@@ -699,6 +699,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             let begin_instant = Instant::now();
 
             let start_ts = request.get_start_ts().into();
+            info!("update max_tx"; "source" => "raftkv read index observer", "new" => start_ts, "current" => self.concurrency_manager.max_ts());
             self.concurrency_manager.update_max_ts(start_ts);
             for range in request.mut_key_ranges().iter_mut() {
                 let key_bound = |key: Vec<u8>| {

@@ -80,6 +80,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         if !self.caller_start_ts.is_max() && self.caller_start_ts > new_max_ts {
             new_max_ts = self.caller_start_ts;
         }
+        info!("update max_tx"; "source" => "check txn status", "new" => new_max_ts, "current" => context.concurrency_manager.max_ts());
         context.concurrency_manager.update_max_ts(new_max_ts);
 
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);

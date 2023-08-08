@@ -70,6 +70,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // it infers a read to the value, in which case max_ts need to be updated to
     // guarantee the linearizability and snapshot isolation.
     if should_not_exist || need_value || need_check_existence {
+        info!("update max_tx"; "source" => "acquire pessimistic lock", "new" => for_update_ts, "current" => txn.concurrency_manager.max_ts());
         txn.concurrency_manager.update_max_ts(for_update_ts);
     }
 

@@ -43,6 +43,7 @@ pub fn prewrite<S: Snapshot>(
     // Update max_ts for Insert operation to guarantee linearizability and snapshot
     // isolation
     if mutation.should_not_exist {
+        info!("update max_tx"; "source" => "prewrite for insert", "new" => txn_props.start_ts, "current" => txn.concurrency_manager.max_ts());
         txn.concurrency_manager.update_max_ts(txn_props.start_ts);
     }
 
@@ -106,6 +107,7 @@ pub fn prewrite<S: Snapshot>(
     if mutation.should_not_write {
         // `checkNotExists` is equivalent to a get operation, so it should update the
         // max_ts.
+        info!("update max_tx"; "source" => "prewrite check not exist", "new" => txn_props.start_ts, "current" => txn.concurrency_manager.max_ts());
         txn.concurrency_manager.update_max_ts(txn_props.start_ts);
         let min_commit_ts = if mutation.need_min_commit_ts() {
             // Don't calculate the min_commit_ts according to the concurrency manager's
@@ -675,8 +677,9 @@ fn async_commit_timestamps(
     // is operating on this key.
     let key_guard = ::futures_executor::block_on(txn.concurrency_manager.lock_key(key));
 
+    let mut max_ts = TimeStamp::zero();
     let final_min_commit_ts = key_guard.with_lock(|l| {
-        let max_ts = txn.concurrency_manager.max_ts();
+        max_ts = txn.concurrency_manager.max_ts();
         fail_point!("before-set-lock-in-memory");
         let min_commit_ts = cmp::max(cmp::max(max_ts, start_ts), for_update_ts).next();
         let min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
@@ -706,6 +709,16 @@ fn async_commit_timestamps(
                 max_commit_ts,
             });
         }
+
+        info!("async commit timestamps";
+            "key" => log_wrappers::Value::key(key.as_encoded()),
+            "start_ts" => start_ts,
+            "for_update_ts" => for_update_ts,
+            "max_commit_ts" => max_commit_ts,
+            "max_ts" => max_ts,
+            "lock.min_commit_ts" => lock.min_commit_ts,
+            "final min_commit_ts" => min_commit_ts,
+        );
 
         lock.min_commit_ts = min_commit_ts;
         *l = Some(lock.clone());

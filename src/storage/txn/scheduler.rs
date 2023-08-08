@@ -729,7 +729,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         }
                         task.extra_op = extra_op;
 
-                        debug!(
+                        info!(
                             "process cmd with snapshot";
                             "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
                             "trakcer" => ?task.tracker
@@ -760,6 +760,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
+        info!("write command finished with error";
+            "cid" => cid,
+            "pr" => ?&pr,
+        );
         if let Some(cb) = tctx.cb {
             cb.execute(pr);
         }
@@ -815,7 +819,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write command finished";
+        info!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -1212,7 +1216,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed"; "cid" => cid, "err" => ?err);
+                info!("write command failed"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
                 return;
             }
@@ -1470,6 +1474,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 WriteEvent::Finished(res) => {
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
+                    info!("scheduler async write applied finish and callback";
+                        "cid" => cid,
+                        "ok" => ok
+                    );
 
                     sched.on_write_finished(
                         cid,

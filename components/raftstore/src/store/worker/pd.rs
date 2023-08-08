@@ -1676,6 +1676,7 @@ where
 
                 match res {
                     Ok(ts) => {
+                        info!("update max_tx"; "source" => "raftstore", "new" => ts, "current" => concurrency_manager.max_ts());
                         concurrency_manager.update_max_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
                         success = txn_ext

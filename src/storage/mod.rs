@@ -47,19 +47,6 @@
 //! * the [`engine_traits`](::engine_traits) crate, more detail of the engine
 //!   abstraction.
 
-pub mod config;
-pub mod config_manager;
-pub mod errors;
-pub mod kv;
-pub mod lock_manager;
-pub(crate) mod metrics;
-pub mod mvcc;
-pub mod raw;
-pub mod txn;
-
-mod read_pool;
-mod types;
-
 use std::{
     borrow::Cow,
     iter,
@@ -133,6 +120,19 @@ use crate::{
         types::StorageCallbackType,
     },
 };
+
+pub mod config;
+pub mod config_manager;
+pub mod errors;
+pub mod kv;
+pub mod lock_manager;
+pub(crate) mod metrics;
+pub mod mvcc;
+pub mod raw;
+pub mod txn;
+
+mod read_pool;
+mod types;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -589,6 +589,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        info!("storage.get";
+            "key" => %key,
+            "start_ts" => start_ts,
+            "region_id" => ctx.get_region_id(),
+            "peer" => ?ctx.get_peer(),
+            "replica read" => ctx.get_replica_read(),
+            "resolved_locks" => ?ctx.get_resolved_locks(),
+            "committed_locks" => ?ctx.get_committed_locks(),
+        );
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -665,6 +674,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             r
                         })
                     });
+                    info!("storage.get() done"; "start_ts" => start_ts, "key" => ?key, "value" => ?result);
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
@@ -924,6 +934,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
+        let _keys = keys
+            .iter()
+            .map(|k| log_wrappers::Value::key(k.as_encoded().as_slice()))
+            .collect::<Vec<_>>();
+        info!("storage.batch_get";
+            "key" => ?_keys,
+            "start_ts" => start_ts,
+            "region_id" => ctx.get_region_id(),
+            "peer" => ?ctx.get_peer(),
+            "replica read" => ctx.get_replica_read(),
+            "resolved_locks" => ?ctx.get_resolved_locks(),
+            "committed_locks" => ?ctx.get_committed_locks(),
+        );
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
@@ -1105,6 +1128,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key_only: bool,
         reverse_scan: bool,
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+        info!("storage.scan()";
+            "start key" => %start_key,
+            "start_ts" => start_ts,
+            "region_id" => ctx.get_region_id(),
+            "peer" => ?ctx.get_peer(),
+            "replica read" => ctx.get_replica_read(),
+            "resolved_locks" => ?ctx.get_resolved_locks(),
+            "committed_locks" => ?ctx.get_committed_locks(),
+        );
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -1163,6 +1195,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 if !ctx.get_stale_read() {
+                    info!("update max_tx"; "source" => "scan", "new" => start_ts, "current" => concurrency_manager.max_ts());
                     concurrency_manager.update_max_ts(start_ts);
                 }
                 if need_check_locks(ctx.get_isolation_level()) {
@@ -1320,6 +1353,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 let command_duration = tikv_util::time::Instant::now();
 
+                info!("update max_tx"; "source" => "scan_lock", "new" => max_ts, "current" => concurrency_manager.max_ts());
                 concurrency_manager.update_max_ts(max_ts);
                 let begin_instant = Instant::now();
                 // TODO: Though it's very unlikely to find a conflicting memory lock here, it's
@@ -2861,8 +2895,18 @@ fn prepare_snap_ctx<'a>(
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
+    let keys_debug: Vec<_> = keys.clone().into_iter().collect();
+    info!("prepare_snap_ctx";
+        "cmd" => ?cmd,
+        "start_ts" => start_ts,
+        "stale_read" => pb_ctx.get_stale_read(),
+        "isolation_level" => ?pb_ctx.get_isolation_level(),
+        "bypass_locks" => ?bypass_locks,
+        "keys" => ?keys_debug
+    );
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
+        info!("update max_tx"; "source" => "prepare_snap_ctx", "new" => start_ts, "current" => concurrency_manager.max_ts());
         concurrency_manager.update_max_ts(start_ts);
     }
     fail_point!("before-storage-check-memory-locks");

@@ -1040,6 +1040,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             // optimizations like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTs` task, and the
             // resolver must be checked in or after `Task::MinTs`' execution.
+            info!("update max_tx"; "source" => "cdc", "new" => min_ts, "current" => cm.max_ts());
             cm.update_max_ts(min_ts);
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {

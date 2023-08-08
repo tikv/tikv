@@ -10,11 +10,6 @@
 //! In order to mutate the lock of a key stored in the lock table, it needs
 //! to be locked first using `lock_key` or `lock_keys`.
 
-use fail::fail_point;
-
-mod key_handle;
-mod lock_table;
-
 use std::{
     mem::MaybeUninit,
     sync::{
@@ -23,12 +18,16 @@ use std::{
     },
 };
 
+use fail::fail_point;
 use txn_types::{Key, Lock, TimeStamp};
 
 pub use self::{
     key_handle::{KeyHandle, KeyHandleGuard},
     lock_table::LockTable,
 };
+
+mod key_handle;
+mod lock_table;
 
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
