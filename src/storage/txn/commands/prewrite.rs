@@ -290,12 +290,13 @@ impl std::fmt::Display for PrewritePessimistic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "kv::command::pessimistic_prewrite mutations({:?}) primary({:?}) secondary_len({:?})@ {} {} {} {} {} {} {:?}| {:?}",
+            "kv::command::pessimistic_prewrite mutations({:?}) primary({:?}) secondary_len({:?})@ {} {} {} {} {} {} {} {:?}| {:?}",
             self.mutations,
             log_wrappers::Value::key(self.primary.as_slice()),
             self.secondary_keys.as_ref().map(|sk| sk.len()),
             self.start_ts,
             self.lock_ttl,
+            self.for_update_ts,
             self.txn_size,
             self.min_commit_ts,
             self.max_commit_ts,
