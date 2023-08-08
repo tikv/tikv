@@ -1395,7 +1395,7 @@ fn test_split_region_with_no_valid_split_keys() {
         cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
     }
     // at most one compaction will be triggered for each safe_point
-    assert!(rx.try_recv().is_err());
+    rx.try_recv().unwrap_err();
 
     fail::cfg(safe_point_inject, "return(200)").unwrap();
     for i in 0..20 {
@@ -1405,5 +1405,5 @@ fn test_split_region_with_no_valid_split_keys() {
     }
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(rx.try_recv().is_err());
+    rx.try_recv().unwrap_err();
 }
