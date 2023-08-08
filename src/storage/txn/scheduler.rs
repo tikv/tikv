@@ -829,6 +829,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "async_apply_prewrite" => async_apply_prewrite,
                 "min_commit_ts" => min_commit_ts,
             );
+        } else if let Some(ProcessResult::TxnStatus { ref txn_status }) = pr {
+            info!("write command finished";
+                "cid" => cid,
+                "pipelined" => pipelined,
+                "async_apply_prewrite" => async_apply_prewrite,
+                "txn_status" => ?txn_status,
+            );
         } else {
             info!("write command finished";
                 "cid" => cid,
