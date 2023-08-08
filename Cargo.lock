@@ -2976,12 +2976,12 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#770f7183434ca05887a3f63265b8745017130e1f"
+source = "git+https://github.com/pingcap/kvproto.git#ee4a4ff68ac385bd61ea9da868b4b6a6c0dadcec"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build 0.15.1",
+ "protobuf-build",
  "raft-proto",
 ]
 
@@ -4407,30 +4407,6 @@ dependencies = [
 
 [[package]]
 name = "protobuf-build"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b2be70fa994657539e3c872cc54363c9bf28b0d7a7f774df70e9fd760df3bc4"
-dependencies = [
- "bitflags",
- "protobuf",
- "protobuf-codegen",
- "regex",
-]
-
-[[package]]
-name = "protobuf-build"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2df9942df2981178a930a72d442de47e2f0df18ad68e50a30f816f1848215ad0"
-dependencies = [
- "bitflags",
- "protobuf",
- "protobuf-codegen",
- "regex",
-]
-
-[[package]]
-name = "protobuf-build"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c852d9625b912c3e50480cdc701f60f49890b5d7ad46198dd583600f15e7c6ec"
@@ -4502,7 +4478,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
+source = "git+https://github.com/tikv/raft-rs?branch=master#9d360a3b0cdb691da8e500a4f73c457b605a1d73"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4561,11 +4537,11 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#f73766712a538c2f6eb135b455297ad6c03fc58d"
+source = "git+https://github.com/tikv/raft-rs?branch=master#9d360a3b0cdb691da8e500a4f73c457b605a1d73"
 dependencies = [
  "bytes",
  "protobuf",
- "protobuf-build 0.14.1",
+ "protobuf-build",
 ]
 
 [[package]]
@@ -5027,6 +5003,7 @@ dependencies = [
  "protobuf",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "strum 0.20.0",
@@ -5793,6 +5770,7 @@ dependencies = [
  "engine_traits",
  "futures 0.3.15",
  "grpcio",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5811,6 +5789,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "toml",
  "txn_types",
 ]
@@ -6709,7 +6688,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "7.3.0-alpha"
+version = "7.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -7114,12 +7093,12 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#955fbdc879517f16b7a2f5967f143b92a6ab03dd"
+source = "git+https://github.com/pingcap/tipb.git#55b921cfdca1e29bcc29a83c1532bfdf53f88c51"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build 0.13.0",
+ "protobuf-build",
 ]
 
 [[package]]

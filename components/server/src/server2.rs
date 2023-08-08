@@ -67,10 +67,7 @@ use raftstore_v2::{
     StateStorage,
 };
 use resolved_ts::Task;
-use resource_control::{
-    worker::{GroupQuotaAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION},
-    ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
-};
+use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
@@ -328,24 +325,13 @@ where
 
         let resource_manager = if config.resource_control.enabled {
             let mgr = Arc::new(ResourceGroupManager::default());
-            let mut resource_mgr_service =
-                ResourceManagerService::new(mgr.clone(), pd_client.clone());
-            // spawn a task to periodically update the minimal virtual time of all resource
-            // groups.
-            let resource_mgr = mgr.clone();
-            background_worker.spawn_interval_task(MIN_PRIORITY_UPDATE_INTERVAL, move || {
-                resource_mgr.advance_min_virtual_time();
-            });
-            // spawn a task to watch all resource groups update.
-            background_worker.spawn_async_task(async move {
-                resource_mgr_service.watch_resource_groups().await;
-            });
-            // spawn a task to auto adjust background quota limiter.
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
-            let mut worker = GroupQuotaAdjustWorker::new(mgr.clone(), io_bandwidth);
-            background_worker.spawn_interval_task(BACKGROUND_LIMIT_ADJUST_DURATION, move || {
-                worker.adjust_quota();
-            });
+            resource_control::start_periodic_tasks(
+                &mgr,
+                pd_client.clone(),
+                &background_worker,
+                io_bandwidth,
+            );
             Some(mgr)
         } else {
             None
@@ -1470,7 +1456,14 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         .sst_recovery_sender(self.init_sst_recovery_sender())
         .flow_listener(flow_listener);
 
-        let mut node = NodeV2::new(&self.core.config.server, self.pd_client.clone(), None);
+        let mut node = NodeV2::new(
+            &self.core.config.server,
+            self.pd_client.clone(),
+            None,
+            self.resource_manager
+                .as_ref()
+                .map(|r| r.derive_controller("raft-v2".into(), false)),
+        );
         node.try_bootstrap_store(&self.core.config.raft_store, &raft_engine)
             .unwrap_or_else(|e| fatal!("failed to bootstrap store: {:?}", e));
         assert_ne!(node.id(), 0);
