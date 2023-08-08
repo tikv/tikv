@@ -87,7 +87,7 @@ use crate::{
         },
         types::StorageCallback,
         DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
-        PessimisticLockKeyResult, PessimisticLockResults,
+        PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
     },
 };
 
@@ -819,12 +819,24 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        info!("write command finished";
-            "cid" => cid,
-            "pipelined" => pipelined,
-            "async_apply_prewrite" => async_apply_prewrite,
-            "result" => ?pr
-        );
+        if let Some(ProcessResult::PrewriteResult {
+            result: PrewriteResult { min_commit_ts, .. },
+        }) = pr
+        {
+            info!("write command finished";
+                "cid" => cid,
+                "pipelined" => pipelined,
+                "async_apply_prewrite" => async_apply_prewrite,
+                "min_commit_ts" => min_commit_ts,
+            );
+        } else {
+            info!("write command finished";
+                "cid" => cid,
+                "pipelined" => pipelined,
+                "async_apply_prewrite" => async_apply_prewrite,
+            );
+        }
+
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
