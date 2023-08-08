@@ -37,6 +37,9 @@ pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
     }
 
     if let Err(Error::KeyNotInRegion(..)) = util::check_key_in_region_exclusive(key, region) {
+        // use this to distinguish whether the key is at the edge or outside of the
+        // region.
+        let equal_start_key = key == region.get_start_key();
         warn!(
             "skip invalid split key: key is not in region";
             "key" => log_wrappers::Value::key(key),
@@ -44,6 +47,7 @@ pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
             "start_key" => log_wrappers::Value::key(region.get_start_key()),
             "end_key" => log_wrappers::Value::key(region.get_end_key()),
             "index" => index,
+            "equal_start_key" => equal_start_key,
         );
         return false;
     }

@@ -18,10 +18,14 @@ use bitflags::bitflags;
 use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK, CF_WRITE, CF_DEFAULT};
+use engine_traits::{
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
+};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
+use keys::{enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -762,7 +766,6 @@ where
     pub region_merge_proposal_index: u64,
 
     pub read_progress: Arc<RegionReadProgress>,
-    last_recorded_safe_ts: u64,
 
     pub memtrace_raft_entries: usize,
     /// Used for sending write msg.
@@ -784,6 +787,8 @@ where
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
+
+    last_record_safe_point: u64,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -918,7 +923,7 @@ where
                 REGION_READ_PROGRESS_CAP,
                 peer_id,
             )),
-            last_recorded_safe_ts: 0,
+            last_record_safe_point: 0,
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
@@ -4103,22 +4108,26 @@ where
                 // that we can not manage to get a valid split key. So, we
                 // trigger a compaction to handle it.
                 if e.to_string().contains(NO_VALID_SPLIT_KEY) {
-                    // Not trigger compaction range if safe ts is not changed.
-                    let safe_ts = self.read_progress.safe_ts();
-                    if safe_ts <= self.last_recorded_safe_ts {
+                    let safe_ts = poll_ctx.safe_point.load(Ordering::Relaxed);
+                    if safe_ts <= self.last_record_safe_point {
+                        info!(
+                            "skip schedule compact range due to safe_point not updated";
+                            "region_id" => self.region_id,
+                            "safe_point" => safe_ts,
+                        );
                         return e;
                     }
-                    self.last_recorded_safe_ts = safe_ts;
+                    self.last_record_safe_point = safe_ts;
 
-                    let region_start_key = self.region().get_start_key();
-                    let region_end_key = self.region().get_end_key();
+                    let start_key = enc_start_key(self.region());
+                    let end_key = enc_end_key(self.region());
 
                     let mut all_scheduled = true;
                     for cf in [CF_WRITE, CF_DEFAULT] {
                         let task = CompactTask::Compact {
                             cf_name: String::from(cf),
-                            start_key: Some(region_start_key.to_vec()),
-                            end_key: Some(region_end_key.to_vec()),
+                            start_key: Some(start_key.clone()),
+                            end_key: Some(end_key.clone()),
                         };
 
                         if let Err(e) = poll_ctx
@@ -4140,9 +4149,10 @@ where
                         info!(
                             "schedule compact range due to no valid split keys";
                             "region_id" => self.region_id,
-                            "region_start_key" => log_wrappers::Value::key(region_start_key),
-                            "region_end_key" => log_wrappers::Value::key(region_end_key),
-                        )
+                            "safe_point" => safe_ts,
+                            "region_start_key" => log_wrappers::Value::key(&start_key),
+                            "region_end_key" => log_wrappers::Value::key(&end_key),
+                        );
                     }
                 }
                 e
