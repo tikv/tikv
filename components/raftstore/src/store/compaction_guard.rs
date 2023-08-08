@@ -72,6 +72,12 @@ impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
             use_guard: false,
             boundaries: vec![],
             pos: 0,
+            next_level_boundaries: context
+                .next_level_boundaries
+                .iter()
+                .map(|v| v.to_vec())
+                .collect(),
+            next_level_size: context.next_level_sizes.clone(),
         })
     }
 }
@@ -86,6 +92,8 @@ pub struct CompactionGuardGenerator<P: RegionInfoProvider> {
     use_guard: bool,
     // The boundary keys are exclusive.
     boundaries: Vec<Vec<u8>>,
+    next_level_boundaries: Vec<Vec<u8>>,
+    next_level_size: Vec<usize>,
     pos: usize,
 }
 
@@ -224,6 +232,8 @@ mod tests {
             use_guard: false,
             boundaries: vec![],
             pos: 0,
+            next_level_boundaries: vec![],
+            next_level_size: vec![],
         };
 
         guard.smallest_key = keys::LOCAL_MIN_KEY.to_vec();
@@ -269,6 +279,8 @@ mod tests {
             use_guard: true,
             boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
             pos: 0,
+            next_level_boundaries: vec![],
+            next_level_size: vec![],
         };
         // Crossing region boundary.
         let mut req = SstPartitionerRequest {
@@ -339,6 +351,8 @@ mod tests {
                 b"aaa15".to_vec(),
             ],
             pos: 0,
+            next_level_boundaries: vec![],
+            next_level_size: vec![],
         };
         // Binary search meet exact match.
         guard.pos = 0;
