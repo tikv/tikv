@@ -4115,14 +4115,13 @@ where
                         poll_ctx.safe_point.load(Ordering::Relaxed)
                     })();
                     if safe_ts <= self.last_record_safe_point {
-                        info!(
+                        debug!(
                             "skip schedule compact range due to safe_point not updated";
                             "region_id" => self.region_id,
                             "safe_point" => safe_ts,
                         );
                         return e;
                     }
-                    self.last_record_safe_point = safe_ts;
 
                     let start_key = enc_start_key(self.region());
                     let end_key = enc_end_key(self.region());
@@ -4158,6 +4157,7 @@ where
                             "region_start_key" => log_wrappers::Value::key(&start_key),
                             "region_end_key" => log_wrappers::Value::key(&end_key),
                         );
+                        self.last_record_safe_point = safe_ts;
                     }
                 }
                 e
