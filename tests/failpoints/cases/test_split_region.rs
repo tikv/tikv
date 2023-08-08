@@ -1364,23 +1364,46 @@ fn test_split_region_with_no_valid_split_keys() {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(500);
     cluster.run();
 
-    let (tx, rx) = sync_channel(1);
+    let (tx, rx) = sync_channel(5);
     fail::cfg_callback("on_compact_range_cf", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
 
+    let safe_point_inject = "safe_point_inject";
+    fail::cfg(safe_point_inject, "return(100)").unwrap();
+
     let mut raw_key = String::new();
-    let _ = (0..100)
+    let _ = (0..250)
         .map(|i: u8| {
             raw_key.push(i as char);
         })
         .collect::<Vec<_>>();
-    for i in 0..100 {
+    for i in 0..20 {
         let key = Key::from_raw(raw_key.as_bytes());
         let key = key.append_ts(TimeStamp::new(i));
         cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
     }
 
+    // one for default cf, one for write cf
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    for i in 0..20 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
+    }
+    // at most one compaction will be triggered for each safe_point
+    assert!(rx.try_recv().is_err());
+
+    fail::cfg(safe_point_inject, "return(200)").unwrap();
+    for i in 0..20 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
+    }
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(rx.try_recv().is_err());
 }

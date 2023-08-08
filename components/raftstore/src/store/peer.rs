@@ -4108,7 +4108,12 @@ where
                 // that we can not manage to get a valid split key. So, we
                 // trigger a compaction to handle it.
                 if e.to_string().contains(NO_VALID_SPLIT_KEY) {
-                    let safe_ts = poll_ctx.safe_point.load(Ordering::Relaxed);
+                    let safe_ts = (|| {
+                        fail::fail_point!("safe_point_inject", |t| {
+                            t.unwrap().parse::<u64>().unwrap()
+                        });
+                        poll_ctx.safe_point.load(Ordering::Relaxed)
+                    })();
                     if safe_ts <= self.last_record_safe_point {
                         info!(
                             "skip schedule compact range due to safe_point not updated";
