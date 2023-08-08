@@ -1977,7 +1977,7 @@ where
     fn is_store_heartbeat_delayed(&self) -> bool {
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
-        (interval_second >= self.store_heartbeat_interval.as_secs())
+        (interval_second > self.store_heartbeat_interval.as_secs())
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
     }
 

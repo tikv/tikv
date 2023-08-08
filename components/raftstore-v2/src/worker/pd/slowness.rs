@@ -135,8 +135,11 @@ where
             STORE_SLOW_TREND_RESULT_GAUGE.set(slow_trend_result_rate);
             STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(total_query_num);
         } else {
-            // Just to mark the invalid range on the graphic
+            // It means that raftstore thread already hung on IO operating, report a rate
+            // with value <= `-epison` to represent it invalid, and mark the invalid range
+            // on the metrics.
             STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(-100.0);
+            slow_trend.set_result_rate(-100.0);
         }
         stats.set_slow_trend(slow_trend);
         self.flush_slowness_metrics();
