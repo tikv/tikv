@@ -820,7 +820,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         info!("write command finished";
-            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
+            "cid" => cid,
+            "pipelined" => pipelined,
+            "async_apply_prewrite" => async_apply_prewrite,
+            "result" => ?pr
+        );
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 

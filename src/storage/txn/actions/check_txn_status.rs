@@ -64,9 +64,19 @@ pub fn check_txn_status_lock_exists(
         // Push forward the min_commit_ts so that reading won't be blocked by locks.
         && caller_start_ts >= lock.min_commit_ts
     {
+        info!("update lock.min_commit_ts using caller_start_ts + 1";
+            "caller_start_ts" => caller_start_ts,
+            "old min_commit_ts" => lock.min_commit_ts,
+            "lock ts" => lock.ts,
+        );
         lock.min_commit_ts = caller_start_ts.next();
 
         if lock.min_commit_ts < current_ts {
+            info!("update lock.min_commit_ts using current_ts";
+                "current_ts" => current_ts,
+                "old min_commit_ts" => lock.min_commit_ts,
+                "lock ts" => lock.ts,
+            );
             lock.min_commit_ts = current_ts;
         }
 
