@@ -493,7 +493,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn already_checked_trim_status(&mut self, req: &RaftCmdRequest) -> Result<bool> {
-        let flushed = !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+        let flushed = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
             .contains(WriteBatchFlags::PRE_FLUSH_FINISHED);
         match self
             .merge_context()
