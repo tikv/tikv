@@ -3204,18 +3204,17 @@ where
                 && read.cmds()[0].0.get_requests().len() == 1
                 && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
+            let read_index = read.read_index.unwrap();
             if is_read_index_request {
                 self.response_read(&mut read, ctx, false);
-            } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+            } else if self.ready_to_handle_unsafe_replica_read(read_index) {
                 self.response_read(&mut read, ctx, true);
-            } else if self.get_store().applied_index() + ctx.cfg.raft_log_gc_count_limit()
-                <= read.read_index.unwrap()
-            {
+            } else if self.get_store().applied_index() + 100 <= read_index {
                 let mut response = cmd_resp::new_error(Error::FollowerNotReady {
                     region_id: self.region_id,
                     peer_id: self.peer_id(),
                     apply_index: self.get_store().applied_index(),
-                    read_index: read.read_index.unwrap(),
+                    read_index,
                 });
                 cmd_resp::bind_term(&mut response, self.term());
                 self.respond_replica_read_error(&mut read, response);

@@ -183,6 +183,7 @@ pub enum ErrorHeaderKind {
     DiskFull,
     RecoveryInProgress,
     FlashbackInProgress,
+    FollowerNotReady,
     Other,
 }
 
@@ -207,6 +208,7 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::DiskFull => "disk_full",
             ErrorHeaderKind::RecoveryInProgress => "recovery_in_progress",
             ErrorHeaderKind::FlashbackInProgress => "flashback_in_progress",
+            ErrorHeaderKind::FollowerNotReady => "follower_not_ready",
             ErrorHeaderKind::Other => "other",
         }
     }
@@ -255,6 +257,8 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::RecoveryInProgress
     } else if header.has_flashback_in_progress() {
         ErrorHeaderKind::FlashbackInProgress
+    } else if header.has_follower_not_ready() {
+        ErrorHeaderKind::FollowerNotReady
     } else {
         ErrorHeaderKind::Other
     }
