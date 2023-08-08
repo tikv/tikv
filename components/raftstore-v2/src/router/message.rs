@@ -268,6 +268,11 @@ pub enum PeerMsg {
     UnsafeRecoveryWaitInitialized(UnsafeRecoveryExecutePlanSyncer),
     /// Destroy a peer.
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
+    // Demote failed voter peers.
+    UnsafeRecoveryDemoteFailedVoters {
+        failed_voters: Vec<metapb::Peer>,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    },
 }
 
 impl ResourceMetered for PeerMsg {}
