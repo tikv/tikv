@@ -2976,7 +2976,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#770f7183434ca05887a3f63265b8745017130e1f"
+source = "git+https://github.com/pingcap/kvproto.git#ee4a4ff68ac385bd61ea9da868b4b6a6c0dadcec"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5003,6 +5003,7 @@ dependencies = [
  "protobuf",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "strum 0.20.0",
@@ -5769,6 +5770,7 @@ dependencies = [
  "engine_traits",
  "futures 0.3.15",
  "grpcio",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5787,6 +5789,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "toml",
  "txn_types",
 ]
@@ -6685,7 +6688,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "7.3.0-alpha"
+version = "7.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
