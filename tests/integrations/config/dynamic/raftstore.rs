@@ -2,7 +2,7 @@
 
 use std::{
     iter::FromIterator,
-    sync::{mpsc, Arc, Mutex},
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
 };
 
@@ -112,6 +112,11 @@ fn start_raftstore(
             CollectorRegHandle::new_for_test(),
             None,
             None,
+<<<<<<< HEAD
+=======
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )
         .unwrap();
 

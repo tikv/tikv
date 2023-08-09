@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
 };
 
 use collections::{HashMap, HashSet};
@@ -330,6 +330,11 @@ impl Simulator for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
             None,
+<<<<<<< HEAD
+=======
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )?;
         assert!(
             engines
