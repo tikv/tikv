@@ -27,8 +27,6 @@ use tikv_util::{
 
 const DEFAULT_HIGH_PRI_POOL_SIZE: usize = 2;
 const DEFAULT_LOW_PRI_POOL_SIZE: usize = 6;
-const TRIM_SLOW_THRESHOLD: Duration = Duration::from_secs(60);
-const MAX_TRIM_SLOW_THRESHOLD: Duration = Duration::from_secs(3600);
 
 pub enum Task<EK> {
     Trim {
@@ -235,50 +233,11 @@ impl<EK> Task<EK> {
     }
 }
 
-struct TrimJob<EK> {
-    tablet: EK,
-    start: Box<[u8]>,
-    end: Box<[u8]>,
-    cb: Box<dyn FnOnce() + Send>,
-    start_time: Instant,
-    slow_threshold: Duration,
-    // Tablet's latest seqno when this job is created. We should wait for the release of all
-    // checkpoint before this fence.
-    seqno_fence: u64,
-}
-
-impl<EK: KvEngine> TrimJob<EK> {
-    fn check(&mut self, logger: &Logger) -> bool {
-        let res = self
-            .tablet
-            .get_oldest_snapshot_sequence_number()
-            .unwrap_or(u64::MAX)
-            > self.seqno_fence;
-        if !res
-            && self.slow_threshold < MAX_TRIM_SLOW_THRESHOLD
-            && let d = self.start_time.saturating_elapsed()
-            && d > self.slow_threshold
-        {
-            warn!(
-                logger, "trim job still not okay";
-                "elapsed" => ?d,
-                "path" => self.tablet.path(),
-            );
-            self.slow_threshold *= 2;
-        }
-        res
-    }
-}
-
 pub struct Runner<EK: KvEngine> {
     tablet_registry: TabletRegistry<EK>,
     sst_importer: Arc<SstImporter>,
     snap_mgr: TabletSnapManager,
     logger: Logger,
-
-    // We need to wait for snapshot release to fully trim deletion marks.
-    // We can afford to hold a reference to the tablet because snapshot itself already holds one.
-    pending_trim_jobs: Vec<TrimJob<EK>>,
 
     // region_id -> [(tablet_path, wait_for_persisted, callback)].
     waiting_destroy_tasks: HashMap<u64, Vec<(PathBuf, u64, Option<Box<dyn FnOnce() + Send>>)>>,
@@ -302,7 +261,6 @@ impl<EK: KvEngine> Runner<EK> {
             sst_importer,
             snap_mgr,
             logger,
-            pending_trim_jobs: Vec::new(),
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
             high_pri_pool: YatpPoolBuilder::new(DefaultTicker::default())
@@ -316,7 +274,7 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    fn trim(&mut self, tablet: EK, start: Box<[u8]>, end: Box<[u8]>, cb: Box<dyn FnOnce() + Send>) {
+    fn trim(&self, tablet: EK, start: Box<[u8]>, end: Box<[u8]>, cb: Box<dyn FnOnce() + Send>) {
         let start_key = keys::data_key(&start);
         let end_key = keys::data_end_key(&end);
         let range1 = Range::new(&[], &start_key);
@@ -335,36 +293,15 @@ impl<EK: KvEngine> Runner<EK> {
             );
             return;
         }
-        let seqno_fence = tablet.get_latest_sequence_number();
-        let mut job = TrimJob {
-            tablet,
-            start,
-            end,
-            cb,
-            seqno_fence,
-            start_time: Instant::now_coarse(),
-            slow_threshold: TRIM_SLOW_THRESHOLD,
-        };
-        if job.check(&self.logger) {
-            self.trim_imp(job);
-        } else {
-            self.pending_trim_jobs.push(job);
-        }
-    }
-
-    fn trim_imp(&mut self, job: TrimJob<EK>) {
         let logger = self.logger.clone();
         self.low_pri_pool
             .spawn(async move {
-                let start_key = keys::data_key(&job.start);
-                let end_key = keys::data_end_key(&job.end);
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
                 for r in [range1, range2] {
                     // When compaction filter is present, trivial move is disallowed.
                     if let Err(e) =
-                        job.tablet
-                            .compact_range(Some(r.start_key), Some(r.end_key), false, 1)
+                        tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)
                     {
                         if e.to_string().contains("Manual compaction paused") {
                             info!(
@@ -387,9 +324,9 @@ impl<EK: KvEngine> Runner<EK> {
                     }
                 }
                 // drop before callback.
-                drop(job.tablet);
+                drop(tablet);
                 fail_point!("tablet_trimmed_finished");
-                (job.cb)();
+                cb();
             })
             .unwrap();
     }
@@ -688,15 +625,6 @@ where
     EK: KvEngine,
 {
     fn on_timeout(&mut self) {
-        let mut i = 0;
-        while i < self.pending_trim_jobs.len() {
-            if self.pending_trim_jobs[i].check(&self.logger) {
-                let job = self.pending_trim_jobs.remove(i);
-                self.trim_imp(job);
-            } else {
-                i += 1;
-            }
-        }
         self.pending_destroy_tasks.retain_mut(|(path, cb)| {
             let r = Self::process_destroy_task(&self.logger, &self.tablet_registry, path);
             if r && let Some(cb) = cb.take() {
