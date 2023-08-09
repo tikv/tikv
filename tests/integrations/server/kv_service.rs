@@ -3,7 +3,7 @@
 use std::{
     char::from_u32,
     path::Path,
-    sync::*,
+    sync::{atomic::AtomicU64, *},
     thread,
     time::{Duration, Instant},
 };
@@ -1411,6 +1411,7 @@ fn test_double_run_node() {
             CollectorRegHandle::new_for_test(),
             None,
             GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
