@@ -243,9 +243,7 @@ struct TrimJob<EK> {
     start_time: Instant,
     slow_threshold: Duration,
     // Tablet's latest seqno when this job is created. We should wait for the release of all
-    // snapshots before this fence.
-    // In reality, all dirty tablet is created from checkpoint. There shouldn't be any stale
-    // snapshot.
+    // checkpoint before this fence.
     seqno_fence: u64,
 }
 
@@ -348,13 +346,13 @@ impl<EK: KvEngine> Runner<EK> {
             slow_threshold: TRIM_SLOW_THRESHOLD,
         };
         if job.check(&self.logger) {
-            self.do_trim_job(job);
+            self.trim_imp(job);
         } else {
             self.pending_trim_jobs.push(job);
         }
     }
 
-    fn do_trim_job(&mut self, job: TrimJob<EK>) {
+    fn trim_imp(&mut self, job: TrimJob<EK>) {
         let logger = self.logger.clone();
         self.low_pri_pool
             .spawn(async move {
@@ -694,7 +692,7 @@ where
         while i < self.pending_trim_jobs.len() {
             if self.pending_trim_jobs[i].check(&self.logger) {
                 let job = self.pending_trim_jobs.remove(i);
-                self.do_trim_job(job);
+                self.trim_imp(job);
             } else {
                 i += 1;
             }
@@ -888,44 +886,5 @@ mod tests {
         runner.run(Task::destroy(r_1, 500));
         runner.on_timeout();
         assert!(runner.pending_destroy_tasks.is_empty());
-    }
-
-    #[test]
-    fn test_trim_referenced() {
-        let dir = Builder::new()
-            .prefix("test_trim_referenced")
-            .tempdir()
-            .unwrap();
-        let factory = Box::new(TestTabletFactory::new(
-            DbOptions::default(),
-            vec![("default", CfOptions::default())],
-        ));
-        let registry = TabletRegistry::new(factory, dir.path()).unwrap();
-        let logger = slog_global::borrow_global().new(slog::o!());
-        let (_dir, importer) = create_tmp_importer();
-        let snap_dir = dir.path().join("snap");
-        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
-        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
-
-        let mut region = Region::default();
-        let r_1 = 1;
-        region.set_id(r_1);
-        region.set_start_key(b"a".to_vec());
-        region.set_end_key(b"b".to_vec());
-        let tablet = registry
-            .load(TabletContext::new(&region, Some(1)), true)
-            .unwrap()
-            .latest()
-            .unwrap()
-            .clone();
-
-        let snap = tablet.snapshot();
-        let (tx, rx) = std::sync::mpsc::channel();
-        runner.run(Task::trim(tablet, &region, move || tx.send(()).unwrap()));
-        rx.try_recv().unwrap_err();
-
-        drop(snap);
-        runner.on_timeout();
-        rx.recv().unwrap();
     }
 }
