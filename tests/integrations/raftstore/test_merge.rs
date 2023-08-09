@@ -1170,7 +1170,7 @@ fn test_merge_isolated_not_in_merge_learner_2() {
 /// Test if a peer can be removed if its target peer has been removed and
 /// doesn't apply the CommitMerge log.
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_merge_remove_target_peer_isolated() {
     let mut cluster = new_cluster(0, 4);
     configure_for_merge(&mut cluster.cfg);

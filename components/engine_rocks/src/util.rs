@@ -510,7 +510,9 @@ impl CompactionFilter for RangeCompactionFilter {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{CfOptionsExt, Peekable, SyncMutable, CF_DEFAULT};
+    use engine_traits::{
+        CfOptionsExt, FlowControlFactorsExt, Iterable, MiscExt, Peekable, SyncMutable, CF_DEFAULT,
+    };
     use rocksdb::DB;
     use tempfile::Builder;
 
@@ -610,5 +612,77 @@ mod tests {
         assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
         let tmp_cf_opts = db.get_options_cf("cf_dynamic_level_bytes").unwrap();
         assert!(tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
+    }
+
+    #[test]
+    fn test_range_filter() {
+        let path = Builder::new()
+            .prefix("test_range_filter")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let mut cf_opts = RocksCfOptions::default();
+        cf_opts
+            .set_compaction_filter_factory(
+                "range",
+                RangeCompactionFilterFactory::new(
+                    b"b".to_vec().into_boxed_slice(),
+                    b"c".to_vec().into_boxed_slice(),
+                ),
+            )
+            .unwrap();
+        let cfs_opts = vec![(CF_DEFAULT, cf_opts)];
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
+
+        // in-range keys.
+        db.put(b"b1", b"").unwrap();
+        db.put(b"c2", b"").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        for i in 0..10 {
+            println!("{:?}", db.get_cf_num_files_at_level(CF_DEFAULT, i).unwrap());
+        }
+        assert_eq!(
+            db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
+            Some(1)
+        );
+        let _iter1 = db.iterator(CF_DEFAULT).unwrap();
+
+        // put then delete.
+        db.put(b"a1", b"").unwrap();
+        let _iter2 = db.iterator(CF_DEFAULT).unwrap();
+        db.delete(b"a1").unwrap();
+        db.delete(b"a1").unwrap();
+        db.put(b"c1", b"").unwrap();
+        let _iter2 = db.iterator(CF_DEFAULT).unwrap();
+        db.delete(b"c1").unwrap();
+        db.delete(b"c1").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(
+            db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
+            Some(1)
+        );
+
+        // multiple puts.
+        db.put(b"a2", b"").unwrap();
+        db.put(b"a2", b"").unwrap();
+        db.put(b"c2", b"").unwrap();
+        db.put(b"c2", b"").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(
+            db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
+            Some(1)
+        );
+
+        // multiple deletes.
+        db.delete(b"a3").unwrap();
+        db.delete(b"a3").unwrap();
+        db.delete(b"c3").unwrap();
+        db.delete(b"c3").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(
+            db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
+            Some(1)
+        );
     }
 }
