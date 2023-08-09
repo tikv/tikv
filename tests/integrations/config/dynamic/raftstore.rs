@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +14,13 @@ use raftstore::store::{AutoSplitController, SnapManager, StoreMsg, Transport};
 use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
+=======
+use std::{
+    iter::FromIterator,
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
+    time::Duration,
+};
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, ALL_CFS};
@@ -112,6 +120,12 @@ fn start_raftstore(
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )
         .unwrap();
 

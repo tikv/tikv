@@ -1,9 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::path::Path;
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
+=======
+use std::{
+    char::from_u32,
+    path::Path,
+    sync::{atomic::AtomicU64, *},
+    thread,
+    time::{Duration, Instant},
+};
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
 
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
@@ -973,6 +983,12 @@ fn test_double_run_node() {
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
+<<<<<<< HEAD
+=======
+            None,
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
