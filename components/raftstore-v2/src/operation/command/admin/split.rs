@@ -92,8 +92,8 @@ pub struct SplitInit {
 
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
-    approximate_size: Option<u64>,
-    approximate_keys: Option<u64>,
+    pub approximate_size: Option<u64>,
+    pub approximate_keys: Option<u64>,
 }
 
 impl SplitInit {
