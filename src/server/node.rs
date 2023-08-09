@@ -1,8 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+=======
+use std::{
+    sync::{atomic::AtomicU64, Arc, Mutex},
+    thread,
+    time::Duration,
+};
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
 
 use super::RaftKv;
 use super::Result;
@@ -178,6 +186,13 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+<<<<<<< HEAD
+=======
+        collector_reg_handle: CollectorRegHandle,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_mgr: GrpcServiceManager,
+        safe_point: Arc<AtomicU64>,
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -213,6 +228,13 @@ where
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
+<<<<<<< HEAD
+=======
+            collector_reg_handle,
+            causal_ts_provider,
+            grpc_service_mgr,
+            safe_point,
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )?;
 
         Ok(())
@@ -449,6 +471,13 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+<<<<<<< HEAD
+=======
+        collector_reg_handle: CollectorRegHandle,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_mgr: GrpcServiceManager,
+        safe_point: Arc<AtomicU64>,
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -480,6 +509,12 @@ where
             self.state.clone(),
             concurrency_manager,
             self.health_service.clone(),
+<<<<<<< HEAD
+=======
+            causal_ts_provider,
+            grpc_service_mgr,
+            safe_point,
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )?;
         Ok(())
     }

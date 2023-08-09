@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+<<<<<<< HEAD
 use std::cell::Cell;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
@@ -10,6 +11,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, u64};
+=======
+use std::{
+    cell::Cell,
+    cmp::{Ord, Ordering as CmpOrdering},
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Included, Unbounded},
+    },
+    mem,
+    ops::{Deref, DerefMut},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+    u64,
+};
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
@@ -414,6 +433,8 @@ where
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
+
+    pub safe_point: Arc<AtomicU64>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -951,8 +972,14 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
+<<<<<<< HEAD
     write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
+=======
+    write_senders: WriteSenders<EK, ER>,
+    node_start_time: Timespec, // monotonic_raw_now
+    safe_point: Arc<AtomicU64>,
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1186,6 +1213,7 @@ where
             sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
+            safe_point: self.safe_point.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1201,6 +1229,48 @@ where
             trace_event: TraceEvent::default(),
             last_flush_time: TiInstant::now(),
             need_flush_events: false,
+<<<<<<< HEAD
+=======
+            previous_append: 0,
+            previous_message: 0,
+            previous_snapshot: 0,
+        }
+    }
+}
+
+impl<EK, ER, T> Clone for RaftPollerBuilder<EK, ER, T>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        RaftPollerBuilder {
+            cfg: self.cfg.clone(),
+            store: self.store.clone(),
+            pd_scheduler: self.pd_scheduler.clone(),
+            consistency_check_scheduler: self.consistency_check_scheduler.clone(),
+            split_check_scheduler: self.split_check_scheduler.clone(),
+            cleanup_scheduler: self.cleanup_scheduler.clone(),
+            raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
+            raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
+            region_scheduler: self.region_scheduler.clone(),
+            apply_router: self.apply_router.clone(),
+            router: self.router.clone(),
+            importer: self.importer.clone(),
+            store_meta: self.store_meta.clone(),
+            pending_create_peers: self.pending_create_peers.clone(),
+            snap_mgr: self.snap_mgr.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
+            trans: self.trans.clone(),
+            global_stat: self.global_stat.clone(),
+            engines: self.engines.clone(),
+            global_replication_state: self.global_replication_state.clone(),
+            feature_gate: self.feature_gate.clone(),
+            write_senders: self.write_senders.clone(),
+            node_start_time: self.node_start_time,
+            safe_point: self.safe_point.clone(),
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         }
     }
 }
@@ -1255,6 +1325,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
         health_service: Option<HealthService>,
+<<<<<<< HEAD
+=======
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_mgr: GrpcServiceManager,
+        safe_point: Arc<AtomicU64>,
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1333,8 +1409,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
+<<<<<<< HEAD
             write_senders: self.store_writers.senders().clone(),
             io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
+=======
+            write_senders: self.store_writers.senders(),
+            node_start_time: self.node_start_time,
+            safe_point,
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();

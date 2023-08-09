@@ -1,9 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
+=======
+use std::{
+    path::Path,
+    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+    thread,
+    time::Duration,
+    usize,
+};
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
@@ -469,6 +479,13 @@ impl Simulator for ServerCluster {
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager.clone(),
+<<<<<<< HEAD
+=======
+            collector_reg_handle,
+            causal_ts_provider,
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
+>>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
