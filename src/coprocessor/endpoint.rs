@@ -408,7 +408,6 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
-        use std::time::{SystemTime};
         use tokio::time::sleep;
 
         // When this function is being executed, it may be queued for a long time, so
@@ -422,14 +421,10 @@ impl<E: Engine> Endpoint<E> {
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
                 .await?;
 
-        match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-            Ok(n) => {
-                let secs = n.as_secs();
-                if secs % 60 == 0{
-                    sleep(Duration::from_secs(10)).await;
-                }
-            },
-            _ => {},
+        let rand_v: u64 = rand::thread_rng().gen();
+        let rand_v = rand_v % 100;
+        if rand_v == 0{
+            sleep(Duration::from_secs(10)).await;
         }
 
         // When snapshot is retrieved, deadline may exceed.
