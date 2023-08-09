@@ -956,6 +956,7 @@ where
             collector_reg_handle,
             self.causal_ts_provider.clone(),
             self.grpc_service_mgr.clone(),
+            safe_point.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
