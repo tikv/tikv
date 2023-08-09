@@ -639,22 +639,19 @@ mod tests {
         db.put(b"b1", b"").unwrap();
         db.put(b"c2", b"").unwrap();
         db.flush_cf(CF_DEFAULT, true).unwrap();
-        for i in 0..10 {
-            println!("{:?}", db.get_cf_num_files_at_level(CF_DEFAULT, i).unwrap());
-        }
         assert_eq!(
             db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
             Some(1)
         );
-        let _iter1 = db.iterator(CF_DEFAULT).unwrap();
 
         // put then delete.
         db.put(b"a1", b"").unwrap();
-        let _iter2 = db.iterator(CF_DEFAULT).unwrap();
+        // avoid merging put and delete.
+        let _iter = db.iterator(CF_DEFAULT).unwrap();
         db.delete(b"a1").unwrap();
         db.delete(b"a1").unwrap();
         db.put(b"c1", b"").unwrap();
-        let _iter2 = db.iterator(CF_DEFAULT).unwrap();
+        let _iter = db.iterator(CF_DEFAULT).unwrap();
         db.delete(b"c1").unwrap();
         db.delete(b"c1").unwrap();
         db.flush_cf(CF_DEFAULT, true).unwrap();

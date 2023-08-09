@@ -257,9 +257,9 @@ impl<EK: KvEngine> TrimJob<EK> {
             .unwrap_or(u64::MAX)
             > self.seqno_fence;
         if !res
+            && self.slow_threshold < MAX_TRIM_SLOW_THRESHOLD
             && let d = self.start_time.saturating_elapsed()
             && d > self.slow_threshold
-            && self.slow_threshold < MAX_TRIM_SLOW_THRESHOLD
         {
             warn!(
                 logger, "trim job still not okay";
