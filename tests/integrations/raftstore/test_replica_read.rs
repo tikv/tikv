@@ -635,7 +635,6 @@ fn test_replica_read_with_pending_peer() {
 
     let new_region = cluster.get_region(b"k1");
     let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), new_region, b"k1", true, true);
-    sleep_ms(100);
 
     let response = block_on_timeout(resp_ch, Duration::from_secs(3)).unwrap();
     assert!(response.get_header().get_error().has_follower_not_ready());

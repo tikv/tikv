@@ -3209,7 +3209,9 @@ where
                 self.response_read(&mut read, ctx, false);
             } else if self.ready_to_handle_unsafe_replica_read(read_index) {
                 self.response_read(&mut read, ctx, true);
-            } else if self.get_store().applied_index() + 100 <= read_index {
+            } else if self.get_store().applied_index() + ctx.cfg.follower_read_max_log_gap()
+                <= read_index
+            {
                 let mut response = cmd_resp::new_error(Error::FollowerNotReady {
                     region_id: self.region_id,
                     peer_id: self.peer_id(),
