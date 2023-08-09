@@ -1,8 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, time::Duration,
-};
+use std::{borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, thread, time::Duration};
 
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
@@ -408,8 +406,6 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
-        use tokio::time::sleep;
-
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
         tracker.on_scheduled();
@@ -422,9 +418,12 @@ impl<E: Engine> Endpoint<E> {
                 .await?;
 
         let rand_v: u64 = rand::thread_rng().gen();
-        let rand_v = rand_v % 1000;
-        if rand_v == 0 {
-            sleep(Duration::from_secs(10)).await;
+        if (rand_v % 10000) == 0 {
+            let dur = Duration::from_secs(5);
+            for _ in 0..dur.as_millis() as u64 / 100 {
+                thread::sleep(Duration::from_millis(100));
+                yatp::task::future::reschedule().await;
+            }
         }
 
         // When snapshot is retrieved, deadline may exceed.
