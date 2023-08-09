@@ -422,8 +422,8 @@ impl<E: Engine> Endpoint<E> {
                 .await?;
 
         let rand_v: u64 = rand::thread_rng().gen();
-        let rand_v = rand_v % 100;
-        if rand_v == 0{
+        let rand_v = rand_v % 1000;
+        if rand_v == 0 {
             sleep(Duration::from_secs(10)).await;
         }
 
