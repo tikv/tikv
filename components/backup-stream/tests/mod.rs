@@ -19,7 +19,7 @@ use backup_stream::{
     },
     observer::BackupStreamObserver,
     router::Router,
-    Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
+    utils, Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
 };
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
@@ -390,7 +390,7 @@ impl Suite {
         rx.into_iter()
             .map(|r| match r {
                 GetCheckpointResult::Ok { checkpoint, region } => {
-                    info!("getting checkpoint"; "checkpoint" => %checkpoint, "region" => ?region);
+                    info!("getting checkpoint"; "checkpoint" => %checkpoint, utils::slog_region(&region));
                     checkpoint.into_inner()
                 }
                 GetCheckpointResult::NotFound { .. }
@@ -805,10 +805,15 @@ mod test {
     use std::time::{Duration, Instant};
 
     use backup_stream::{
-        errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
-        RegionSet, Task,
+        errors::Error,
+        metadata::{
+            keys::MetaKey,
+            store::{Keys, MetaStore},
+        },
+        router::TaskSelector,
+        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
-    use futures::{Stream, StreamExt};
+    use futures::{executor::block_on, Stream, StreamExt};
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
     use tikv_util::{box_err, defer, info, HandyRwLock};
@@ -1307,6 +1312,36 @@ mod test {
     }
 
     #[test]
+    fn failure_and_split() {
+        let mut suite = super::SuiteBuilder::new_named("failure_and_split")
+            .nodes(1)
+            .build();
+        fail::cfg("try_start_observe0", "pause").unwrap();
+
+        // write data before the task starting, for testing incremental scanning.
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        suite.must_register_task(1, "failure_and_split");
+        suite.sync();
+
+        suite.must_split(&make_split_key_at_record(1, 42));
+        suite.sync();
+        std::thread::sleep(Duration::from_millis(200));
+        fail::cfg("try_start_observe", "2*return").unwrap();
+        fail::cfg("try_start_observe0", "off").unwrap();
+
+        let round2 = run_async_test(suite.write_records(256, 128, 1));
+        suite.force_flush_files("failure_and_split");
+        suite.wait_for_flush();
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(Vec::as_slice),
+        ));
+        let cp = suite.global_checkpoint();
+        assert!(cp > 512, "it is {}", cp);
+        suite.cluster.shutdown();
+    }
+
+    #[test]
     fn network_partition() {
         let mut suite = super::SuiteBuilder::new_named("network_partition")
             .nodes(3)
@@ -1349,5 +1384,55 @@ mod test {
             suite.flushed_files.path(),
             round1.iter().map(|k| k.as_slice()),
         ))
+    }
+
+    #[test]
+    fn test_retry_abort() {
+        let mut suite = super::SuiteBuilder::new_named("retry_abort")
+            .nodes(1)
+            .build();
+        defer! {
+            fail::list().into_iter().for_each(|(name, _)| fail::remove(name))
+        };
+
+        suite.must_register_task(1, "retry_abort");
+        fail::cfg("subscribe_mgr_retry_start_observe_delay", "return(10)").unwrap();
+        fail::cfg("try_start_observe", "return()").unwrap();
+
+        suite.must_split(&make_split_key_at_record(1, 42));
+        std::thread::sleep(Duration::from_secs(2));
+
+        let error = run_async_test(suite.get_meta_cli().get_last_error("retry_abort", 1)).unwrap();
+        let error = error.expect("no error uploaded");
+        error
+            .get_error_message()
+            .find("retry")
+            .expect("error doesn't contain retry");
+        fail::cfg("try_start_observe", "10*return()").unwrap();
+        // Resume the task manually...
+        run_async_test(async {
+            suite
+                .meta_store
+                .delete(Keys::Key(MetaKey::pause_of("retry_abort")))
+                .await?;
+            suite
+                .meta_store
+                .delete(Keys::Prefix(MetaKey::last_errors_of("retry_abort")))
+                .await?;
+            backup_stream::errors::Result::Ok(())
+        })
+        .unwrap();
+
+        suite.sync();
+        suite.wait_with(move |r| block_on(r.get_task_info("retry_abort")).is_ok());
+        let items = run_async_test(suite.write_records(0, 128, 1));
+        suite.force_flush_files("retry_abort");
+        suite.wait_for_flush();
+        run_async_test(
+            suite.check_for_write_records(
+                suite.flushed_files.path(),
+                items.iter().map(Vec::as_slice),
+            ),
+        );
     }
 }

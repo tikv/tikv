@@ -30,6 +30,10 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn get_sst_key_ranges(&self, cf: &str, level: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        panic!()
+    }
+
     fn get_engine_used_size(&self) -> Result<u64> {
         panic!()
     }

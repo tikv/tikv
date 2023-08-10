@@ -177,6 +177,7 @@ make_static_metric! {
         region_nonexistent,
         applying_snap,
         disk_full,
+        unsafe_vote,
     }
 
     pub label_enum ProposalType {
@@ -794,4 +795,16 @@ lazy_static! {
         "Total snapshot generate limit used",
     )
     .unwrap();
+
+    pub static ref MESSAGE_RECV_BY_STORE: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_message_recv_by_store",
+        "Messages received by store",
+        &["store"]
+    )
+    .unwrap();
+
+    pub static ref PEER_IN_FLASHBACK_STATE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_peer_in_flashback_state",
+        "Total number of peers in the flashback state"
+    ).unwrap();
 }
