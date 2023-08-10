@@ -420,8 +420,8 @@ impl<E: Engine> Endpoint<E> {
         let rand_v: u64 = rand::thread_rng().gen();
         if (rand_v % 10000) == 0 {
             let dur = Duration::from_secs(5);
-            for _ in 0..dur.as_millis() as u64 / 100 {
-                thread::sleep(Duration::from_millis(100));
+            for _ in 0..dur.as_millis() as u64 / 10 {
+                thread::sleep(Duration::from_millis(10));
                 yatp::task::future::reschedule().await;
             }
         }

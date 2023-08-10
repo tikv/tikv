@@ -69,6 +69,7 @@ use std::{
         atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
     },
+    thread,
     time::Duration,
 };
 
@@ -601,6 +602,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
         let stage_begin_ts = Instant::now();
+        let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -640,6 +642,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
+                if let Err(e) = deadline.check() {
+                    return Err(Error::from(e));
+                }
+
                 Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
                 let command_duration = tikv_util::time::Instant::now();
@@ -661,6 +667,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
 
                 {
+                    let rand_v: u64 = rand::thread_rng().gen();
+                    if (rand_v % 10000) == 0 {
+                        let dur = Duration::from_secs(5);
+                        for _ in 0..dur.as_millis() as u64 / 10 {
+                            thread::sleep(Duration::from_millis(10));
+                            yatp::task::future::reschedule().await;
+                        }
+                    }
+
+                    if let Err(e) = deadline.check() {
+                        return Err(Error::from(e));
+                    }
                     let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
