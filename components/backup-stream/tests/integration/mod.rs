@@ -242,7 +242,7 @@ mod all {
             .unwrap();
         let end = run_async_test(rx).unwrap();
         assert!(
-            end - start < Duration::from_secs(10),
+            end - start < Duration::from_secs(2),
             "take = {:?}",
             end - start
         );

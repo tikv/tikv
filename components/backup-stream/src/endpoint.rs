@@ -5,7 +5,7 @@ use std::{collections::HashSet, fmt, marker::PhantomData, sync::Arc, time::Durat
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use futures::FutureExt;
+use futures::{stream::AbortHandle, FutureExt};
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -89,6 +89,12 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     // however probably it would be useful in the future.
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
+
+    // Runtime status:
+    /// The handle to abort last save storage safe point.
+    /// This is used for simulating an asynchronous background worker.
+    /// Each time we spawn a task, once time goes by, we abort that task.
+    abort_last_storage_save: Option<AbortHandle>,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -845,15 +851,13 @@ where
         }
     }
 
-    fn on_update_global_checkpoint(&self, task: String) {
-        let _guard = self.pool.handle().enter();
-        let result = self.pool.block_on(tokio::time::timeout(
-            TICK_UPDATE_TIMEOUT,
-            self.update_global_checkpoint(task),
-        ));
-        if let Err(err) = result {
-            warn!("log backup update global checkpoint timed out"; "err" => %err)
+    fn on_update_global_checkpoint(&mut self, task: String) {
+        if let Some(handle) = self.abort_last_storage_save.take() {
+            handle.abort();
         }
+        let _guard = self.pool.handle().enter();
+        let (fut, handle) = futures::future::abortable(self.update_global_checkpoint(task));
+        tokio::task::spawn(fut);
     }
 
     fn on_update_change_config(&mut self, cfg: BackupStreamConfig) {
