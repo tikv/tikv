@@ -23,7 +23,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt};
+use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -195,18 +195,36 @@ fn exec_admin<E: KvEngine, S: RaftStoreRouter<E>>(
     router: &S,
     req: RaftCmdRequest,
 ) -> BoxFuture<'static, kv::Result<()>> {
+    let region_id = req.get_header().get_region_id();
+    let peer_id = req.get_header().get_peer().get_id();
+    let term = req.get_header().get_term();
+    let epoch = req.get_header().get_region_epoch().clone();
+    let admin_type = req.get_admin_request().get_cmd_type();
     let (cb, f) = paired_future_callback();
     let res = router.send_command(
         req,
         raftstore::store::Callback::write(cb),
         RaftCmdExtraOpts::default(),
     );
-    Box::pin(async move {
-        res?;
-        let mut resp = box_try!(f.await);
-        check_raft_cmd_response(&mut resp.response)?;
-        Ok(())
-    })
+    Box::pin(
+        async move {
+            res?;
+            let mut resp = box_try!(f.await);
+            check_raft_cmd_response(&mut resp.response)?;
+            Ok(())
+        }
+        .map_err(move |e| {
+            warn!("failed to execute admin command";
+                "err" => ?e,
+                "admin_type" => ?admin_type,
+                "term" => term,
+                "region_epoch" => ?epoch,
+                "peer_id" => peer_id,
+                "region_id" => region_id,
+            );
+            e
+        }),
+    )
 }
 
 pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
