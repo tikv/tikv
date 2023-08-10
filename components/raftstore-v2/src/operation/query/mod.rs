@@ -291,11 +291,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 + ctx.cfg.follower_read_max_log_gap()
                 <= read_index
             {
-                let mut response = cmd_resp::new_error(Error::FollowerNotReady {
+                let mut response = cmd_resp::new_error(Error::ReadIndexNotReady {
                     region_id: self.region_id(),
-                    peer_id: self.peer_id(),
-                    apply_index: self.storage().apply_state().get_applied_index(),
-                    read_index,
+                    reason: "applied index fail behind read index too long",
                 });
                 cmd_resp::bind_term(&mut response, self.term());
                 self.respond_replica_read_error(&mut read, response);

@@ -476,7 +476,6 @@ make_auto_flush_static_metric! {
         err_disk_full,
         err_recovery_in_progress,
         err_flashback_in_progress,
-        err_follower_not_ready,
         err_undetermind,
     }
 
@@ -513,7 +512,6 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::DiskFull => RequestStatusKind::err_disk_full,
             ErrorHeaderKind::RecoveryInProgress => RequestStatusKind::err_recovery_in_progress,
             ErrorHeaderKind::FlashbackInProgress => RequestStatusKind::err_flashback_in_progress,
-            ErrorHeaderKind::FollowerNotReady => RequestStatusKind::err_follower_not_ready,
             ErrorHeaderKind::Other => RequestStatusKind::err_other,
         }
     }

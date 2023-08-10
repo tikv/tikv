@@ -33,7 +33,6 @@ define_error_codes!(
     FLASHBACK_IN_PROGRESS => ("FlashbackInProgress", "", ""),
     FLASHBACK_NOT_PREPARED => ("FlashbackNotPrepared", "", ""),
     IS_WITNESS => ("IsWitness", "", ""),
-    FOLLOWER_NOT_READY => ("FollowerNotReady", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),

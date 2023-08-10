@@ -143,14 +143,6 @@ pub enum Error {
 
     #[error("peer is a witness of region {0}")]
     IsWitness(u64),
-
-    #[error("peer {} is not ready, read_index {}, apply_index {}, region {}",.peer_id, .read_index, .apply_index, .region_id)]
-    FollowerNotReady {
-        region_id: u64,
-        peer_id: u64,
-        read_index: u64,
-        apply_index: u64,
-    },
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -280,19 +272,6 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_is_witness(e);
             }
-            Error::FollowerNotReady {
-                region_id,
-                peer_id,
-                read_index,
-                apply_index,
-            } => {
-                let mut e = errorpb::FollowerNotReady::default();
-                e.set_region_id(region_id);
-                e.set_read_index(peer_id);
-                e.set_read_index(read_index);
-                e.set_apply_index(apply_index);
-                errorpb.set_follower_not_ready(e);
-            }
             _ => {}
         };
 
@@ -350,7 +329,6 @@ impl ErrorCodeExt for Error {
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
             Error::PendingPrepareMerge => error_code::raftstore::PENDING_PREPARE_MERGE,
             Error::IsWitness(..) => error_code::raftstore::IS_WITNESS,
-            Error::FollowerNotReady { .. } => error_code::raftstore::FOLLOWER_NOT_READY,
 
             Error::Other(_) | Error::RegionNotRegistered { .. } => error_code::raftstore::UNKNOWN,
         }

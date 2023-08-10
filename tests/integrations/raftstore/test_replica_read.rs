@@ -637,5 +637,5 @@ fn test_replica_read_with_pending_peer() {
     let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), new_region, b"k1", true, true);
 
     let response = block_on_timeout(resp_ch, Duration::from_secs(3)).unwrap();
-    assert!(response.get_header().get_error().has_follower_not_ready());
+    assert!(response.get_header().get_error().has_read_index_not_ready());
 }
