@@ -427,7 +427,6 @@ impl Suite {
 
     pub async fn advance_global_checkpoint(&self, task: &str) -> Result<()> {
         let cp = self.global_checkpoint();
-        self.run(|| Task::UpdateGlobalCheckpoint(task.to_owned()));
         self.meta_store
             .set(KeyValue(
                 MetaKey::central_global_checkpoint_of(task),
