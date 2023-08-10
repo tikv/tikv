@@ -3,7 +3,7 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, channel},
+        mpsc::{self, channel, sync_channel},
         Arc, Mutex,
     },
     thread,
@@ -39,7 +39,7 @@ use tikv_util::{
     time::Instant,
     HandyRwLock,
 };
-use txn_types::{Key, LastChange, PessimisticLock};
+use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_follower_slow_split() {
@@ -1355,4 +1355,55 @@ fn test_not_reset_has_dirty_data_due_to_slow_split() {
     cluster.run_node(1).unwrap();
 
     cluster.must_put(b"k00001", b"val");
+}
+
+#[test]
+fn test_split_region_with_no_valid_split_keys() {
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize::kb(1));
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(500);
+    cluster.run();
+
+    let (tx, rx) = sync_channel(5);
+    fail::cfg_callback("on_compact_range_cf", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let safe_point_inject = "safe_point_inject";
+    fail::cfg(safe_point_inject, "return(100)").unwrap();
+
+    let mut raw_key = String::new();
+    let _ = (0..250)
+        .map(|i: u8| {
+            raw_key.push(i as char);
+        })
+        .collect::<Vec<_>>();
+    for i in 0..20 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
+    }
+
+    // one for default cf, one for write cf
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    for i in 0..20 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
+    }
+    // at most one compaction will be triggered for each safe_point
+    rx.try_recv().unwrap_err();
+
+    fail::cfg(safe_point_inject, "return(200)").unwrap();
+    for i in 0..20 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
+    }
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.try_recv().unwrap_err();
 }
