@@ -110,6 +110,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
+const LOCK_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::mb(32).0;
 
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
@@ -1235,6 +1236,7 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub allow_concurrent_memtable_write: Option<bool>,
     pub write_buffer_limit: Option<ReadableSize>,
+    pub lock_write_buffer_limit: Option<ReadableSize>,
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1265,6 +1267,7 @@ pub struct DbResources {
     pub statistics: Arc<RocksStatistics>,
     pub rate_limiter: Option<Arc<RateLimiter>>,
     pub write_buffer_manager: Option<Arc<WriteBufferManager>>,
+    pub lock_write_buffer_manager: Option<Arc<WriteBufferManager>>,
 }
 
 impl Default for DbConfig {
@@ -1308,6 +1311,7 @@ impl Default for DbConfig {
             enable_unordered_write: false,
             allow_concurrent_memtable_write: None,
             write_buffer_limit: None,
+            lock_write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
             paranoid_checks: None,
@@ -1348,6 +1352,8 @@ impl DbConfig {
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                     WRITE_BUFFER_MEMORY_LIMIT_MAX,
                 )));
+                self.lock_write_buffer_limit
+                    .get_or_insert(ReadableSize(LOCK_BUFFER_MEMORY_LIMIT_MAX));
                 self.max_total_wal_size.get_or_insert(ReadableSize(1));
                 self.stats_dump_period
                     .get_or_insert(ReadableDuration::minutes(0));
@@ -1399,6 +1405,13 @@ impl DbConfig {
             statistics: Arc::new(RocksStatistics::new_titan()),
             rate_limiter,
             write_buffer_manager: self.write_buffer_limit.map(|limit| {
+                Arc::new(WriteBufferManager::new(
+                    limit.0 as usize,
+                    self.write_buffer_stall_ratio,
+                    self.write_buffer_flush_oldest_first,
+                ))
+            }),
+            lock_write_buffer_manager: self.lock_write_buffer_limit.map(|limit| {
                 Arc::new(WriteBufferManager::new(
                     limit.0 as usize,
                     self.write_buffer_stall_ratio,
@@ -1465,7 +1478,11 @@ impl DbConfig {
             opts.set_rate_limiter(r);
         }
         if let Some(r) = &shared.write_buffer_manager {
-            opts.set_write_buffer_manager(r);
+            opts.add_write_buffer_manager(r, &[CF_DEFAULT, CF_WRITE]);
+            opts.add_write_buffer_manager(
+                shared.lock_write_buffer_manager.as_ref().unwrap(),
+                &[CF_LOCK],
+            );
         }
         if for_engine == EngineType::RaftKv2 {
             // Historical stats are not used.
@@ -1985,6 +2002,13 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .next()
         {
             self.db.set_flush_size(size.1.into())?;
+        }
+
+        if let Some(size) = change
+            .drain_filter(|(name, _)| name == "lock_write_buffer_limit")
+            .next()
+        {
+            self.db.set_lock_flush_size(size.1.into())?;
         }
 
         if let Some(f) = change

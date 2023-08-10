@@ -48,6 +48,10 @@ impl DbOptions for PanicDbOptions {
         panic!()
     }
 
+    fn set_lock_flush_size(&mut self, f: usize) -> Result<()> {
+        panic!()
+    }
+
     fn set_flush_oldest_first(&mut self, f: bool) -> Result<()> {
         panic!()
     }
