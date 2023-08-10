@@ -266,9 +266,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(snapshot_index);
-            if self.proposal_control().is_merging() {
+            if self.proposal_control().has_applied_prepare_merge() {
                 // After applying a snapshot, merge is rollbacked implicitly.
+<<<<<<< HEAD
                 // TODO: self.rollback_merge(ctx);
+=======
+                info!(
+                    self.logger,
+                    "rollback merge after applying snapshot";
+                    "index" => snapshot_index,
+                    "region" => ?self.region(),
+                );
+                self.rollback_merge(ctx);
+>>>>>>> c7c4f12c51 (raftstore-v2: fix error handling during merge trim check (#15243))
             }
             let read_tablet = SharedReadTablet::new(tablet.clone());
             {
