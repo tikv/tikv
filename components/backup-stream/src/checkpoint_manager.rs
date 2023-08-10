@@ -565,7 +565,10 @@ pub mod tests {
     use txn_types::TimeStamp;
 
     use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
-    use crate::GetCheckpointResult;
+    use crate::{
+        subscription_track::{CheckpointType, ResolveResult},
+        GetCheckpointResult,
+    };
 
     fn region(id: u64, version: u64, conf_version: u64) -> Region {
         let mut r = Region::new();
@@ -658,10 +661,14 @@ pub mod tests {
         }
     }
 
-    fn simple_resolve_result() -> (Region, TimeStamp) {
+    fn simple_resolve_result() -> ResolveResult {
         let mut region = Region::new();
         region.set_id(42);
-        (region, 42.into())
+        ResolveResult {
+            region,
+            checkpoint: 42.into(),
+            checkpoint_type: CheckpointType::MinTs,
+        }
     }
 
     #[test]
@@ -677,8 +684,7 @@ pub mod tests {
         rt.block_on(mgr.add_subscriber(trivial_sink.clone()))
             .unwrap();
 
-        let (region, ts) = simple_resolve_result();
-        mgr.update_region_checkpoint(&region, ts);
+        mgr.resolve_regions(vec![simple_resolve_result()]);
         mgr.flush();
         mgr.sync_with_subs_mgr(|_| {});
         assert_eq!(trivial_sink.0.lock().unwrap().items.len(), 1);
@@ -696,8 +702,7 @@ pub mod tests {
         let error_sink = MockSink::with_fail_once(RpcStatusCode::INTERNAL);
         rt.block_on(mgr.add_subscriber(error_sink.clone())).unwrap();
 
-        let (region, ts) = simple_resolve_result();
-        mgr.update_region_checkpoint(&region, ts);
+        mgr.resolve_regions(vec![simple_resolve_result()]);
         mgr.flush();
         assert_eq!(mgr.sync_with_subs_mgr(|item| { item.subscribers.len() }), 0);
         let sink = error_sink.0.lock().unwrap();
