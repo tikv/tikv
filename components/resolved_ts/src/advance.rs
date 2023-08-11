@@ -43,7 +43,7 @@ use txn_types::TimeStamp;
 
 use crate::{endpoint::Task, metrics::*};
 
-const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
+pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
@@ -54,6 +54,9 @@ pub struct AdvanceTsWorker {
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
+
+    // cache the last pd tso, used to approximate the next timestamp w/o an actual TSO RPC
+    pub(crate) last_pd_tso: Arc<std::sync::Mutex<Option<(TimeStamp, Instant)>>>,
 }
 
 impl AdvanceTsWorker {
@@ -78,6 +81,7 @@ impl AdvanceTsWorker {
             advance_ts_interval,
             timer: SteadyTimer::default(),
             concurrency_manager,
+            last_pd_tso: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -100,9 +104,13 @@ impl AdvanceTsWorker {
             self.advance_ts_interval,
         ));
 
+        let last_pd_tso = self.last_pd_tso.clone();
         let fut = async move {
             // Ignore get tso errors since we will retry every `advdance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
+            if let Ok(mut last_pd_tso) = last_pd_tso.try_lock() {
+                *last_pd_tso = Some((min_ts, Instant::now()));
+            }
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
