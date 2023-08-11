@@ -30,7 +30,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
             // Avoid naming conflict
             let mut hasher = DefaultHasher::new();
             format!("{}", &name).hash(&mut hasher);
-            format!("{}_encoder_{:x}", name, hasher.finish()).as_str()
+            format!("{}Encoder{:x}", name, hasher.finish()).as_str()
         },
         Span::call_site(),
     );
