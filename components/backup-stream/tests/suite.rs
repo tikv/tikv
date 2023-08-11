@@ -12,7 +12,7 @@ use backup_stream::{
     errors::Result,
     metadata::{
         keys::{KeyValue, MetaKey},
-        store::{slash_etc::SlashEtc, MetaStore, SlashEtcStore},
+        store::{MetaStore, SlashEtcStore},
         MetadataClient, StreamTask,
     },
     observer::BackupStreamObserver,
