@@ -23,10 +23,16 @@ pub struct CompactionGuardGeneratorFactory<P: RegionInfoProvider> {
     cf_name: CfNames,
     provider: P,
     min_output_file_size: u64,
+    max_compaction_size: u64,
 }
 
 impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
-    pub fn new(cf: CfName, provider: P, min_output_file_size: u64) -> Result<Self> {
+    pub fn new(
+        cf: CfName,
+        provider: P,
+        min_output_file_size: u64,
+        max_compaction_size: u64,
+    ) -> Result<Self> {
         let cf_name = match cf {
             CF_DEFAULT => CfNames::default,
             CF_LOCK => CfNames::lock,
@@ -43,6 +49,7 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
             cf_name,
             provider,
             min_output_file_size,
+            max_compaction_size,
         })
     }
 }
@@ -72,12 +79,15 @@ impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
             use_guard: false,
             boundaries: vec![],
             pos: 0,
+            next_level_pos: 0,
             next_level_boundaries: context
                 .next_level_boundaries
                 .iter()
                 .map(|v| v.to_vec())
                 .collect(),
             next_level_size: context.next_level_sizes.clone(),
+            current_next_level_size: 0,
+            max_compaction_size: self.max_compaction_size,
         })
     }
 }
@@ -95,6 +105,9 @@ pub struct CompactionGuardGenerator<P: RegionInfoProvider> {
     next_level_boundaries: Vec<Vec<u8>>,
     next_level_size: Vec<usize>,
     pos: usize,
+    next_level_pos: usize,
+    current_next_level_size: usize,
+    max_compaction_size: u64,
 }
 
 impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
@@ -201,6 +214,12 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
     }
 }
 
+impl<P> CompactionGuardGenerator<P> {
+    fn seek_next_level_pos_to(&mut self, key: &[u8]) {
+        let mut 
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str;
@@ -232,8 +251,11 @@ mod tests {
             use_guard: false,
             boundaries: vec![],
             pos: 0,
+            current_next_level_size: 0,
+            next_level_pos: 0,
             next_level_boundaries: vec![],
             next_level_size: vec![],
+            max_compaction_size: 1 << 30,
         };
 
         guard.smallest_key = keys::LOCAL_MIN_KEY.to_vec();
@@ -279,8 +301,11 @@ mod tests {
             use_guard: true,
             boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
             pos: 0,
+            current_next_level_size: 0,
+            next_level_pos: 0,
             next_level_boundaries: vec![],
             next_level_size: vec![],
+            max_compaction_size: 1 << 30, // 1GB
         };
         // Crossing region boundary.
         let mut req = SstPartitionerRequest {
@@ -351,8 +376,11 @@ mod tests {
                 b"aaa15".to_vec(),
             ],
             pos: 0,
+            current_next_level_size: 0,
+            next_level_pos: 0,
             next_level_boundaries: vec![],
             next_level_size: vec![],
+            max_compaction_size: 1 << 30,
         };
         // Binary search meet exact match.
         guard.pos = 0;
@@ -386,7 +414,7 @@ mod tests {
         let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_target_file_size_base(MAX_OUTPUT_FILE_SIZE);
         cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
-            CompactionGuardGeneratorFactory::new(CF_DEFAULT, provider, MIN_OUTPUT_FILE_SIZE)
+            CompactionGuardGeneratorFactory::new(CF_DEFAULT, provider, MIN_OUTPUT_FILE_SIZE, 10240)
                 .unwrap(),
         ));
         cf_opts.set_disable_auto_compactions(true);
