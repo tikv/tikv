@@ -406,7 +406,7 @@ struct CfFlowChecker {
     // When the write flow is about 100MB/s, we observed that the compaction ops
     // is about 2.5, it means there are 750 compaction events in 5 minutes.
     long_term_pending_bytes:
-        Smoother<f64, 1024, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD>,
+        Smoother<f64, 100, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD>,
     pending_bytes_before_unsafe_destroy_range: Option<f64>,
 
     // On start related markers. Because after restart, the memtable, l0 files

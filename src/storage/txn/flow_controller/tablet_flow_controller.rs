@@ -136,7 +136,7 @@ impl FlowInfoDispatcher {
             .name(thd_name!("flow-checker"))
             .spawn_wrapper(move || {
                 let mut deadline = std::time::Instant::now();
-                let mut enabled = true;
+                let mut enabled = config.enable;
                 loop {
                     match rx.try_recv() {
                         Ok(Msg::Close) => break,
@@ -148,12 +148,15 @@ impl FlowInfoDispatcher {
                             }
                         }
                         Ok(Msg::Enable) => {
-                            enabled = true;
+                            // enabled = true;
                         }
                         Err(_) => {}
                     }
 
                     let msg = flow_info_receiver.recv_deadline(deadline);
+                    if !enabled {
+                        continue;
+                    }
                     match msg.clone() {
                         Ok(FlowInfo::L0(_cf, _, region_id))
                         | Ok(FlowInfo::L0Intra(_cf, _, region_id))
@@ -173,6 +176,7 @@ impl FlowInfoDispatcher {
                         }
                         Ok(FlowInfo::Created(region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
+                            let current_count = checkers.len();
                             match checkers.entry(region_id) {
                                 HashMapEntry::Occupied(e) => {
                                     let val = e.into_mut();
@@ -191,6 +195,7 @@ impl FlowInfoDispatcher {
                                         ),
                                         discard_ratio,
                                     ));
+                                    info!("add FlowChecker region_id {}. Total FlowChecker count {}", region_id, current_count);
                                     e.insert(FlowChecker::new_with_region_id(
                                         region_id,
                                         &config,
