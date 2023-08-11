@@ -20,7 +20,6 @@ use backup_stream::{
     utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
     RegionSet, Service, Task,
 };
-use engine_rocks::RocksEngine;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
@@ -32,7 +31,6 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
-use raft_log_engine::RaftLogEngine;
 use raftstore::{
     router::{CdcRaftRouter, ServerRaftStoreRouter},
     RegionInfoAccessor,
@@ -58,8 +56,12 @@ use walkdir::WalkDir;
 pub type TestEndpoint = Endpoint<
     ErrorStore<SlashEtcStore>,
     RegionInfoAccessor,
-    RocksEngine,
-    CdcRaftRouter<SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftLogEngine>>>,
+    engine_test::kv::KvTestEngine,
+    CdcRaftRouter<
+        SimulateTransport<
+            ServerRaftStoreRouter<engine_test::kv::KvTestEngine, engine_test::raft::RaftTestEngine>,
+        >,
+    >,
     TestPdClient,
 >;
 
@@ -370,7 +372,7 @@ impl Suite {
                 .clone(),
             Duration::from_secs(60),
         );
-        let endpoint: TestEndpoint = Endpoint::new(
+        let endpoint = Endpoint::new(
             id,
             self.meta_store.clone(),
             cfg,
