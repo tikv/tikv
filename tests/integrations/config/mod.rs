@@ -214,6 +214,7 @@ fn test_serde_custom_tikv_config() {
         consistency_check_interval: ReadableDuration::secs(12),
         report_region_flow_interval: ReadableDuration::minutes(12),
         raft_store_max_leader_lease: ReadableDuration::secs(12),
+        allow_unsafe_vote_after_start: false,
         right_derive_when_split: false,
         allow_remove_leader: true,
         merge_max_log_gap: 3,
@@ -255,6 +256,7 @@ fn test_serde_custom_tikv_config() {
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
         check_peers_availability_interval: ReadableDuration::secs(30),
+        unsafe_disable_check_quorum: false,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

@@ -1073,7 +1073,7 @@ where
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
-            check_quorum: true,
+            check_quorum: !cfg.unsafe_disable_check_quorum,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
@@ -1918,6 +1918,19 @@ where
                     return Ok(());
                 }
                 self.should_wake_up = state == LeaseState::Expired;
+            }
+        } else if util::is_vote_msg(&m) {
+            // Only by passing an election timeout can peers handle request vote safely.
+            // See https://github.com/tikv/tikv/issues/15035
+            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
+                debug!("drop request vote for one election timeout after node start";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "from_peer_id" => m.get_from(),
+                    "remain_duration" => ?remain,
+                );
+                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
+                return Ok(());
             }
         }
 
