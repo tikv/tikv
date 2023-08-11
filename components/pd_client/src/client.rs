@@ -834,21 +834,14 @@ impl PdClient for RpcClient {
                     })
             };
             Box::pin(async move {
-<<<<<<< HEAD
-                let resp = handler.await?;
-                PD_REQUEST_HISTOGRAM_VEC
-                    .with_label_values(&["store_heartbeat"])
-                    .observe(duration_to_sec(timer.saturating_elapsed()));
-=======
                 let resp = handler
                     .map(|res| {
                         PD_REQUEST_HISTOGRAM_VEC
-                            .store_heartbeat
+                            .with_label_values(&["store_heartbeat"])
                             .observe(timer.saturating_elapsed_secs());
                         res
                     })
                     .await?;
->>>>>>> e8238777ea (pd_client: reduce store heartbeat retires to prevent heartbeat storm (#15191))
                 check_resp_header(resp.get_header())?;
                 match feature_gate.set_version(resp.get_cluster_version()) {
                     Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),

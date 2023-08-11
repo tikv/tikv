@@ -621,7 +621,7 @@ impl PdConnector {
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
             .await;
         PD_REQUEST_HISTOGRAM_VEC
-            .get_members
+            .with_label_values(&["get_members"])
             .observe(timer.saturating_elapsed_secs());
         match response {
             Ok(resp) => Ok((client, resp)),
@@ -846,7 +846,7 @@ impl PdConnector {
                             })
                             .await;
                         PD_REQUEST_HISTOGRAM_VEC
-                            .get_members
+                            .with_label_values(&["get_members"])
                             .observe(timer.saturating_elapsed_secs());
                         match response {
                             Ok(_) => return Ok(Some((client, target))),
