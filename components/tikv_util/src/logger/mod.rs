@@ -15,7 +15,7 @@ use std::{
 };
 
 use log::{self, SetLoggerError};
-use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
+use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV, OwnedKV, SendSyncRefUnwindSafeKV};
 pub use slog::{FilterFn, Level};
 use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
@@ -85,7 +85,7 @@ where
         };
         let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
 
-        (slog::Logger::root(filtered, slog_o!()), Some(guard))
+        (slog::Logger::root(filtered, get_values()), Some(guard))
     } else {
         let drain = LogAndFuse(Mutex::new(drain));
         let drain = SlowLogFilter {
@@ -93,7 +93,7 @@ where
             inner: drain,
         };
         let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
-        (slog::Logger::root(filtered, slog_o!()), None)
+        (slog::Logger::root(filtered, get_values()), None)
     };
 
     set_global_logger(level, init_stdlog, logger, guard)
@@ -628,6 +628,14 @@ fn write_log_fields(
     Ok(())
 }
 
+fn get_values() -> OwnedKV<impl SendSyncRefUnwindSafeKV> {
+    slog_o!(
+        "thread_id" => FnValue(|_| {
+            format!("{:#0x}", std::thread::current().id().as_u64())
+        })
+    )
+}
+
 struct Serializer<'a> {
     decorator: &'a mut dyn RecordDecorator,
 }
@@ -763,21 +771,22 @@ mod tests {
     fn test_log_format_text() {
         let decorator = PlainSyncDecorator::new(TestWriter);
         let drain = TikvFormat::new(decorator, true).fuse();
-        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
+        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
 
         log_format_cases(logger);
 
-        let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"]
-[2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"]
-[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""]
-[2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN]
-[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote]
-"#;
+        let thread_id = format!("{:#0x}", std::thread::current().id().as_u64());
+        let expect = format!(r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"] [thread_id={0}]
+[2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN] [thread_id={0}]
+[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote] [thread_id={0}]
+"#, thread_id);
 
         BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
@@ -811,21 +820,22 @@ mod tests {
     fn test_log_format_json() {
         use serde_json::{from_str, Value};
         let drain = Mutex::new(json_format(TestWriter, true)).map(slog::Fuse);
-        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
+        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
 
         log_format_cases(logger);
 
-        let expect = r#"{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":""}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\""}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null}
-{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote"}
-"#;
+        let thread_id = format!("{:#0x}", std::thread::current().id().as_u64());
+        let expect = format!(r#"{{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":"","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\"","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null,"thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote","thread_id":"{0}"}}
+"#, thread_id);
 
         BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
