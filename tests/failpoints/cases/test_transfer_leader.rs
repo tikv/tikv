@@ -1,7 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc, Arc},
+    sync::{
+        mpsc::{self, channel},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -14,6 +17,7 @@ use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::storage::Snapshot;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -595,4 +599,40 @@ fn test_when_warmup_succeed_and_not_become_leader() {
     // The peer should warm up cache again when it receives a new TransferLeaderMsg.
     cluster.transfer_leader(1, new_peer(2, 2));
     assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap());
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_check_long_uncommitted_proposals_after_became_leader() {
+    let mut cluster = new_cluster(0, 3);
+    let base_tick_ms = 50;
+    configure_for_lease_read(&mut cluster.cfg, Some(base_tick_ms), Some(1000));
+    cluster.cfg.raft_store.check_long_uncommitted_interval = ReadableDuration::millis(200);
+    cluster.cfg.raft_store.long_uncommitted_base_threshold = ReadableDuration::millis(500);
+
+    cluster.pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    cluster.transfer_leader(1, new_peer(2, 2));
+
+    // Must not tick CheckLongUncommitted after became follower.
+    thread::sleep(2 * cluster.cfg.raft_store.long_uncommitted_base_threshold.0);
+    let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
+    fail::cfg_callback("on_check_long_uncommitted_proposals_1", move || {
+        let _ = tx.lock().unwrap().send(());
+    })
+    .unwrap();
+    rx.recv_timeout(2 * cluster.cfg.raft_store.long_uncommitted_base_threshold.0)
+        .unwrap_err();
+
+    // Must keep ticking CheckLongUncommitted after became leader.
+    cluster.transfer_leader(1, new_peer(1, 1));
+    rx.recv_timeout(2 * cluster.cfg.raft_store.long_uncommitted_base_threshold.0)
+        .unwrap();
 }

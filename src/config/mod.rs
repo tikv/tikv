@@ -686,7 +686,7 @@ impl Default for DefaultCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
@@ -721,10 +721,6 @@ impl DefaultCfConfig {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
-        cf_opts.add_table_properties_collector_factory(
-            "tikv.rawkv-mvcc-properties-collector",
-            RawMvccPropertiesCollectorFactory::default(),
-        );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         if let Some(factory) = filter_factory {
             match api_version {
@@ -750,6 +746,10 @@ impl DefaultCfConfig {
                         .unwrap();
                 }
                 ApiVersion::V2 => {
+                    cf_opts.add_table_properties_collector_factory(
+                        "tikv.rawkv-mvcc-properties-collector",
+                        RawMvccPropertiesCollectorFactory::default(),
+                    );
                     let factory = StackingCompactionFilterFactory::new(
                         factory.clone(),
                         RawCompactionFilterFactory,
@@ -780,6 +780,10 @@ impl DefaultCfConfig {
                         .unwrap();
                 }
                 ApiVersion::V2 => {
+                    cf_opts.add_table_properties_collector_factory(
+                        "tikv.rawkv-mvcc-properties-collector",
+                        RawMvccPropertiesCollectorFactory::default(),
+                    );
                     cf_opts
                         .set_compaction_filter_factory(
                             "apiv2_gc_compaction_filter_factory",
@@ -850,7 +854,7 @@ impl Default for WriteCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
@@ -968,7 +972,7 @@ impl Default for LockCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -1061,7 +1065,7 @@ impl Default for RaftCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -1580,7 +1584,7 @@ impl Default for RaftDefaultCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
