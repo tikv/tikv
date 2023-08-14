@@ -60,7 +60,6 @@ make_static_metric! {
         flashback_not_prepared,
         flashback_in_progress,
         wait_data,
-        redirect,
     }
 
     pub struct LocalReadRejectCounter : LocalIntCounter {

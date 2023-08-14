@@ -597,7 +597,7 @@ where
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
         }
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
-        let begin_instant = Instant::now_coarse();
+        let begin_instant = Instant::now();
         let (cb, f) = paired_must_called_future_callback(drop_snapshot_callback);
 
         let mut header = new_request_header(ctx.pb_ctx);
@@ -625,9 +625,7 @@ where
             cb(on_read_result(resp).map_err(Error::into));
         }));
         let tracker = store_cb.read_tracker().unwrap();
-        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-            tracker.metrics.snapshot_begin_time = begin_instant.timespec()
-        });
+
         if res.is_ok() {
             res = self
                 .router
@@ -658,7 +656,7 @@ where
                     Err(e)
                 }
                 Ok(CmdRes::Snap(s)) => {
-                    let coarse_now = Instant::now_coarse();
+                    let elapse = begin_instant.saturating_elapsed_secs();
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         if tracker.metrics.read_index_propose_wait_nanos > 0 {
                             ASYNC_REQUESTS_DURATIONS_VEC
@@ -675,32 +673,12 @@ where
                                         / 1_000_000_000.0,
                                 );
                         } else if tracker.metrics.local_read {
-                            ASYNC_REQUESTS_DURATIONS_VEC.snapshot_pre_duration.observe(
-                                tracker.metrics.snapshot_pre_duration_nanos as f64
-                                    / 1_000_000_000.0,
-                            );
-                            ASYNC_REQUESTS_DURATIONS_VEC.snapshot_post_duration.observe(
-                                coarse_now
-                                    .saturating_duration_since(Instant::MonotonicCoarse(
-                                        tracker.metrics.snap_end_time,
-                                    ))
-                                    .as_secs_f64(),
-                            );
-                            ASYNC_REQUESTS_DURATIONS_VEC.snapshot_local.observe(
-                                coarse_now
-                                    .saturating_duration_since(begin_instant)
-                                    .as_secs_f64(),
-                            );
-                            ASYNC_REQUESTS_DURATIONS_VEC.engine_snap_duration.observe(
-                                tracker.metrics.engine_snap_duration as f64 / 1_000_000_000.0,
-                            );
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_local_read
+                                .observe(elapse);
                         }
                     });
-                    ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(
-                        coarse_now
-                            .saturating_duration_since(begin_instant)
-                            .as_secs_f64(),
-                    );
+                    ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(s)
                 }
