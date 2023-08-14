@@ -50,7 +50,7 @@ use raftstore::{
     store::{metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext, Transport},
     Error, Result,
 };
-use slog::{debug, error, info, warn};
+use slog::{debug, error, info};
 use tikv_util::{
     box_err, log::SlogFormat, slog_panic, store::region_on_same_stores, time::Instant,
 };
@@ -65,7 +65,7 @@ use crate::{
     router::{CmdResChannel, PeerMsg, RaftRequest},
 };
 
-const TRIM_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+const TRIM_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct PreProposeContext {
@@ -81,7 +81,7 @@ pub struct PreProposeContext {
 ///  |       |      |           ^
 ///  +-------+------+--> (3) ---+
 ///
-/// - None->1: `start_check_trim_status`
+/// - None->1: `start_check_trim_status` / `already_checked_trim_status`
 /// - 1->2: `check_pessimistic_locks`
 /// - *->3: `on_catch_up_logs`
 /// - *->4: `on_apply_res_prepare_merge` / `Peer::new`
@@ -182,22 +182,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // (3) `check_pessimistic_locks`
         // Check 1 and 3 are async, they yield by returning
         // `Error::PendingPrepareMerge`.
+        //
+        // Error handling notes:
+        // - `WaitForTrimStatus` can only become `WaitForFence` when both check 2&3
+        // succeed. We need to clean up the status if any of them failed, otherwise we
+        // still can't serve other merge requests (not until status is cleaned up in
+        // `maybe_clean_up_stale_merge_context`).
+        // - `WaitForFence` will always reach proposing phase when committed logs are
+        // applied. No intermediate error.
         let pre_propose = if let Some(r) = self.already_checked_pessimistic_locks()? {
             r
-        } else if self.already_checked_trim_status()? {
-            if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
-                .contains(WriteBatchFlags::PRE_FLUSH_FINISHED)
-            {
-                // We will always schedule flush (`merge_on_availability_response`) when trim
-                // status passed.
-                warn!(
-                    self.logger,
-                    "flush should already be scheduled for prepare merge"
-                );
-                return Err(Error::PendingPrepareMerge);
-            }
-            let r = self.check_logs_before_prepare_merge(store_ctx)?;
-            self.check_pessimistic_locks(r, &mut req)?
+        } else if self.already_checked_trim_status(&req)? {
+            self.check_logs_before_prepare_merge(store_ctx)
+                .and_then(|r| self.check_pessimistic_locks(r, &mut req))
+                .map_err(|e| {
+                    if !matches!(e, Error::PendingPrepareMerge) {
+                        info!(self.logger, "fail to advance to `WaitForFence`"; "err" => ?e);
+                        self.take_merge_context();
+                    }
+                    e
+                })?
         } else {
             return self.start_check_trim_status(store_ctx, &mut req);
         };
@@ -468,12 +472,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let logger = self.logger.clone();
                 let on_flush_finish = move || {
                     let (ch, _) = CmdResChannel::pair();
-                    if let Err(e) = mailbox.try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch))) {
+                    if let Err(e) = mailbox.force_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch))) {
                         error!(
                             logger,
                             "send PrepareMerge request failed after pre-flush finished";
                             "err" => ?e,
                         );
+                        // We rely on `maybe_clean_up_stale_merge_context` to clean this up.
                     }
                 };
                 self.start_pre_flush(
@@ -487,20 +492,36 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn already_checked_trim_status(&mut self) -> Result<bool> {
+    fn already_checked_trim_status(&mut self, req: &RaftCmdRequest) -> Result<bool> {
+        let flushed = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+            .contains(WriteBatchFlags::PRE_FLUSH_FINISHED);
         match self
             .merge_context()
             .as_ref()
             .and_then(|c| c.prepare_status.as_ref())
         {
             Some(PrepareStatus::WaitForTrimStatus { pending_peers, .. }) => {
-                if pending_peers.is_empty() {
+                // We should wait for the request sent from flush callback.
+                if pending_peers.is_empty() && flushed {
                     Ok(true)
                 } else {
                     Err(Error::PendingPrepareMerge)
                 }
             }
-            None => Ok(false),
+            None => {
+                // Pre-flush can only be triggered when the request has checked trim status.
+                if flushed {
+                    self.merge_context_mut().prepare_status =
+                        Some(PrepareStatus::WaitForTrimStatus {
+                            start_time: Instant::now_coarse(),
+                            pending_peers: HashMap::default(),
+                            req: None,
+                        });
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
             // Shouldn't reach here after calling `already_checked_pessimistic_locks` first.
             _ => unreachable!(),
         }
@@ -582,17 +603,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    // Free up memory if trim check failed.
     #[inline]
     pub fn maybe_clean_up_stale_merge_context(&mut self) {
         // Check if there's a stale trim check. Ideally this should be implemented as a
         // tick. But this is simpler.
+        // We do not check `req.is_some()` here. When req is taken for propose in flush
+        // callback, it will either trigger a state transition to `WaitForFence` or
+        // abort. If we see the state here, it means the req never made it to
+        // `propose_prepare_merge`.
+        // If the req is still inflight and reaches `propose_prepare_merge` later,
+        // `already_checked_trim_status` will restore the status.
         if let Some(PrepareStatus::WaitForTrimStatus {
-            start_time, req, ..
+            start_time, ..
         }) = self
             .merge_context()
             .as_ref()
             .and_then(|c| c.prepare_status.as_ref())
-            && req.is_some()
             && start_time.saturating_elapsed() > TRIM_CHECK_TIMEOUT
         {
             info!(self.logger, "cancel merge because trim check timed out");
@@ -721,6 +748,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .set_merge_state(merging_state.clone());
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
+
+        info!(
+            self.logger,
+            "execute PrepareMerge";
+            "index" => log_index,
+            "target_region" => ?prepare_merge.get_target(),
+        );
 
         let _ = self.flush();
         let reg = self.tablet_registry();
