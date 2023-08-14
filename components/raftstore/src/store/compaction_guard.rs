@@ -106,7 +106,7 @@ pub struct CompactionGuardGenerator<P: RegionInfoProvider> {
     next_level_size: Vec<usize>,
     pos: usize,
     next_level_pos: usize,
-    current_next_level_size: usize,
+    current_next_level_size: u64,
     max_compaction_size: u64,
 }
 
@@ -174,27 +174,41 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
         if !self.use_guard {
             return SstPartitionerResult::NotRequired;
         }
-        let mut pos = self.pos;
-        let mut skip_count = 0;
-        while pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.prev_user_key {
-            pos += 1;
-            skip_count += 1;
-            if skip_count >= COMPACTION_GUARD_MAX_POS_SKIP {
-                let prev_user_key = req.prev_user_key.to_vec();
-                pos = match self.boundaries.binary_search(&prev_user_key) {
-                    Ok(search_pos) => search_pos + 1,
-                    Err(search_pos) => search_pos,
-                };
-                break;
-            }
-        }
-        self.pos = pos;
-        if pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.current_user_key {
-            if req.current_output_file_size >= self.min_output_file_size {
+        self.pos = seek_to(&self.boundaries, req.prev_user_key, self.pos);
+        let old_next_level_pos = self.next_level_pos;
+        self.next_level_pos = seek_to(
+            &self.next_level_boundaries,
+            req.prev_user_key,
+            self.next_level_pos,
+        );
+        let size_diff = self.next_level_size[old_next_level_pos..self.next_level_pos]
+            .iter()
+            .map(|x| *x as u64)
+            .sum::<u64>();
+        self.current_next_level_size += size_diff;
+        if self.pos < self.boundaries.len()
+            && self.boundaries[self.pos].as_slice() <= req.current_user_key
+        {
+            if req.current_output_file_size >= self.min_output_file_size
+                // Or, the output file may make a huge compaction even greater than the max compaction size.
+                || self.current_next_level_size >= self.max_compaction_size
+            {
                 COMPACTION_GUARD_ACTION_COUNTER
                     .get(self.cf_name)
                     .partition
                     .inc();
+                // The current pointer status should be like (let * be the current pos, ^ be
+                // where the previous user key is):
+                // boundaries: A   B   C   D
+                // size:           1   3   2
+                //                   ^ *
+                // You will notice that the previous user key is between B and C, when indices
+                // that there must still be something between previous user key and C.
+                // We still set `current_next_level_size` to zero here, so the segment will be
+                // forgot. I think that will be acceptable given generally a segment won't be
+                // greater than the `max-sst-size`, which is tiny comparing to the
+                // `max-compaction-size` usually.
+                self.current_next_level_size = 0;
                 SstPartitionerResult::Required
             } else {
                 COMPACTION_GUARD_ACTION_COUNTER
@@ -214,10 +228,21 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
     }
 }
 
-impl<P> CompactionGuardGenerator<P> {
-    fn seek_next_level_pos_to(&mut self, key: &[u8]) {
-        let mut 
+fn seek_to(all_data: &Vec<Vec<u8>>, target_key: &[u8], from_pos: usize) -> usize {
+    let mut pos = from_pos;
+    let mut skip_count = 0;
+    while pos < all_data.len() && all_data[pos].as_slice() <= target_key {
+        pos += 1;
+        skip_count += 1;
+        if skip_count >= COMPACTION_GUARD_MAX_POS_SKIP {
+            pos = match all_data.binary_search_by(|probe| probe.as_slice().cmp(target_key)) {
+                Ok(search_pos) => search_pos + 1,
+                Err(search_pos) => search_pos,
+            };
+            break;
+        }
     }
+    pos
 }
 
 #[cfg(test)]
@@ -299,12 +324,20 @@ mod tests {
             provider: MockRegionInfoProvider::new(vec![]),
             initialized: true,
             use_guard: true,
-            boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
+            boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec(), b"ddd".to_vec()],
             pos: 0,
             current_next_level_size: 0,
             next_level_pos: 0,
-            next_level_boundaries: vec![],
-            next_level_size: vec![],
+            next_level_boundaries: (0..10)
+                .into_iter()
+                .map(|x| format!("bbb{:02}", x).into_bytes())
+                .chain(
+                    (0..100)
+                        .into_iter()
+                        .map(|x| format!("cccz{:03}", x).into_bytes()),
+                )
+                .collect(),
+            next_level_size: vec![1024; 199],
             max_compaction_size: 1 << 30, // 1GB
         };
         // Crossing region boundary.
