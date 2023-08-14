@@ -32,11 +32,7 @@ make_static_metric! {
         is_recovering_marked,
         store_heartbeat,
         tso,
-<<<<<<< HEAD
-=======
-        scan_regions,
         get_members,
->>>>>>> e8238777ea (pd_client: reduce store heartbeat retires to prevent heartbeat storm (#15191))
 
         meta_storage_put,
         meta_storage_get,
