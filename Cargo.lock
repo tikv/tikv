@@ -5775,8 +5775,7 @@ checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
 [[package]]
 name = "sysinfo"
 version = "0.16.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c280c91abd1aed2e36be1bc8f56fbc7a2acbb2b58fbcac9641510179cc72dd9"
+source = "git+https://github.com/tikv/sysinfo?branch=0.16.4-fix-cpu#ec11955eef37a2370ff00c7c7304241ad85f2635"
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
