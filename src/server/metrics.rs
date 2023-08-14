@@ -482,12 +482,10 @@ make_auto_flush_static_metric! {
     pub label_enum RequestTypeKind {
         write,
         snapshot,
-        snapshot_local,
-        engine_snap_duration,
+        // exclude those handled by raftstore
+        snapshot_local_read,
         snapshot_read_index_propose_wait,
         snapshot_read_index_confirm,
-        snapshot_pre_duration,
-        snapshot_post_duration,
     }
 
     pub struct AsyncRequestsCounterVec: LocalIntCounter {

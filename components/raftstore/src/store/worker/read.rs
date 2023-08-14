@@ -26,7 +26,7 @@ use tikv_util::{
     debug, error,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{monotonic_raw_now, Instant, ThreadReadId},
+    time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
@@ -939,7 +939,6 @@ where
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
-        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.redirect.inc());
         match ProposalRouter::send(&self.router, cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
@@ -984,7 +983,6 @@ where
                         let mut local_read_ctx =
                             LocalReadContext::new(&mut self.snap_cache, read_id);
 
-                        let begin = Instant::now_coarse();
                         snap_updated = local_read_ctx
                             .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
@@ -995,22 +993,6 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-
-                        let coarse_now = Instant::now_coarse();
-                        cb.read_tracker().map(|tracker| {
-                            GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                                t.metrics.local_read = true;
-                                t.metrics.engine_snap_duration =
-                                    coarse_now.saturating_duration_since(begin).as_nanos() as u64;
-                                t.metrics.snapshot_pre_duration_nanos = begin
-                                    .saturating_duration_since(Instant::MonotonicCoarse(
-                                        t.metrics.snapshot_begin_time,
-                                    ))
-                                    .as_nanos()
-                                    as u64;
-                                t.metrics.snap_end_time = coarse_now.timespec();
-                            })
-                        });
 
                         let region = Arc::clone(&delegate.region);
                         let mut response =
@@ -1063,6 +1045,12 @@ where
                     _ => unreachable!(),
                 };
 
+                cb.read_tracker().map(|tracker| {
+                    GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                        t.metrics.local_read = true;
+                    })
+                });
+
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
                 if !snap_updated {
                     TLS_LOCAL_READ_METRICS
@@ -1075,7 +1063,6 @@ where
                     snap.bucket_meta = delegate.bucket_meta.clone();
                 }
                 response.txn_extra_op = delegate.txn_extra_op.load();
-
                 cb.set_result(response);
             }
             // Forward to raftstore.

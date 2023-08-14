@@ -127,17 +127,13 @@ pub enum RequestType {
     CoprocessorChecksum,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct RequestMetrics {
-    pub snapshot_begin_time: time::Timespec,
-    pub snapshot_pre_duration_nanos: u64,
-    pub snap_end_time: time::Timespec,
     pub get_snapshot_nanos: u64,
     pub read_index_propose_wait_nanos: u64,
     pub read_index_confirm_wait_nanos: u64,
     pub read_pool_schedule_wait_nanos: u64,
     pub local_read: bool,
-    pub engine_snap_duration: u64,
     pub block_cache_hit_count: u64,
     pub block_read_count: u64,
     pub block_read_byte: u64,
@@ -171,51 +167,4 @@ pub struct RequestMetrics {
     pub apply_thread_wait_nanos: u64,
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
-}
-
-impl Default for RequestMetrics {
-    fn default() -> Self {
-        Self {
-            snapshot_begin_time: time::Timespec::new(0, 0),
-            snap_end_time: time::Timespec::new(0, 0),
-            get_snapshot_nanos: 0,
-            read_index_propose_wait_nanos: 0,
-            read_index_confirm_wait_nanos: 0,
-            read_pool_schedule_wait_nanos: 0,
-            local_read: false,
-            engine_snap_duration: 0,
-            block_cache_hit_count: 0,
-            block_read_count: 0,
-            block_read_byte: 0,
-            block_read_nanos: 0,
-            internal_key_skipped_count: 0,
-            deleted_key_skipped_count: 0,
-            pessimistic_lock_wait_nanos: 0,
-            latch_wait_nanos: 0,
-            scheduler_process_nanos: 0,
-            scheduler_throttle_nanos: 0,
-            write_instant: None,
-            wf_batch_wait_nanos: 0,
-            wf_send_to_queue_nanos: 0,
-            wf_send_proposal_nanos: 0,
-            wf_persist_log_nanos: 0,
-            wf_before_write_nanos: 0,
-            wf_write_end_nanos: 0,
-            wf_kvdb_end_nanos: 0,
-            wf_commit_log_nanos: 0,
-            commit_not_persisted: false,
-            store_mutex_lock_nanos: 0,
-            store_thread_wait_nanos: 0,
-            store_write_wal_nanos: 0,
-            store_write_memtable_nanos: 0,
-            store_time_nanos: 0,
-            apply_wait_nanos: 0,
-            apply_time_nanos: 0,
-            apply_mutex_lock_nanos: 0,
-            apply_thread_wait_nanos: 0,
-            apply_write_wal_nanos: 0,
-            apply_write_memtable_nanos: 0,
-            snapshot_pre_duration_nanos: 0,
-        }
-    }
 }
