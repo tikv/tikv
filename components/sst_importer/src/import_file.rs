@@ -12,7 +12,8 @@ use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    iter_option, EncryptionKeyManager, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader,
+    iter_option, EncryptionKeyManager, IterOptions, Iterator, KvEngine, RefIterable, SstExt,
+    SstMetaInfo, SstReader,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
@@ -165,11 +166,12 @@ impl ImportFile {
 
     fn cleanup(&mut self) -> Result<()> {
         self.file.take();
-        if self.path.temp.exists() {
+        let path = &self.path.temp;
+        if path.exists() {
             if let Some(ref manager) = self.key_manager {
-                manager.delete_file(self.path.temp.to_str().unwrap())?;
+                manager.delete_file(path.to_str().unwrap())?;
             }
-            file_system::remove_file(&self.path.temp)?;
+            file_system::remove_file(path)?;
         }
         Ok(())
     }
@@ -412,6 +414,31 @@ impl ImportDir {
         Ok(())
     }
 
+    pub fn load_start_key_by_meta<E: SstExt>(
+        &self,
+        meta: &SstMeta,
+        km: Option<Arc<DataKeyManager>>,
+    ) -> Result<Option<Vec<u8>>> {
+        let path = self.join(meta)?;
+        let r = match km {
+            Some(km) => E::SstReader::open_encrypted(&path.save.to_string_lossy(), km)?,
+            None => E::SstReader::open(&path.save.to_string_lossy())?,
+        };
+        let opts = IterOptions::new(None, None, false);
+        let mut i = r.iter(opts)?;
+        if !i.seek_to_first()? || !i.valid()? {
+            return Ok(None);
+        }
+        // Should we warn if the key doesn't start with the prefix key? (Is that
+        // possible?)
+        // Also note this brings implicit coupling between this and
+        // RocksEngine. Perhaps it is better to make the engine to provide
+        // decode functions. Anyway we have directly used the RocksSstReader
+        // somewhere... This won't make things worse.
+        let real_key = i.key().strip_prefix(keys::DATA_PREFIX_KEY);
+        Ok(real_key.map(ToOwned::to_owned))
+    }
+
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         let mut ssts = Vec::new();
         for e in file_system::read_dir(&self.root_dir)? {
@@ -420,9 +447,9 @@ impl ImportDir {
                 continue;
             }
             let path = e.path();
-            match path_to_sst_meta(&path) {
+            match parse_meta_from_path(&path) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.to_str().unwrap(),),
+                Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.display(),),
             }
         }
         Ok(ssts)
@@ -443,7 +470,7 @@ pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     )))
 }
 
-pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
+pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
@@ -495,7 +522,7 @@ mod test {
         let expected_path = format!("{}_1_2_3_default.sst", uuid);
         assert_eq!(path.to_str().unwrap(), &expected_path);
 
-        let new_meta = path_to_sst_meta(path).unwrap();
+        let new_meta = parse_meta_from_path(path).unwrap();
         assert_eq!(meta, new_meta);
     }
 
@@ -515,7 +542,84 @@ mod test {
             meta.get_region_epoch().get_version(),
             SST_SUFFIX,
         ));
-        let new_meta = path_to_sst_meta(path).unwrap();
+        let new_meta = parse_meta_from_path(path).unwrap();
         assert_eq!(meta, new_meta);
+    }
+
+    #[cfg(feature = "test-engines-rocksdb")]
+    fn test_path_with_range_and_km(km: Option<DataKeyManager>) {
+        use engine_rocks::{RocksEngine, RocksSstWriterBuilder};
+        use engine_test::ctor::{CfOptions, DbOptions};
+        use engine_traits::{SstWriter, SstWriterBuilder};
+        use tempfile::TempDir;
+        let arcmgr = km.map(Arc::new);
+        let tmp = TempDir::new().unwrap();
+        let dir = ImportDir::new(tmp.path()).unwrap();
+        let mut meta = SstMeta::default();
+        let mut rng = Range::new();
+        rng.set_start(b"hello".to_vec());
+        let uuid = Uuid::new_v4();
+        meta.set_uuid(uuid.as_bytes().to_vec());
+        meta.set_region_id(1);
+        meta.set_range(rng);
+        meta.mut_region_epoch().set_conf_ver(222);
+        meta.mut_region_epoch().set_version(333);
+        let mut db_opt = DbOptions::default();
+        db_opt.set_key_manager(arcmgr.clone());
+        let e = engine_test::kv::new_engine_opt(
+            &tmp.path().join("eng").to_string_lossy(),
+            db_opt,
+            vec![(CF_DEFAULT, CfOptions::new())],
+        )
+        .unwrap();
+        let f = dir.create(&meta, arcmgr.clone()).unwrap();
+        let dp = f.path.clone();
+        let mut w = RocksSstWriterBuilder::new()
+            .set_db(&e)
+            .set_cf(CF_DEFAULT)
+            .build(f.path.temp.to_str().unwrap())
+            .unwrap();
+        w.put(b"zhello", concat!("This is the start key of the SST, ",
+              "how about some of our users uploads metas with range not aligned with the content of SST?",
+              "No, at least for now, tidb-lightning won't do so.").as_bytes()).unwrap();
+        w.put(
+            b"zworld",
+            concat!(
+                "This is the end key of the SST, ",
+                "you might notice that all keys have a extra prefix 'z', that was appended by the RocksEngine implementation.",
+                "It is a little weird that the user key isn't the same in SST. But anyway reasonable. We have bypassed some layers."
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        w.finish().unwrap();
+        dp.save(arcmgr.as_deref()).unwrap();
+        let mut ssts = dir.list_ssts().unwrap();
+        ssts.iter_mut().for_each(|meta| {
+            let start = dir
+                .load_start_key_by_meta::<RocksEngine>(meta, arcmgr.clone())
+                .unwrap()
+                .unwrap();
+            meta.mut_range().set_start(start)
+        });
+        assert_eq!(ssts, vec![meta]);
+    }
+
+    #[test]
+    #[cfg(feature = "test-engines-rocksdb")]
+    fn test_path_with_range() {
+        test_path_with_range_and_km(None)
+    }
+
+    #[test]
+    #[cfg(feature = "test-engines-rocksdb")]
+    fn test_path_with_range_encrypted() {
+        use tempfile::TempDir;
+        use test_util::new_test_key_manager;
+        let dir = TempDir::new().unwrap();
+        let enc = new_test_key_manager(&dir, None, None, None)
+            .unwrap()
+            .unwrap();
+        test_path_with_range_and_km(Some(enc));
     }
 }

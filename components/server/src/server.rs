@@ -81,7 +81,9 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
+use resolved_ts::Task;
 use security::SecurityManager;
+use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
@@ -92,6 +94,7 @@ use tikv::{
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
+        debug::Debugger,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
@@ -115,6 +118,7 @@ use tikv_util::{
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
+    mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
         cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
@@ -145,9 +149,12 @@ const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
 const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
-    let mut tikv = TikvServer::<CER>::init::<F>(config);
-
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
+    let mut tikv = TikvServer::<CER, F>::init(config, service_event_tx.clone());
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
@@ -161,7 +168,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     let listener = tikv.init_flow_receiver();
     let (engines, engines_info) = tikv.init_raw_engines(listener);
     tikv.init_engines(engines.clone());
-    let server_config = tikv.init_servers::<F>();
+    let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_storage_stats_task(engines);
@@ -169,13 +176,38 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.run_status_server();
     tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
 
-    signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+    // Build a background worker for handling signals.
+    {
+        let engines = tikv.engines.take().unwrap().engines;
+        std::thread::spawn(move || {
+            signal_handler::wait_for_signal(Some(engines), Some(service_event_tx))
+        });
+    }
+    loop {
+        if let Ok(service_event) = service_event_rx.recv() {
+            match service_event {
+                ServiceEvent::PauseGrpc => {
+                    tikv.pause();
+                }
+                ServiceEvent::ResumeGrpc => {
+                    tikv.resume();
+                }
+                ServiceEvent::Exit => {
+                    break;
+                }
+            }
+        }
+    }
     tikv.stop();
 }
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TikvConfig) {
+pub fn run_tikv(
+    config: TikvConfig,
+    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
+    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
+) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -196,9 +228,9 @@ pub fn run_tikv(config: TikvConfig) {
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config)
+            run_impl::<RocksEngine, API>(config, service_event_tx, service_event_rx)
         } else {
-            run_impl::<RaftLogEngine, API>(config)
+            run_impl::<RaftLogEngine, API>(config, service_event_tx, service_event_rx)
         }
     })
 }
@@ -212,7 +244,7 @@ const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A complete TiKV server.
-struct TikvServer<ER: RaftEngine> {
+struct TikvServer<ER: RaftEngine, F: KvFormat> {
     config: TikvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
@@ -226,7 +258,7 @@ struct TikvServer<ER: RaftEngine> {
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TikvEngines<RocksEngine, ER>>,
-    servers: Option<Servers<RocksEngine, ER>>,
+    servers: Option<Servers<RocksEngine, ER, F>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -240,6 +272,8 @@ struct TikvServer<ER: RaftEngine> {
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
+    resolved_ts_scheduler: Option<Scheduler<Task>>,
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -248,7 +282,7 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
     engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
 }
 
-struct Servers<EK: KvEngine, ER: RaftEngine> {
+struct Servers<EK: KvEngine, ER: RaftEngine, F: KvFormat> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
     node: Node<RpcClient, EK, ER>,
@@ -257,16 +291,18 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     cdc_memory_quota: MemoryQuota,
     rsmeter_pubsub_service: resource_metering::PubSubService,
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
+    debugger: Debugger<ER, RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, LockManager, F>,
 }
 
 type LocalServer<EK, ER> = Server<resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER> TikvServer<ER>
+impl<ER, F> TikvServer<ER, F>
 where
     ER: RaftEngine,
+    F: KvFormat,
 {
-    fn init<F: KvFormat>(mut config: TikvConfig) -> TikvServer<ER> {
+    fn init(mut config: TikvConfig, tx: TikvMpsc::Sender<ServiceEvent>) -> TikvServer<ER, F> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -392,6 +428,8 @@ where
             causal_ts_provider,
             tablet_factory: None,
             br_snap_recovery_mode: is_recovering_marked,
+            resolved_ts_scheduler: None,
+            grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
 
@@ -669,7 +707,7 @@ where
         gc_worker
     }
 
-    fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+    fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
@@ -738,6 +776,7 @@ where
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
+                .enable_time()
                 .worker_threads(1)
                 .after_start_wrapper(move || {
                     tikv_alloc::add_thread_memory_accessor();
@@ -942,7 +981,7 @@ where
             node.id(),
             &server_config,
             &self.security_mgr,
-            storage,
+            storage.clone(),
             coprocessor::Endpoint::new(
                 &server_config.value(),
                 cop_read_pool_handle,
@@ -1158,6 +1197,7 @@ where
                 server.env(),
                 self.security_mgr.clone(),
             );
+            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
             self.to_stop.push(rts_worker);
         }
@@ -1170,6 +1210,13 @@ where
             )),
         );
 
+        // Create Debugger.
+        let debugger = Debugger::new(
+            engines.engines.clone(),
+            self.cfg_controller.as_ref().unwrap().clone(),
+            Some(storage),
+        );
+
         self.servers = Some(Servers {
             lock_mgr,
             server,
@@ -1179,6 +1226,7 @@ where
             cdc_memory_quota,
             rsmeter_pubsub_service,
             backup_stream_scheduler,
+            debugger,
         });
 
         server_config
@@ -1205,11 +1253,27 @@ where
         }
 
         // Debug service.
+        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
         let debug_service = DebugService::new(
-            engines.engines.clone(),
+            servers.debugger.clone(),
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension().clone(),
-            self.cfg_controller.as_ref().unwrap().clone(),
+            self.engines.as_ref().unwrap().store_meta.clone(),
+            Arc::new(
+                move |region_id, log_locks, min_start_ts, callback| -> bool {
+                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                        let res = s.schedule(Task::GetDiagnosisInfo {
+                            region_id,
+                            log_locks,
+                            min_start_ts,
+                            callback,
+                        });
+                        res.is_ok()
+                    } else {
+                        false
+                    }
+                },
+            ),
         );
         if servers
             .server
@@ -1640,6 +1704,7 @@ where
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
                 self.store_path.clone(),
+                self.grpc_service_mgr.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1674,6 +1739,26 @@ where
         }
 
         self.to_stop.into_iter().for_each(|s| s.stop());
+    }
+
+    fn pause(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        if let Err(e) = server.server.pause() {
+            warn!(
+                "failed to pause the server";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn resume(&mut self) {
+        let server = self.servers.as_mut().unwrap();
+        if let Err(e) = server.server.resume() {
+            warn!(
+                "failed to resume the server";
+                "err" => ?e
+            );
+        }
     }
 }
 
@@ -1794,7 +1879,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
+impl<CER: ConfiguredRaftEngine, F: KvFormat> TikvServer<CER, F> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,

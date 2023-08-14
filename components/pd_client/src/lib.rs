@@ -412,6 +412,23 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    fn scan_regions(
+        &self,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        unimplemented!();
+    }
+
+    fn batch_load_regions(
+        &self,
+        mut _start_key: Vec<u8>,
+        mut _end_key: Vec<u8>,
+    ) -> Vec<Vec<pdpb::Region>> {
+        unimplemented!();
+    }
+
     /// Gets store state if it is not a tombstone store asynchronously.
     fn get_store_stats_async(&self, _store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
         unimplemented!();

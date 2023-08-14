@@ -31,10 +31,8 @@ impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
         for i in 0..context.file_numbers().len() {
             let table_props = context.table_properties(i);
             let user_props = table_props.user_collected_properties();
-            if let Ok(props) = RocksTtlProperties::decode(user_props) {
-                if props.min_expire_ts != 0 {
-                    min_expire_ts = std::cmp::min(min_expire_ts, props.min_expire_ts);
-                }
+            if let Some(m) = RocksTtlProperties::decode(user_props).min_expire_ts {
+                min_expire_ts = std::cmp::min(min_expire_ts, m);
             }
         }
         if min_expire_ts > current {

@@ -181,6 +181,7 @@ abnormal-leader-missing-duration = "6h"
 peer-stale-state-check-interval = "2h"
 leader-transfer-max-log-lag = 123
 snap-apply-batch-size = "12MB"
+snap-apply-copy-symlink = true
 consistency-check-interval = "12s"
 report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
@@ -624,6 +625,16 @@ num-threads = 456
 batch-size = 7
 s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
+
+[log-backup]
+min-ts-interval = "2s"
+max-flush-interval = "11s"
+num-threads = 7
+enable = true
+temp-path = "./stream"
+file-size-limit = "5GiB"
+initial-scan-pending-memory-quota = "2KiB"
+initial-scan-rate-limit = "3MiB"
 
 [backup.hadoop]
 home = "/root/hadoop"

@@ -2910,9 +2910,27 @@ where
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        let mut region = self.region.clone();
+        match req.get_cmd_type() {
+            AdminCmdType::PrepareFlashback => {
+                PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+                // First time enter into the flashback state, inc the counter.
+                if !region.is_in_flashback {
+                    PEER_IN_FLASHBACK_STATE.inc()
+                }
+            }
+            AdminCmdType::FinishFlashback => {
+                PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+                // Leave the flashback state, dec the counter.
+                if region.is_in_flashback {
+                    PEER_IN_FLASHBACK_STATE.dec()
+                }
+            }
+            _ => unreachable!(),
+        }
+
         let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
         // Modify the region meta in memory.
-        let mut region = self.region.clone();
         region.set_is_in_flashback(is_in_flashback);
         // Modify the `RegionLocalState` persisted in disk.
         write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
@@ -2922,15 +2940,6 @@ where
             )
         });
 
-        match req.get_cmd_type() {
-            AdminCmdType::PrepareFlashback => {
-                PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
-            }
-            AdminCmdType::FinishFlashback => {
-                PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
-            }
-            _ => unreachable!(),
-        }
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::SetFlashbackState { region }),
