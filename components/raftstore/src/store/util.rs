@@ -719,7 +719,13 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
 pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
-        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
+        panic!(
+            "{} data is corrupted at {}: {:?}. hex value: {}",
+            tag,
+            index,
+            e,
+            log_wrappers::Value::value(data)
+        );
     });
     result
 }
@@ -1562,6 +1568,26 @@ impl RegionReadProgressCore {
 
     pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
         &self.leader_info
+    }
+
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index
+    }
+
+    pub fn paused(&self) -> bool {
+        self.pause
+    }
+
+    pub fn pending_items(&self) -> &VecDeque<ReadState> {
+        &self.pending_items
+    }
+
+    pub fn read_state(&self) -> &ReadState {
+        &self.read_state
+    }
+
+    pub fn discarding(&self) -> bool {
+        self.discard
     }
 }
 
