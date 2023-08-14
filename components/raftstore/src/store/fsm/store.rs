@@ -1520,11 +1520,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-<<<<<<< HEAD
-=======
-        grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
->>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
