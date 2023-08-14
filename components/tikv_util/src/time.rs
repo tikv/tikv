@@ -293,13 +293,6 @@ impl Instant {
         Instant::MonotonicCoarse(monotonic_coarse_now())
     }
 
-    pub fn timespec(&self) -> Timespec {
-        match *self {
-            Instant::Monotonic(t) => t,
-            Instant::MonotonicCoarse(t) => t,
-        }
-    }
-
     pub fn saturating_elapsed(&self) -> Duration {
         match *self {
             Instant::Monotonic(t) => {
