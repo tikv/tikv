@@ -223,11 +223,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-<<<<<<< HEAD
-=======
-        grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
->>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -265,11 +261,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
-<<<<<<< HEAD
-=======
-            grpc_service_mgr,
             safe_point,
->>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )?;
 
         Ok(())
@@ -517,11 +509,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-<<<<<<< HEAD
-=======
-        grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
->>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -555,11 +543,7 @@ where
             collector_reg_handle,
             self.health_service.clone(),
             causal_ts_provider,
-<<<<<<< HEAD
-=======
-            grpc_service_mgr,
             safe_point,
->>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )?;
         Ok(())
     }
