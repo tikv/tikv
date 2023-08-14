@@ -80,7 +80,7 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     config.raft_store.snap_apply_batch_size = ReadableSize::gb(1);
 
     // unlimit the snapshot I/O.
-    config.server.snap_io_max_bytes_per_sec = ReadableSize::gb(16);
+    config.server.snap_max_write_bytes_per_sec = ReadableSize::gb(16);
     config.server.concurrent_recv_snap_limit = 256;
     config.server.concurrent_send_snap_limit = 256;
 
