@@ -85,6 +85,19 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     config.raft_store.max_snapshot_file_raw_size = ReadableSize::gb(1);
     config.raft_store.hibernate_regions = false;
 
+<<<<<<< HEAD
+=======
+    // Disable prevote so it is possible to regenerate leaders.
+    config.raft_store.prevote = false;
+    // Because we have increased the election tick to inf, once there is a leader,
+    // the follower will believe it holds an eternal lease. So, once the leader
+    // reboots, the followers will reject to vote for it again.
+    // We need to disable the lease for avoiding that.
+    config.raft_store.unsafe_disable_check_quorum = true;
+    // The election is fully controlled by the restore procedure of BR.
+    config.raft_store.allow_unsafe_vote_after_start = true;
+
+>>>>>>> e8ea0a9e51 (snap_restore: fix snapshot recovery leader election (#15297))
     // disable auto compactions during the restore
     config.rocksdb.defaultcf.disable_auto_compactions = true;
     config.rocksdb.writecf.disable_auto_compactions = true;
