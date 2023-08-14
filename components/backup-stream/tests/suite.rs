@@ -19,7 +19,7 @@ use backup_stream::{
     router::Router,
     utils, Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
 };
-use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt, TryStreamExt};
+use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
@@ -273,7 +273,10 @@ impl Suite {
     /// create a subscription stream. this has simply asserted no error, because
     /// in theory observing flushing should not emit error. change that if
     /// needed.
-    pub fn flush_stream(&self) -> impl Stream<Item = (u64, SubscribeFlushEventResponse)> {
+    pub fn flush_stream(
+        &self,
+        panic_while_fail: bool,
+    ) -> impl Stream<Item = (u64, SubscribeFlushEventResponse)> {
         let streams = self
             .log_backup_cli
             .iter()
@@ -286,8 +289,18 @@ impl Suite {
                     })
                     .unwrap_or_else(|err| panic!("failed to subscribe on {} because {}", id, err));
                 let id = *id;
-                stream.map_ok(move |x| (id, x)).map(move |x| {
-                    x.unwrap_or_else(move |err| panic!("failed to rec from {} because {}", id, err))
+                stream.filter_map(move |x| {
+                    futures::future::ready(match x {
+                        Ok(x) => Some((id, x)),
+                        Err(err) => {
+                            if panic_while_fail {
+                                panic!("failed to rec from {} because {}", id, err)
+                            } else {
+                                println!("[WARN] failed to rec from {} because {}", id, err);
+                                None
+                            }
+                        }
+                    })
                 })
             })
             .collect::<Vec<_>>();

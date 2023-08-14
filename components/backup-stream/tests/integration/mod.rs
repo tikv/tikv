@@ -11,9 +11,8 @@ mod all {
     use std::time::{Duration, Instant};
 
     use backup_stream::{
-        errors::Error,
-        router::TaskSelector,
-        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
+        errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
+        RegionSet, Task,
     };
     use futures::{Stream, StreamExt};
     use pd_client::PdClient;
@@ -319,7 +318,7 @@ mod all {
     #[test]
     fn subscribe_flushing() {
         let mut suite = super::SuiteBuilder::new_named("sub_flush").build();
-        let stream = suite.flush_stream();
+        let stream = suite.flush_stream(true);
         for i in 1..10 {
             let split_key = make_split_key_at_record(1, i * 20);
             suite.must_split(&split_key);
@@ -362,11 +361,46 @@ mod all {
     }
 
     #[test]
+    fn resolved_follower() {
+        let mut suite = super::SuiteBuilder::new_named("r").build();
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        suite.must_register_task(1, "r");
+        suite.run(|| Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve));
+        suite.sync();
+        std::thread::sleep(Duration::from_secs(1));
+
+        let leader = suite.cluster.leader_of_region(1).unwrap();
+        suite.must_shuffle_leader(1);
+        let round2 = run_async_test(suite.write_records(256, 128, 1));
+        suite
+            .endpoints
+            .get(&leader.store_id)
+            .unwrap()
+            .scheduler()
+            .schedule(Task::ForceFlush("r".to_owned()))
+            .unwrap();
+        suite.sync();
+        std::thread::sleep(Duration::from_secs(1));
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.iter().map(|x| x.as_slice()),
+        ));
+        assert!(suite.global_checkpoint() > 256);
+        suite.force_flush_files("r");
+        suite.wait_for_flush();
+        assert!(suite.global_checkpoint() > 512);
+        run_async_test(suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(|x| x.as_slice()),
+        ));
+    }
+
+    #[test]
     fn network_partition() {
         let mut suite = super::SuiteBuilder::new_named("network_partition")
             .nodes(3)
             .build();
-        let stream = suite.flush_stream();
+        let stream = suite.flush_stream(true);
         suite.must_register_task(1, "network_partition");
         let leader = suite.cluster.leader_of_region(1).unwrap();
         let round1 = run_async_test(suite.write_records(0, 64, 1));
