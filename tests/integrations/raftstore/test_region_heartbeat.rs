@@ -16,56 +16,60 @@ use tikv_util::{
 
 macro_rules! test_down_peers {
     ($cluster:expr) => {
-        $cluster.cfg.raft_store.max_peer_down_duration = ReadableDuration::secs(1);
-        $cluster.run();
+        // depress false-positive warning.
+        #[allow(clippy::unnecessary_mut_passed)]
+        {
+            $cluster.cfg.raft_store.max_peer_down_duration = ReadableDuration::secs(1);
+            $cluster.run();
 
-        // Kill 1, 2
-        for len in 1..3 {
-            let id = len;
-            $cluster.stop_node(id);
-            wait_down_peers($cluster, len, Some(id));
+            // Kill 1, 2
+            for len in 1..3 {
+                let id = len;
+                $cluster.stop_node(id);
+                wait_down_peers($cluster, len, Some(id));
+            }
+
+            // Restart 1, 2
+            $cluster.run_node(1).unwrap();
+            $cluster.run_node(2).unwrap();
+            wait_down_peers($cluster, 0, None);
+
+            $cluster.stop_node(1);
+
+            $cluster.must_put(b"k1", b"v1");
+            // max peer down duration is 500 millis, but we only report down time in
+            // seconds, so sleep 1 second to make the old down second is always larger
+            // than new down second by at lease 1 second.
+            sleep_ms(1000);
+
+            wait_down_peers($cluster, 1, Some(1));
+            let down_secs = $cluster.get_down_peers()[&1].get_down_seconds();
+            let timer = Instant::now();
+            let leader = $cluster.leader_of_region(1).unwrap();
+            let new_leader = if leader.get_id() == 2 {
+                new_peer(3, 3)
+            } else {
+                new_peer(2, 2)
+            };
+
+            $cluster.must_transfer_leader(1, new_leader);
+            // new leader should reset all down peer list.
+            wait_down_peers($cluster, 0, None);
+            wait_down_peers($cluster, 1, Some(1));
+            assert!(
+                $cluster.get_down_peers()[&1].get_down_seconds()
+                    < down_secs + timer.saturating_elapsed().as_secs()
+            );
+
+            // Ensure that node will not reuse the previous peer heartbeats.
+            $cluster.must_transfer_leader(1, leader);
+            wait_down_peers($cluster, 0, None);
+            wait_down_peers($cluster, 1, Some(1));
+            assert!(
+                $cluster.get_down_peers()[&1].get_down_seconds()
+                    < timer.saturating_elapsed().as_secs() + 1
+            );
         }
-
-        // Restart 1, 2
-        $cluster.run_node(1).unwrap();
-        $cluster.run_node(2).unwrap();
-        wait_down_peers($cluster, 0, None);
-
-        $cluster.stop_node(1);
-
-        $cluster.must_put(b"k1", b"v1");
-        // max peer down duration is 500 millis, but we only report down time in
-        // seconds, so sleep 1 second to make the old down second is always larger
-        // than new down second by at lease 1 second.
-        sleep_ms(1000);
-
-        wait_down_peers($cluster, 1, Some(1));
-        let down_secs = $cluster.get_down_peers()[&1].get_down_seconds();
-        let timer = Instant::now();
-        let leader = $cluster.leader_of_region(1).unwrap();
-        let new_leader = if leader.get_id() == 2 {
-            new_peer(3, 3)
-        } else {
-            new_peer(2, 2)
-        };
-
-        $cluster.must_transfer_leader(1, new_leader);
-        // new leader should reset all down peer list.
-        wait_down_peers($cluster, 0, None);
-        wait_down_peers($cluster, 1, Some(1));
-        assert!(
-            $cluster.get_down_peers()[&1].get_down_seconds()
-                < down_secs + timer.saturating_elapsed().as_secs()
-        );
-
-        // Ensure that node will not reuse the previous peer heartbeats.
-        $cluster.must_transfer_leader(1, leader);
-        wait_down_peers($cluster, 0, None);
-        wait_down_peers($cluster, 1, Some(1));
-        assert!(
-            $cluster.get_down_peers()[&1].get_down_seconds()
-                < timer.saturating_elapsed().as_secs() + 1
-        );
     };
 }
 
@@ -84,7 +88,6 @@ fn test_server_down_peers_with_hibernate_regions() {
 fn test_server_down_peers_without_hibernate_regions() {
     let mut cluster = new_cluster(0, 5);
     cluster.cfg.raft_store.hibernate_regions = false;
-    // test_down_peers(&mut cluster);
     test_down_peers!(&mut cluster);
 }
 
