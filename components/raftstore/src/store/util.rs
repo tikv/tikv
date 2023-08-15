@@ -1200,7 +1200,7 @@ impl RegionReadProgressRegistry {
     ) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
-        let now = Some(Instant::now());
+        let now = Some(Instant::now_coarse());
         for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
