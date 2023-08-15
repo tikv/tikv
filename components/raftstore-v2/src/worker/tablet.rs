@@ -325,6 +325,15 @@ impl<EK: KvEngine> Runner<EK> {
                         return;
                     }
                 }
+                if let Err(e) = tablet.check_in_range(Some(&start_key), Some(&end_key)) {
+                    error!(
+                        logger,
+                        "trim did not remove all dirty data";
+                        "path" => tablet.path(),
+                        "err" => %e,
+                    );
+                    return;
+                }
                 // drop before callback.
                 drop(tablet);
                 fail_point!("tablet_trimmed_finished");
