@@ -1009,14 +1009,14 @@ impl DebugExecutor for DebugClient {
             ("paused", resp.get_region_read_progress_paused().to_string()),
             ("discarding", resp.get_discard().to_string()),
             (
-                "duration to last update_safe_ts",
+                "duration since resolved-ts last called update_safe_ts()",
                 match resp.get_duration_to_last_update_safe_ts_ms() {
                     u64::MAX => "none".to_owned(),
                     x => format!("{} ms", x),
                 },
             ),
             (
-                "duration to last consume_leader_info",
+                "duration to last consume_leader_info()",
                 match resp.get_duration_to_last_consume_leader_ms() {
                     u64::MAX => "none".to_owned(),
                     x => format!("{} ms", x),
