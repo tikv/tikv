@@ -109,17 +109,9 @@ pub trait Simulator<EK: KvEngine> {
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
-        let timeout_f = GLOBAL_TIMER_HANDLE
-            .delay(std::time::Instant::now() + timeout)
-            .compat();
-        futures::executor::block_on(async move {
-            futures::select! {
-                res = self.async_read(node_id, request).fuse() => res,
-                e = timeout_f.fuse() => {
-                    Err(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e)))
-                },
-            }
-        })
+        let f = self.async_read(node_id, request);
+        block_on_timeout(Box::pin(f), timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
     }
 
     fn async_read(
@@ -289,14 +281,9 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + timeout);
-        block_on(async move {
-            select! {
-                // todo: unwrap?
-                res = sub.result().fuse() => Ok(res.unwrap()),
-                _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
-            }
-        })
+        Ok(block_on_timeout(Box::pin(sub.result()), timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
+            .unwrap())
     }
 
     fn async_command_on_node(
