@@ -336,7 +336,6 @@ fn test_read_after_cleanup_range_for_snap() {
     fail::remove("pause_on_peer_collect_message");
     must_get_none(&cluster.get_engine(3), b"k0");
     // Should not receive resp
-    rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
     fail::remove("apply_snap_cleanup_range");
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }

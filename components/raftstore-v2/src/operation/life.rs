@@ -782,10 +782,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // If it's marked as tombstone, then it must be changed by conf change. In
         // this case, all following entries are skipped so applied_index never equals
         // to last_applying_index.
-        (self.storage().region_state().get_state() != PeerState::Tombstone
-            && entry_storage.applied_index() != last_applying_index)
-            // Wait for critical commands like split.
-            || self.has_pending_tombstone_tablets()
+        if self.storage().region_state().get_state() != PeerState::Tombstone
+            && entry_storage.applied_index() != last_applying_index
+        {
+            info!(
+                self.logger,
+                "postpone destroy because there're pending apply logs";
+                "applied" => entry_storage.applied_index(),
+                "last_applying" => last_applying_index,
+            );
+            return true;
+        }
+        // Wait for critical commands like split.
+        if self.has_pending_tombstone_tablets() {
+            info!(
+                self.logger,
+                "postpone destroy because there're pending tombstone tablets"
+            );
+            return true;
+        }
+        false
     }
 
     /// Start the destroy progress. It will write `Tombstone` state
