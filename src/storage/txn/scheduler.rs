@@ -39,6 +39,7 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use file_system::IoBytes;
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp},
@@ -1283,7 +1284,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 * SCHEDULER_CPU_TIME_FACTOR;
             if let Some(limiter) = resource_limiter {
                 limiter
-                    .async_consume(expected_dur, write_bytes as u64)
+                    .async_consume(
+                        expected_dur,
+                        IoBytes {
+                            read: 0,
+                            write: write_bytes as u64,
+                        },
+                    )
                     .await;
             }
         }

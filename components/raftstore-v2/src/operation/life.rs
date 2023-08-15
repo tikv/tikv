@@ -252,6 +252,7 @@ impl Store {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: Box<SplitInit>,
+        skip_if_exists: bool,
     ) where
         EK: KvEngine,
         ER: RaftEngine,
@@ -286,13 +287,17 @@ impl Store {
         })();
 
         // It will create the peer if it does not exist
-        self.on_raft_message(ctx, raft_msg);
+        let create = self.on_raft_message(ctx, raft_msg);
+        if !create && skip_if_exists {
+            warn!(self.logger(), "skip sending SplitInit"; "msg" => ?msg);
+            return;
+        }
 
         if let Err(SendError(m)) = ctx.router.force_send(region_id, PeerMsg::SplitInit(msg)) {
             warn!(
                 self.logger(),
-                "Split peer is destroyed before sending the intialization msg";
-                "split init msg" => ?m,
+                "split peer is destroyed before sending the initialization msg";
+                "msg" => ?m,
             );
             report_split_init_finish(ctx, derived_region_id, region_id, true);
         }
@@ -355,12 +360,17 @@ impl Store {
     /// When a message's recipient doesn't exist, it will be redirected to
     /// store. Store is responsible for checking if it's neccessary to create
     /// a peer to handle the message.
+    ///
+    /// Return true if the peer is created by the message, false indicates
+    /// either the message is invalid or the peer had already been created
+    /// before the message.
     #[inline]
     pub fn on_raft_message<EK, ER, T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: Box<RaftMessage>,
-    ) where
+    ) -> bool
+    where
         EK: KvEngine,
         ER: RaftEngine,
         T: Transport,
@@ -379,7 +389,7 @@ impl Store {
         {
             m
         } else {
-            return;
+            return false;
         };
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
@@ -394,22 +404,22 @@ impl Store {
         );
         if to_peer.store_id != self.store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
-            return;
+            return false;
         }
         if !msg.has_region_epoch() {
             ctx.raft_metrics.message_dropped.mismatch_region_epoch.inc();
-            return;
+            return false;
         }
         if msg.has_merge_target() {
             // Target tombstone peer doesn't exist, so ignore it.
             ctx.raft_metrics.message_dropped.stale_msg.inc();
-            return;
+            return false;
         }
         let destroyed = match check_if_to_peer_destroyed(&ctx.engine, &msg, self.store_id()) {
             Ok(d) => d,
             Err(e) => {
                 error!(self.logger(), "failed to get region state"; "region_id" => region_id, "err" => ?e);
-                return;
+                return false;
             }
         };
         if destroyed {
@@ -417,7 +427,7 @@ impl Store {
                 if let Some(msg) = build_peer_destroyed_report(&mut msg) {
                     let _ = ctx.trans.send(msg);
                 }
-                return;
+                return false;
             }
             if msg.has_extra_msg() {
                 let extra_msg = msg.get_extra_msg();
@@ -429,11 +439,11 @@ impl Store {
                     forward_destroy_to_source_peer(&msg, |m| {
                         let _ = ctx.router.send_raft_message(m.into());
                     });
-                    return;
+                    return false;
                 }
             }
             ctx.raft_metrics.message_dropped.region_tombstone_peer.inc();
-            return;
+            return false;
         }
         // If it's not destroyed, and the message is a tombstone message, create the
         // peer and destroy immediately to leave a tombstone record.
@@ -477,7 +487,7 @@ impl Store {
             Ok(p) => p,
             res => {
                 error!(self.logger(), "failed to create peer"; "region_id" => region_id, "peer_id" => to_peer.id, "err" => ?res.err());
-                return;
+                return false;
             }
         };
         ctx.store_meta
@@ -502,6 +512,7 @@ impl Store {
             // handling its first readiness.
             let _ = ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
         }
+        true
     }
 
     pub fn on_update_latency_inspectors<EK, ER, T>(
@@ -741,11 +752,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.maybe_schedule_gc_peer_tick();
     }
 
-    /// A peer can be destroyed in three cases:
+    /// A peer can be destroyed in four cases:
+    ///
     /// 1. Received a gc message;
     /// 2. Received a message whose target peer's ID is larger than this;
     /// 3. Applied a conf remove self command.
-    /// In all cases, the peer will be destroyed asynchronousely in next
+    /// 4. Received UnsafeRecoveryDestroy message.
+    ///
+    /// In all cases, the peer will be destroyed asynchronously in next
     /// handle_raft_ready.
     /// `triggered_msg` will be sent to store fsm after destroy is finished.
     /// Should set the message only when the target peer is supposed to be
@@ -768,10 +782,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // If it's marked as tombstone, then it must be changed by conf change. In
         // this case, all following entries are skipped so applied_index never equals
         // to last_applying_index.
-        (self.storage().region_state().get_state() != PeerState::Tombstone
-            && entry_storage.applied_index() != last_applying_index)
-            // Wait for critical commands like split.
-            || self.has_pending_tombstone_tablets()
+        if self.storage().region_state().get_state() != PeerState::Tombstone
+            && entry_storage.applied_index() != last_applying_index
+        {
+            info!(
+                self.logger,
+                "postpone destroy because there're pending apply logs";
+                "applied" => entry_storage.applied_index(),
+                "last_applying" => last_applying_index,
+            );
+            return true;
+        }
+        // Wait for critical commands like split.
+        if self.has_pending_tombstone_tablets() {
+            info!(
+                self.logger,
+                "postpone destroy because there're pending tombstone tablets"
+            );
+            return true;
+        }
+        false
     }
 
     /// Start the destroy progress. It will write `Tombstone` state
@@ -789,6 +819,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // No need to wait for the apply anymore.
         self.unsafe_recovery_maybe_finish_wait_apply(true);
+        self.unsafe_recovery_maybe_finish_wait_initialized(true);
 
         // Use extra write to ensure these writes are the last writes to raft engine.
         let raft_engine = self.entry_storage().raft_engine();

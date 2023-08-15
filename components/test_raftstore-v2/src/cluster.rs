@@ -1659,6 +1659,30 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn must_remove_region(&mut self, store_id: u64, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            let peer = new_peer(store_id, 0);
+            let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+            let resp = self
+                .call_command(find_leader, Duration::from_secs(5))
+                .unwrap();
+
+            if is_error_response(&resp) {
+                assert!(
+                    resp.get_header().get_error().has_region_not_found(),
+                    "unexpected error resp: {:?}",
+                    resp
+                );
+                break;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(60) {
+                panic!("region {} is not removed after 60s.", region_id);
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
@@ -1783,6 +1807,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
 
         debug!("all nodes are shut down.");
+    }
+
+    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+        let timer = Instant::now_coarse();
+        while timer.saturating_elapsed() < Duration::from_secs(5) {
+            if self
+                .query_leader(node_id, region_id, Duration::from_secs(1))
+                .is_none()
+            {
+                return;
+            }
+            sleep_ms(100);
+        }
+        panic!(
+            "region {}'s replica in store {} still has a valid leader after 5 secs",
+            region_id, node_id
+        );
     }
 
     pub fn must_send_store_heartbeat(&self, node_id: u64) {

@@ -11,7 +11,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
     kvrpcpb::ExtraOp,
-    metapb::RegionEpoch,
+    metapb::{Peer, Region, RegionEpoch},
     pdpb,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -20,8 +20,8 @@ use raftstore::{
     router::CdcHandle,
     store::{
         fsm::ChangeObserver, AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
-        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
-        UnsafeRecoveryWaitApplySyncer,
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryWaitApplySyncer,
     },
 };
 use slog::warn;
@@ -288,6 +288,47 @@ impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for UnsafeRecoveryRouter
     fn broadcast_exit_force_leader(&self) {
         let router = self.0.lock().unwrap();
         router.broadcast_normal(|| PeerMsg::ExitForceLeaderState);
+    }
+
+    fn send_create_peer(
+        &self,
+        region: Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        match router.force_send_control(StoreMsg::UnsafeRecoveryCreatePeer { region, syncer }) {
+            Ok(()) => Ok(()),
+            Err(SendError(_)) => Err(box_err!("fail to send unsafe recovery create peer")),
+        }
+    }
+
+    fn send_destroy_peer(
+        &self,
+        region_id: u64,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        match router.check_send(region_id, PeerMsg::UnsafeRecoveryDestroy(syncer)) {
+            // The peer may be destroy already.
+            Err(crate::Error::RegionNotFound(_)) => Ok(()),
+            res => res,
+        }
+    }
+
+    fn send_demote_peers(
+        &self,
+        region_id: u64,
+        failed_voters: Vec<Peer>,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        router.check_send(
+            region_id,
+            PeerMsg::UnsafeRecoveryDemoteFailedVoters {
+                syncer,
+                failed_voters,
+            },
+        )
     }
 
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer) {
