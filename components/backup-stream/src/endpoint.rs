@@ -853,9 +853,8 @@ where
         if let Some(handle) = self.abort_last_storage_save.take() {
             handle.abort();
         }
-        let _guard = self.pool.handle().enter();
         let (fut, handle) = futures::future::abortable(self.update_global_checkpoint(task));
-        tokio::task::spawn(fut);
+        self.pool.spawn(fut);
         self.abort_last_storage_save = Some(handle);
     }
 
