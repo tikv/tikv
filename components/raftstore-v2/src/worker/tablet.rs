@@ -298,6 +298,8 @@ impl<EK: KvEngine> Runner<EK> {
             .spawn(async move {
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
+                // Note: Refer to https://github.com/facebook/rocksdb/pull/11468. There's could be
+                // some files missing from compaction if dynamic_level_bytes is off.
                 for r in [range1, range2] {
                     // When compaction filter is present, trivial move is disallowed.
                     if let Err(e) =
