@@ -1065,6 +1065,10 @@ pub(super) mod tests {
     }
 
     impl FlowControlFactorsExt for EngineStub {
+        fn get_num_level(&self, _cf: &str) -> Result<usize> {
+            Ok(7)
+        }
+
         fn get_cf_num_files_at_level(&self, _cf: &str, _level: usize) -> Result<Option<u64>> {
             Ok(Some(self.0.num_l0_files.load(Ordering::Relaxed)))
         }

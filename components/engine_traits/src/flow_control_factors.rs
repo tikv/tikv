@@ -2,6 +2,8 @@
 use crate::errors::Result;
 
 pub trait FlowControlFactorsExt {
+    fn get_num_level(&self, cf: &str) -> Result<usize>;
+
     fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>>;
 
     fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>>;
