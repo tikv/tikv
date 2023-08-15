@@ -245,6 +245,9 @@ struct RaftStoreProxyFFIHelper {
   RaftstoreVer (*fn_get_cluster_raftstore_version)(RaftStoreProxyPtr,
                                                    uint8_t refresh_strategy,
                                                    int64_t timeout_ms);
+  void (*fn_notify_compact_log)(RaftStoreProxyPtr, uint64_t region_id,
+                                uint64_t compact_index, uint64_t compact_term,
+                                uint64_t applied_index);
 };
 
 struct PageStorageInterfaces {
@@ -281,8 +284,10 @@ struct EngineStoreServerHelper {
                                                   BaseBuffView, BaseBuffView,
                                                   RaftCmdHeader);
   uint8_t (*fn_need_flush_data)(EngineStoreServerWrap *, uint64_t);
-  uint8_t (*fn_try_flush_data)(EngineStoreServerWrap *, uint64_t, uint8_t,
-                               uint64_t, uint64_t);
+  uint8_t (*fn_try_flush_data)(EngineStoreServerWrap *, uint64_t region_id,
+                               uint8_t flush_pattern, uint64_t index,
+                               uint64_t term, uint64_t truncated_index,
+                               uint64_t truncated_term);
   void (*fn_atomic_update_proxy)(EngineStoreServerWrap *,
                                  RaftStoreProxyFFIHelper *);
   void (*fn_handle_destroy)(EngineStoreServerWrap *, uint64_t);

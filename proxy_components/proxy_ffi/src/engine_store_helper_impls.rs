@@ -158,6 +158,7 @@ impl EngineStoreServerHelper {
         term: u64,
     ) -> bool {
         debug_assert!(self.fn_try_flush_data.is_some());
+        // TODO(proactive flush)
         unsafe {
             (self.fn_try_flush_data.into_inner())(
                 self.inner,
@@ -170,6 +171,8 @@ impl EngineStoreServerHelper {
                 },
                 index,
                 term,
+                0,
+                0,
             ) != 0
         }
     }
