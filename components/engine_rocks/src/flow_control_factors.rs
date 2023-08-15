@@ -5,12 +5,6 @@ use engine_traits::{FlowControlFactorsExt, Result};
 use crate::{engine::RocksEngine, util};
 
 impl FlowControlFactorsExt for RocksEngine {
-    fn get_num_level(&self, cf: &str) -> Result<usize> {
-        let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        let cf_opts = self.as_inner().get_options_cf(handle);
-        Ok(cf_opts.get_num_levels())
-    }
-
     fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(crate::util::get_cf_num_files_at_level(
