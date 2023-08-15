@@ -376,7 +376,7 @@ pub trait Engine: Send + Clone + 'static {
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let f = write(self, ctx, batch, None);
-        let res = block_on_timeout(Box::pin(f), DEFAULT_TIMEOUT)
+        let res = block_on_timeout(f, DEFAULT_TIMEOUT)
             .map_err(|_| Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))?;
         if let Some(res) = res {
             return res;
@@ -387,7 +387,7 @@ pub trait Engine: Send + Clone + 'static {
     fn release_snapshot(&mut self) {}
 
     fn snapshot(&mut self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
-        block_on_timeout(Box::pin(self.async_snapshot(ctx)), DEFAULT_TIMEOUT)
+        block_on_timeout(self.async_snapshot(ctx), DEFAULT_TIMEOUT)
             .map_err(|_| Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))?
     }
 

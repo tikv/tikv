@@ -17,9 +17,7 @@ use engine_traits::{
     TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
-use futures::{
-    compat::Future01CompatExt, executor::block_on, future::BoxFuture, select, Future, FutureExt,
-};
+use futures::{executor::block_on, future::BoxFuture, Future};
 use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
@@ -65,7 +63,6 @@ use tikv_util::{
     safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
-    timer::GLOBAL_TIMER_HANDLE,
     warn,
     worker::LazyWorker,
     HandyRwLock,
@@ -110,7 +107,7 @@ pub trait Simulator<EK: KvEngine> {
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
         let f = self.async_read(node_id, request);
-        block_on_timeout(Box::pin(f), timeout)
+        block_on_timeout(f, timeout)
             .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
     }
 
@@ -215,8 +212,7 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        let mut fut = Box::pin(sub.result());
-        match block_on_timeout(fut.as_mut(), timeout)
+        match block_on_timeout(sub.result(), timeout)
             .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
         {
             Some(QueryResult::Read(_)) => unreachable!(),
@@ -281,7 +277,7 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        Ok(block_on_timeout(Box::pin(sub.result()), timeout)
+        Ok(block_on_timeout(sub.result(), timeout)
             .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
             .unwrap())
     }
