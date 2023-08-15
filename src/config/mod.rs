@@ -527,7 +527,7 @@ macro_rules! write_into_metrics {
             .set(($cf.enable_doubly_skiplist as i32).into());
         $metrics
             .with_label_values(&[$tag, "format_version"])
-            .set($cf.format_version.unwrap() as f64);
+            .set($cf.format_version.unwrap_or(2) as f64);
 
         // Titan specific metrics.
         $metrics
