@@ -397,6 +397,14 @@ macro_rules! cf_config {
                 if self.format_version.map_or(false, |v| v > 5) {
                     return Err("format-version larger than 5 is unsupported".into());
                 }
+                if self.ribbon_filter_above_level.is_some()
+                    && self.format_version.map_or(true, |v| v < 5)
+                {
+                    return Err(
+                        "ribbon-filter-above-level is only supported when format-version >= 5"
+                            .into(),
+                    );
+                }
                 self.titan.validate()?;
                 Ok(())
             }
@@ -517,6 +525,11 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "enable_doubly_skiplist"])
             .set(($cf.enable_doubly_skiplist as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "format_version"])
+            .set($cf.format_version.unwrap() as f64);
+
+        // Titan specific metrics.
         $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.0 as f64);
@@ -672,6 +685,8 @@ impl Default for DefaultCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
             ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
@@ -842,6 +857,8 @@ impl Default for WriteCfConfig {
             whole_key_filtering: false,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
             ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
@@ -970,6 +987,8 @@ impl Default for LockCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
             ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
@@ -1067,6 +1086,8 @@ impl Default for RaftCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
             ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
@@ -1330,10 +1351,6 @@ impl DbConfig {
                     .get_or_insert(ReadableDuration::minutes(10));
                 self.defaultcf.enable_compaction_guard.get_or_insert(true);
                 self.writecf.enable_compaction_guard.get_or_insert(true);
-                self.defaultcf.format_version.get_or_insert(2);
-                self.writecf.format_version.get_or_insert(2);
-                self.lockcf.format_version.get_or_insert(2);
-                self.raftcf.format_version.get_or_insert(2);
                 if self.lockcf.write_buffer_size.is_none() {
                     self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
                 }
@@ -1363,14 +1380,6 @@ impl DbConfig {
                 self.writecf.disable_write_stall = true;
                 self.lockcf.disable_write_stall = true;
                 self.raftcf.disable_write_stall = true;
-                self.defaultcf.format_version.get_or_insert(5);
-                self.writecf.format_version.get_or_insert(5);
-                self.lockcf.format_version.get_or_insert(5);
-                self.raftcf.format_version.get_or_insert(5);
-                // According to FB, Ribbon filter is more cost-efficient for SST with 1h+
-                // lifetime. We conservatively use it for L6.
-                self.defaultcf.ribbon_filter_above_level.get_or_insert(6);
-                self.writecf.ribbon_filter_above_level.get_or_insert(6);
                 // Initially only allow one compaction. Pace up when pending bytes is high. This
                 // strategy is consistent with single RocksDB.
                 self.defaultcf.max_compactions.get_or_insert(1);
@@ -1602,6 +1611,8 @@ impl Default for RaftDefaultCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
             ribbon_filter_above_level: None,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
@@ -5635,6 +5646,16 @@ mod tests {
         cfg.storage.engine = EngineType::RaftKv2;
         cfg.validate().unwrap();
         assert!(!cfg.raft_store.enable_v2_compatible_learner);
+
+        // Ribbon filter and format version.
+        let mut cfg = TikvConfig::default();
+        cfg.rocksdb.writecf.ribbon_filter_above_level = Some(6);
+        cfg.rocksdb.writecf.format_version = None;
+        cfg.validate().unwrap_err();
+        cfg.rocksdb.writecf.format_version = Some(3);
+        cfg.validate().unwrap_err();
+        cfg.rocksdb.writecf.format_version = Some(5);
+        cfg.validate().unwrap();
     }
 
     #[test]
