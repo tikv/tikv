@@ -8,6 +8,7 @@ use std::{
 use engine_traits::{KvEngine, RangeStats, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
+use raftstore::store::{need_compact, CompactThreshold};
 use slog::{debug, error, info, warn, Logger};
 use thiserror::Error;
 use tikv_util::{box_try, worker::Runnable};
@@ -26,22 +27,6 @@ pub struct CompactThreshold {
     tombstones_percent_threshold: u64,
     redundant_rows_threshold: u64,
     redundant_rows_percent_threshold: u64,
-}
-
-impl CompactThreshold {
-    pub fn new(
-        tombstones_num_threshold: u64,
-        tombstones_percent_threshold: u64,
-        redundant_rows_threshold: u64,
-        redundant_rows_percent_threshold: u64,
-    ) -> Self {
-        Self {
-            tombstones_num_threshold,
-            tombstones_percent_threshold,
-            redundant_rows_percent_threshold,
-            redundant_rows_threshold,
-        }
-    }
 }
 
 impl Display for Task {
@@ -149,23 +134,6 @@ where
             },
         }
     }
-}
-
-fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThreshold) -> bool {
-    if range_stats.num_entries < range_stats.num_versions {
-        return false;
-    }
-
-    // We trigger region compaction when their are to many tombstones as well as
-    // redundant keys, both of which can severly impact scan operation:
-    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
-    let redundant_keys = range_stats.num_entries - range_stats.num_rows;
-    (redundant_keys >= compact_threshold.redundant_rows_threshold
-        && redundant_keys * 100
-            >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries)
-        || (estimate_num_del >= compact_threshold.tombstones_num_threshold
-            && estimate_num_del * 100
-                >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries)
 }
 
 fn collect_regions_to_compact<E: KvEngine>(

@@ -6,7 +6,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, CF_WRITE};
+use engine_traits::{KvEngine, RangeStats, CF_WRITE};
 use fail::fail_point;
 use thiserror::Error;
 use tikv_util::{box_try, error, info, time::Instant, warn, worker::Runnable};
@@ -27,10 +27,32 @@ pub enum Task {
         cf_names: Vec<String>,
         // Ranges need to check
         ranges: Vec<Key>,
-        // The minimum RocksDB tombstones a range that need compacting has
+        // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
+        compact_threshold: CompactThreshold,
+    },
+}
+
+pub struct CompactThreshold {
+    pub tombstones_num_threshold: u64,
+    pub tombstones_percent_threshold: u64,
+    pub redundant_rows_threshold: u64,
+    pub redundant_rows_percent_threshold: u64,
+}
+
+impl CompactThreshold {
+    pub fn new(
         tombstones_num_threshold: u64,
         tombstones_percent_threshold: u64,
-    },
+        redundant_rows_threshold: u64,
+        redundant_rows_percent_threshold: u64,
+    ) -> Self {
+        Self {
+            tombstones_num_threshold,
+            tombstones_percent_threshold,
+            redundant_rows_percent_threshold,
+            redundant_rows_threshold,
+        }
+    }
 }
 
 impl Display for Task {
@@ -55,8 +77,7 @@ impl Display for Task {
             Task::CheckAndCompact {
                 ref cf_names,
                 ref ranges,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
+                ref compact_threshold,
             } => f
                 .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
@@ -67,10 +88,21 @@ impl Display for Task {
                         ranges.last().as_ref().map(|k| log_wrappers::Value::key(k)),
                     ),
                 )
-                .field("tombstones_num_threshold", &tombstones_num_threshold)
+                .field(
+                    "tombstones_num_threshold",
+                    &compact_threshold.tombstones_num_threshold,
+                )
                 .field(
                     "tombstones_percent_threshold",
-                    &tombstones_percent_threshold,
+                    &compact_threshold.tombstones_percent_threshold,
+                )
+                .field(
+                    "redundant_rows_threshold",
+                    &compact_threshold.redundant_rows_threshold,
+                )
+                .field(
+                    "redundant_rows_percent_threshold",
+                    &compact_threshold.redundant_rows_percent_threshold,
                 )
                 .finish(),
         }
@@ -145,14 +177,8 @@ where
             Task::CheckAndCompact {
                 cf_names,
                 ranges,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
-            } => match collect_ranges_need_compact(
-                &self.engine,
-                ranges,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
-            ) {
+                compact_threshold,
+            } => match collect_ranges_need_compact(&self.engine, ranges, compact_threshold) {
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
                         for cf in &cf_names {
@@ -175,28 +201,27 @@ where
     }
 }
 
-fn need_compact(
-    num_entires: u64,
-    num_versions: u64,
-    tombstones_num_threshold: u64,
-    tombstones_percent_threshold: u64,
-) -> bool {
-    if num_entires <= num_versions {
+pub fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThreshold) -> bool {
+    if range_stats.num_entries < range_stats.num_versions {
         return false;
     }
 
-    // When the number of tombstones exceed threshold and ratio, this range need
-    // compacting.
-    let estimate_num_del = num_entires - num_versions;
-    estimate_num_del >= tombstones_num_threshold
-        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
+    // We trigger region compaction when their are to many tombstones as well as
+    // redundant keys, both of which can severly impact scan operation:
+    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
+    let redundant_keys = range_stats.num_entries - range_stats.num_rows;
+    (redundant_keys >= compact_threshold.redundant_rows_threshold
+        && redundant_keys * 100
+            >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries)
+        || (estimate_num_del >= compact_threshold.tombstones_num_threshold
+            && estimate_num_del * 100
+                >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries)
 }
 
 fn collect_ranges_need_compact(
     engine: &impl KvEngine,
     ranges: Vec<Key>,
-    tombstones_num_threshold: u64,
-    tombstones_percent_threshold: u64,
+    compact_threshold: CompactThreshold,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     // Check the SST properties for each range, and TiKV will compact a range if the
     // range contains too many RocksDB tombstones. TiKV will merge multiple
@@ -209,12 +234,7 @@ fn collect_ranges_need_compact(
         // be compacted.
         if let Some(range_stats) = box_try!(engine.get_range_stats(CF_WRITE, &range[0], &range[1]))
         {
-            if need_compact(
-                range_stats.num_entries,
-                range_stats.num_versions,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
-            ) {
+            if need_compact(&range_stats, &compact_threshold) {
                 if compact_start.is_none() {
                     // The previous range doesn't need compacting.
                     compact_start = Some(range[0].clone());
