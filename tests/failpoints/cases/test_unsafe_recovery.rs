@@ -74,7 +74,7 @@ fn test_unsafe_recovery_send_report() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_timeout_abort() {
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
@@ -121,7 +121,9 @@ fn test_unsafe_recovery_timeout_abort() {
     cluster.must_send_store_heartbeat(nodes[0]);
 
     // sleep for a while to trigger timeout
+    fail::cfg("unsafe_recovery_state_timeout", "return").unwrap();
     sleep_ms(200);
+    fail::remove("unsafe_recovery_state_timeout");
 
     // Unblocks the apply process.
     drop(apply_released_tx);

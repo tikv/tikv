@@ -54,12 +54,12 @@ clean-stale-peer-delay = "0s"
 # Use a value of 3 seconds as max_leader_missing_duration just for test.
 # In production environment, the value of max_leader_missing_duration
 # should be configured far beyond the election timeout.
-max-leader-missing-duration = "20s"
+max-leader-missing-duration = "2s"
 # To make a valid config, use a value of 2 seconds as
 # abnormal_leader_missing_duration and set
 # peer_stale_state_check_interval to 1 second.
-abnormal-leader-missing-duration = "15000ms"
-peer-stale-state-check-interval = "10s"
+abnormal-leader-missing-duration = "1500ms"
+peer-stale-state-check-interval = "1s"
 report-region-flow-interval = "100ms"
 raft-store-max-leader-lease = "240ms"
 allow-remove-leader = true
