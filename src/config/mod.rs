@@ -399,6 +399,14 @@ macro_rules! cf_config {
                     // TODO: allow version 5 if we have another LTS capable of reading it?
                     return Err("format-version larger than 5 is unsupported".into());
                 }
+                if self.ribbon_filter_above_level.is_some()
+                    && self.format_version.map_or(true, |v| v < 5)
+                {
+                    return Err(
+                        "ribbon-filter-above-level is only supported when format-version >= 5"
+                            .into(),
+                    );
+                }
                 self.titan.validate()?;
                 Ok(())
             }
@@ -511,6 +519,11 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "enable_doubly_skiplist"])
             .set(($cf.enable_doubly_skiplist as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "format_version"])
+            .set($cf.format_version.unwrap_or(2) as f64);
+
+        // Titan specific metrics.
         $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.0 as f64);
@@ -653,6 +666,12 @@ impl Default for DefaultCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+<<<<<<< HEAD
+=======
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
+            ribbon_filter_above_level: None,
+>>>>>>> 4fb70fbee5 (config: disable rocksdb ribbon filter (#15331))
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -821,6 +840,12 @@ impl Default for WriteCfConfig {
             whole_key_filtering: false,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+<<<<<<< HEAD
+=======
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
+            ribbon_filter_above_level: None,
+>>>>>>> 4fb70fbee5 (config: disable rocksdb ribbon filter (#15331))
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -947,6 +972,12 @@ impl Default for LockCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+<<<<<<< HEAD
+=======
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
+            ribbon_filter_above_level: None,
+>>>>>>> 4fb70fbee5 (config: disable rocksdb ribbon filter (#15331))
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
             write_buffer_size: ReadableSize::mb(32),
@@ -1040,6 +1071,12 @@ impl Default for RaftCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+<<<<<<< HEAD
+=======
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
+            ribbon_filter_above_level: None,
+>>>>>>> 4fb70fbee5 (config: disable rocksdb ribbon filter (#15331))
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
             write_buffer_size: ReadableSize::mb(128),
@@ -1299,6 +1336,12 @@ impl DbConfig {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
                 self.defaultcf.enable_compaction_guard.get_or_insert(true);
                 self.writecf.enable_compaction_guard.get_or_insert(true);
+<<<<<<< HEAD
+=======
+                if self.lockcf.write_buffer_size.is_none() {
+                    self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
+                }
+>>>>>>> 4fb70fbee5 (config: disable rocksdb ribbon filter (#15331))
             }
             EngineType::RaftKv2 => {
                 self.enable_multi_batch_write.get_or_insert(false);
@@ -1319,6 +1362,16 @@ impl DbConfig {
                 self.writecf.disable_write_stall = true;
                 self.lockcf.disable_write_stall = true;
                 self.raftcf.disable_write_stall = true;
+<<<<<<< HEAD
+=======
+                // Initially only allow one compaction. Pace up when pending bytes is high. This
+                // strategy is consistent with single RocksDB.
+                self.defaultcf.max_compactions.get_or_insert(1);
+                self.writecf.max_compactions.get_or_insert(1);
+                if self.lockcf.write_buffer_size.is_none() {
+                    self.lockcf.write_buffer_size = Some(ReadableSize::mb(4));
+                }
+>>>>>>> 4fb70fbee5 (config: disable rocksdb ribbon filter (#15331))
             }
         }
     }
@@ -1551,6 +1604,12 @@ impl Default for RaftDefaultCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+<<<<<<< HEAD
+=======
+            // Ribbon filter causes memory surge during compaction,
+            // so disable it by default.
+            ribbon_filter_above_level: None,
+>>>>>>> 4fb70fbee5 (config: disable rocksdb ribbon filter (#15331))
             read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
@@ -5450,6 +5509,16 @@ mod tests {
         cfg.storage.engine = EngineType::RaftKv2;
         cfg.validate().unwrap();
         assert!(!cfg.raft_store.enable_v2_compatible_learner);
+
+        // Ribbon filter and format version.
+        let mut cfg = TikvConfig::default();
+        cfg.rocksdb.writecf.ribbon_filter_above_level = Some(6);
+        cfg.rocksdb.writecf.format_version = None;
+        cfg.validate().unwrap_err();
+        cfg.rocksdb.writecf.format_version = Some(3);
+        cfg.validate().unwrap_err();
+        cfg.rocksdb.writecf.format_version = Some(5);
+        cfg.validate().unwrap();
     }
 
     #[test]
