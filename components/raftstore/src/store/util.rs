@@ -423,11 +423,10 @@ pub fn check_peer_id(header: &RaftRequestHeader, peer_id: u64) -> Result<()> {
     if header.get_peer().get_id() == peer_id {
         Ok(())
     } else {
-        Err(box_err!(
-            "mismatch peer id {} != {}",
-            header.get_peer().get_id(),
-            peer_id
-        ))
+        Err(Error::MismatchPeerId {
+            request_peer_id: header.get_peer().get_id(),
+            store_peer_id: peer_id,
+        })
     }
 }
 
@@ -2416,5 +2415,24 @@ mod tests {
             rrp.core.lock().unwrap().get_local_leader_info().peers,
             *region.get_peers(),
         );
+    }
+
+    #[test]
+    fn test_peer_id_mismatch() {
+        use kvproto::errorpb::{Error, MismatchPeerId};
+        let mut header = RaftRequestHeader::default();
+        let mut peer = Peer::default();
+        peer.set_id(1);
+        header.set_peer(peer);
+        // match
+        check_peer_id(&header, 1).unwrap();
+        // mismatch
+        let err = check_peer_id(&header, 2).unwrap_err();
+        let region_err: Error = err.into();
+        assert!(region_err.has_mismatch_peer_id());
+        let mut mismatch_err = MismatchPeerId::default();
+        mismatch_err.set_request_peer_id(1);
+        mismatch_err.set_store_peer_id(2);
+        assert_eq!(region_err.get_mismatch_peer_id(), &mismatch_err)
     }
 }
