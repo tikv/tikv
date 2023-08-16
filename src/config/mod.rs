@@ -737,10 +737,6 @@ impl DefaultCfConfig {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
-        cf_opts.add_table_properties_collector_factory(
-            "tikv.rawkv-mvcc-properties-collector",
-            RawMvccPropertiesCollectorFactory::default(),
-        );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         if let Some(factory) = filter_factory {
             match api_version {
@@ -766,6 +762,10 @@ impl DefaultCfConfig {
                         .unwrap();
                 }
                 ApiVersion::V2 => {
+                    cf_opts.add_table_properties_collector_factory(
+                        "tikv.rawkv-mvcc-properties-collector",
+                        RawMvccPropertiesCollectorFactory::default(),
+                    );
                     let factory = StackingCompactionFilterFactory::new(
                         factory.clone(),
                         RawCompactionFilterFactory,
@@ -796,6 +796,10 @@ impl DefaultCfConfig {
                         .unwrap();
                 }
                 ApiVersion::V2 => {
+                    cf_opts.add_table_properties_collector_factory(
+                        "tikv.rawkv-mvcc-properties-collector",
+                        RawMvccPropertiesCollectorFactory::default(),
+                    );
                     cf_opts
                         .set_compaction_filter_factory(
                             "apiv2_gc_compaction_filter_factory",

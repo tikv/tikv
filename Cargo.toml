@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.1.0"
+version = "7.1.1"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -150,6 +150,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
+service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 smallvec = "1.4"
@@ -270,6 +271,7 @@ members = [
   "components/resource_metering",
   "components/security",
   "components/server",
+  "components/service",
   "components/snap_recovery",
   "components/sst_importer",
   "components/test_backup",
@@ -347,6 +349,7 @@ resource_control = { path = "components/resource_control" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
+service = { path = "components/service" }
 snap_recovery = { path = "components/snap_recovery" }
 sst_importer = { path = "components/sst_importer" }
 test_backup = { path = "components/test_backup" }
