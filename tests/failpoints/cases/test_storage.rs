@@ -1534,6 +1534,9 @@ fn test_before_async_write_deadline() {
 
 #[test]
 fn test_deadline_exceeded_on_get_and_batch_get() {
+    use tikv_util::time::Instant;
+    use tracker::INVALID_TRACKER_TOKEN;
+
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
@@ -1563,6 +1566,23 @@ fn test_deadline_exceeded_on_get_and_batch_get() {
     let f = storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a")], 1.into());
     assert!(matches!(
         block_on(f),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+
+    let consumer = GetConsumer::new();
+    let mut get_req = GetRequest::default();
+    get_req.set_key(b"a".to_vec());
+    get_req.set_version(1_u64);
+    block_on(storage.batch_get_command(
+        vec![get_req],
+        vec![1],
+        vec![INVALID_TRACKER_TOKEN; 1],
+        consumer.clone(),
+        Instant::now(),
+    )).unwrap();
+    let mut result = consumer.take_data();
+    assert!(matches!(
+        result[0],
         Err(StorageError(box StorageErrorInner::DeadlineExceeded))
     ));
     fail::remove("after-snapshot");
