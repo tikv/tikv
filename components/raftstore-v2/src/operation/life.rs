@@ -58,6 +58,7 @@ use crate::{
     operation::command::report_split_init_finish,
     raft::{Peer, Storage},
     router::{CmdResChannel, PeerMsg, PeerTick},
+    worker::tablet,
 };
 
 /// When a peer is about to destroy, it becomes `WaitReady` first. If there is
@@ -776,7 +777,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// are split. It's a waste to use snapshot to restore newly split
     /// tablet.
     #[inline]
-    pub fn postponed_destroy(&self) -> bool {
+    pub fn postponed_destroy<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) -> bool {
         let last_applying_index = self.compact_log_context().last_applying_index();
         let entry_storage = self.storage().entry_storage();
         // If it's marked as tombstone, then it must be changed by conf change. In
@@ -795,6 +796,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // Wait for critical commands like split.
         if self.has_pending_tombstone_tablets() {
+            // Sometimes tablets with smaller wait index can come in after
+            // `remove_tombstone_tablets` is fired. They will never be processed unless
+            // there are other Ready-s.
+            //
+            // FIXME: this is one nasty way to get the persisted flushed index. We rely on
+            // the fact that raft-engine always publish the data AFTER fsync.
+            let persisted = ctx
+                .engine
+                .get_flushed_index(self.region_id(), engine_traits::CF_RAFT)
+                .unwrap()
+                .unwrap();
+            if self.remove_tombstone_tablets(persisted) {
+                let _ = ctx
+                    .schedulers
+                    .tablet
+                    .schedule(tablet::Task::destroy(self.region_id(), persisted));
+            }
             info!(
                 self.logger,
                 "postpone destroy because there're pending tombstone tablets"
@@ -814,7 +832,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         write_task: &mut WriteTask<EK, ER>,
     ) {
-        if self.postponed_destroy() {
+        if self.postponed_destroy(ctx) {
             return;
         }
         // No need to wait for the apply anymore.

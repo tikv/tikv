@@ -717,7 +717,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !has_extra_write
             && !self.has_pending_messages()
             && !self.raft_group().has_ready()
-            && (self.serving() || self.postponed_destroy())
+            && (self.serving() || self.postponed_destroy(ctx))
         {
             self.maybe_schedule_gen_snapshot();
             #[cfg(feature = "testexport")]
