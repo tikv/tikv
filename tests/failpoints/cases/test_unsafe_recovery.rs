@@ -13,7 +13,6 @@ use tikv_util::{config::ReadableDuration, mpsc, store::find_peer};
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_send_report() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -154,7 +153,6 @@ fn test_unsafe_recovery_timeout_abort() {
 #[test]
 fn test_unsafe_recovery_execution_result_report() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     // Prolong force leader time.
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
@@ -277,7 +275,6 @@ fn test_unsafe_recovery_wait_for_snapshot_apply() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
     cluster.cfg.raft_store.merge_max_log_gap = 3;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -356,7 +353,6 @@ fn test_unsafe_recovery_wait_for_snapshot_apply() {
 fn test_unsafe_recovery_demotion_reentrancy() {
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);

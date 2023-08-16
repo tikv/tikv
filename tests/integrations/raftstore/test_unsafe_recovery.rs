@@ -30,7 +30,6 @@ macro_rules! confirm_quorum_is_lost {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_demote_failed_voters() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -87,7 +86,6 @@ fn test_unsafe_recovery_demote_failed_voters() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_demote_non_exist_voters() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -154,7 +152,6 @@ fn test_unsafe_recovery_demote_non_exist_voters() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_auto_promote_learner() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -229,7 +226,6 @@ fn test_unsafe_recovery_auto_promote_learner() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_already_in_joint_state() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -318,7 +314,6 @@ fn test_unsafe_recovery_already_in_joint_state() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_early_return_after_exit_joint_state() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -408,7 +403,6 @@ fn test_unsafe_recovery_early_return_after_exit_joint_state() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_create_region() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -454,7 +448,6 @@ fn test_unsafe_recovery_create_region() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_create_region_reentrancy() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -501,7 +494,6 @@ fn test_unsafe_recovery_create_region_reentrancy() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_create_destroy_reentrancy() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -612,7 +604,6 @@ macro_rules! must_get_error_recovery_in_progress {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_three_nodes() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -662,7 +653,6 @@ fn test_force_leader_three_nodes() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_five_nodes() {
     let mut cluster = new_node_cluster(0, 5);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -720,7 +710,6 @@ fn test_force_leader_for_learner() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -791,7 +780,6 @@ fn test_force_leader_for_learner() {
 #[test]
 fn test_force_leader_on_hibernated_leader() {
     let mut cluster = new_node_cluster(0, 5);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -839,7 +827,6 @@ fn test_force_leader_on_hibernated_leader() {
 #[test]
 fn test_force_leader_on_hibernated_follower() {
     let mut cluster = new_node_cluster(0, 5);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -894,7 +881,6 @@ fn test_force_leader_trigger_snapshot() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
     cluster.cfg.raft_store.merge_max_log_gap = 3;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -992,7 +978,6 @@ fn test_force_leader_with_uncommitted_conf_change() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1064,7 +1049,6 @@ fn test_force_leader_on_healthy_region() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(30);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1102,7 +1086,6 @@ fn test_force_leader_on_healthy_region() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_on_wrong_leader() {
     let mut cluster = new_cluster(0, 5);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1152,7 +1135,6 @@ fn test_force_leader_on_wrong_leader() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_twice_on_different_peers() {
     let mut cluster = new_cluster(0, 5);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1220,7 +1202,6 @@ fn test_force_leader_twice_on_different_peers() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_twice_on_same_peer() {
     let mut cluster = new_cluster(0, 5);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1270,7 +1251,6 @@ fn test_force_leader_multiple_election_rounds() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(30);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1338,7 +1318,6 @@ fn test_force_leader_multiple_election_rounds() {
 fn test_unsafe_recovery_has_commit_merge() {
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
 
     cluster.run();
 
@@ -1398,7 +1377,6 @@ fn test_unsafe_recovery_has_commit_merge() {
 fn test_unsafe_recovery_during_merge() {
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
 
     cluster.run();
 
