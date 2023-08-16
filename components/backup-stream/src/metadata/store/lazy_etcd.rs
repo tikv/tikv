@@ -25,7 +25,7 @@ use super::{
 };
 use crate::errors::{ContextualResultExt, Result};
 
-const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct LazyEtcdClient(Arc<AsyncMutex<LazyEtcdClientInner>>);

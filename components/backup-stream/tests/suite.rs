@@ -31,10 +31,14 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
-use raftstore::router::CdcRaftRouter;
+use raftstore::{
+    router::{CdcRaftRouter, ServerRaftStoreRouter},
+    RegionInfoAccessor,
+};
 use resolved_ts::LeadershipResolver;
 use tempdir::TempDir;
-use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
+use test_pd_client::TestPdClient;
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateTransport};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
@@ -48,6 +52,18 @@ use tikv_util::{
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
+
+pub type TestEndpoint = Endpoint<
+    ErrorStore<SlashEtcStore>,
+    RegionInfoAccessor,
+    engine_test::kv::KvTestEngine,
+    CdcRaftRouter<
+        SimulateTransport<
+            ServerRaftStoreRouter<engine_test::kv::KvTestEngine, engine_test::raft::RaftTestEngine>,
+        >,
+    >,
+    TestPdClient,
+>;
 
 pub fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
     mutation_op(k, v, Op::Put)
@@ -391,7 +407,7 @@ impl Suite {
         ))
         .unwrap();
         let name = name.to_owned();
-        self.wait_with(move |r| block_on(r.get_task_info(&name)).is_ok())
+        self.wait_with_router(move |r| block_on(r.get_task_info(&name)).is_ok())
     }
 
     /// This function tries to calculate the global checkpoint from the flush
@@ -762,19 +778,25 @@ impl Suite {
     }
 
     pub fn sync(&self) {
-        self.wait_with(|_| true)
+        self.wait_with_router(|_| true)
     }
 
-    pub fn wait_with(&self, cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
+    pub fn wait_with(&self, cond: impl FnMut(&mut TestEndpoint) -> bool + Send + 'static + Clone) {
         self.endpoints
             .iter()
             .map({
                 move |(_, wkr)| {
                     let (tx, rx) = std::sync::mpsc::channel();
+                    let mut cond = cond.clone();
                     wkr.scheduler()
                         .schedule(Task::Sync(
                             Box::new(move || tx.send(()).unwrap()),
-                            Box::new(cond.clone()),
+                            Box::new(move |this| {
+                                let ep = this
+                                    .downcast_mut::<TestEndpoint>()
+                                    .expect("`Sync` with wrong type");
+                                cond(ep)
+                            }),
                         ))
                         .unwrap();
                     rx
@@ -783,32 +805,21 @@ impl Suite {
             .for_each(|rx| rx.recv().unwrap())
     }
 
+    pub fn wait_with_router(&self, mut cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
+        self.wait_with(move |ep| cond(&ep.range_router))
+    }
+
     pub fn wait_for_flush(&self) {
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.run(|| {
-            let tx = tx.clone();
-            Task::Sync(
-                Box::new(move || {
-                    tx.send(()).unwrap();
-                }),
-                Box::new(move |r| {
-                    let task_names = block_on(r.select_task(TaskSelector::All.reference()));
-                    for task_name in task_names {
-                        let tsk = block_on(r.get_task_info(&task_name));
-                        if tsk.unwrap().is_flushing() {
-                            return false;
-                        }
-                    }
-                    true
-                }),
-            )
-        });
-        for _ in self.endpoints.iter() {
-            // Receive messages from each store.
-            if rx.recv_timeout(Duration::from_secs(30)).is_err() {
-                panic!("the temp isn't empty after the deadline");
+        self.wait_with_router(move |r| {
+            let task_names = block_on(r.select_task(TaskSelector::All.reference()));
+            for task_name in task_names {
+                let tsk = block_on(r.get_task_info(&task_name));
+                if tsk.unwrap().is_flushing() {
+                    return false;
+                }
             }
-        }
+            true
+        });
     }
 
     pub fn must_shuffle_leader(&mut self, region_id: u64) {
