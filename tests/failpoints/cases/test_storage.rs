@@ -1573,6 +1573,7 @@ fn test_deadline_exceeded_on_get_and_batch_get() {
     let mut get_req = GetRequest::default();
     get_req.set_key(b"a".to_vec());
     get_req.set_version(1_u64);
+    get_req.set_context(ctx.clone());
     block_on(storage.batch_get_command(
         vec![get_req],
         vec![1],
@@ -1580,7 +1581,8 @@ fn test_deadline_exceeded_on_get_and_batch_get() {
         consumer.clone(),
         Instant::now(),
     )).unwrap();
-    let mut result = consumer.take_data();
+    let result = consumer.take_data();
+    assert_eq!(1,result.len());
     assert!(matches!(
         result[0],
         Err(StorageError(box StorageErrorInner::DeadlineExceeded))

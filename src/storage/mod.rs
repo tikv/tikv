@@ -900,6 +900,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         consumer.consume(id, Err(Error::from(e)), begin_instant, source);
                         continue;
                     }
+
                     set_tls_tracker_token(tracker);
                     match snap_res {
                         Ok(snapshot) => Self::with_perf_context(CMD, || {
