@@ -350,8 +350,8 @@ impl FileDictionaryFile {
             warn!(
                 "file corrupted! record content size is too small, discarded the tail record";
                 "content size" => remained.len(),
-                "expected name length" => name_len,
-                "expected content length" =>info_len,
+                "expected_name_length" => name_len,
+                "expected_content_length" =>info_len,
             );
             return Err(Error::TailRecordParseIncomplete);
         }
@@ -366,8 +366,8 @@ impl FileDictionaryFile {
                 // Only when this record is the last one can the panic be skipped.
                 warn!(
                     "file corrupted! crc32 mismatch, discarded the tail record";
-                    "expected crc32" => crc32,
-                    "checksum crc32" => crc32_checksum,
+                    "expected_crc32" => crc32,
+                    "checksum_crc32" => crc32_checksum,
                 );
                 return Err(Error::TailRecordParseIncomplete);
             } else {

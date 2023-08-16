@@ -4677,8 +4677,8 @@ where
                 }
                 warn!(
                     "read rejected by safe timestamp";
-                    "safe ts" => safe_ts,
-                    "read ts" => read_ts,
+                    "safe_ts" => safe_ts,
+                    "read_ts" => read_ts,
                     "tag" => &self.tag,
                 );
                 let mut response = cmd_resp::new_error(Error::DataIsNotReady {

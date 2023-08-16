@@ -552,7 +552,7 @@ impl SstImporter {
         if self.mem_limit.load(Ordering::SeqCst) != memory_limit {
             self.mem_limit.store(memory_limit, Ordering::SeqCst);
             info!("update importer config";
-                "memory-use-ratio" => mem_ratio,
+                "memory_use_ratio" => mem_ratio,
                 "size" => memory_limit,
             )
         }
