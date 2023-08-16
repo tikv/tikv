@@ -175,17 +175,28 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
             return SstPartitionerResult::NotRequired;
         }
         self.pos = seek_to(&self.boundaries, req.prev_user_key, self.pos);
-        let old_next_level_pos = self.next_level_pos;
-        self.next_level_pos = seek_to(
+        // Generally this shall be a noop... because each time we are moving the cursor
+        // to the previous key.
+        let left_next_level_pos = seek_to(
             &self.next_level_boundaries,
             req.prev_user_key,
             self.next_level_pos,
         );
-        let size_diff = self.next_level_size[old_next_level_pos..self.next_level_pos]
-            .iter()
-            .map(|x| *x as u64)
-            .sum::<u64>();
-        self.current_next_level_size += size_diff;
+        let right_next_level_pos = seek_to(
+            &self.next_level_boundaries,
+            req.current_user_key,
+            left_next_level_pos,
+        );
+        // The cursor has been moved.
+        if right_next_level_pos > left_next_level_pos {
+            self.current_next_level_size += self.next_level_size
+                [left_next_level_pos..right_next_level_pos - 1]
+                .iter()
+                .map(|x| *x as u64)
+                .sum::<u64>();
+        }
+        self.next_level_pos = right_next_level_pos;
+
         if self.pos < self.boundaries.len()
             && self.boundaries[self.pos].as_slice() <= req.current_user_key
         {
@@ -264,6 +275,13 @@ mod tests {
     use super::*;
     use crate::coprocessor::region_info_accessor::MockRegionInfoProvider;
 
+    impl<G: RegionInfoProvider> CompactionGuardGenerator<G> {
+        fn reset_next_level_size_state(&mut self) {
+            self.current_next_level_size = 0;
+            self.next_level_pos = 0;
+        }
+    }
+
     #[test]
     fn test_compaction_guard_non_data() {
         let mut guard = CompactionGuardGenerator {
@@ -337,7 +355,7 @@ mod tests {
                         .map(|x| format!("cccz{:03}", x).into_bytes()),
                 )
                 .collect(),
-            next_level_size: vec![1024; 199],
+            next_level_size: [&[1 << 18; 99][..], &[1 << 28; 10][..]].concat(),
             max_compaction_size: 1 << 30, // 1GB
         };
         // Crossing region boundary.
@@ -347,7 +365,11 @@ mod tests {
             current_output_file_size: 32 << 20,
         };
         assert_eq!(guard.should_partition(&req), SstPartitionerResult::Required);
+        assert_eq!(guard.next_level_pos, 10);
         assert_eq!(guard.pos, 0);
+        assert_eq!(guard.current_next_level_size, 0);
+        guard.reset_next_level_size_state();
+
         // Output file size too small.
         req = SstPartitionerRequest {
             prev_user_key: b"bba",
@@ -359,6 +381,10 @@ mod tests {
             SstPartitionerResult::NotRequired
         );
         assert_eq!(guard.pos, 0);
+        assert_eq!(guard.next_level_pos, 10);
+        assert_eq!(guard.current_next_level_size, 9 << 18);
+        guard.reset_next_level_size_state();
+
         // Not crossing boundary.
         req = SstPartitionerRequest {
             prev_user_key: b"aaa",
@@ -370,6 +396,9 @@ mod tests {
             SstPartitionerResult::NotRequired
         );
         assert_eq!(guard.pos, 0);
+        assert_eq!(guard.next_level_pos, 0);
+        guard.reset_next_level_size_state();
+
         // Move position
         req = SstPartitionerRequest {
             prev_user_key: b"cca",
@@ -378,6 +407,30 @@ mod tests {
         };
         assert_eq!(guard.should_partition(&req), SstPartitionerResult::Required);
         assert_eq!(guard.pos, 1);
+        assert_eq!(guard.next_level_pos, 110);
+        guard.reset_next_level_size_state();
+
+        // Move next level posistion
+        req = SstPartitionerRequest {
+            prev_user_key: b"cccz000",
+            current_user_key: b"cccz042",
+            current_output_file_size: 1 << 20,
+        };
+        assert_eq!(
+            guard.should_partition(&req),
+            SstPartitionerResult::NotRequired
+        );
+        assert_eq!(guard.pos, 2);
+        assert_eq!(guard.next_level_pos, 53);
+
+        req = SstPartitionerRequest {
+            prev_user_key: b"cccz090",
+            current_user_key: b"dde",
+            current_output_file_size: 1 << 20,
+        };
+        assert_eq!(guard.should_partition(&req), SstPartitionerResult::Required);
+        assert_eq!(guard.pos, 2);
+        assert_eq!(guard.next_level_pos, 110);
     }
 
     #[test]
