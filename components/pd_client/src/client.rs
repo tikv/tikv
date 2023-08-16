@@ -44,6 +44,7 @@ use super::{
 
 pub const CQ_COUNT: usize = 1;
 pub const CLIENT_PREFIX: &str = "pd";
+const DEFAULT_REGION_PER_BATCH: i32 = 128;
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -284,6 +285,8 @@ impl fmt::Debug for RpcClient {
 }
 
 const LEADER_CHANGE_RETRY: usize = 10;
+// periodic request like store_heartbeat, we don't need to retry.
+const NO_RETRY: usize = 1;
 
 impl PdClient for RpcClient {
     fn load_global_config(&self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {
@@ -328,6 +331,55 @@ impl PdClient for RpcClient {
         sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, _| {
             client.watch_global_config(&req)
         })
+    }
+
+    fn scan_regions(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["scan_regions"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::ScanRegionsRequest::default();
+        req.set_header(self.header());
+        req.set_start_key(start_key.to_vec());
+        req.set_end_key(end_key.to_vec());
+        req.set_limit(limit);
+
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.scan_regions_opt(&req, option)
+        })?;
+        check_resp_header(resp.get_header())?;
+        Ok(resp.take_regions().into())
+    }
+
+    fn batch_load_regions(
+        &self,
+        mut start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> Vec<Vec<pdpb::Region>> {
+        let mut res = Vec::new();
+
+        loop {
+            let regions = self
+                .scan_regions(&start_key, &end_key, DEFAULT_REGION_PER_BATCH)
+                .unwrap();
+            if regions.is_empty() {
+                break;
+            }
+            res.push(regions.clone());
+
+            let end_region = regions.last().unwrap().get_region();
+            if end_region.get_end_key().is_empty() {
+                break;
+            }
+            start_key = end_region.get_end_key().to_vec();
+        }
+
+        res
     }
 
     fn get_cluster_id(&self) -> Result<u64> {
@@ -782,10 +834,14 @@ impl PdClient for RpcClient {
                     })
             };
             Box::pin(async move {
-                let resp = handler.await?;
-                PD_REQUEST_HISTOGRAM_VEC
-                    .with_label_values(&["store_heartbeat"])
-                    .observe(duration_to_sec(timer.saturating_elapsed()));
+                let resp = handler
+                    .map(|res| {
+                        PD_REQUEST_HISTOGRAM_VEC
+                            .with_label_values(&["store_heartbeat"])
+                            .observe(timer.saturating_elapsed_secs());
+                        res
+                    })
+                    .await?;
                 check_resp_header(resp.get_header())?;
                 match feature_gate.set_version(resp.get_cluster_version()) {
                     Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
@@ -796,9 +852,7 @@ impl PdClient for RpcClient {
             }) as PdFuture<_>
         };
 
-        self.pd_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
-            .execute()
+        self.pd_client.request(req, executor, NO_RETRY).execute()
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {

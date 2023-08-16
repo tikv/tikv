@@ -2827,7 +2827,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#3dc79e77313957c720403f98daab699d82bd6246"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#73d6d7f3756b292a56e61469e091591853981aed"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5314,6 +5314,7 @@ dependencies = [
  "engine_rocks_helper",
  "engine_traits",
  "error_code",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -5336,6 +5337,7 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "service",
  "signal-hook",
  "slog",
  "slog-global",
@@ -5348,6 +5350,15 @@ dependencies = [
  "toml",
  "txn_types",
  "yatp",
+]
+
+[[package]]
+name = "service"
+version = "0.0.1"
+dependencies = [
+ "atomic",
+ "crossbeam",
+ "tikv_util",
 ]
 
 [[package]]
@@ -5499,10 +5510,14 @@ dependencies = [
  "engine_traits",
  "futures 0.3.15",
  "grpcio",
+ "itertools",
  "keys",
  "kvproto",
+ "lazy_static",
  "log",
  "pd_client",
+ "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "raft_log_engine",
  "raftstore",
@@ -5514,6 +5529,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "toml",
  "txn_types",
 ]
@@ -5759,8 +5775,7 @@ checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
 [[package]]
 name = "sysinfo"
 version = "0.16.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c280c91abd1aed2e36be1bc8f56fbc7a2acbb2b58fbcac9641510179cc72dd9"
+source = "git+https://github.com/tikv/sysinfo?branch=0.16.4-fix-cpu#ec11955eef37a2370ff00c7c7304241ad85f2635"
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
@@ -6106,6 +6121,8 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "server",
+ "service",
  "slog",
  "slog-global",
  "sst_importer",
@@ -6334,7 +6351,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.2"
+version = "6.5.3"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6425,6 +6442,7 @@ dependencies = [
  "serde_derive",
  "serde_ignored",
  "serde_json",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -6463,6 +6481,7 @@ dependencies = [
 name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "cc",
  "cdc",
@@ -6553,6 +6572,7 @@ dependencies = [
  "serde_json",
  "server",
  "tikv",
+ "tikv_util",
  "time",
  "toml",
 ]

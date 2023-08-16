@@ -8,12 +8,14 @@ use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
+const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
 pub struct Resolver {
     region_id: u64,
     // key -> start_ts
-    locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
+    pub(crate) locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
@@ -72,6 +74,14 @@ impl Resolver {
 
     pub fn resolved_ts(&self) -> TimeStamp {
         self.resolved_ts
+    }
+
+    pub fn tracked_index(&self) -> u64 {
+        self.tracked_index
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stopped
     }
 
     pub fn size(&self) -> usize {
@@ -189,6 +199,35 @@ impl Resolver {
         self.min_ts = cmp::max(self.min_ts, new_min_ts);
 
         self.resolved_ts
+    }
+
+    pub(crate) fn log_locks(&self, min_start_ts: u64) {
+        // log lock with the minimum start_ts >= min_start_ts
+        if let Some((start_ts, keys)) = self
+            .lock_ts_heap
+            .range(TimeStamp::new(min_start_ts)..)
+            .next()
+        {
+            let keys_for_log = keys
+                .iter()
+                .map(|key| log_wrappers::Value::key(key))
+                .take(MAX_NUMBER_OF_LOCKS_IN_LOG)
+                .collect::<Vec<_>>();
+            info!(
+                "locks with the minimum start_ts in resolver";
+                "region_id" => self.region_id,
+                "start_ts" => start_ts,
+                "sampled keys" => ?keys_for_log,
+            );
+        }
+    }
+
+    pub(crate) fn num_locks(&self) -> u64 {
+        self.locks_by_key.len() as u64
+    }
+
+    pub(crate) fn num_transactions(&self) -> u64 {
+        self.lock_ts_heap.len() as u64
     }
 }
 

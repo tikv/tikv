@@ -5,9 +5,10 @@ use std::ops::Bound;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
-    errorpb::{self, EpochNotMatch, StaleCommand},
+    errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
 };
+use raftstore::store::LocksStatus;
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
@@ -146,6 +147,8 @@ pub struct MvccReader<S: EngineSnapshot> {
     term: u64,
     #[allow(dead_code)]
     version: u64,
+
+    allow_in_flashback: bool,
 }
 
 impl<S: EngineSnapshot> MvccReader<S> {
@@ -164,6 +167,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             fill_cache,
             term: 0,
             version: 0,
+            allow_in_flashback: false,
         }
     }
 
@@ -182,6 +186,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             fill_cache: !ctx.get_not_fill_cache(),
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
+            allow_in_flashback: false,
         }
     }
 
@@ -265,6 +270,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     let mut err = errorpb::Error::default();
                     // We don't know the current regions. Just return an empty EpochNotMatch error.
                     err.set_epoch_not_match(EpochNotMatch::default());
+                    return Some(Err(KvError::from(err).into()));
+                }
+                // If the region is in the flashback state, it should not be allowed to read the
+                // locks.
+                if locks.status == LocksStatus::IsInFlashback && !self.allow_in_flashback {
+                    let mut err = errorpb::Error::default();
+                    err.set_flashback_in_progress(FlashbackInProgress::default());
                     return Some(Err(KvError::from(err).into()));
                 }
 
@@ -579,7 +591,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok((locks, has_remain))
     }
 
-    /// Scan the writes to get all the latest user keys. The return type is:
+    /// Scan the writes to get all the latest user keys. This scan will skip
+    /// `WriteType::Lock` and `WriteType::Rollback`, only return the key that
+    /// has a latest `WriteType::Put` or `WriteType::Delete` record. The return
+    /// type is:
     /// * `(Vec<key>, has_remain)`.
     ///   - `key` is the encoded user key without `commit_ts`.
     ///   - `has_remain` indicates whether there MAY be remaining user keys that
@@ -621,6 +636,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
             let commit_ts = key.decode_ts()?;
             let user_key = key.truncate_ts()?;
+            // Skip the key if its latest write type is not `WriteType::Put` or
+            // `WriteType::Delete`.
+            match WriteRef::parse(cursor.value(&mut self.statistics.write))?.write_type {
+                WriteType::Put | WriteType::Delete => {}
+                WriteType::Lock | WriteType::Rollback => {
+                    cursor.next(&mut self.statistics.write);
+                    continue;
+                }
+            }
             // To make sure we only check each unique user key once and the filter returns
             // true.
             let is_same_user_key = cur_user_key.as_ref() == Some(&user_key);
@@ -763,6 +787,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
     pub fn snapshot(&self) -> &S {
         &self.snapshot
+    }
+
+    pub fn set_allow_in_flashback(&mut self, set_allow_in_flashback: bool) {
+        self.allow_in_flashback = set_allow_in_flashback;
     }
 }
 
@@ -1833,13 +1861,27 @@ pub mod tests {
             8,
         );
         engine.commit(b"k3", 8, 9);
-        // Prewrite and rollback k4.
+        // Prewrite and commit k4.
         engine.prewrite(
             Mutation::make_put(Key::from_raw(b"k4"), b"v4@1".to_vec()),
             b"k4",
             10,
         );
-        engine.rollback(b"k4", 10);
+        engine.commit(b"k4", 10, 11);
+        // Prewrite and rollback k4.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k4"), b"v4@2".to_vec()),
+            b"k4",
+            12,
+        );
+        engine.rollback(b"k4", 12);
+        // Prewrite and rollback k5.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k5"), b"v5@1".to_vec()),
+            b"k5",
+            13,
+        );
+        engine.rollback(b"k5", 13);
 
         // Current MVCC keys in `CF_WRITE` should be:
         // PUT      k0 -> v0@999
@@ -1851,7 +1893,9 @@ pub mod tests {
         // PUT      k3 -> v3@8
         // ROLLBACK k3 -> v3@7
         // PUT      k3 -> v3@5
-        // ROLLBACK k4 -> v4@1
+        // ROLLBACK k4 -> v4@2
+        // PUT      k4 -> v4@1
+        // ROLLBACK k5 -> v5@1
 
         struct Case {
             start_key: Option<Key>,

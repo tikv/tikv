@@ -95,6 +95,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut reader =
             MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &self.ctx);
+        reader.set_allow_in_flashback(true);
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
         match self.state {
             FlashbackToVersionState::RollbackLock {

@@ -45,6 +45,7 @@ test-engines-panic = [
 nortcheck = ["engine_rocks/nortcheck"]
 
 [dependencies]
+api_version = { workspace = true }
 backup = { workspace = true }
 cdc = { workspace = true }
 chrono = "0.4"
