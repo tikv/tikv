@@ -5772,12 +5772,6 @@ mod tests {
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
         cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
-        //
-        cfg.rocksdb.defaultcf.ribbon_filter_above_level = None;
-        cfg.rocksdb.writecf.ribbon_filter_above_level = None;
-        cfg.rocksdb.lockcf.ribbon_filter_above_level = None;
-        cfg.rocksdb.raftcf.ribbon_filter_above_level = None;
-        cfg.raftdb.defaultcf.ribbon_filter_above_level = None;
         // ColumnFamily::ttl
         cfg.rocksdb.defaultcf.ttl = None;
         cfg.rocksdb.writecf.ttl = None;
