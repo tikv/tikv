@@ -72,6 +72,84 @@ fn test_unsafe_recovery_send_report() {
 }
 
 #[test]
+fn test_unsafe_recovery_timeout_abort() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::millis(150);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(100);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+    // Makes the leadership definite.
+    let store2_peer = find_peer(&region, nodes[1]).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), store2_peer);
+    cluster.put(b"random_key1", b"random_val1").unwrap();
+
+    // Blocks the raft apply process on store 1 entirely.
+    let (apply_triggered_tx, apply_triggered_rx) = mpsc::bounded::<()>(1);
+    let (apply_released_tx, apply_released_rx) = mpsc::bounded::<()>(1);
+    fail::cfg_callback("on_handle_apply_store_1", move || {
+        let _ = apply_triggered_tx.send(());
+        let _ = apply_released_rx.recv();
+    })
+    .unwrap();
+
+    // Manually makes an update, and wait for the apply to be triggered, to
+    // simulate "some entries are committed but not applied" scenario.
+    cluster.put(b"random_key2", b"random_val2").unwrap();
+    apply_triggered_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+
+    // Makes the group lose its quorum.
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
+
+    // Triggers the unsafe recovery store reporting process.
+    let plan = pdpb::RecoveryPlan::default();
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    // sleep for a while to trigger timeout
+    fail::cfg("unsafe_recovery_state_timeout", "return").unwrap();
+    sleep_ms(200);
+    fail::remove("unsafe_recovery_state_timeout");
+
+    // Unblocks the apply process.
+    drop(apply_released_tx);
+
+    // No store report is sent, cause the plan is aborted.
+    for _ in 0..20 {
+        assert_eq!(pd_client.must_get_store_report(nodes[0]), None);
+        sleep_ms(100);
+    }
+
+    // resend the plan
+    let plan = pdpb::RecoveryPlan::default();
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    // Store reports are sent once the entries are applied.
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_ne!(store_report, None);
+    fail::remove("on_handle_apply_store_1");
+}
+
+#[test]
 fn test_unsafe_recovery_execution_result_report() {
     let mut cluster = new_server_cluster(0, 3);
     // Prolong force leader time.
