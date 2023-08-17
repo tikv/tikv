@@ -217,7 +217,7 @@ impl Resolver {
                 "locks with the minimum start_ts in resolver";
                 "region_id" => self.region_id,
                 "start_ts" => start_ts,
-                "sampled keys" => ?keys_for_log,
+                "sampled_keys" => ?keys_for_log,
             );
         }
     }

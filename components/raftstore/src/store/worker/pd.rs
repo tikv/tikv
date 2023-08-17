@@ -1677,7 +1677,7 @@ where
                     let mut switches = resp.take_switch_witnesses();
                     info!("try to switch witness";
                           "region_id" => region_id,
-                          "switch witness" => ?switches
+                          "switch_witness" => ?switches
                     );
                     let req = new_batch_switch_witness(switches.take_switch_witnesses().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());

@@ -2416,8 +2416,8 @@ where
             self.send_extra_message(msg, &mut ctx.trans, &leader);
             info!(
                 "notify leader the peer is available";
-                "region id" => self.region().get_id(),
-                "peer id" => self.peer.id
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer.id
             );
         }
     }

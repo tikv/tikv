@@ -349,7 +349,7 @@ impl FileDictionaryFile {
         if remained.len() < name_len + info_len {
             warn!(
                 "file corrupted! record content size is too small, discarded the tail record";
-                "content size" => remained.len(),
+                "content_size" => remained.len(),
                 "expected_name_length" => name_len,
                 "expected_content_length" =>info_len,
             );
