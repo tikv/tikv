@@ -411,6 +411,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &StoreContext<EK, ER, T>,
         task: &mut WriteTask<EK, ER>,
     ) {
+        let applied_index = self.entry_storage().applied_index();
+        self.remove_tombstone_tablets(applied_index);
         assert!(
             !self.has_pending_tombstone_tablets(),
             "{} all tombstone should be cleared before being destroyed.",
@@ -421,7 +423,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None => return,
         };
         let region_id = self.region_id();
-        let applied_index = self.entry_storage().applied_index();
         let sched = ctx.schedulers.tablet.clone();
         let _ = sched.schedule(tablet::Task::prepare_destroy(
             tablet,

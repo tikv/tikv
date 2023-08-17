@@ -717,7 +717,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !has_extra_write
             && !self.has_pending_messages()
             && !self.raft_group().has_ready()
-            && (self.serving() || self.postponed_destroy(ctx))
+            && (self.serving() || self.postponed_destroy())
         {
             self.maybe_schedule_gen_snapshot();
             #[cfg(feature = "testexport")]
@@ -903,6 +903,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.maybe_force_forward_commit_index();
         }
 
+        // Sometimes tablets with smaller wait index can come in after
+        // `remove_tombstone_tablets` is fired. They will never be processed unless
+        // there are other Ready-s.
+        if self.remove_tombstone_tablets(persisted_index) {
+            let _ = ctx
+                .schedulers
+                .tablet
+                .schedule(tablet::Task::destroy(self.region_id(), persisted_index));
+            if !self.serving() {
+                self.set_has_ready();
+            }
+        }
         if !self.destroy_progress().started() {
             // We may need to check if there is persisted committed logs.
             self.set_has_ready();
