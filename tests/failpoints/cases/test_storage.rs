@@ -1580,9 +1580,10 @@ fn test_deadline_exceeded_on_get_and_batch_get() {
         vec![INVALID_TRACKER_TOKEN; 1],
         consumer.clone(),
         Instant::now(),
-    )).unwrap();
+    ))
+    .unwrap();
     let result = consumer.take_data();
-    assert_eq!(1,result.len());
+    assert_eq!(1, result.len());
     assert!(matches!(
         result[0],
         Err(StorageError(box StorageErrorInner::DeadlineExceeded))
