@@ -22,8 +22,8 @@ impl MemoryTraceManager {
                 let sub_trace = provider.sub_trace(id);
                 let sub_trace_name = sub_trace.name();
                 if sub_trace_name == raft_router || sub_trace_name == apply_router {
-                    let alive = provider.sub_trace(Id::Name("alive"));
-                    let leak = provider.sub_trace(Id::Name("leak"));
+                    let alive = sub_trace.sub_trace(Id::Name("alive"));
+                    let leak = sub_trace.sub_trace(Id::Name("leak"));
                     MEM_TRACE_SUM_GAUGE
                         .with_label_values(&[&format!(
                             "{}-{}-alive",
