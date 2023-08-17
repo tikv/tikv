@@ -231,21 +231,19 @@ mod all {
             .schedule(Task::UpdateGlobalCheckpoint("greenwoods".to_owned()))
             .unwrap();
         let start = Instant::now();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        sched
-            .schedule(Task::Sync(
-                Box::new(move || {
-                    tx.send(Instant::now()).unwrap();
-                }),
-                Box::new(|_| true),
-            ))
-            .unwrap();
-        let end = run_async_test(rx).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        suite.wait_with(move |ep| {
+            tx.send((Instant::now(), ep.abort_last_storage_save.is_some()))
+                .unwrap();
+            true
+        });
+        let (end, has_abort) = rx.recv().unwrap();
         assert!(
-            end - start < Duration::from_secs(10),
+            end - start < Duration::from_secs(2),
             "take = {:?}",
             end - start
         );
+        assert!(has_abort);
     }
 
     /// This test case tests whether we correctly handle the pessimistic locks.
