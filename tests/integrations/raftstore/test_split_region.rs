@@ -1487,10 +1487,7 @@ fn test_node_split_during_read_index() {
     cluster.clear_recv_filter_on_node(2);
     cluster.clear_recv_filter_on_node(3);
 
-    match block_on_timeout(
-        Box::pin(async { sub.result().await }),
-        Duration::from_secs(5),
-    ) {
+    match block_on_timeout(sub.result(), Duration::from_secs(5)) {
         Ok(Some(QueryResult::Response(resp))) if resp.get_header().has_error() => {}
         other => {
             panic!("{:?}", other);

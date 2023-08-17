@@ -512,9 +512,10 @@ mod tests {
     use futures::{executor::block_on, SinkExt};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
+    use tikv_util::future::block_on_timeout;
 
     use super::*;
-    use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
+    use crate::channel::{recv_timeout, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = MemoryQuota::new(capacity);
@@ -565,7 +566,7 @@ mod tests {
             let mut window_size = 0;
             loop {
                 if matches!(
-                    poll_timeout(&mut send(), Duration::from_millis(100)),
+                    block_on_timeout(send(), Duration::from_millis(100)),
                     Err(_) | Ok(Err(_))
                 ) {
                     // Window is filled and flow control in sink is triggered.
@@ -586,7 +587,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        poll_timeout(&mut send(), Duration::from_millis(100))
+        block_on_timeout(send(), Duration::from_millis(100))
             .unwrap()
             .unwrap();
         // gRPC client may update window size after receiving a message,
