@@ -366,13 +366,14 @@ mod tests {
         for i in 0..5 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
         }
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         // gc 0..5
         for i in 0..5 {
             let k = format!("k{}", i);
-            delete(&engine, k.as_bytes(), 2.into());
+            delete(&engine, k.as_bytes(), 4.into());
         }
         engine.flush_cf(CF_WRITE, true).unwrap();
 
@@ -381,26 +382,32 @@ mod tests {
             .get_range_stats(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
-        assert_eq!(range_stats.num_entries, 10);
-        assert_eq!(range_stats.num_versions, 5);
+        assert_eq!(range_stats.num_entries, 15);
+        assert_eq!(range_stats.num_versions, 10);
+        assert_eq!(range_stats.num_rows, 5);
 
         // mvcc_put 5..10
         for i in 5..10 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
+        for i in 5..8 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
+        }
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
         let range_stats = engine.get_range_stats(CF_WRITE, &s, &e).unwrap().unwrap();
-        assert_eq!(range_stats.num_entries, 5);
-        assert_eq!(range_stats.num_versions, 5);
+        assert_eq!(range_stats.num_entries, 8);
+        assert_eq!(range_stats.num_versions, 8);
+        assert_eq!(range_stats.num_rows, 5);
 
+        // tombstone triggers compaction
         let ranges_need_to_compact = collect_ranges_need_compact(
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
-            1,
-            50,
+            CompactThreshold::new(4, 30, 100, 100),
         )
         .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
@@ -408,28 +415,45 @@ mod tests {
         expected_ranges.push_back((s, e));
         assert_eq!(ranges_need_to_compact, expected_ranges);
 
-        // gc 5..10
-        for i in 5..10 {
+        // duplicated mvcc triggers compaction
+        let ranges_need_to_compact = collect_ranges_need_compact(
+            &engine,
+            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            CompactThreshold::new(100, 100, 5, 50),
+        )
+        .unwrap();
+        assert_eq!(ranges_need_to_compact, expected_ranges);
+
+        // gc 5..8
+        for i in 5..8 {
             let k = format!("k{}", i);
-            delete(&engine, k.as_bytes(), 2.into());
+            delete(&engine, k.as_bytes(), 4.into());
         }
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
         let range_stats = engine.get_range_stats(CF_WRITE, &s, &e).unwrap().unwrap();
-        assert_eq!(range_stats.num_entries, 10);
-        assert_eq!(range_stats.num_versions, 5);
+        assert_eq!(range_stats.num_entries, 11);
+        assert_eq!(range_stats.num_versions, 8);
+        assert_eq!(range_stats.num_rows, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
             &engine,
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
-            1,
-            50,
+            CompactThreshold::new(3, 25, 100, 100),
         )
         .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
+        assert_eq!(ranges_need_to_compact, expected_ranges);
+
+        let ranges_need_to_compact = collect_ranges_need_compact(
+            &engine,
+            vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
+            CompactThreshold::new(100, 100, 3, 35),
+        )
+        .unwrap();
         assert_eq!(ranges_need_to_compact, expected_ranges);
     }
 }

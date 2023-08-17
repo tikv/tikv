@@ -5,7 +5,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, RangeStats, TabletRegistry, CF_WRITE};
+use engine_traits::{KvEngine, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use raftstore::store::{need_compact, CompactThreshold};
@@ -20,13 +20,6 @@ pub enum Task {
         region_ids: Vec<u64>,
         compact_threshold: CompactThreshold,
     },
-}
-
-pub struct CompactThreshold {
-    tombstones_num_threshold: u64,
-    tombstones_percent_threshold: u64,
-    redundant_rows_threshold: u64,
-    redundant_rows_percent_threshold: u64,
 }
 
 impl Display for Task {
