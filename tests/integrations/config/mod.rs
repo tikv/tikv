@@ -366,6 +366,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -434,6 +436,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -502,6 +506,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -570,6 +576,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config.clone(),
     };
@@ -653,6 +661,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config,
     };
