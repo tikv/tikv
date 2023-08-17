@@ -71,12 +71,9 @@ fn test_unsafe_recovery_send_report() {
     fail::remove("on_handle_apply_store_1");
 }
 
-<<<<<<< HEAD
-=======
-#[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_unsafe_recovery_timeout_abort() {
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::millis(150);
@@ -152,7 +149,6 @@ fn test_unsafe_recovery_timeout_abort() {
     fail::remove("on_handle_apply_store_1");
 }
 
->>>>>>> f5b30021f1 (raftstore: online unsafe recovery aborts on timeout (#15283))
 #[test]
 fn test_unsafe_recovery_execution_result_report() {
     let mut cluster = new_server_cluster(0, 3);
