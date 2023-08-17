@@ -17,9 +17,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if self.unsafe_recovery_state().is_some() {
+        if let Some(state) = self.unsafe_recovery_state() {
             warn!(self.logger,
                 "Unsafe recovery, demote failed voters has already been initiated";
+                "state" => ?state,
             );
             syncer.abort();
             return;
