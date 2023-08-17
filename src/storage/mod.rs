@@ -641,9 +641,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
-                if let Err(e) = deadline.check() {
-                    return Err(Error::from(e));
-                }
+                deadline.check()?;
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
@@ -666,9 +664,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
 
                 {
-                    if let Err(e) = deadline.check() {
-                        return Err(Error::from(e));
-                    }
+                    deadline.check()?;
                     let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
@@ -1014,9 +1010,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
-                if let Err(e) = deadline.check() {
-                    return Err(Error::from(e));
-                }
+                deadline.check()?;
 
                 Self::check_api_version(
                     api_version,
@@ -1041,9 +1035,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    if let Err(e) = deadline.check() {
-                        return Err(Error::from(e));
-                    }
+                    deadline.check()?;
                     let begin_instant = Instant::now();
 
                     let stage_snap_recv_ts = begin_instant;
