@@ -696,26 +696,7 @@ impl Delegate {
             ..Default::default()
         };
 
-        let send = move |downstream: &Downstream| {
-            // No ready downstream or a downstream that does not match the kv_api type, will
-            // be ignored. There will be one region that contains both Txn & Raw entries.
-            // The judgement here is for sending entries to downstreams with correct kv_api.
-            if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
-                return Ok(());
-            }
-            if downstream.filter_loop && filtered.is_none() {
-                return Ok(());
-            }
-
-            let event = if downstream.filter_loop {
-                filtered.clone().unwrap()
-            } else {
-                change_data_event.clone()
-            };
-            // Do not force send for real time change data events.
-            let force_send = false;
-            downstream.sink_event(event, force_send)
-        };
+        let send = move |downstream: &Downstream| { return Ok(()) };
         match self.broadcast(send) {
             Ok(()) => Ok(()),
             Err(e) => {
