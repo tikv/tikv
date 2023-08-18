@@ -552,7 +552,7 @@ where
         let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
         match range_init_result {
             Ok(()) => {
-                info!("backup stream success to initialize"; 
+                info!("backup stream success to initialize";
                         "start_key" => utils::redact(&start_key),
                         "end_key" => utils::redact(&end_key),
                         "take" => ?start.saturating_elapsed(),)
@@ -607,7 +607,7 @@ where
                 info!(
                     "register backup stream ranges";
                     "task" => ?task,
-                    "ranges-count" => ranges.inner.len(),
+                    "ranges_count" => ranges.inner.len(),
                 );
                 let ranges = ranges
                     .inner
@@ -820,7 +820,7 @@ where
                             {
                                 warn!("backup stream failed to set global checkpoint.";
                                     "task" => ?task,
-                                    "global-checkpoint" => global_checkpoint,
+                                    "global_checkpoint" => global_checkpoint,
                                     "err" => ?err,
                                 );
                             }
@@ -828,7 +828,7 @@ where
                         Ok(false) => {
                             debug!("backup stream no need update global checkpoint.";
                                 "task" => ?task,
-                                "global-checkpoint" => global_checkpoint,
+                                "global_checkpoint" => global_checkpoint,
                             );
                         }
                         Err(e) => {
@@ -1011,7 +1011,7 @@ where
 /// Create a standard tokio runtime
 /// (which allows io and time reactor, involve thread memory accessor),
 fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
-    info!("create tokio runtime for backup stream"; "thread_name" => thread_name, "thread-count" => thread_count);
+    info!("create tokio runtime for backup stream"; "thread_name" => thread_name, "thread_count" => thread_count);
 
     tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
