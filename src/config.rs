@@ -350,11 +350,17 @@ macro_rules! cf_config {
             #[serde(with = "rocks_config::checksum_serde")]
             #[online_config(skip)]
             pub checksum: ChecksumType,
+<<<<<<< HEAD:src/config.rs
             // `ttl == None` means using default setting in Rocksdb.
+=======
+            #[online_config(skip)]
+            pub max_compactions: Option<u32>,
+            // `ttl == None` means disable this feature in Rocksdb.
+>>>>>>> cb6531fa57 (compaction: disable periodic-compaction and ttl as default. (#15359)):src/config/mod.rs
             // `ttl` in Rocksdb is 30 days as default.
             #[online_config(skip)]
             pub ttl: Option<ReadableDuration>,
-            // `periodic_compaction_seconds == None` means using default setting in Rocksdb.
+            // `periodic_compaction_seconds == None` means disabled this feature in Rocksdb.
             // `periodic_compaction_seconds` in Rocksdb is 30 days as default.
             #[online_config(skip)]
             pub periodic_compaction_seconds: Option<ReadableDuration>,
@@ -602,12 +608,25 @@ macro_rules! build_cf_opt {
                 warn!("compaction guard is disabled due to region info provider not available")
             }
         }
+<<<<<<< HEAD:src/config.rs
         if let Some(ttl) = $opt.ttl {
             cf_opts.set_ttl(ttl.0.as_secs());
         }
         if let Some(secs) = $opt.periodic_compaction_seconds {
             cf_opts.set_periodic_compaction_seconds(secs.0.as_secs());
         }
+=======
+        if let Some(r) = $compaction_limiter {
+            cf_opts.set_compaction_thread_limiter(r);
+        }
+        cf_opts.set_ttl($opt.ttl.unwrap_or(ReadableDuration::secs(0)).0.as_secs());
+        cf_opts.set_periodic_compaction_seconds(
+            $opt.periodic_compaction_seconds
+                .unwrap_or(ReadableDuration::secs(0))
+                .0
+                .as_secs(),
+        );
+>>>>>>> cb6531fa57 (compaction: disable periodic-compaction and ttl as default. (#15359)):src/config/mod.rs
         cf_opts
     }};
 }

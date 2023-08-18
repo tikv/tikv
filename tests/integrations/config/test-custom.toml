@@ -331,6 +331,12 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+<<<<<<< HEAD
+=======
+max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
+>>>>>>> cb6531fa57 (compaction: disable periodic-compaction and ttl as default. (#15359))
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -393,6 +399,12 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+<<<<<<< HEAD
+=======
+max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
+>>>>>>> cb6531fa57 (compaction: disable periodic-compaction and ttl as default. (#15359))
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -442,6 +454,12 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+<<<<<<< HEAD
+=======
+max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
+>>>>>>> cb6531fa57 (compaction: disable periodic-compaction and ttl as default. (#15359))
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -491,6 +509,12 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+<<<<<<< HEAD
+=======
+max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
+>>>>>>> cb6531fa57 (compaction: disable periodic-compaction and ttl as default. (#15359))
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
