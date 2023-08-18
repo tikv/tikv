@@ -11,6 +11,7 @@ use std::{
 };
 
 use resource_control::ResourceMetered;
+use tikv_util::info;
 
 use crate::mailbox::BasicMailbox;
 
@@ -40,6 +41,10 @@ pub trait FsmScheduler {
 /// updating internal state according to incoming messages.
 pub trait Fsm: Send + 'static {
     type Message: Send + ResourceMetered;
+
+    fn id(&self) -> u64 {
+        0
+    }
 
     fn is_stopped(&self) -> bool;
 
@@ -72,7 +77,7 @@ pub trait Fsm: Send + 'static {
 ///    holds a null pointer.
 /// 2. NOTIFYSTATE_IDLE: No actor is using the FSM. `data` owns the FSM.
 /// 3. NOTIFYSTATE_DROP: The FSM is dropped. `data` holds a null pointer.
-pub struct FsmState<N> {
+pub struct FsmState<N: Fsm> {
     status: AtomicUsize,
     data: AtomicPtr<N>,
     /// A counter shared with other `FsmState`s.
@@ -175,11 +180,15 @@ impl<N: Fsm> FsmState<N> {
     }
 }
 
-impl<N> Drop for FsmState<N> {
+impl<N: Fsm> Drop for FsmState<N> {
     fn drop(&mut self) {
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
-            unsafe { Box::from_raw(ptr) };
+            let fsm = unsafe { Box::from_raw(ptr) };
+            info!(
+                "drop fsm state";
+                "id" => fsm.as_ref().id(),
+            );
         }
         self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }

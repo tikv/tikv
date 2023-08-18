@@ -4432,6 +4432,10 @@ where
 {
     type Message = Msg<EK>;
 
+    fn id(&self) -> u64 {
+        self.delegate.region_id()
+    }
+
     #[inline]
     fn is_stopped(&self) -> bool {
         self.delegate.stopped
@@ -4470,7 +4474,9 @@ where
             self.delegate.clear_all_commands_as_stale();
         }
         let mut event = TraceEvent::default();
-        self.delegate.update_memory_trace(&mut event);
+        if let Some(e) = self.delegate.trace.reset(ApplyMemoryTrace::default()) {
+            event = event + e;
+        }
         MEMTRACE_APPLYS.trace(event);
     }
 }

@@ -565,6 +565,10 @@ where
 {
     type Message = PeerMsg<EK>;
 
+    fn id(&self) -> u64 {
+        self.region_id()
+    }
+
     #[inline]
     fn is_stopped(&self) -> bool {
         self.stopped

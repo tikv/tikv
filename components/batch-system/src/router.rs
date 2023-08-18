@@ -385,17 +385,16 @@ where
         // crossbeam unbounded channel sender has a list of blocks. Every block has 31
         // unit and every sender has at least one sender.
         let sender_block_unit = 31;
-        RouterTrace {
-            alive: (mailbox_unit * 8 / 7 // hashmap uses 7/8 of allocated memory.
-                + state_unit + message_unit * sender_block_unit)
-                * alive,
-            leak: (state_unit + message_unit * sender_block_unit) * leak,
-        }
+        RouterTrace { alive, leak }
     }
 }
 
 impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
     fn clone(&self) -> Router<N, C, Ns, Cs> {
+        info!(
+            "cloning router";
+            "count" => Arc::strong_count(&self.normals) + 1,
+        );
         Router {
             normals: self.normals.clone(),
             caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
