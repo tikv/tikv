@@ -7,7 +7,7 @@ use std::{
 };
 
 use crossbeam::channel::{SendError, TrySendError};
-use tikv_util::mpsc;
+use tikv_util::{info, mpsc};
 
 use crate::fsm::{Fsm, FsmScheduler, FsmState};
 
@@ -31,6 +31,7 @@ use crate::fsm::{Fsm, FsmScheduler, FsmState};
 pub struct BasicMailbox<Owner: Fsm> {
     sender: mpsc::LooseBoundedSender<Owner::Message>,
     state: Arc<FsmState<Owner>>,
+    id: u64,
 }
 
 impl<Owner: Fsm> BasicMailbox<Owner> {
@@ -42,6 +43,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     ) -> BasicMailbox<Owner> {
         BasicMailbox {
             sender,
+            id: fsm.id(),
             state: Arc::new(FsmState::new(fsm, state_cnt)),
         }
     }
@@ -101,13 +103,16 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     pub(crate) fn close(&self) {
         self.sender.close_sender();
         self.state.clear();
+        info!("close mailbox"; "count" => Arc::strong_count(&self.state), "id" => self.id);
     }
 }
 
 impl<Owner: Fsm> Clone for BasicMailbox<Owner> {
     #[inline]
     fn clone(&self) -> BasicMailbox<Owner> {
+        info!("cloning mailbox"; "count" => Arc::strong_count(&self.state), "id" => self.id);
         BasicMailbox {
+            id: self.id,
             sender: self.sender.clone(),
             state: self.state.clone(),
         }

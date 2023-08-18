@@ -3,7 +3,6 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
-    mem,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -15,7 +14,7 @@ use crossbeam::channel::{SendError, TrySendError};
 use tikv_util::{debug, info, lru::LruCache, time::Instant, Either};
 
 use crate::{
-    fsm::{Fsm, FsmScheduler, FsmState},
+    fsm::{Fsm, FsmScheduler},
     mailbox::{BasicMailbox, Mailbox},
     metrics::*,
 };
@@ -378,13 +377,6 @@ where
         } else {
             0
         };
-        let mailbox_unit = mem::size_of::<(u64, BasicMailbox<N>)>();
-        let state_unit = mem::size_of::<FsmState<N>>();
-        // Every message in crossbeam sender needs 8 bytes to store state.
-        let message_unit = mem::size_of::<N::Message>() + 8;
-        // crossbeam unbounded channel sender has a list of blocks. Every block has 31
-        // unit and every sender has at least one sender.
-        let sender_block_unit = 31;
         RouterTrace { alive, leak }
     }
 }

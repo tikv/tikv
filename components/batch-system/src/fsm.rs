@@ -173,9 +173,11 @@ impl<N: Fsm> FsmState<N> {
 
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
-            unsafe {
-                let _ = Box::from_raw(ptr);
-            }
+            let fsm = unsafe { Box::from_raw(ptr) };
+            info!(
+                "clear fsm state";
+                "id" => fsm.as_ref().id(),
+            );
         }
     }
 }
@@ -184,12 +186,9 @@ impl<N: Fsm> Drop for FsmState<N> {
     fn drop(&mut self) {
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
-            let fsm = unsafe { Box::from_raw(ptr) };
-            info!(
-                "drop fsm state";
-                "id" => fsm.as_ref().id(),
-            );
+            unsafe { Box::from_raw(ptr) };
         }
+        info!("drop fsm state");
         self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }
 }
