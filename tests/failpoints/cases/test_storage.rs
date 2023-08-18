@@ -1426,6 +1426,65 @@ fn test_before_async_write_deadline() {
 }
 
 #[test]
+fn test_deadline_exceeded_on_get_and_batch_get() {
+    use tikv_util::time::Instant;
+    use tracker::INVALID_TRACKER_TOKEN;
+
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .build()
+        .unwrap();
+
+    fail::cfg("after-snapshot", "sleep(100)").unwrap();
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+    ctx.max_execution_duration_ms = 20;
+    let f = storage.get(ctx.clone(), Key::from_raw(b"a"), 1.into());
+    assert!(matches!(
+        block_on(f),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+    let f = storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a")], 1.into());
+    assert!(matches!(
+        block_on(f),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+
+    let consumer = GetConsumer::new();
+    let mut get_req = GetRequest::default();
+    get_req.set_key(b"a".to_vec());
+    get_req.set_version(1_u64);
+    get_req.set_context(ctx.clone());
+    block_on(storage.batch_get_command(
+        vec![get_req],
+        vec![1],
+        vec![INVALID_TRACKER_TOKEN; 1],
+        consumer.clone(),
+        Instant::now(),
+    ))
+    .unwrap();
+    let result = consumer.take_data();
+    assert_eq!(1, result.len());
+    assert!(matches!(
+        result[0],
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+    fail::remove("after-snapshot");
+}
+
+#[test]
 fn test_before_propose_deadline() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
