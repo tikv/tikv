@@ -258,7 +258,7 @@ fn seek_to(all_data: &Vec<Vec<u8>>, target_key: &[u8], from_pos: usize) -> usize
 
 #[cfg(test)]
 mod tests {
-    use std::str;
+    use std::{path::Path, str};
 
     use engine_rocks::{
         raw::{BlockBasedOptions, DBCompressionType},
@@ -268,12 +268,15 @@ mod tests {
     use engine_traits::{
         CompactExt, IterOptions, Iterator, MiscExt, RefIterable, SstReader, SyncMutable, CF_DEFAULT,
     };
+    use itertools::Itertools;
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use crate::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider, store::util::get_entry_header,
+    };
 
     impl<G: RegionInfoProvider> CompactionGuardGenerator<G> {
         fn reset_next_level_size_state(&mut self) {
@@ -493,15 +496,23 @@ mod tests {
 
     const MIN_OUTPUT_FILE_SIZE: u64 = 1024;
     const MAX_OUTPUT_FILE_SIZE: u64 = 4096;
+    const MAX_COMPACTION_SIZE: u64 = 10240;
 
     fn new_test_db(provider: MockRegionInfoProvider) -> (RocksEngine, TempDir) {
         let temp_dir = TempDir::new().unwrap();
 
         let mut cf_opts = RocksCfOptions::default();
+        cf_opts.set_max_bytes_for_level_base(MAX_OUTPUT_FILE_SIZE);
+        cf_opts.set_max_bytes_for_level_multiplier(5);
         cf_opts.set_target_file_size_base(MAX_OUTPUT_FILE_SIZE);
         cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
-            CompactionGuardGeneratorFactory::new(CF_DEFAULT, provider, MIN_OUTPUT_FILE_SIZE, 10240)
-                .unwrap(),
+            CompactionGuardGeneratorFactory::new(
+                CF_DEFAULT,
+                provider,
+                MIN_OUTPUT_FILE_SIZE,
+                MAX_COMPACTION_SIZE,
+            )
+            .unwrap(),
         ));
         cf_opts.set_disable_auto_compactions(true);
         cf_opts.compression_per_level(&[
@@ -538,6 +549,16 @@ mod tests {
             valid = sst_reader.next().unwrap();
         }
         ret
+    }
+
+    fn get_sst_files(dir: &Path) -> Vec<String> {
+        let files = dir.read_dir().unwrap();
+        let mut sst_files = files
+            .map(|entry| entry.unwrap().path().to_str().unwrap().to_owned())
+            .filter(|entry| entry.ends_with(".sst"))
+            .collect::<Vec<String>>();
+        sst_files.sort();
+        sst_files
     }
 
     #[test]
@@ -591,11 +612,7 @@ mod tests {
         )
         .unwrap();
 
-        let files = dir.path().read_dir().unwrap();
-        let mut sst_files = files
-            .map(|entry| entry.unwrap().path().to_str().unwrap().to_owned())
-            .filter(|entry| entry.ends_with(".sst"))
-            .collect::<Vec<String>>();
+        let mut sst_files = get_sst_files(dir.path());
         sst_files.sort();
         assert_eq!(3, sst_files.len());
         assert_eq!(collect_keys(&sst_files[0]), [b"za1", b"zb1", b"zb2"]);
@@ -604,5 +621,68 @@ mod tests {
             [b"zc1", b"zc2", b"zc3", b"zc4", b"zc5"]
         );
         assert_eq!(collect_keys(&sst_files[2]), [b"zc6"]);
+    }
+
+    #[test]
+    fn test_next_level_compaction() {
+        let provider = MockRegionInfoProvider::new(vec![
+            Region {
+                id: 1,
+                start_key: b"a".to_vec(),
+                end_key: b"b".to_vec(),
+                ..Default::default()
+            },
+            Region {
+                id: 2,
+                start_key: b"b".to_vec(),
+                end_key: b"c".to_vec(),
+                ..Default::default()
+            },
+            Region {
+                id: 3,
+                start_key: b"c".to_vec(),
+                end_key: b"d".to_vec(),
+                ..Default::default()
+            },
+        ]);
+        let (db, dir) = new_test_db(provider);
+        assert_eq!(b"z", DATA_PREFIX_KEY);
+        let small_value = [b'v'; 1024];
+        let huge_value = vec![b'v'; 1024 * 1024];
+        ['a', 'b', 'c']
+            .into_iter()
+            .flat_map(|x| (1..10).map(move |n| format!("z{x}{n}").into_bytes()))
+            .for_each(|key| db.put(&key, &huge_value).unwrap());
+        db.flush_cfs(&[], true).unwrap();
+        db.compact_files_in_range(None, None, Some(2)).unwrap();
+        dump_db_info(&db);
+        db.put(b"za0", &small_value).unwrap();
+        db.put(b"zc0", &small_value).unwrap();
+        db.flush_cfs(&[], true).unwrap();
+        db.compact_files_in_range(None, None, Some(1)).unwrap();
+        dump_db_info(&db);
+        db.put(b"zb0", &huge_value).unwrap();
+        db.put(b"zb6", &huge_value).unwrap();
+        db.flush_cfs(&[], true).unwrap();
+        db.compact_range(None, None, false, 1).unwrap();
+        dump_db_info(&db);
+
+        panic!("everything is alright");
+    }
+
+    fn dump_db_info(db: &RocksEngine) {
+        let db = db.as_inner();
+        let cf = db.cf_handle("default").unwrap();
+        let md = db.get_column_family_meta_data(cf);
+        for (i, level) in md.get_levels().into_iter().enumerate() {
+            println!(
+                "{i}: {}",
+                level
+                    .get_files()
+                    .into_iter()
+                    .map(|f| format!("{}({})", f.get_name(), f.get_size()))
+                    .join(", ")
+            );
+        }
     }
 }
