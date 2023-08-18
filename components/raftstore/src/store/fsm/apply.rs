@@ -2384,8 +2384,8 @@ where
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
-                            "exist peer" => ?exist_peer,
-                            "confchange type" => ?change_type,
+                            "exist_peer" => ?exist_peer,
+                            "confchange_type" => ?change_type,
                             "region" => ?&self.region
                         );
                         return Err(box_err!(

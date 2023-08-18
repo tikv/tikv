@@ -1677,7 +1677,7 @@ where
                     let mut switches = resp.take_switch_witnesses();
                     info!("try to switch witness";
                           "region_id" => region_id,
-                          "switch witness" => ?switches
+                          "switch_witness" => ?switches
                     );
                     let req = new_batch_switch_witness(switches.take_switch_witnesses().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
@@ -1977,7 +1977,11 @@ where
     fn is_store_heartbeat_delayed(&self) -> bool {
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
-        (interval_second >= self.store_heartbeat_interval.as_secs())
+        // Only if the `last_report_ts`, that is, the last timestamp of
+        // store_heartbeat, exceeds the interval of store heartbaet but less than
+        // the given limitation, will it trigger a report of fake heartbeat to
+        // make the statistics of slowness percepted by PD timely.
+        (interval_second > self.store_heartbeat_interval.as_secs())
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
     }
 
