@@ -350,11 +350,11 @@ macro_rules! cf_config {
             #[serde(with = "rocks_config::checksum_serde")]
             #[online_config(skip)]
             pub checksum: ChecksumType,
-            // `ttl == None` means using default setting in Rocksdb.
+            // `ttl == None` means disable this feature in Rocksdb.
             // `ttl` in Rocksdb is 30 days as default.
             #[online_config(skip)]
             pub ttl: Option<ReadableDuration>,
-            // `periodic_compaction_seconds == None` means using default setting in Rocksdb.
+            // `periodic_compaction_seconds == None` means disabled this feature in Rocksdb.
             // `periodic_compaction_seconds` in Rocksdb is 30 days as default.
             #[online_config(skip)]
             pub periodic_compaction_seconds: Option<ReadableDuration>,
@@ -602,12 +602,13 @@ macro_rules! build_cf_opt {
                 warn!("compaction guard is disabled due to region info provider not available")
             }
         }
-        if let Some(ttl) = $opt.ttl {
-            cf_opts.set_ttl(ttl.0.as_secs());
-        }
-        if let Some(secs) = $opt.periodic_compaction_seconds {
-            cf_opts.set_periodic_compaction_seconds(secs.0.as_secs());
-        }
+        cf_opts.set_ttl($opt.ttl.unwrap_or(ReadableDuration::secs(0)).0.as_secs());
+        cf_opts.set_periodic_compaction_seconds(
+            $opt.periodic_compaction_seconds
+                .unwrap_or(ReadableDuration::secs(0))
+                .0
+                .as_secs(),
+        );
         cf_opts
     }};
 }
