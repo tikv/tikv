@@ -362,6 +362,34 @@ fn json_contains(args: &[ScalarValueRef]) -> Result<Option<i64>> {
     Ok(Some(j.as_ref().json_contains(target)? as i64))
 }
 
+// Args should be like `(Option<JsonRef> , Option<JsonRef>)`
+fn member_of_validator(expr: &tipb::Expr) -> Result<()> {
+    assert!(expr.get_children().len() == 2);
+    let children = expr.get_children();
+    super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
+    super::function::validate_expr_return_type(&children[1], EvalType::Json)?;
+    Ok(())
+}
+
+#[rpn_fn(nullable, raw_varg,min_args= 2, max_args = 2, extra_validator = member_of_validator)]
+#[inline]
+fn member_of(args: &[ScalarValueRef]) -> Result<Option<i64>> {
+    assert!(args.len() == 2);
+    let target: Option<JsonRef> = args[0].as_json();
+    let target = match target {
+        None => return Ok(None),
+        Some(target) => target,
+    };
+
+    let obj: Option<JsonRef> = args[1].as_json();
+    let mut obj = match obj {
+        None => return Ok(None),
+        Some(obj) => obj.to_owned(),
+    };
+
+    Ok(Some(obj.as_ref().member_of(target)? as i64))
+}
+
 #[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
 #[inline]
 fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
