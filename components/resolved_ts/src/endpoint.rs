@@ -402,7 +402,7 @@ where
                         observe_id,
                         cause: format!("met error while handle scan task {:?}", e),
                     })
-                    .unwrap_or_else(|schedule_err| warn!("schedule re-register task failed"; "err" => ?schedule_err, "re-register cause" => ?e));
+                    .unwrap_or_else(|schedule_err| warn!("schedule re-register task failed"; "err" => ?schedule_err, "re_register_cause" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
         }
@@ -895,11 +895,11 @@ where
             info!(
                 "the max gap of safe-ts is large";
                 "gap" => safe_ts_gap,
-                "oldest safe-ts" => ?oldest_safe_ts,
-                "region id" => oldest_safe_ts_region,
-                "advance-ts-interval" => ?self.cfg.advance_ts_interval,
-                "lock num" => lock_num,
-                "min start ts" => min_start_ts,
+                "oldest_safe_ts" => ?oldest_safe_ts,
+                "region_id" => oldest_safe_ts_region,
+                "advance_ts_interval" => ?self.cfg.advance_ts_interval,
+                "lock_num" => lock_num,
+                "min_start_ts" => min_start_ts,
             );
         }
         RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);

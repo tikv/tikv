@@ -606,8 +606,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 warn!(
                     self.logger(),
                     "snapshot is staled, skip";
-                    "snap index" => snapshot.get_metadata().get_index(),
-                    "required index" => index.load(Ordering::SeqCst),
+                    "snap_index" => snapshot.get_metadata().get_index(),
+                    "required_index" => index.load(Ordering::SeqCst),
                     "to_peer_id" => to_peer_id,
                 );
                 return false;

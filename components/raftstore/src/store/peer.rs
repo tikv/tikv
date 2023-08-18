@@ -2416,8 +2416,8 @@ where
             self.send_extra_message(msg, &mut ctx.trans, &leader);
             info!(
                 "notify leader the peer is available";
-                "region id" => self.region().get_id(),
-                "peer id" => self.peer.id
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer.id
             );
         }
     }
@@ -4677,8 +4677,8 @@ where
                 }
                 warn!(
                     "read rejected by safe timestamp";
-                    "safe ts" => safe_ts,
-                    "read ts" => read_ts,
+                    "safe_ts" => safe_ts,
+                    "read_ts" => read_ts,
                     "tag" => &self.tag,
                 );
                 let mut response = cmd_resp::new_error(Error::DataIsNotReady {
