@@ -436,7 +436,7 @@ impl Client {
     }
 }
 
-/// The context of sending requets.
+/// The context of sending request.
 pub struct Request<Req, F> {
     remain_request_count: usize,
     request_sent: usize,
