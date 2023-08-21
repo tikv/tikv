@@ -143,6 +143,12 @@ pub enum Error {
 
     #[error("peer is a witness of region {0}")]
     IsWitness(u64),
+
+    #[error("mismatch peer id {} != {}", .request_peer_id, .store_peer_id)]
+    MismatchPeerId {
+        request_peer_id: u64,
+        store_peer_id: u64,
+    },
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -272,6 +278,15 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_is_witness(e);
             }
+            Error::MismatchPeerId {
+                request_peer_id,
+                store_peer_id,
+            } => {
+                let mut e = errorpb::MismatchPeerId::default();
+                e.set_request_peer_id(request_peer_id);
+                e.set_store_peer_id(store_peer_id);
+                errorpb.set_mismatch_peer_id(e);
+            }
             _ => {}
         };
 
@@ -329,6 +344,7 @@ impl ErrorCodeExt for Error {
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
             Error::PendingPrepareMerge => error_code::raftstore::PENDING_PREPARE_MERGE,
             Error::IsWitness(..) => error_code::raftstore::IS_WITNESS,
+            Error::MismatchPeerId { .. } => error_code::raftstore::MISMATCH_PEER_ID,
 
             Error::Other(_) | Error::RegionNotRegistered { .. } => error_code::raftstore::UNKNOWN,
         }

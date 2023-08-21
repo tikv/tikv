@@ -3,6 +3,7 @@
 use std::{
     fmt, mem,
     sync::{mpsc::SyncSender, Arc, Mutex},
+    time::Duration,
 };
 
 use collections::HashSet;
@@ -10,11 +11,16 @@ use crossbeam::channel::SendError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
-    pdpb::{PeerReport, StoreReport},
+    pdpb::{ChangePeer, PeerReport, StoreReport},
+    raft_cmdpb::RaftCmdRequest,
 };
+use raft::eraftpb::ConfChangeType;
 use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
 
-use super::{PeerMsg, RaftRouter, SignificantMsg, SignificantRouter, StoreMsg};
+use super::{
+    fsm::new_admin_request, worker::new_change_peer_v2_request, PeerMsg, RaftRouter,
+    SignificantMsg, SignificantRouter, StoreMsg,
+};
 use crate::Result;
 
 /// A handle for PD to schedule online unsafe recovery commands back to
@@ -28,6 +34,25 @@ pub trait UnsafeRecoveryHandle: Sync + Send {
     ) -> Result<()>;
 
     fn broadcast_exit_force_leader(&self);
+
+    fn send_create_peer(
+        &self,
+        region: metapb::Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()>;
+
+    fn send_destroy_peer(
+        &self,
+        region_id: u64,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()>;
+
+    fn send_demote_peers(
+        &self,
+        region_id: u64,
+        failed_voters: Vec<metapb::Peer>,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()>;
 
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer);
 
@@ -56,6 +81,50 @@ impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for Mutex<RaftRouter<EK,
     fn broadcast_exit_force_leader(&self) {
         let router = self.lock().unwrap();
         router.broadcast_normal(|| PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState));
+    }
+
+    fn send_create_peer(
+        &self,
+        region: metapb::Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()> {
+        let router = self.lock().unwrap();
+        match router.force_send_control(StoreMsg::UnsafeRecoveryCreatePeer {
+            syncer,
+            create: region,
+        }) {
+            Ok(()) => Ok(()),
+            Err(SendError(_)) => Err(box_err!("fail to send unsafe recovery create peer")),
+        }
+    }
+
+    fn send_destroy_peer(
+        &self,
+        region_id: u64,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()> {
+        let router = self.lock().unwrap();
+        match router.significant_send(region_id, SignificantMsg::UnsafeRecoveryDestroy(syncer)) {
+            // The peer may be destroy already.
+            Err(crate::Error::RegionNotFound(_)) => Ok(()),
+            res => res,
+        }
+    }
+
+    fn send_demote_peers(
+        &self,
+        region_id: u64,
+        failed_voters: Vec<metapb::Peer>,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> Result<()> {
+        let router = self.lock().unwrap();
+        router.significant_send(
+            region_id,
+            SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
+                syncer,
+                failed_voters,
+            },
+        )
     }
 
     fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer) {
@@ -137,7 +206,7 @@ pub enum ForceLeaderState {
 //      type explosion problem.
 //   2. Invoke on drop, so that it can be easily and safely used (together with
 //      Arc) as a coordinator between all concerning peers. Each of the peers
-//      holds a reference to the same strcuture, and whoever finishes the task
+//      holds a reference to the same structure, and whoever finishes the task
 //      drops its reference. Once the last reference is dropped, indicating all
 //      the peers have finished their own tasks, the closure is invoked.
 pub struct InvokeClosureOnDrop(Option<Box<dyn FnOnce() + Send + Sync>>);
@@ -181,8 +250,9 @@ impl UnsafeRecoveryForceLeaderSyncer {
 
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryExecutePlanSyncer {
+    pub(self) time: TiInstant,
     _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
+    pub(self) abort: Arc<Mutex<bool>>,
 }
 
 impl UnsafeRecoveryExecutePlanSyncer {
@@ -198,6 +268,7 @@ impl UnsafeRecoveryExecutePlanSyncer {
             start_unsafe_recovery_report(router, report_id, true);
         })));
         UnsafeRecoveryExecutePlanSyncer {
+            time: TiInstant::now(),
             _closure: Arc::new(closure),
             abort,
         }
@@ -244,8 +315,9 @@ impl SnapshotRecoveryWaitApplySyncer {
 
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySyncer {
+    pub(self) time: TiInstant,
     _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
+    pub(self) abort: Arc<Mutex<bool>>,
 }
 
 impl UnsafeRecoveryWaitApplySyncer {
@@ -257,11 +329,11 @@ impl UnsafeRecoveryWaitApplySyncer {
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
         let closure = InvokeClosureOnDrop(Some(Box::new(move || {
-            info!("Unsafe recovery, wait apply finished");
             if *abort_clone.lock().unwrap() {
                 warn!("Unsafe recovery, wait apply aborted");
                 return;
             }
+            info!("Unsafe recovery, wait apply finished");
             if exit_force_leader {
                 router.broadcast_exit_force_leader();
             }
@@ -269,6 +341,7 @@ impl UnsafeRecoveryWaitApplySyncer {
             router.broadcast_fill_out_report(fill_out_report);
         })));
         UnsafeRecoveryWaitApplySyncer {
+            time: TiInstant::now(),
             _closure: Arc::new(closure),
             abort,
         }
@@ -313,6 +386,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
     }
 }
 
+#[derive(Debug)]
 pub enum SnapshotRecoveryState {
     // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
     // and force forward to last index once follower appended and then it also is checked
@@ -325,6 +399,7 @@ pub enum SnapshotRecoveryState {
     },
 }
 
+#[derive(Debug)]
 pub enum UnsafeRecoveryState {
     // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
     // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
@@ -344,4 +419,87 @@ pub enum UnsafeRecoveryState {
         demote_after_exit: bool,
     },
     Destroy(UnsafeRecoveryExecutePlanSyncer),
+    WaitInitialize(UnsafeRecoveryExecutePlanSyncer),
+}
+
+impl UnsafeRecoveryState {
+    pub fn check_timeout(&self, timeout: Duration) -> bool {
+        let time = match self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => syncer.time,
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer)
+            | UnsafeRecoveryState::WaitInitialize(syncer) => syncer.time,
+        };
+        time.saturating_elapsed() >= timeout
+    }
+
+    pub fn is_abort(&self) -> bool {
+        let abort = match &self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => &syncer.abort,
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer)
+            | UnsafeRecoveryState::WaitInitialize(syncer) => &syncer.abort,
+        };
+        *abort.lock().unwrap()
+    }
+
+    pub fn abort(&mut self) {
+        match self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => syncer.abort(),
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer)
+            | UnsafeRecoveryState::WaitInitialize(syncer) => syncer.abort(),
+        }
+    }
+}
+
+pub fn exit_joint_request(region: &metapb::Region, peer: &metapb::Peer) -> RaftCmdRequest {
+    let mut req = new_admin_request(region.get_id(), peer.clone());
+    req.mut_header()
+        .set_region_epoch(region.get_region_epoch().clone());
+    req.set_admin_request(new_change_peer_v2_request(vec![]));
+    req
+}
+
+pub fn demote_failed_voters_request(
+    region: &metapb::Region,
+    peer: &metapb::Peer,
+    failed_voters: Vec<metapb::Peer>,
+) -> Option<RaftCmdRequest> {
+    let failed_voter_ids = HashSet::from_iter(failed_voters.iter().map(|voter| voter.get_id()));
+    let mut req = new_admin_request(region.get_id(), peer.clone());
+    req.mut_header()
+        .set_region_epoch(region.get_region_epoch().clone());
+    let mut change_peer_reqs: Vec<ChangePeer> = region
+        .get_peers()
+        .iter()
+        .filter_map(|peer| {
+            if failed_voter_ids.contains(&peer.get_id())
+                && peer.get_role() == metapb::PeerRole::Voter
+            {
+                let mut peer_clone = peer.clone();
+                peer_clone.set_role(metapb::PeerRole::Learner);
+                let mut cp = ChangePeer::default();
+                cp.set_change_type(ConfChangeType::AddLearnerNode);
+                cp.set_peer(peer_clone);
+                return Some(cp);
+            }
+            None
+        })
+        .collect();
+
+    // Promote self if it is a learner.
+    if peer.get_role() == metapb::PeerRole::Learner {
+        let mut cp = ChangePeer::default();
+        cp.set_change_type(ConfChangeType::AddNode);
+        let mut promote = peer.clone();
+        promote.set_role(metapb::PeerRole::Voter);
+        cp.set_peer(promote);
+        change_peer_reqs.push(cp);
+    }
+    if change_peer_reqs.is_empty() {
+        return None;
+    }
+    req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
+    Some(req)
 }

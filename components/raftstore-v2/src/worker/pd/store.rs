@@ -285,8 +285,8 @@ where
                 Ok(mut resp) => {
                     // TODO: handle replication_status
 
-                    if let Some(plan) = resp.recovery_plan.take() {
-                        let router = Arc::new(UnsafeRecoveryRouter::new(router));
+                    if let Some(mut plan) = resp.recovery_plan.take() {
+                        let handle = Arc::new(UnsafeRecoveryRouter::new(router));
                         info!(logger, "Unsafe recovery, received a recovery plan");
                         if plan.has_force_leader() {
                             let mut failed_stores = HashSet::default();
@@ -295,10 +295,10 @@ where
                             }
                             let syncer = UnsafeRecoveryForceLeaderSyncer::new(
                                 plan.get_step(),
-                                router.clone(),
+                                handle.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
-                                if let Err(e) = router.send_enter_force_leader(
+                                if let Err(e) = handle.send_enter_force_leader(
                                     *region,
                                     syncer.clone(),
                                     failed_stores.clone(),
@@ -309,9 +309,36 @@ where
                                 }
                             }
                         } else {
-                            let _syncer =
-                                UnsafeRecoveryExecutePlanSyncer::new(plan.get_step(), router);
-                            // TODO: handle creates/tombstone/demotes
+                            let syncer = UnsafeRecoveryExecutePlanSyncer::new(
+                                plan.get_step(),
+                                handle.clone(),
+                            );
+                            for create in plan.take_creates().into_iter() {
+                                if let Err(e) = handle.send_create_peer(create, syncer.clone()) {
+                                    error!(logger,
+                                        "fail to send create peer message for recovery";
+                                        "err" => ?e);
+                                }
+                            }
+                            for tombstone in plan.take_tombstones().into_iter() {
+                                if let Err(e) = handle.send_destroy_peer(tombstone, syncer.clone())
+                                {
+                                    error!(logger,
+                                        "fail to send destroy peer message for recovery";
+                                        "err" => ?e);
+                                }
+                            }
+                            for mut demote in plan.take_demotes().into_iter() {
+                                if let Err(e) = handle.send_demote_peers(
+                                    demote.get_region_id(),
+                                    demote.take_failed_voters().into_vec(),
+                                    syncer.clone(),
+                                ) {
+                                    error!(logger,
+                                        "fail to send update peer list message for recovery";
+                                        "err" => ?e);
+                                }
+                            }
                         }
                     }
 
@@ -387,7 +414,11 @@ where
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
         let store_heartbeat_interval = std::cmp::max(self.store_heartbeat_interval.as_secs(), 1);
-        (interval_second >= store_heartbeat_interval)
+        // Only if the `last_report_ts`, that is, the last timestamp of
+        // store_heartbeat, exceeds the interval of store heartbaet but less than
+        // the given limitation, will it trigger a report of fake heartbeat to
+        // make the statistics of slowness percepted by PD timely.
+        (interval_second > store_heartbeat_interval)
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
             && (interval_second % store_heartbeat_interval == 0)
     }

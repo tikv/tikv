@@ -9,7 +9,7 @@ use std::{
         Bound::{Excluded, Unbounded},
         VecDeque,
     },
-    iter::{FromIterator, Iterator},
+    iter::Iterator,
     mem,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -71,6 +71,7 @@ use crate::{
     coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         cmd_resp::{bind_term, new_error},
+        demote_failed_voters_request,
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
@@ -90,15 +91,16 @@ use crate::{
         region_meta::RegionMeta,
         transport::Transport,
         unsafe_recovery::{
-            ForceLeaderState, SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+            exit_joint_request, ForceLeaderState, SnapshotRecoveryState,
+            SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
         util,
         util::{KeysInfoFormatter, LeaseState},
         worker::{
-            new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
-            GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
+            Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
+            ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
@@ -126,6 +128,7 @@ enum DelayReason {
 /// in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
 
@@ -769,11 +772,12 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, demote failed voters has already been initiated";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -870,11 +874,12 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't destroy, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -888,11 +893,12 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't wait apply, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -919,11 +925,12 @@ where
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
     fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
-        if self.fsm.peer.snapshot_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -6056,8 +6063,8 @@ where
         debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
-            "buckets count" => buckets_count,
-            "buckets size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
+            "buckets_count" => buckets_count,
+            "buckets_size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
         );
         // test purpose
         #[cfg(any(test, feature = "testexport"))]
@@ -6295,13 +6302,22 @@ where
         if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
             // Clean up the force leader state after a timeout, since the PD recovery
             // process may have been aborted for some reasons.
-            if time.saturating_elapsed()
-                > cmp::max(
-                    self.ctx.cfg.peer_stale_state_check_interval.0,
-                    Duration::from_secs(60),
-                )
-            {
+            if time.saturating_elapsed() > UNSAFE_RECOVERY_STATE_TIMEOUT {
                 self.on_exit_force_leader();
+            }
+        }
+        if let Some(state) = &mut self.fsm.peer.unsafe_recovery_state {
+            let unsafe_recovery_state_timeout_failpoint = || -> bool {
+                fail_point!("unsafe_recovery_state_timeout", |_| true);
+                false
+            };
+            // Clean up the unsafe recovery state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if unsafe_recovery_state_timeout_failpoint()
+                || state.check_timeout(UNSAFE_RECOVERY_STATE_TIMEOUT)
+            {
+                info!("timeout, abort unsafe recovery"; "state" => ?state);
+                state.abort();
             }
         }
 
@@ -6806,57 +6822,6 @@ fn new_compact_log_request(
         .set_voter_replicated_index(voter_replicated_index);
     request.set_admin_request(admin);
     request
-}
-
-fn demote_failed_voters_request(
-    region: &metapb::Region,
-    peer: &metapb::Peer,
-    failed_voters: Vec<metapb::Peer>,
-) -> Option<RaftCmdRequest> {
-    let failed_voter_ids = HashSet::from_iter(failed_voters.iter().map(|voter| voter.get_id()));
-    let mut req = new_admin_request(region.get_id(), peer.clone());
-    req.mut_header()
-        .set_region_epoch(region.get_region_epoch().clone());
-    let mut change_peer_reqs: Vec<pdpb::ChangePeer> = region
-        .get_peers()
-        .iter()
-        .filter_map(|peer| {
-            if failed_voter_ids.contains(&peer.get_id())
-                && peer.get_role() == metapb::PeerRole::Voter
-            {
-                let mut peer_clone = peer.clone();
-                peer_clone.set_role(metapb::PeerRole::Learner);
-                let mut cp = pdpb::ChangePeer::default();
-                cp.set_change_type(ConfChangeType::AddLearnerNode);
-                cp.set_peer(peer_clone);
-                return Some(cp);
-            }
-            None
-        })
-        .collect();
-
-    // Promote self if it is a learner.
-    if peer.get_role() == metapb::PeerRole::Learner {
-        let mut cp = pdpb::ChangePeer::default();
-        cp.set_change_type(ConfChangeType::AddNode);
-        let mut promote = peer.clone();
-        promote.set_role(metapb::PeerRole::Voter);
-        cp.set_peer(promote);
-        change_peer_reqs.push(cp);
-    }
-    if change_peer_reqs.is_empty() {
-        return None;
-    }
-    req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
-    Some(req)
-}
-
-fn exit_joint_request(region: &metapb::Region, peer: &metapb::Peer) -> RaftCmdRequest {
-    let mut req = new_admin_request(region.get_id(), peer.clone());
-    req.mut_header()
-        .set_region_epoch(region.get_region_epoch().clone());
-    req.set_admin_request(new_change_peer_v2_request(vec![]));
-    req
 }
 
 impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>

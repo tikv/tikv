@@ -50,7 +50,7 @@ where
             if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty, None) {
                 error!(
                     "failed to decrease thread pool";
-                    "decrease to" => size,
+                    "decrease_to" => size,
                     "err" => %e,
                 );
                 return;
