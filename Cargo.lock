@@ -2972,7 +2972,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build 0.13.0",
+ "protobuf-build 0.14.1",
  "raft-proto",
 ]
 
@@ -3096,7 +3096,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3115,7 +3115,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4403,7 +4403,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b2be70fa994657539e3c872cc54363c9bf28b0d7a7f774df70e9fd760df3bc4"
 dependencies = [
  "bitflags",
- "grpcio-compiler",
  "protobuf",
  "protobuf-codegen",
  "regex",
@@ -4416,6 +4415,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2df9942df2981178a930a72d442de47e2f0df18ad68e50a30f816f1848215ad0"
 dependencies = [
  "bitflags",
+ "grpcio-compiler",
  "protobuf",
  "protobuf-codegen",
  "regex",
@@ -5090,7 +5090,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#782bfc8309f266da634267d207760362b362aa61"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -6625,7 +6625,6 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "protobuf",
- "resource_control",
  "slog",
  "slog-global",
  "smallvec",
