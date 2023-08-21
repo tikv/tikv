@@ -375,19 +375,19 @@ fn member_of_validator(expr: &tipb::Expr) -> Result<()> {
 #[inline]
 fn member_of(args: &[ScalarValueRef]) -> Result<Option<i64>> {
     assert!(args.len() == 2);
-    let target: Option<JsonRef> = args[0].as_json();
-    let target = match target {
+    let value: Option<JsonRef> = args[0].as_json();
+    let value = match value {
         None => return Ok(None),
-        Some(target) => target,
+        Some(value) => value.to_owned(),
     };
 
-    let obj: Option<JsonRef> = args[1].as_json();
-    let mut obj = match obj {
+    let json_array: Option<JsonRef> = args[1].as_json();
+    let json_array = match json_array {
         None => return Ok(None),
-        Some(obj) => obj.to_owned(),
+        Some(json_array) => json_array,
     };
 
-    Ok(Some(obj.as_ref().member_of(target)? as i64))
+    Ok(Some(value.as_ref().member_of(json_array)? as i64))
 }
 
 #[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
