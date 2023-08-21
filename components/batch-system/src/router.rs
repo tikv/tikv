@@ -8,6 +8,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    time::Duration,
 };
 
 use collections::HashMap;
@@ -21,6 +22,8 @@ use crate::{
 };
 
 const ROUTER_CACHE_CAP: usize = 256;
+const ROUTER_CACHE_CLEAN_UP_COUNT_DOWN: usize = 10;
+const ROUTER_CACHE_CLEAN_UP_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A struct that traces the approximate memory usage of router.
 #[derive(Default)]
@@ -58,7 +61,7 @@ enum CheckDoResult<T> {
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<NormalMailMap<N>>>,
     caches: Cell<LruCache<u64, BasicMailbox<N>>>,
-    clean_cache_cnt: Cell<usize>,
+    clean_cache_count_down: Cell<usize>,
     clean_cache_time: Cell<Instant>,
     pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
@@ -67,9 +70,11 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     pub(crate) normal_scheduler: Ns,
     pub(crate) control_scheduler: Cs,
 
-    // Number of active mailboxes.
+    // Number of alive mailboxes.
     // Added when a mailbox is created, and subtracted it when a mailbox is
     // destroyed.
+    alive_cnt: Arc<AtomicUsize>,
+    // Number of alive mailboxes and closed mailbox that holden by caches.
     state_cnt: Arc<AtomicUsize>,
     // Indicates the router is shutdown down or not.
     shutdown: Arc<AtomicBool>,
@@ -88,17 +93,19 @@ where
         control_scheduler: Cs,
         state_cnt: Arc<AtomicUsize>,
     ) -> Router<N, C, Ns, Cs> {
+        let alive_cnt = Arc::<AtomicUsize>::default();
         Router {
             normals: Arc::new(Mutex::new(NormalMailMap {
                 map: HashMap::default(),
-                alive_cnt: Arc::default(),
+                alive_cnt: alive_cnt.clone(),
             })),
             caches: Cell::new(LruCache::with_capacity_and_sample(ROUTER_CACHE_CAP, 7)),
-            clean_cache_cnt: Cell::new(0),
+            clean_cache_count_down: Cell::new(ROUTER_CACHE_CLEAN_UP_COUNT_DOWN),
             clean_cache_time: Cell::new(Instant::now_coarse()),
             control_box,
             normal_scheduler,
             control_scheduler,
+            alive_cnt,
             state_cnt,
             shutdown: Arc::new(AtomicBool::new(false)),
         }
@@ -125,15 +132,20 @@ where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
         let maybe_clean_cache_leak = |alive_cnt, caches: &mut LruCache<u64, BasicMailbox<N>>| {
+            self.clean_cache_count_down
+                .set(ROUTER_CACHE_CLEAN_UP_COUNT_DOWN);
+            self.clean_cache_time.set(Instant::now_coarse());
+
             let leak = self.leak_count(alive_cnt);
+            if leak == 0 {
+                return;
+            }
             for _ in 0..leak {
                 // Maybe the cache is hold leaked mailbox, so we need to remove it.
                 let _ = caches.remove_lru();
             }
             // Free memory holden by the cache when cache len / cache cap < 0.6.
             caches.maybe_shrink_to_fit(0.6);
-            self.clean_cache_cnt.set(0);
-            self.clean_cache_time.set(Instant::now_coarse());
         };
 
         let caches = unsafe { &mut *self.caches.as_ptr() };
@@ -150,16 +162,19 @@ where
             }
         }
         if let Some(res) = res {
-            let hit_count = self.clean_cache_cnt.get();
-            if hit_count > 10 {
+            let count_down = self.clean_cache_count_down.get();
+            if count_down == 0 {
                 // Amortizes overhead.
-                if self.clean_cache_time.get().saturating_elapsed().as_secs() > 1 {
-                    let alive_cnt = self.normals.lock().unwrap().map.len();
+                if self.clean_cache_time.get().saturating_elapsed() > ROUTER_CACHE_CLEAN_UP_INTERVAL
+                {
+                    let alive_cnt = self.alive_cnt.load(Ordering::Relaxed);
                     maybe_clean_cache_leak(alive_cnt, caches);
                 }
-                self.clean_cache_cnt.set(0);
+                self.clean_cache_count_down
+                    .set(ROUTER_CACHE_CLEAN_UP_COUNT_DOWN);
             } else {
-                self.clean_cache_cnt.set(hit_count + 1);
+                self.clean_cache_count_down
+                    .set(count_down.saturating_sub(1));
             }
             return res;
         }
@@ -375,6 +390,7 @@ where
             debug!("[region {}] shutdown mailbox", addr);
             mailbox.close();
         }
+        mailboxes.alive_cnt.store(0, Ordering::Relaxed);
         self.control_box.close();
         self.normal_scheduler.shutdown();
         self.control_scheduler.shutdown();
@@ -402,7 +418,7 @@ where
     }
 
     pub fn alive_cnt(&self) -> Arc<AtomicUsize> {
-        self.normals.lock().unwrap().alive_cnt.clone()
+        self.alive_cnt.clone()
     }
 
     fn leak_count(&self, alive: usize) -> usize {
@@ -416,12 +432,7 @@ where
     }
 
     pub fn trace(&self) -> RouterTrace {
-        let alive = self
-            .normals
-            .lock()
-            .unwrap()
-            .alive_cnt
-            .load(Ordering::Relaxed);
+        let alive = self.alive_cnt.load(Ordering::Relaxed);
         let leak = self.leak_count(alive);
         let mailbox_unit = mem::size_of::<(u64, BasicMailbox<N>)>();
         let state_unit = mem::size_of::<FsmState<N>>();
@@ -444,7 +455,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
         Router {
             normals: self.normals.clone(),
             caches: Cell::new(LruCache::with_capacity_and_sample(ROUTER_CACHE_CAP, 7)),
-            clean_cache_cnt: Cell::new(0),
+            clean_cache_count_down: Cell::new(0),
             clean_cache_time: Cell::new(Instant::now_coarse()),
             control_box: self.control_box.clone(),
             // These two schedulers should be unified as single one. However
@@ -454,6 +465,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
             control_scheduler: self.control_scheduler.clone(),
             shutdown: self.shutdown.clone(),
             state_cnt: self.state_cnt.clone(),
+            alive_cnt: self.alive_cnt.clone(),
         }
     }
 }
