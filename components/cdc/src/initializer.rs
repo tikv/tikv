@@ -425,9 +425,9 @@ impl<E: KvEngine> Initializer<E> {
         Ok(entries)
     }
 
-    async fn sink_scan_events(&mut self, _entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
+    async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
         let mut barrier = None;
-        let entries = Vec::new();
+        let entries = entries.into_iter().filter(|x| x.is_none()).collect();
         let mut events = Delegate::convert_to_grpc_events(
             self.region_id,
             self.request_id,
