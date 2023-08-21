@@ -260,6 +260,7 @@ fn seek_to(all_data: &Vec<Vec<u8>>, target_key: &[u8], from_pos: usize) -> usize
 mod tests {
     use std::{path::Path, str};
 
+    use collections::HashMap;
     use engine_rocks::{
         raw::{BlockBasedOptions, DBCompressionType},
         util::new_engine_opt,
@@ -268,15 +269,12 @@ mod tests {
     use engine_traits::{
         CompactExt, IterOptions, Iterator, MiscExt, RefIterable, SstReader, SyncMutable, CF_DEFAULT,
     };
-    use itertools::Itertools;
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{
-        coprocessor::region_info_accessor::MockRegionInfoProvider, store::util::get_entry_header,
-    };
+    use crate::coprocessor::region_info_accessor::MockRegionInfoProvider;
 
     impl<G: RegionInfoProvider> CompactionGuardGenerator<G> {
         fn reset_next_level_size_state(&mut self) {
@@ -623,9 +621,8 @@ mod tests {
         assert_eq!(collect_keys(&sst_files[2]), [b"zc6"]);
     }
 
-    #[test]
-    fn test_next_level_compaction() {
-        let provider = MockRegionInfoProvider::new(vec![
+    fn simple_regions() -> MockRegionInfoProvider {
+        MockRegionInfoProvider::new(vec![
             Region {
                 id: 1,
                 start_key: b"a".to_vec(),
@@ -644,45 +641,99 @@ mod tests {
                 end_key: b"d".to_vec(),
                 ..Default::default()
             },
-        ]);
-        let (db, dir) = new_test_db(provider);
+        ])
+    }
+
+    #[test]
+    fn test_next_level_compaction() {
+        let provider = simple_regions();
+        let (db, _dir) = new_test_db(provider);
         assert_eq!(b"z", DATA_PREFIX_KEY);
-        let small_value = [b'v'; 1024];
-        let huge_value = vec![b'v'; 1024 * 1024];
+        let tiny_value = [b'v'; 1];
+        let value = vec![b'v'; 1024 * 10];
         ['a', 'b', 'c']
             .into_iter()
             .flat_map(|x| (1..10).map(move |n| format!("z{x}{n}").into_bytes()))
-            .for_each(|key| db.put(&key, &huge_value).unwrap());
+            .for_each(|key| db.put(&key, &value).unwrap());
         db.flush_cfs(&[], true).unwrap();
         db.compact_files_in_range(None, None, Some(2)).unwrap();
-        dump_db_info(&db);
-        db.put(b"za0", &small_value).unwrap();
-        db.put(b"zc0", &small_value).unwrap();
+        db.put(b"za0", &tiny_value).unwrap();
+        db.put(b"zd0", &tiny_value).unwrap();
         db.flush_cfs(&[], true).unwrap();
         db.compact_files_in_range(None, None, Some(1)).unwrap();
-        dump_db_info(&db);
-        db.put(b"zb0", &huge_value).unwrap();
-        db.put(b"zb6", &huge_value).unwrap();
-        db.flush_cfs(&[], true).unwrap();
-        db.compact_range(None, None, false, 1).unwrap();
-        dump_db_info(&db);
 
-        panic!("everything is alright");
+        let level_1 = &level_files(&db)[&1];
+        assert_eq!(level_1.len(), 2, "{:?}", level_1);
+        assert_eq!(level_1[0].smallestkey, b"za0", "{:?}", level_1);
+        assert_eq!(level_1[0].largestkey, b"za0", "{:?}", level_1);
+        assert_eq!(level_1[1].smallestkey, b"zd0", "{:?}", level_1);
+        assert_eq!(level_1[1].largestkey, b"zd0", "{:?}", level_1);
     }
 
-    fn dump_db_info(db: &RocksEngine) {
+    #[test]
+    fn test_next_level_compaction_no_split() {
+        let provider = simple_regions();
+        let (db, _dir) = new_test_db(provider);
+        assert_eq!(b"z", DATA_PREFIX_KEY);
+        let tiny_value = [b'v'; 1];
+        let value = vec![b'v'; 1024 * 10];
+        ['a', 'b', 'c']
+            .into_iter()
+            .flat_map(|x| (1..10).map(move |n| format!("z{x}{n}").into_bytes()))
+            .for_each(|key| db.put(&key, &value).unwrap());
+        db.flush_cfs(&[], true).unwrap();
+        db.compact_files_in_range(None, None, Some(2)).unwrap();
+        // So... the next-level size will be almost 1024 * 9, which doesn't exceeds the
+        // compaction size limit.
+        db.put(b"za0", &tiny_value).unwrap();
+        db.put(b"za9", &tiny_value).unwrap();
+        db.flush_cfs(&[], true).unwrap();
+        db.compact_files_in_range(None, None, Some(1)).unwrap();
+
+        let level_1 = &level_files(&db)[&1];
+        assert_eq!(level_1.len(), 1, "{:?}", level_1);
+        assert_eq!(level_1[0].smallestkey, b"za0", "{:?}", level_1);
+        assert_eq!(level_1[0].largestkey, b"za9", "{:?}", level_1);
+        db.compact_range(None, None, false, 1).unwrap();
+
+        // So... the next-level size will be almost 1024 * 15, which should reach the
+        // limit.
+        db.put(b"za30", &tiny_value).unwrap();
+        db.put(b"zb90", &tiny_value).unwrap();
+        db.flush_cfs(&[], true).unwrap();
+        db.compact_files_in_range(None, None, Some(1)).unwrap();
+
+        let level_1 = &level_files(&db)[&1];
+        assert_eq!(level_1.len(), 2, "{:?}", level_1);
+        assert_eq!(level_1[0].smallestkey, b"za30", "{:?}", level_1);
+        assert_eq!(level_1[1].largestkey, b"zb90", "{:?}", level_1);
+    }
+
+    #[derive(Debug)]
+    #[allow(dead_code)]
+    struct OwnedSstFileMetadata {
+        name: String,
+        size: usize,
+        smallestkey: Vec<u8>,
+        largestkey: Vec<u8>,
+    }
+
+    #[allow(unused)]
+    fn level_files(db: &RocksEngine) -> HashMap<usize, Vec<OwnedSstFileMetadata>> {
         let db = db.as_inner();
         let cf = db.cf_handle("default").unwrap();
         let md = db.get_column_family_meta_data(cf);
+        let mut res: HashMap<usize, Vec<OwnedSstFileMetadata>> = HashMap::default();
         for (i, level) in md.get_levels().into_iter().enumerate() {
-            println!(
-                "{i}: {}",
-                level
-                    .get_files()
-                    .into_iter()
-                    .map(|f| format!("{}({})", f.get_name(), f.get_size()))
-                    .join(", ")
-            );
+            for file in level.get_files() {
+                res.entry(i).or_default().push(OwnedSstFileMetadata {
+                    name: file.get_name(),
+                    size: file.get_size(),
+                    smallestkey: file.get_smallestkey().to_owned(),
+                    largestkey: file.get_largestkey().to_owned(),
+                });
+            }
         }
+        res
     }
 }
