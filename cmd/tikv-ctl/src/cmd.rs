@@ -565,6 +565,7 @@ pub enum Cmd {
     },
     #[structopt(external_subcommand)]
     External(Vec<String>),
+    /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {
         #[structopt(short = "r", long)]
         /// The target region id
