@@ -213,10 +213,10 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
                 // boundaries: A   B   C   D
                 // size:           1   3   2
                 //                   ^ *
-                // You will notice that the previous user key is between B and C, when indices
+                // You will notice that the previous user key is between B and C, which indices
                 // that there must still be something between previous user key and C.
                 // We still set `current_next_level_size` to zero here, so the segment will be
-                // forgot. I think that will be acceptable given generally a segment won't be
+                // forgotten. I think that will be acceptable given generally a segment won't be
                 // greater than the `max-sst-size`, which is tiny comparing to the
                 // `max-compaction-size` usually.
                 self.current_next_level_size = 0;
