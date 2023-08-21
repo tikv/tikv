@@ -59,9 +59,21 @@ impl SubRecorder for CpuRecorder {
         });
     }
 
+<<<<<<< HEAD:components/resource_metering/src/recorder/cpu.rs
     fn cleanup(&mut self) {
         const THREAD_STAT_LEN_THRESHOLD: usize = 500;
+=======
+    fn cleanup(
+        &mut self,
+        _records: &mut RawRecords,
+        thread_stores: &mut HashMap<Pid, LocalStorage>,
+    ) {
+        // Remove thread stats that are no longer in thread_stores.
+        self.thread_stats
+            .retain(|tid, _| thread_stores.contains_key(tid));
+>>>>>>> e59ad221e3 (resource_metering: free leaked thread CPU stats (#15373)):components/resource_metering/src/recorder/sub_recorder/cpu.rs
 
+        const THREAD_STAT_LEN_THRESHOLD: usize = 500;
         if self.thread_stats.capacity() > THREAD_STAT_LEN_THRESHOLD
             && self.thread_stats.len() < THREAD_STAT_LEN_THRESHOLD / 2
         {
