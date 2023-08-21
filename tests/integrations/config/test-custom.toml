@@ -331,6 +331,8 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -393,6 +395,8 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -442,6 +446,8 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -491,6 +497,8 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
