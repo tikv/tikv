@@ -2298,11 +2298,11 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
         {
             // FIXME: this doesn't output to logfile.
             debug!("need reject log append on memory limit";
-                "raft messages" => raft_msg_usage,
-                "cached entries" => cached_entries,
-                "applying entries" => applying_entries,
-                "current usage" => usage,
-                "reject ratio" => reject_messages_on_memory_ratio);
+                "raft_messages" => raft_msg_usage,
+                "cached_entries" => cached_entries,
+                "applying_entries" => applying_entries,
+                "current_usage" => usage,
+                "reject_ratio" => reject_messages_on_memory_ratio);
             return true;
         }
     }

@@ -20,7 +20,7 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
-use tikv_util::{impl_display_as_debug, time::Instant, warn};
+use tikv_util::{future::block_on_timeout, impl_display_as_debug, time::Instant, warn};
 
 use crate::metrics::*;
 
@@ -435,22 +435,7 @@ pub fn recv_timeout<S, I>(s: &mut S, dur: std::time::Duration) -> Result<Option<
 where
     S: Stream<Item = I> + Unpin,
 {
-    poll_timeout(&mut s.next(), dur)
-}
-
-pub fn poll_timeout<F, I>(fut: &mut F, dur: std::time::Duration) -> Result<I, ()>
-where
-    F: std::future::Future<Output = I> + Unpin,
-{
-    use futures::FutureExt;
-    let mut timeout = futures_timer::Delay::new(dur).fuse();
-    let mut f = fut.fuse();
-    futures::executor::block_on(async {
-        futures::select! {
-            () = timeout => Err(()),
-            item = f => Ok(item),
-        }
-    })
+    block_on_timeout(s.next(), dur)
 }
 
 #[cfg(test)]

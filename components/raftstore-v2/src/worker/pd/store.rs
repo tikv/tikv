@@ -328,7 +328,17 @@ where
                                         "err" => ?e);
                                 }
                             }
-                            // TODO: handle demotes
+                            for mut demote in plan.take_demotes().into_iter() {
+                                if let Err(e) = handle.send_demote_peers(
+                                    demote.get_region_id(),
+                                    demote.take_failed_voters().into_vec(),
+                                    syncer.clone(),
+                                ) {
+                                    error!(logger,
+                                        "fail to send update peer list message for recovery";
+                                        "err" => ?e);
+                                }
+                            }
                         }
                     }
 
@@ -404,7 +414,11 @@ where
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
         let store_heartbeat_interval = std::cmp::max(self.store_heartbeat_interval.as_secs(), 1);
-        (interval_second >= store_heartbeat_interval)
+        // Only if the `last_report_ts`, that is, the last timestamp of
+        // store_heartbeat, exceeds the interval of store heartbaet but less than
+        // the given limitation, will it trigger a report of fake heartbeat to
+        // make the statistics of slowness percepted by PD timely.
+        (interval_second > store_heartbeat_interval)
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
             && (interval_second % store_heartbeat_interval == 0)
     }

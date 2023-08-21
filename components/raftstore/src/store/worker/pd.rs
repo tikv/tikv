@@ -59,7 +59,6 @@ use crate::{
     store::{
         cmd_resp::new_error,
         metrics::*,
-        transport::SignificantRouter,
         unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
         },
@@ -69,7 +68,7 @@ use crate::{
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
         Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
+        RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
 };
 
@@ -1417,12 +1416,10 @@ where
                                 }
                             }
                             for mut demote in plan.take_demotes().into_iter() {
-                                if let Err(e) = router.significant_send(
+                                if let Err(e) = handle.send_demote_peers(
                                     demote.get_region_id(),
-                                    SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
-                                        syncer: syncer.clone(),
-                                        failed_voters: demote.take_failed_voters().into_vec(),
-                                    },
+                                    demote.take_failed_voters().into_vec(),
+                                    syncer.clone(),
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
                                 }
@@ -1680,7 +1677,7 @@ where
                     let mut switches = resp.take_switch_witnesses();
                     info!("try to switch witness";
                           "region_id" => region_id,
-                          "switch witness" => ?switches
+                          "switch_witness" => ?switches
                     );
                     let req = new_batch_switch_witness(switches.take_switch_witnesses().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
@@ -1980,7 +1977,11 @@ where
     fn is_store_heartbeat_delayed(&self) -> bool {
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
-        (interval_second >= self.store_heartbeat_interval.as_secs())
+        // Only if the `last_report_ts`, that is, the last timestamp of
+        // store_heartbeat, exceeds the interval of store heartbaet but less than
+        // the given limitation, will it trigger a report of fake heartbeat to
+        // make the statistics of slowness percepted by PD timely.
+        (interval_second > self.store_heartbeat_interval.as_secs())
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
     }
 

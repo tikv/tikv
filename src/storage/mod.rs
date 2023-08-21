@@ -601,6 +601,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
         let stage_begin_ts = Instant::now();
+        let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -640,6 +641,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
+                deadline.check()?;
+
                 Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
                 let command_duration = tikv_util::time::Instant::now();
@@ -661,6 +664,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
 
                 {
+                    deadline.check()?;
                     let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
@@ -809,6 +813,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
                     set_tls_tracker_token(tracker);
                     let mut ctx = req.take_context();
+                    let deadline = Self::get_deadline(&ctx);
                     let source = ctx.take_request_source();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
@@ -867,6 +872,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         id,
                         source,
                         tracker,
+                        deadline,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -883,8 +889,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         id,
                         source,
                         tracker,
+                        deadline,
                     ) = req_snap;
                     let snap_res = snap.await;
+                    if let Err(e) = deadline.check() {
+                        consumer.consume(id, Err(Error::from(e)), begin_instant, source);
+                        continue;
+                    }
+
                     set_tls_tracker_token(tracker);
                     match snap_res {
                         Ok(snapshot) => Self::with_perf_context(CMD, || {
@@ -955,6 +967,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
         let stage_begin_ts = Instant::now();
+        let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
@@ -997,6 +1010,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
+                deadline.check()?;
+
                 Self::check_api_version(
                     api_version,
                     ctx.api_version,
@@ -1020,6 +1035,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
+                    deadline.check()?;
                     let begin_instant = Instant::now();
 
                     let stage_snap_recv_ts = begin_instant;

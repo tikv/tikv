@@ -301,8 +301,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(snapshot_index);
-            if self.proposal_control().is_merging() {
+            if self.proposal_control().has_applied_prepare_merge() {
                 // After applying a snapshot, merge is rollbacked implicitly.
+                info!(
+                    self.logger,
+                    "rollback merge after applying snapshot";
+                    "index" => snapshot_index,
+                    "region" => ?self.region(),
+                );
                 self.rollback_merge(ctx);
             }
             let read_tablet = SharedReadTablet::new(tablet.clone());
@@ -600,8 +606,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 warn!(
                     self.logger(),
                     "snapshot is staled, skip";
-                    "snap index" => snapshot.get_metadata().get_index(),
-                    "required index" => index.load(Ordering::SeqCst),
+                    "snap_index" => snapshot.get_metadata().get_index(),
+                    "required_index" => index.load(Ordering::SeqCst),
                     "to_peer_id" => to_peer_id,
                 );
                 return false;

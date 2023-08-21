@@ -627,6 +627,7 @@ pub enum Cmd {
         /// hex end key
         end: String,
     },
+    /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {
         #[structopt(short = "r", long)]
         /// The target region id
