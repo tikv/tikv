@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, time::Duration,
+    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, thread,time::Duration,
 };
 
 use ::tracker::{
@@ -399,6 +399,16 @@ impl<E: Engine> Endpoint<E> {
         let snapshot =
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
                 .await?;
+
+        let rand_v: u64 = rand::thread_rng().gen();
+        if (rand_v % 10000) == 0 {
+            let dur = Duration::from_secs(5);
+            for _ in 0..dur.as_millis() as u64 / 10 {
+                thread::sleep(Duration::from_millis(10));
+                yatp::task::future::reschedule().await;
+            }
+        }
+
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
