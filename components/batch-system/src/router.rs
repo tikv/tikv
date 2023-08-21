@@ -20,7 +20,7 @@ use crate::{
     metrics::*,
 };
 
-const ROUTER_CACHE_CAP: usize = 256;
+const ROUTER_CACHE_CAP: usize = 64;
 
 /// A struct that traces the approximate memory usage of router.
 #[derive(Default)]
