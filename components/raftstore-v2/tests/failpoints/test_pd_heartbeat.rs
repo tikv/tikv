@@ -31,15 +31,18 @@ fn test_fake_store_heartbeat() {
     }
     // Inject failpoints to trigger reporting fake store heartbeat to pd.
     fail::cfg("mock_slowness_last_tick_unfinished", "return(0)").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_secs(1));
     let after_stats =
         block_on(cluster.node(0).pd_client().get_store_stats_async(store_id)).unwrap();
     assert_ne!(after_stats.get_capacity(), 0);
     assert_ne!(after_stats.get_used_size(), 0);
     assert_eq!(after_stats.get_keys_written(), 0);
     if after_stats.get_start_time() == 0 {
+        // It means that current store_heartbeat is timeout, and triggers a fake
+        // heartbeat.
         assert!(after_stats.get_is_busy());
     } else {
+        // Normal.
         assert!(!after_stats.get_is_busy());
     }
 
