@@ -281,15 +281,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
-name = "autotools"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aef8da1805e028a172334c3b680f93e71126f2327622faef2ec3d893c0a4ad77"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "aws"
 version = "0.0.1"
 dependencies = [
@@ -2976,12 +2967,12 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/bufferflies/kvproto?branch=not_bucket_version#7dbd02fd5962be446f48b3c88a6b9e1bd3099f23"
+source = "git+https://github.com/pingcap/kvproto.git#7b612d935bf96f9daf7a537db379bcc88b4644e0"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build 0.15.1",
+ "protobuf-build 0.13.0",
  "raft-proto",
 ]
 
@@ -4412,6 +4403,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b2be70fa994657539e3c872cc54363c9bf28b0d7a7f774df70e9fd760df3bc4"
 dependencies = [
  "bitflags",
+ "grpcio-compiler",
  "protobuf",
  "protobuf-codegen",
  "regex",
@@ -4426,20 +4418,6 @@ dependencies = [
  "bitflags",
  "protobuf",
  "protobuf-codegen",
- "regex",
-]
-
-[[package]]
-name = "protobuf-build"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c852d9625b912c3e50480cdc701f60f49890b5d7ad46198dd583600f15e7c6ec"
-dependencies = [
- "bitflags",
- "grpcio-compiler",
- "protobuf",
- "protobuf-codegen",
- "protobuf-src",
  "regex",
 ]
 
@@ -4460,15 +4438,6 @@ checksum = "00993dc5fbbfcf9d8a005f6b6c29fd29fd6d86deba3ae3f41fd20c624c414616"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
-]
-
-[[package]]
-name = "protobuf-src"
-version = "1.1.0+21.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7ac8852baeb3cc6fb83b93646fb93c0ffe5d14bf138c945ceb4b9948ee0e3c1"
-dependencies = [
- "autotools",
 ]
 
 [[package]]
