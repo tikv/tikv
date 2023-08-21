@@ -796,6 +796,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
                     set_tls_tracker_token(tracker);
                     let mut ctx = req.take_context();
+                    let deadline = Self::get_deadline(&ctx);
                     let source = ctx.take_request_source();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
@@ -854,6 +855,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         id,
                         source,
                         tracker,
+                        deadline,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -870,8 +872,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         id,
                         source,
                         tracker,
+                        deadline
                     ) = req_snap;
                     let snap_res = snap.await;
+                    if let Err(e) = deadline.check() {
+                        consumer.consume(id, Err(Error::from(e)), begin_instant, source);
+                        continue;
+                    }
                     set_tls_tracker_token(tracker);
                     match snap_res {
                         Ok(snapshot) => Self::with_perf_context(CMD, || {
@@ -1017,7 +1024,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     if let Err(e) = deadline.check() {
                         return Err(Error::from(e));
                     }
-                    
+
                     let begin_instant = Instant::now();
 
                     let stage_snap_recv_ts = begin_instant;
