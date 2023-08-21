@@ -455,7 +455,7 @@ impl<E: KvEngine> Initializer<E> {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
         let observe_id = self.observe_id;
-        let rts = resolver.resolve(TimeStamp::zero());
+        let rts = resolver.resolve(TimeStamp::zero(), None);
         info!(
             "cdc resolver initialized and schedule resolver ready";
             "region_id" => region.get_id(),
