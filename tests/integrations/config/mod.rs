@@ -378,8 +378,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
-            ttl: None,
-            periodic_compaction_seconds: None,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -449,8 +449,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
-            ttl: None,
-            periodic_compaction_seconds: None,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -520,8 +520,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
-            ttl: None,
-            periodic_compaction_seconds: None,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -591,8 +591,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
-            ttl: None,
-            periodic_compaction_seconds: None,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         titan: titan_db_config.clone(),
     };
