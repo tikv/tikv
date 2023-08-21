@@ -1,13 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-<<<<<<< HEAD
     borrow::ToOwned, cmp::Ordering, path::PathBuf, pin::Pin, str, string::ToString, sync::Arc,
     time::Duration, u64,
-=======
-    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, result, str, string::ToString, sync::Arc,
-    time::Duration,
->>>>>>> 2c5e7ebdb6 (ctl: print durations in get_region_read_progress (#15327))
 };
 
 use api_version::{ApiV1, KvFormat};

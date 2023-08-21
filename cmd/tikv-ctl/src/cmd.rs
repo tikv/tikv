@@ -627,11 +627,7 @@ pub enum Cmd {
         /// hex end key
         end: String,
     },
-<<<<<<< HEAD
     /// Get diagnosis info about resolved-ts and safe-ts
-=======
-    /// Get the state of a region's RegionReadProgress.
->>>>>>> 2c5e7ebdb6 (ctl: print durations in get_region_read_progress (#15327))
     GetRegionReadProgress {
         #[structopt(short = "r", long)]
         /// The target region id
