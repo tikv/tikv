@@ -579,6 +579,7 @@ dependencies = [
  "dashmap",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "etcd-client",
@@ -612,6 +613,7 @@ dependencies = [
  "tempdir",
  "tempfile",
  "test_pd",
+ "test_pd_client",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -6481,6 +6483,7 @@ dependencies = [
  "tipb_helper",
  "tokio",
  "toml",
+ "tracker",
  "txn_types",
  "uuid 0.8.2",
 ]

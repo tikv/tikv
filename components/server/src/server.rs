@@ -1308,7 +1308,7 @@ where
                     Err(e) => {
                         error!(
                             "get disk stat for kv store failed";
-                            "kv path" => store_path.to_str(),
+                            "kv_path" => store_path.to_str(),
                             "err" => ?e
                         );
                         return;
@@ -1334,7 +1334,7 @@ where
                         Err(e) => {
                             error!(
                                 "get disk stat for raft engine failed";
-                                "raft engine path" => raft_path.clone(),
+                                "raft_engine_path" => raft_path.clone(),
                                 "err" => ?e
                             );
                             return;

@@ -81,6 +81,12 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     config.raft_store.snap_generator_pool_size = 20;
     // applied snapshot mem size
     config.raft_store.snap_apply_batch_size = ReadableSize::gb(1);
+
+    // unlimit the snapshot I/O.
+    config.server.snap_io_max_bytes_per_sec = ReadableSize::gb(16);
+    config.server.concurrent_recv_snap_limit = 256;
+    config.server.concurrent_send_snap_limit = 256;
+
     // max snapshot file size, if larger than it, file be splitted.
     config.raft_store.max_snapshot_file_raw_size = ReadableSize::gb(1);
     config.raft_store.hibernate_regions = false;
@@ -92,6 +98,8 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // reboots, the followers will reject to vote for it again.
     // We need to disable the lease for avoiding that.
     config.raft_store.unsafe_disable_check_quorum = true;
+    // The election is fully controlled by the restore procedure of BR.
+    config.raft_store.allow_unsafe_vote_after_start = true;
 
     // disable auto compactions during the restore
     config.rocksdb.defaultcf.disable_auto_compactions = true;

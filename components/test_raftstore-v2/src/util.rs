@@ -266,7 +266,7 @@ pub fn batch_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
         request.mut_header().set_peer(peer.clone());
         let snap = cluster.sim.wl().async_snapshot(node_id, request);
         let resp = block_on_timeout(
-            Box::pin(async move {
+            async move {
                 match snap.await {
                     Ok(snap) => ReadResponse {
                         response: Default::default(),
@@ -279,7 +279,7 @@ pub fn batch_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
                         txn_extra_op: Default::default(),
                     },
                 }
-            }),
+            },
             Duration::from_secs(1),
         )
         .unwrap();
