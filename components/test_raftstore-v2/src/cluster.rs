@@ -1894,6 +1894,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             }
         });
     }
+
+    pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
+        self.pd_client.get_down_peers()
+    }
 }
 
 pub fn bootstrap_store<ER: RaftEngine>(
