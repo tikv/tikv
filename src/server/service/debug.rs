@@ -517,6 +517,124 @@ where
         self.debugger.reset_to_version(req.get_ts());
         sink.success(ResetToVersionResponse::default());
     }
+<<<<<<< HEAD
+=======
+
+    fn flashback_to_version(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: FlashbackToVersionRequest,
+        sink: UnarySink<FlashbackToVersionResponse>,
+    ) {
+        let debugger = self.debugger.clone();
+        let f = self
+            .pool
+            .spawn(async move {
+                let check = debugger.key_range_flashback_to_version(
+                    req.get_version(),
+                    req.get_region_id(),
+                    req.get_start_key(),
+                    req.get_end_key(),
+                    req.get_start_ts(),
+                    req.get_commit_ts(),
+                );
+                match check.await {
+                    Ok(_) => Ok(FlashbackToVersionResponse::default()),
+                    Err(err) => Err(err),
+                }
+            })
+            .map(|res| res.unwrap());
+
+        self.handle_response(ctx, sink, f, "debug_flashback_to_version");
+    }
+
+    fn get_region_read_progress(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: GetRegionReadProgressRequest,
+        sink: UnarySink<GetRegionReadProgressResponse>,
+    ) {
+        let store_meta = self.store_meta.lock().unwrap();
+        let rrp = store_meta.region_read_progress();
+        let mut resp = GetRegionReadProgressResponse::default();
+        rrp.with(|registry| {
+            let region = registry.get(&req.get_region_id());
+            if let Some(r) = region {
+                resp.set_region_read_progress_exist(true);
+                resp.set_safe_ts(r.safe_ts());
+                let core = r.get_core();
+                resp.set_applied_index(core.applied_index());
+                resp.set_region_read_progress_paused(core.paused());
+                if let Some(back) = core.pending_items().back() {
+                    resp.set_pending_back_ts(back.ts);
+                    resp.set_pending_back_applied_index(back.idx);
+                }
+                if let Some(front) = core.pending_items().front() {
+                    resp.set_pending_front_ts(front.ts);
+                    resp.set_pending_front_applied_index(front.idx)
+                }
+                resp.set_read_state_ts(core.read_state().ts);
+                resp.set_read_state_apply_index(core.read_state().idx);
+                resp.set_discard(core.discarding());
+                resp.set_duration_to_last_consume_leader_ms(
+                    core.last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as u64)
+                        .unwrap_or(u64::MAX),
+                );
+                resp.set_duration_to_last_update_safe_ts_ms(
+                    core.last_instant_of_update_ts()
+                        .map(|t| t.saturating_elapsed().as_millis() as u64)
+                        .unwrap_or(u64::MAX),
+                );
+            } else {
+                resp.set_region_read_progress_exist(false);
+            }
+        });
+
+        // get from resolver
+        let (cb, f) = paired_future_callback();
+        if (*self.resolved_ts_scheduler)(
+            req.get_region_id(),
+            req.get_log_locks(),
+            req.get_min_start_ts(),
+            cb,
+        ) {
+            let f = async move {
+                let res = f.await;
+                match res {
+                    Err(e) => {
+                        resp.set_error("get resolved-ts info failed".to_owned());
+                        error!("tikv-ctl get resolved-ts info failed"; "err" => ?e);
+                    }
+                    Ok(Some((
+                        stopped,
+                        resolved_ts,
+                        resolver_tracked_index,
+                        num_locks,
+                        num_transactions,
+                    ))) => {
+                        resp.set_resolver_exist(true);
+                        resp.set_resolver_stopped(stopped);
+                        resp.set_resolved_ts(resolved_ts);
+                        resp.set_resolver_tracked_index(resolver_tracked_index);
+                        resp.set_num_locks(num_locks);
+                        resp.set_num_transactions(num_transactions);
+                    }
+                    Ok(None) => {
+                        resp.set_resolver_exist(false);
+                    }
+                }
+
+                Ok(resp)
+            };
+            self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+        } else {
+            resp.set_error("resolved-ts is not enabled".to_owned());
+            let f = async move { Ok(resp) };
+            self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+        }
+    }
+>>>>>>> 2c5e7ebdb6 (ctl: print durations in get_region_read_progress (#15327))
 }
 
 mod region_size_response {
