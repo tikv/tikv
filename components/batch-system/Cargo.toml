@@ -8,6 +8,7 @@ default = ["test-runner"]
 test-runner = ["derive_more"]
 
 [dependencies]
+backtrace = "0.3"
 collections = { workspace = true }
 crossbeam = "0.8"
 derive_more = { version = "0.99", optional = true }

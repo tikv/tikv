@@ -386,6 +386,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
         info!(
             "cloning router";
             "count" => Arc::strong_count(&self.normals) + 1,
+            "backtrace" => format_args!("{:?}", backtrace::Backtrace::new()),
         );
         Router {
             normals: self.normals.clone(),
