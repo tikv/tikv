@@ -219,8 +219,9 @@ impl FlowInfoDispatcher {
                                         discard_ratio,
                                     ));
                                     info!(
-                                        "add FlowChecker region_id {}. Total FlowChecker count {}",
-                                        region_id, current_count
+                                        "add FlowChecker";
+                                        "region_id" => region_id,
+                                        "current_count" => current_count,
                                     );
                                     e.insert(FlowChecker::new_with_region_id(
                                         region_id,
