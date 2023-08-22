@@ -252,8 +252,9 @@ impl FlowInfoDispatcher {
                                 limiters.as_ref().write().unwrap().remove(&region_id);
                                 pending_compaction_checker.on_region_destroy(&region_id);
                                 info!(
-                                    "remove FlowChecker region_id {}. Total FlowChecker count {}",
-                                    region_id, current_count
+                                    "remove FlowChecker";
+                                    "region_id" => region_id,
+                                    "current_count" => current_count,
                                 );
                             }
                         }
