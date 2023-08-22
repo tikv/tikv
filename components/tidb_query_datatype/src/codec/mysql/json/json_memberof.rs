@@ -19,6 +19,7 @@ impl<'a> JsonRef<'a> {
                 }
             }
             _ => {
+                // If `json_array` is not a JSON_ARRAY, compare the two JSON directly.
                 return match json_array.partial_cmp(self).unwrap() {
                     Ordering::Equal => Ok(true),
                     _ => Ok(false),
