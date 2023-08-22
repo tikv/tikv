@@ -5,7 +5,7 @@ mod gbk_collation;
 mod latin1_bin;
 mod utf8mb4_binary;
 mod utf8mb4_general_ci;
-mod utf8mb4_unicode_ci;
+mod utf8mb4_uca;
 
 use std::{
     cmp::Ordering,
@@ -19,7 +19,7 @@ pub use gbk_collation::*;
 pub use latin1_bin::*;
 pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
-pub use utf8mb4_unicode_ci::*;
+pub use utf8mb4_uca::*;
 
 use super::{charset::*, Collator};
 use crate::codec::Result;
@@ -43,6 +43,7 @@ mod tests {
             (Collation::Latin1Bin, 4),
             (Collation::GbkBin, 5),
             (Collation::GbkChineseCi, 6),
+            (Collation::Utf8Mb40900AiCi, 7),
         ];
         let cases = vec![
             // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi,
@@ -51,6 +52,7 @@ mod tests {
                 "a".as_bytes(),
                 "a".as_bytes(),
                 [
+                    Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
@@ -71,6 +73,7 @@ mod tests {
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -84,12 +87,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
                 "aa ".as_bytes(),
                 "a a".as_bytes(),
                 [
+                    Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
@@ -110,6 +115,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -123,6 +129,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -136,6 +143,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -149,6 +157,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -162,12 +171,14 @@ mod tests {
                     Ordering::Less,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Less,
                 ],
             ),
             (
                 "啊".as_bytes(),
                 "把".as_bytes(),
                 [
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -231,6 +242,7 @@ mod tests {
             (Collation::Latin1Bin, 4),
             (Collation::GbkBin, 5),
             (Collation::GbkChineseCi, 6),
+            (Collation::Utf8Mb40900AiCi, 7),
         ];
         let cases = vec![
             // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi, Latin1,
@@ -245,6 +257,7 @@ mod tests {
                     vec![0x61],
                     vec![0x61],
                     vec![0x41],
+                    vec![0x1C, 0x47],
                 ],
             ),
             (
@@ -257,6 +270,7 @@ mod tests {
                     vec![0x41],
                     vec![0x41],
                     vec![0x41],
+                    vec![0x1C, 0x47, 0x2, 0x9],
                 ],
             ),
             (
@@ -269,6 +283,7 @@ mod tests {
                     vec![0x41],
                     vec![0x41],
                     vec![0x41],
+                    vec![0x1C, 0x47],
                 ],
             ),
             (
@@ -281,6 +296,7 @@ mod tests {
                     vec![0xF0, 0x9F, 0x98, 0x83],
                     vec![0x3F],
                     vec![0x3F],
+                    vec![0x15, 0xFE],
                 ],
             ),
             (
@@ -321,6 +337,12 @@ mod tests {
                         0x46, 0x4f, 0x4f, 0x20, 0x3f, 0x20, 0x42, 0x41, 0x52, 0x20, 0x3f, 0x20,
                         0x42, 0x41, 0x5a, 0x20, 0x3f, 0x20, 0x51, 0x55, 0x58,
                     ],
+                    vec![
+                        0x1C, 0xE5, 0x1D, 0xDD, 0x1D, 0xDD, 0x2, 0x9, 0x5, 0x84, 0x2, 0x9, 0x1C,
+                        0x60, 0x1C, 0x47, 0x1E, 0x33, 0x2, 0x9, 0xE, 0xF0, 0x2, 0x9, 0x1C, 0x60,
+                        0x1C, 0x47, 0x1F, 0x21, 0x2, 0x9, 0x9, 0x1B, 0x2, 0x9, 0x1E, 0x21, 0x1E,
+                        0xB5, 0x1E, 0xFF,
+                    ],
                 ],
             ),
             (
@@ -336,6 +358,10 @@ mod tests {
                     vec![0xEF, 0xB7, 0xBB],
                     vec![0x3f],
                     vec![0x3f],
+                    vec![
+                        0x23, 0x25, 0x23, 0x9C, 0x2, 0x9, 0x23, 0x25, 0x23, 0x9C, 0x23, 0xB, 0x23,
+                        0x9C, 0x23, 0xB1,
+                    ],
                 ],
             ),
             (
@@ -348,6 +374,7 @@ mod tests {
                     vec![0xE4, 0xB8, 0xAD, 0xE6, 0x96, 0x87],
                     vec![0xD6, 0xD0, 0xCE, 0xC4],
                     vec![0xD3, 0x21, 0xC1, 0xAD],
+                    vec![0xFB, 0x40, 0xCE, 0x2D, 0xFB, 0x40, 0xE5, 0x87],
                 ],
             ),
         ];

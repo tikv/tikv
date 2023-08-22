@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::BorrowMut,
     cell::UnsafeCell,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -216,10 +215,9 @@ pub fn try_poll<T>(f: impl Future<Output = T>) -> Option<T> {
 
 // Run a future with a timeout on the current thread. Returns Err if times out.
 #[allow(clippy::result_unit_err)]
-pub fn block_on_timeout<B, F, I>(mut fut: B, dur: std::time::Duration) -> Result<I, ()>
+pub fn block_on_timeout<F>(fut: F, dur: std::time::Duration) -> Result<F::Output, ()>
 where
-    F: std::future::Future<Output = I> + Unpin,
-    B: BorrowMut<F>,
+    F: std::future::Future,
 {
     use futures_util::compat::Future01CompatExt;
 
@@ -227,7 +225,8 @@ where
         .delay(std::time::Instant::now() + dur)
         .compat()
         .fuse();
-    let mut f = fut.borrow_mut().fuse();
+    futures::pin_mut!(fut);
+    let mut f = fut.fuse();
     futures::executor::block_on(async {
         futures::select! {
             _ = timeout => Err(()),
