@@ -110,8 +110,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
 impl<Owner: Fsm> Clone for BasicMailbox<Owner> {
     #[inline]
     fn clone(&self) -> BasicMailbox<Owner> {
-        info!("cloning mailbox"; "count" => Arc::strong_count(&self.state) + 1, "id" => self.id);
-        debug!("clone"; "id" => self.id, "backtrace" => format_args!("{:?}", backtrace::Backtrace::new()));
+        info!("cloning mailbox"; "count" => Arc::strong_count(&self.state) + 1, "id" => self.id, "backtrace" => format_args!("{:?}", backtrace::Backtrace::new()));
         BasicMailbox {
             id: self.id,
             sender: self.sender.clone(),
@@ -123,8 +122,7 @@ impl<Owner: Fsm> Clone for BasicMailbox<Owner> {
 impl<Owner: Fsm> Drop for BasicMailbox<Owner> {
     #[inline]
     fn drop(&mut self) {
-        info!("drop mailbox"; "count" => Arc::strong_count(&self.state) - 1, "id" => self.id);
-        debug!("drop"; "id" => self.id, "backtrace" => format_args!("{:?}", backtrace::Backtrace::new()));
+        info!("drop mailbox"; "count" => Arc::strong_count(&self.state) - 1, "id" => self.id, "backtrace" => format_args!("{:?}", backtrace::Backtrace::new()));
     }
 }
 
