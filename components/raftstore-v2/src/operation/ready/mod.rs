@@ -903,14 +903,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.maybe_force_forward_commit_index();
         }
 
-        // Sometimes tablets with smaller wait index can come in after
-        // `remove_tombstone_tablets` is fired. They will never be processed unless
-        // there are other Ready-s.
-        if self.remove_tombstone_tablets(persisted_index) {
+        let persisted_admin = cmp::min(
+            self.storage().apply_trace().persisted_apply_index(),
+            persisted_index,
+        );
+        if self.remember_persisted_tablet_index(persisted_admin) {
             let _ = ctx
                 .schedulers
                 .tablet
-                .schedule(tablet::Task::destroy(self.region_id(), persisted_index));
+                .schedule(tablet::Task::destroy(self.region_id(), persisted_admin));
             if !self.serving() {
                 self.set_has_ready();
             }
