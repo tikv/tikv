@@ -484,6 +484,10 @@ make_auto_flush_static_metric! {
         snapshot,
         // exclude those handled by raftstore
         snapshot_local_read,
+        // If async snapshot is involved with read index request(due to lease
+        // expire or explicitly specified), the async snapshot duration will
+        // includes the duration before raft leader propsoe it (snapshot_read_index_propose_wait)
+        // and the time used for checking quorum (snapshot_read_index_confirm).
         snapshot_read_index_propose_wait,
         snapshot_read_index_confirm,
     }
