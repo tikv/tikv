@@ -54,7 +54,7 @@ enum CheckDoResult<T> {
 /// required.
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<NormalMailMap<N>>>,
-    caches: Cell<LruCache<u64, BasicMailbox<N>>>,
+    // caches: Cell<LruCache<u64, BasicMailbox<N>>>,
     pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
@@ -88,7 +88,7 @@ where
                 map: HashMap::default(),
                 alive_cnt: Arc::default(),
             })),
-            caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
+            // caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
             control_box,
             normal_scheduler,
             control_scheduler,
@@ -117,16 +117,16 @@ where
     where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
-        let caches = unsafe { &mut *self.caches.as_ptr() };
-        let mut connected = true;
-        if let Some(mailbox) = caches.get(&addr) {
-            match f(mailbox) {
-                Some(r) => return CheckDoResult::Valid(r),
-                None => {
-                    connected = false;
-                }
-            }
-        }
+        // let caches = unsafe { &mut *self.caches.as_ptr() };
+        // let mut connected = true;
+        // if let Some(mailbox) = caches.get(&addr) {
+        //     match f(mailbox) {
+        //         Some(r) => return CheckDoResult::Valid(r),
+        //         None => {
+        //             connected = false;
+        //         }
+        //     }
+        // }
 
         let (cnt, mailbox) = {
             let mut boxes = self.normals.lock().unwrap();
@@ -135,28 +135,28 @@ where
                 Some(mailbox) => mailbox.clone(),
                 None => {
                     drop(boxes);
-                    if !connected {
-                        caches.remove(&addr);
-                    }
+                    // if !connected {
+                    //     caches.remove(&addr);
+                    // }
                     return CheckDoResult::NotExist;
                 }
             };
             (cnt, b)
         };
-        if cnt > caches.capacity() || cnt < caches.capacity() / 2 {
-            caches.resize(cnt);
-        }
+        // if cnt > caches.capacity() || cnt < caches.capacity() / 2 {
+        //     caches.resize(cnt);
+        // }
 
         let res = f(&mailbox);
         match res {
             Some(r) => {
-                caches.insert(addr, mailbox);
+                // caches.insert(addr, mailbox);
                 CheckDoResult::Valid(r)
             }
             None => {
-                if !connected {
-                    caches.remove(&addr);
-                }
+                // if !connected {
+                //     caches.remove(&addr);
+                // }
                 CheckDoResult::Invalid
             }
         }
@@ -279,13 +279,7 @@ where
     pub fn force_send(&self, addr: u64, msg: N::Message) -> Result<(), SendError<N::Message>> {
         match self.send(addr, msg) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(m)) => {
-                let caches = unsafe { &mut *self.caches.as_ptr() };
-                caches
-                    .get(&addr)
-                    .unwrap()
-                    .force_send(m, &self.normal_scheduler)
-            }
+            Err(TrySendError::Full(m)) => Err(SendError(m)),
             Err(TrySendError::Disconnected(m)) => {
                 if self.is_shutdown() {
                     Ok(())
@@ -331,7 +325,7 @@ where
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
         self.shutdown.store(true, Ordering::SeqCst);
-        unsafe { &mut *self.caches.as_ptr() }.clear();
+        // unsafe { &mut *self.caches.as_ptr() }.clear();
         let mut mailboxes = self.normals.lock().unwrap();
         for (addr, mailbox) in mailboxes.map.drain() {
             debug!("[region {}] shutdown mailbox", addr);
@@ -345,7 +339,7 @@ where
     /// Close the mailbox of address.
     pub fn close(&self, addr: u64) {
         info!("shutdown mailbox"; "region_id" => addr);
-        unsafe { &mut *self.caches.as_ptr() }.remove(&addr);
+        // unsafe { &mut *self.caches.as_ptr() }.remove(&addr);
         let mut mailboxes = self.normals.lock().unwrap();
         if let Some(mb) = mailboxes.map.remove(&addr) {
             mb.close();
@@ -356,7 +350,7 @@ where
     }
 
     pub fn clear_cache(&self) {
-        unsafe { &mut *self.caches.as_ptr() }.clear();
+        // unsafe { &mut *self.caches.as_ptr() }.clear();
     }
 
     pub fn state_cnt(&self) -> &Arc<AtomicUsize> {
@@ -390,7 +384,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
         );
         Router {
             normals: self.normals.clone(),
-            caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
+            // caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
             control_box: self.control_box.clone(),
             // These two schedulers should be unified as single one. However
             // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
