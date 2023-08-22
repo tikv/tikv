@@ -979,12 +979,14 @@ mod tests {
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
                 "a",
                 "b",
                 [
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -999,6 +1001,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
                 ],
@@ -1012,6 +1015,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -1023,6 +1027,7 @@ mod tests {
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -1034,12 +1039,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
                 "À\t",
                 "A",
                 [
+                    Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
@@ -1056,12 +1063,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
             (
                 "a bc",
                 "ab ",
                 [
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -1078,6 +1087,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -1087,6 +1097,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                 ],
@@ -1100,6 +1111,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -1111,6 +1123,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Less,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
         ];
@@ -1120,6 +1133,7 @@ mod tests {
             (Collation::Utf8Mb4Bin, 2),
             (Collation::Utf8Mb4GeneralCi, 3),
             (Collation::Utf8Mb4UnicodeCi, 4),
+            (Collation::Utf8Mb40900AiCi, 5),
         ];
 
         for (str_a, str_b, ordering_in_collations) in cases {

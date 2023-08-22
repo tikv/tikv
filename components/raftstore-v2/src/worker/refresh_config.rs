@@ -41,7 +41,7 @@ where
                 error!(
                     self.logger,
                     "failed to decrease thread pool";
-                    "decrease to" => size,
+                    "decrease_to" => size,
                     "err" => %e,
                 );
                 return;
