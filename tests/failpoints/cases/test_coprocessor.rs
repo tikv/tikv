@@ -418,3 +418,66 @@ fn test_read_index_lock_checking_on_follower() {
         resp
     );
 }
+<<<<<<< HEAD
+=======
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_follower_buckets() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.run();
+    fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
+    let product = ProductTable::new();
+    let (raft_engine, ctx) = leader_raft_engine!(cluster, "");
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+
+    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
+    let resp = handle_request(&endpoint, req.clone());
+    assert_eq!(resp.get_latest_buckets_version(), 0);
+
+    let mut bucket_key = product.get_record_range_all().get_start().to_owned();
+    bucket_key.push(0);
+    let region = cluster.get_region(&bucket_key);
+    let bucket = Bucket {
+        keys: vec![bucket_key],
+        size: 1024,
+    };
+
+    cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
+    thread::sleep(Duration::from_millis(100));
+    let wait_refresh_buckets = |endpoint, req: &mut Request| {
+        for _ in 0..10 {
+            req.mut_context().set_buckets_version(0);
+            let resp = handle_request(&endpoint, req.clone());
+            if resp.get_latest_buckets_version() == 0 {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+
+            req.mut_context().set_buckets_version(1);
+            let resp = handle_request(&endpoint, req.clone());
+            if !resp.has_region_error() {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            assert_ge!(
+                resp.get_region_error()
+                    .get_bucket_version_not_match()
+                    .version,
+                1
+            );
+            return;
+        }
+        panic!("test_follower_buckets test case failed, can not get bucket version in time");
+    };
+    wait_refresh_buckets(endpoint, &mut req.clone());
+    for (engine, ctx) in follower_raft_engine!(cluster, "") {
+        req.set_context(ctx.clone());
+        let (_, endpoint, _) =
+            init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
+        wait_refresh_buckets(endpoint, &mut req.clone());
+    }
+    fail::remove("skip_check_stale_read_safe");
+}
+>>>>>>> d7fc4b3b2e (coprocessor: return `bucket version not match` error if the given bucket's version is stale (#15224))

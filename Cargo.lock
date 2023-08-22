@@ -2753,7 +2753,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#18d3a81835621d80f78a600da8334d7d0d7b51f2"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#7b612d935bf96f9daf7a537db379bcc88b4644e0"
+>>>>>>> d7fc4b3b2e (coprocessor: return `bucket version not match` error if the given bucket's version is stale (#15224))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
