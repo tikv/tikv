@@ -546,6 +546,8 @@ mod tests {
         time::{Duration, SystemTime},
     };
 
+    use test::Bencher;
+
     use super::*;
 
     #[test]
@@ -685,5 +687,19 @@ mod tests {
             assert!(now.saturating_elapsed() >= zero);
             assert!(now_coarse.saturating_elapsed() >= zero);
         }
+    }
+
+    #[bench]
+    fn bench_instant_now(b: &mut Bencher) {
+        b.iter(|| {
+            let _now = Instant::now();
+        });
+    }
+
+    #[bench]
+    fn bench_instant_now_coarse(b: &mut Bencher) {
+        b.iter(|| {
+            let _now = Instant::now_coarse();
+        });
     }
 }
