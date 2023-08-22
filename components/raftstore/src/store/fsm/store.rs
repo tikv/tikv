@@ -34,6 +34,7 @@ use protobuf::Message;
 use raft::StateRole;
 use time::{self, Timespec};
 
+<<<<<<< HEAD
 use collections::HashMap;
 use engine_traits::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch, WriteOptions};
@@ -50,6 +51,47 @@ use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::{
     box_err, box_try, debug, defer, error, info, is_zero_duration, slow_log, sys as sys_util, warn,
     Either, RingQueue,
+=======
+use crate::{
+    bytes_capacity,
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
+    store::{
+        async_io::{
+            read::{ReadRunner, ReadTask},
+            write::{StoreWriters, StoreWritersContext, Worker as WriteWorker, WriteMsg},
+            write_router::WriteSenders,
+        },
+        config::Config,
+        fsm::{
+            create_apply_batch_system,
+            life::handle_tombstone_message_on_learner,
+            metrics::*,
+            peer::{
+                maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
+            },
+            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
+            ApplyTaskRes,
+        },
+        local_metrics::RaftMetrics,
+        memory::*,
+        metrics::*,
+        peer_storage,
+        transport::Transport,
+        util,
+        util::{is_initial_msg, RegionReadProgressRegistry},
+        worker::{
+            AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
+            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+            GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
+            ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
+            SplitCheckTask,
+        },
+        Callback, CasualMessage, CompactThreshold, GlobalReplicationState, InspectedRaftMessage,
+        MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager,
+        StoreMsg, StoreTick,
+    },
+    Error, Result,
+>>>>>>> c099e482cb (raftstore: consider duplicated mvcc versions when check compact (#15342))
 };
 
 use crate::bytes_capacity;
@@ -2041,8 +2083,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             CompactTask::CheckAndCompact {
                 cf_names,
                 ranges: ranges_need_check,
-                tombstones_num_threshold: self.ctx.cfg.region_compact_min_tombstones,
-                tombstones_percent_threshold: self.ctx.cfg.region_compact_tombstones_percent,
+                compact_threshold: CompactThreshold::new(
+                    self.ctx.cfg.region_compact_min_tombstones,
+                    self.ctx.cfg.region_compact_tombstones_percent,
+                    self.ctx.cfg.region_compact_min_redundant_rows,
+                    self.ctx.cfg.region_compact_redundant_rows_percent,
+                ),
             },
         )) {
             error!(
