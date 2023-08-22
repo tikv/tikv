@@ -749,7 +749,7 @@ impl AzureStorage {
             azure_core::Result::Ok(chunk)
         };
         let stream = stream::once(
-            t.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", e))),
+            t.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e))),
         )
         .boxed()
         .into_async_read();
