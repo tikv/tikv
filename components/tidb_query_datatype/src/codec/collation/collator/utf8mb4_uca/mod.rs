@@ -11,7 +11,7 @@ use super::*;
 /// right spaces).
 pub type CollatorUtf8Mb4UnicodeCi = CollatorUca<data_0400::Unicode0400>;
 
-/// Collator for `utf8mb4_0900_ai-ci` collation without padding
+/// Collator for `utf8mb4_0900_ai_ci` collation without padding
 pub type CollatorUtf8Mb40900AiCi = CollatorUca<data_0900::Unicode0900>;
 
 pub trait UnicodeVersion: 'static + Send + Sync + Debug {
