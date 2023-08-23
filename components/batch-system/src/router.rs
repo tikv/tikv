@@ -20,8 +20,6 @@ use crate::{
     metrics::*,
 };
 
-const ROUTER_CACHE_CAP: usize = 1;
-
 /// A struct that traces the approximate memory usage of router.
 #[derive(Default)]
 pub struct RouterTrace {
@@ -58,7 +56,6 @@ enum CheckDoResult<T> {
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<NormalMailMap<N>>>,
     caches: Cell<LruCache<u64, BasicMailbox<N>>>,
-    clean_cache_cnt: Cell<usize>,
     pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
@@ -92,8 +89,7 @@ where
                 map: HashMap::default(),
                 alive_cnt: Arc::default(),
             })),
-            caches: Cell::new(LruCache::with_capacity_and_sample(ROUTER_CACHE_CAP, 7)),
-            clean_cache_cnt: Cell::new(0),
+            caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
             control_box,
             normal_scheduler,
             control_scheduler,
@@ -122,40 +118,15 @@ where
     where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
-        let maybe_clean_cache_leak = |alive_cnt, caches: &mut LruCache<u64, BasicMailbox<N>>| {
-            let leak = self.leak_count(alive_cnt);
-            for _ in 0..leak {
-                // Maybe the cache is hold leaked mailbox, so we need to remove it.
-                let _ = caches.remove_lru();
-            }
-            // Free memory holden by the cache when cache len / cache cap < 0.6.
-            caches.maybe_shrink_to_fit(0.6);
-            self.clean_cache_cnt.set(0);
-        };
-
         let caches = unsafe { &mut *self.caches.as_ptr() };
         let mut connected = true;
-        let mut res = None;
         if let Some(mailbox) = caches.get(&addr) {
             match f(mailbox) {
-                Some(r) => {
-                    res = Some(CheckDoResult::Valid(r));
-                }
+                Some(r) => return CheckDoResult::Valid(r),
                 None => {
                     connected = false;
                 }
             }
-        }
-        if let Some(res) = res {
-            let hit_count = self.clean_cache_cnt.get();
-            if hit_count > 1024 {
-                // amortizes overhead.
-                let alive_cnt = self.normals.lock().unwrap().map.len();
-                maybe_clean_cache_leak(alive_cnt, caches);
-            } else {
-                self.clean_cache_cnt.set(hit_count + 1);
-            }
-            return res;
         }
 
         let (cnt, mailbox) = {
@@ -173,7 +144,6 @@ where
             };
             (cnt, b)
         };
-        maybe_clean_cache_leak(cnt, caches);
         if cnt > caches.capacity() || cnt < caches.capacity() / 2 {
             caches.resize(cnt);
         }
@@ -398,24 +368,16 @@ where
         self.normals.lock().unwrap().alive_cnt.clone()
     }
 
-    fn leak_count(&self, alive: usize) -> usize {
+    pub fn trace(&self) -> RouterTrace {
+        let alive = self.normals.lock().unwrap().alive_cnt.clone();
         let total = self.state_cnt.load(Ordering::Relaxed);
+        let alive = alive.load(Ordering::Relaxed);
         // 1 represents the control fsm.
-        if total > alive + 1 {
+        let leak = if total > alive + 1 {
             total - alive - 1
         } else {
             0
-        }
-    }
-
-    pub fn trace(&self) -> RouterTrace {
-        let alive = self
-            .normals
-            .lock()
-            .unwrap()
-            .alive_cnt
-            .load(Ordering::Relaxed);
-        let leak = self.leak_count(alive);
+        };
         let mailbox_unit = mem::size_of::<(u64, BasicMailbox<N>)>();
         let state_unit = mem::size_of::<FsmState<N>>();
         // Every message in crossbeam sender needs 8 bytes to store state.
@@ -439,8 +401,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
             "count" => Arc::strong_count(&self.normals) + 1);
         Router {
             normals: self.normals.clone(),
-            caches: Cell::new(LruCache::with_capacity_and_sample(ROUTER_CACHE_CAP, 7)),
-            clean_cache_cnt: Cell::new(0),
+            caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
             control_box: self.control_box.clone(),
             // These two schedulers should be unified as single one. However
             // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>

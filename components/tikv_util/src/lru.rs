@@ -215,7 +215,6 @@ where
         self.trace.clear();
         self.size_policy.on_reset(0);
     }
-
     #[inline]
     pub fn capacity(&self) -> usize {
         self.capacity
@@ -304,18 +303,6 @@ where
     }
 
     #[inline]
-    pub fn remove_lru(&mut self) -> Option<(K, V)> {
-        if !self.is_empty() {
-            let key = self.trace.remove_tail();
-            let entry = self.map.remove(&key)?;
-            self.size_policy.on_remove(&key, &entry.value);
-            Some((key, entry.value))
-        } else {
-            None
-        }
-    }
-
-    #[inline]
     pub fn get(&mut self, key: &K) -> Option<&V> {
         match self.map.get(key) {
             Some(v) => {
@@ -365,16 +352,6 @@ where
             self.map.shrink_to_fit();
         }
         self.capacity = new_cap;
-    }
-
-    // Shrink the memory allocated by the cache without changing size and capacity.
-    #[inline]
-    pub fn maybe_shrink_to_fit(&mut self, ratio: f64) {
-        let map_len = self.map.len();
-        let map_cap = self.map.capacity();
-        if map_len < map_cap && (map_len as f64) < (map_cap as f64 * ratio) {
-            self.map.shrink_to_fit();
-        }
     }
 }
 
@@ -504,48 +481,6 @@ mod tests {
         for i in (3..8).chain(10..15) {
             assert_eq!(map.get(&i), Some(&i));
         }
-    }
-
-    #[test]
-    fn test_remove_lru() {
-        let mut map = LruCache::with_capacity(3);
-        for i in 0..3 {
-            map.insert(i, i);
-        }
-        assert_eq!(map.remove_lru(), Some((0, 0)));
-        assert_eq!(map.get(&0), None);
-
-        assert_eq!(map.get(&1), Some(&1));
-        assert_eq!(map.remove_lru(), Some((2, 2)));
-        assert_eq!(map.capacity(), 3);
-        assert_eq!(map.size(), 1);
-    }
-
-    #[test]
-    fn test_maybe_shrink_to_hit() {
-        let mut map = LruCache::with_capacity(10);
-        map.map.reserve(10);
-        for i in 0..10 {
-            map.insert(i, i);
-        }
-        assert_eq!(map.size(), 10);
-        assert_eq!(map.capacity(), 10);
-
-        let real_cap = map.map.capacity();
-        for i in 0..5 {
-            map.remove(&i);
-        }
-        // The capacity should not change.
-        map.maybe_shrink_to_fit(0.1);
-        assert_eq!(map.map.capacity(), real_cap);
-        assert_eq!(map.size(), 5);
-        assert_eq!(map.capacity(), 10);
-
-        // The capacity should change.
-        map.maybe_shrink_to_fit(0.9);
-        assert!(map.map.capacity() < real_cap);
-        assert_eq!(map.size(), 5);
-        assert_eq!(map.capacity(), 10);
     }
 
     #[test]
