@@ -2,7 +2,7 @@
 
 use std::{
     sync::{atomic::*, Arc},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use batch_system::{test_runner::*, *};
@@ -164,61 +164,4 @@ fn test_router_trace() {
     }
     assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 1024);
     assert_eq!(router.state_cnt().load(Ordering::Relaxed), 1025);
-}
-
-#[test]
-fn test_router_mailbox_leak() {
-    let (control_tx, control_fsm) = Runner::new(10);
-    let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
-    let builder = Builder::new();
-    system.spawn("test".to_owned(), builder);
-
-    let register_runner = |addr| {
-        let (sender, runner) = Runner::new(10);
-        let mailbox = BasicMailbox::new(sender, runner, router.state_cnt().clone());
-        router.register(addr, mailbox);
-    };
-    let close_runner = |addr| {
-        router.close(addr);
-    };
-
-    let router_clone = router.clone();
-    for i in 0..256 {
-        register_runner(i);
-        // Read mailbox to cache.
-        router_clone.mailbox(i).unwrap();
-    }
-    assert_eq!(router_clone.alive_cnt().load(Ordering::Relaxed), 256);
-    assert_eq!(router_clone.state_cnt().load(Ordering::Relaxed), 257);
-    // Routers closed but exist in the cache.
-    for i in 0..128 {
-        close_runner(i);
-    }
-    assert_eq!(router_clone.alive_cnt().load(Ordering::Relaxed), 128);
-    assert_eq!(router_clone.state_cnt().load(Ordering::Relaxed), 257);
-    // Cache miss triggers clean up mailbox leak.
-    router_clone
-        .send(0, Message::Callback(Box::new(|_, _| {})))
-        .unwrap_err();
-    assert_eq!(router_clone.state_cnt().load(Ordering::Relaxed), 129);
-
-    for i in 128..255 {
-        close_runner(i);
-    }
-    assert_eq!(router_clone.alive_cnt().load(Ordering::Relaxed), 1);
-    assert_eq!(router_clone.state_cnt().load(Ordering::Relaxed), 129);
-    // Sending message triggers clean up mailbox leak eventually.
-    let now = Instant::now();
-    loop {
-        router_clone
-            .force_send(255, Message::Callback(Box::new(|_, _| {})))
-            .unwrap();
-        if router_clone.state_cnt().load(Ordering::Relaxed) == 2 {
-            break;
-        }
-        if now.elapsed() > Duration::from_secs(5) {
-            panic!("mailbox leak not cleaned up");
-        }
-    }
 }

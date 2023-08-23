@@ -59,7 +59,6 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<NormalMailMap<N>>>,
     caches: Cell<LruCache<u64, BasicMailbox<N>>>,
     clean_cache_cnt: Cell<usize>,
-    clean_cache_time: Cell<Instant>,
     pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
@@ -95,7 +94,6 @@ where
             })),
             caches: Cell::new(LruCache::with_capacity_and_sample(ROUTER_CACHE_CAP, 7)),
             clean_cache_cnt: Cell::new(0),
-            clean_cache_time: Cell::new(Instant::now_coarse()),
             control_box,
             normal_scheduler,
             control_scheduler,
@@ -133,7 +131,6 @@ where
             // Free memory holden by the cache when cache len / cache cap < 0.6.
             caches.maybe_shrink_to_fit(0.6);
             self.clean_cache_cnt.set(0);
-            self.clean_cache_time.set(Instant::now_coarse());
         };
 
         let caches = unsafe { &mut *self.caches.as_ptr() };
@@ -151,13 +148,10 @@ where
         }
         if let Some(res) = res {
             let hit_count = self.clean_cache_cnt.get();
-            if hit_count > 10 {
-                // Amortizes overhead.
-                if self.clean_cache_time.get().saturating_elapsed().as_secs() > 1 {
-                    let alive_cnt = self.normals.lock().unwrap().map.len();
-                    maybe_clean_cache_leak(alive_cnt, caches);
-                }
-                self.clean_cache_cnt.set(0);
+            if hit_count > 1024 {
+                // amortizes overhead.
+                let alive_cnt = self.normals.lock().unwrap().map.len();
+                maybe_clean_cache_leak(alive_cnt, caches);
             } else {
                 self.clean_cache_cnt.set(hit_count + 1);
             }
@@ -174,7 +168,6 @@ where
                     if !connected {
                         caches.remove(&addr);
                     }
-                    maybe_clean_cache_leak(cnt, caches);
                     return CheckDoResult::NotExist;
                 }
             };
@@ -448,7 +441,6 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
             normals: self.normals.clone(),
             caches: Cell::new(LruCache::with_capacity_and_sample(ROUTER_CACHE_CAP, 7)),
             clean_cache_cnt: Cell::new(0),
-            clean_cache_time: Cell::new(Instant::now_coarse()),
             control_box: self.control_box.clone(),
             // These two schedulers should be unified as single one. However
             // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
