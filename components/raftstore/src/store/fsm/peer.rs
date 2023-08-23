@@ -3699,12 +3699,13 @@ where
                 "peer is destroyed inconsistently";
                 "region_id" => region_id,
                 "peer_id" => self.fsm.peer_id(),
+                "peers" => ?self.region().get_peers(),
                 "merged_by_target" => merged_by_target,
                 "is_initialized" => is_initialized,
                 "is_region_initialized_in_meta" => is_region_initialized_in_meta,
-                "start_key" => log_wrappers::Value::key(region_in_meta.get_start_key()),
-                "end_key" => log_wrappers::Value::key(region_in_meta.get_end_key()),
-                "peers" => ?region_in_meta.get_peers(),
+                "start_key_in_meta" => log_wrappers::Value::key(region_in_meta.get_start_key()),
+                "end_key_in_meta" => log_wrappers::Value::key(region_in_meta.get_end_key()),
+                "peers_in_meta" => ?region_in_meta.get_peers(),
             );
         }
 
