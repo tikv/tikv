@@ -6152,6 +6152,7 @@ dependencies = [
  "tipb_helper",
  "tokio",
  "toml",
+ "tracker",
  "txn_types",
  "uuid 0.8.2",
 ]

@@ -110,6 +110,7 @@ tikv_util = { workspace = true }
 time = "0.1"
 tipb = { workspace = true }
 toml = "0.5"
+tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
