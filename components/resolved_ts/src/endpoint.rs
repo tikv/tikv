@@ -515,7 +515,9 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region.resolver.resolve(ts, Some(now));
+                    let _ = observe_region
+                        .resolver
+                        .resolve(ts, Some(now), "resolved_ts_advance");
                 }
             }
         }

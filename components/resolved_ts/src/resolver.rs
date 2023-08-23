@@ -160,7 +160,7 @@ impl Resolver {
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp, now: Option<Instant>) -> TimeStamp {
+    pub fn resolve(&mut self, min_ts: TimeStamp, now: Option<Instant>, source: &str) -> TimeStamp {
         // The `Resolver` is stopped, not need to advance, just return the current
         // `resolved_ts`
         if self.stopped {
@@ -176,7 +176,7 @@ impl Resolver {
         if self.resolved_ts >= new_resolved_ts {
             let label = if has_lock { "has_lock" } else { "stale_ts" };
             RTS_RESOLVED_FAIL_ADVANCE_VEC
-                .with_label_values(&[label])
+                .with_label_values(&[label, source])
                 .inc();
         }
 
@@ -309,7 +309,7 @@ mod tests {
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(
-                            resolver.resolve(min_ts.into(), None),
+                            resolver.resolve(min_ts.into(), None, "test"),
                             expect.into(),
                             "case {}",
                             i
