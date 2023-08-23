@@ -44,8 +44,8 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts,
-        ReadCallback, ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
+        self, Callback as StoreCallback, RaftCmdExtraOpts, ReadCallback, ReadIndexContext,
+        ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
@@ -567,7 +567,7 @@ where
         let store_cb = StoreCallback::read(Box::new(move |resp| {
             cb(on_read_result(resp).map_err(Error::into));
         }));
-        let tracker = store_cb.read_tracker().unwrap();
+        let tracker = *store_cb.read_tracker().unwrap();
 
         if res.is_ok() {
             res = self
