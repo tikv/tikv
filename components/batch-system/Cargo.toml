@@ -11,6 +11,7 @@ test-runner = ["derive_more"]
 backtrace = "0.3"
 collections = { workspace = true }
 crossbeam = "0.8"
+dashmap = "5.2"
 derive_more = { version = "0.99", optional = true }
 fail = "0.5"
 file_system = { workspace = true }
@@ -25,7 +26,6 @@ slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
-dashmap = "5.2"
 
 [dev-dependencies]
 criterion = "0.3"

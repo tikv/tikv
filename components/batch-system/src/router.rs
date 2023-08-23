@@ -118,11 +118,11 @@ where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
         let mailbox = match self.normals.map.get_mut(&addr) {
-                Some(mailbox) => mailbox.clone(),
-                None => {
-                    return CheckDoResult::NotExist;
-                }
-            };
+            Some(mailbox) => mailbox.clone(),
+            None => {
+                return CheckDoResult::NotExist;
+            }
+        };
 
         let res = f(&mailbox);
         match res {
@@ -164,7 +164,7 @@ where
             self.normals.map.remove(&addr);
             return Err((mailbox, m));
         }
-        
+
         Ok(())
     }
 
@@ -294,7 +294,7 @@ where
         for e in self.normals.map.iter() {
             debug!("[region {}] shutdown mailbox", e.key());
             e.value().close();
-        };
+        }
         self.normals.map.clear();
         self.control_box.close();
         self.normal_scheduler.shutdown();
@@ -340,7 +340,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
         info!(
             "cloning router";
             "count" => Arc::strong_count(&self.normals) + 1,
-            "backtrace" => format_args!("{:?}", backtrace::Backtrace::new()),
+            // "backtrace" => format_args!("{:?}", backtrace::Backtrace::new()),
         );
         Router {
             normals: self.normals.clone(),

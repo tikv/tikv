@@ -16,7 +16,6 @@ use tikv_util::{config::*, time::Instant};
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_put() {
-    test_util::init_log_for_test();
     let mut cluster = new_cluster(0, 1);
     cluster.run();
 

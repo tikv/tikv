@@ -10,7 +10,7 @@ pub mod priority_queue;
 use std::{
     cell::Cell,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
