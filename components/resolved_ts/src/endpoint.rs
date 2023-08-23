@@ -888,6 +888,7 @@ where
             })
             .unwrap_or_else(|_| TimeStamp::physical_now());
 
+        // min safe ts
         RTS_MIN_SAFE_TS.set(oldest_safe_ts as i64);
         RTS_MIN_SAFE_TS_REGION.set(oldest_safe_ts_region as i64);
         let safe_ts_gap = now.saturating_sub(TimeStamp::from(oldest_safe_ts).physical());
@@ -923,17 +924,52 @@ where
         RTS_MIN_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER
             .set(oldest_duration_to_last_consume_leader_ms);
 
+        // min resolved ts
         RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
         RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
         RTS_MIN_RESOLVED_TS_GAP
             .set(now.saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64);
 
+        // min leader
         RTS_MIN_LEADER_RESOLVED_TS_REGION.set(oldest_leader_region as i64);
         RTS_MIN_LEADER_RESOLVED_TS.set(oldest_leader_ts as i64);
-        RTS_MIN_LEADER_RESOLVED_TS_GAP
-            .set(now.saturating_sub(TimeStamp::from(oldest_leader_ts).physical()) as i64);
+        let min_leader_resolved_ts_gap =
+            now.saturating_sub(TimeStamp::from(oldest_leader_ts).physical());
+        RTS_MIN_LEADER_RESOLVED_TS_GAP.set(min_leader_resolved_ts_gap as i64);
+        let mut oldest_leader_region_min_lock_ts;
+        let mut oldest_leader_region_min_lock_key_sample = None;
+        if let Some(region) = self.regions.get(&oldest_leader_region) {
+            if let Some((start_ts, keys)) = region.resolver.lock_ts_heap.iter().next() {
+                oldest_leader_region_min_lock_ts = start_ts.into_inner() as i64;
+                oldest_leader_region_min_lock_key_sample =
+                    keys.iter().next().map(|key| log_wrappers::Value::key(key));
+            } else {
+                // no locks
+                oldest_leader_region_min_lock_ts = 0;
+            }
+        } else {
+            // region not found. should be unreachable
+            oldest_leader_region_min_lock_ts = -1;
+        }
+        if min_leader_resolved_ts_gap
+            > self.cfg.advance_ts_interval.as_millis()
+                + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64
+                + SLOW_LOG_GRACE_PERIOD_MS
+        {
+            info!(
+                "the max gap of leader resolved-ts is large";
+                "gap" => min_leader_resolved_ts_gap,
+                "oldest_leader_resolved_ts" => ?oldest_leader_ts,
+                "region_id" => oldest_leader_region,
+                "advance_ts_interval" => ?self.cfg.advance_ts_interval,
+                "oldest_leader_region_min_lock_ts" => oldest_leader_region_min_lock_ts,
+                "oldest_leader_region_min_lock_key_sample" => ?oldest_leader_region_min_lock_key_sample,
+            );
+        }
+        RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS.set(oldest_leader_region_min_lock_ts);
 
+        // misc
         RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
             .with_label_values(&["resolved"])

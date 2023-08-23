@@ -18,7 +18,7 @@ pub struct Resolver {
     // key -> start_ts
     pub(crate) locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
-    lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
+    pub(crate) lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
     // The highest index `Resolver` had been tracked

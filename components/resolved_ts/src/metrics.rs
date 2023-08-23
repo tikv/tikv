@@ -125,7 +125,12 @@ lazy_static! {
     .unwrap();
     pub static ref RTS_MIN_LEADER_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_leader_resolved_ts_region",
-        "The region which its leader peer has minimal resolved ts"
+        "The region whose leader peer has minimal resolved ts"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_leader_resolved_ts_region_min_lock_ts",
+        "The minimal lock ts for the region whose leader peer has minimal resolved ts. 0 means no lock. -1 means no region found."
     )
     .unwrap();
     pub static ref RTS_MIN_LEADER_RESOLVED_TS: IntGauge = register_int_gauge!(
