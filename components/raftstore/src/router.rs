@@ -331,6 +331,7 @@ impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRoute
                 split_keys,
                 callback: Callback::None,
                 source,
+                skip_size_check: false,
             },
         ) {
             warn!(

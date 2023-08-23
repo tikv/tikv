@@ -148,6 +148,7 @@ pub struct RequestSplit {
     pub epoch: RegionEpoch,
     pub split_keys: Vec<Vec<u8>>,
     pub source: Cow<'static, str>,
+    pub skip_size_check: bool,
 }
 
 #[derive(Debug)]
