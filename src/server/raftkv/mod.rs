@@ -44,13 +44,8 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-<<<<<<< HEAD
-        self, Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
-        RegionSnapshot, StoreMsg, WriteResponse,
-=======
         self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts,
         ReadCallback, ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
->>>>>>> 03eab8cde9 (raftstore: add some metrics about async snapshot (#15278))
     },
 };
 use thiserror::Error;

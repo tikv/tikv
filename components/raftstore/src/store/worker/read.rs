@@ -1002,7 +1002,7 @@ where
                 };
 
                 cb.read_tracker().map(|tracker| {
-                    GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                    GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                         t.metrics.local_read = true;
                     })
                 });
