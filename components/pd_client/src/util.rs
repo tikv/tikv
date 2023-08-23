@@ -50,6 +50,7 @@ const MAX_RETRY_TIMES: u64 = 5;
 // The max duration when retrying to connect to leader. No matter if the
 // MAX_RETRY_TIMES is reached.
 const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
+const MAX_BACKOFF: Duration = Duration::from_secs(3);
 
 // FIXME: Use a request-independent way to handle reconnection.
 pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
@@ -116,6 +117,7 @@ pub struct Inner {
     pub rg_resp: Option<ClientDuplexReceiver<TokenBucketsResponse>>,
 
     last_try_reconnect: Instant,
+    bo: ExponentialBackoff,
 }
 
 impl Inner {
@@ -168,7 +170,6 @@ pub struct Client {
     pub(crate) inner: RwLock<Inner>,
     pub feature_gate: FeatureGate,
     enable_forwarding: bool,
-    retry_interval: Duration,
 }
 
 impl Client {
@@ -219,6 +220,7 @@ impl Client {
                 pending_heartbeat: Arc::default(),
                 pending_buckets: Arc::default(),
                 last_try_reconnect: Instant::now(),
+                bo: ExponentialBackoff::new(retry_interval),
                 tso,
                 meta_storage,
                 rg_sender: Either::Left(Some(rg_sender)),
@@ -226,7 +228,6 @@ impl Client {
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
-            retry_interval,
         }
     }
 
@@ -368,7 +369,7 @@ impl Client {
 
         let future = {
             let inner = self.inner.rl();
-            if start.saturating_duration_since(inner.last_try_reconnect) < self.retry_interval {
+            if start.saturating_duration_since(inner.last_try_reconnect) < inner.bo.get_interval() {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
                 PD_RECONNECT_COUNTER_VEC
@@ -394,7 +395,7 @@ impl Client {
 
         {
             let mut inner = self.inner.wl();
-            if start.saturating_duration_since(inner.last_try_reconnect) < self.retry_interval {
+            if start.saturating_duration_since(inner.last_try_reconnect) < inner.bo.get_interval() {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
                 PD_RECONNECT_COUNTER_VEC
@@ -403,6 +404,7 @@ impl Client {
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             inner.last_try_reconnect = start;
+            inner.bo.next_backoff();
         }
 
         slow_log!(start.saturating_elapsed(), "try reconnect pd");
@@ -413,17 +415,26 @@ impl Client {
                     .inc();
                 return Err(e);
             }
-            Ok(None) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["no-need"])
-                    .inc();
-                return Ok(());
-            }
-            Ok(Some(tuple)) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["success"])
-                    .inc();
-                tuple
+            Ok(res) => {
+                // Reset the retry count.
+                {
+                    let mut inner = self.inner.wl();
+                    inner.bo.reset()
+                }
+                match res {
+                    None => {
+                        PD_RECONNECT_COUNTER_VEC
+                            .with_label_values(&["no-need"])
+                            .inc();
+                        return Ok(());
+                    }
+                    Some(tuple) => {
+                        PD_RECONNECT_COUNTER_VEC
+                            .with_label_values(&["success"])
+                            .inc();
+                        tuple
+                    }
+                }
             }
         };
 
@@ -900,6 +911,33 @@ impl PdConnector {
     }
 }
 
+/// Simple backoff strategy.
+struct ExponentialBackoff {
+    base: Duration,
+    interval: Duration,
+}
+
+impl ExponentialBackoff {
+    pub fn new(base: Duration) -> Self {
+        Self {
+            base,
+            interval: base,
+        }
+    }
+    pub fn next_backoff(&mut self) -> Duration {
+        self.interval = std::cmp::min(self.interval * 2, MAX_BACKOFF);
+        self.interval
+    }
+
+    pub fn get_interval(&self) -> Duration {
+        self.interval
+    }
+
+    pub fn reset(&mut self) {
+        self.interval = self.base;
+    }
+}
+
 pub fn trim_http_prefix(s: &str) -> &str {
     s.trim_start_matches("http://")
         .trim_start_matches("https://")
@@ -1045,7 +1083,10 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
 mod test {
     use kvproto::metapb::BucketStats;
 
+    use super::*;
     use crate::{merge_bucket_stats, util::find_bucket_index};
+
+    const BASE_BACKOFF: Duration = Duration::from_millis(100);
 
     #[test]
     fn test_merge_bucket_stats() {
@@ -1161,5 +1202,24 @@ mod test {
         assert_eq!(find_bucket_index(b"k0", &keys), Some(0));
         assert_eq!(find_bucket_index(b"k7", &keys), Some(4));
         assert_eq!(find_bucket_index(b"k8", &keys), Some(4));
+    }
+
+    #[test]
+    fn test_exponential_backoff() {
+        let mut backoff = ExponentialBackoff::new(BASE_BACKOFF);
+        assert_eq!(backoff.get_interval(), BASE_BACKOFF);
+
+        assert_eq!(backoff.next_backoff(), 2 * BASE_BACKOFF);
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(400));
+        assert_eq!(backoff.get_interval(), Duration::from_millis(400));
+
+        // Should not exceed MAX_BACKOFF
+        for _ in 0..20 {
+            backoff.next_backoff();
+        }
+        assert_eq!(backoff.get_interval(), MAX_BACKOFF);
+
+        backoff.reset();
+        assert_eq!(backoff.get_interval(), BASE_BACKOFF);
     }
 }
