@@ -46,6 +46,7 @@ use crate::{
 
 /// grace period for logging safe-ts and resolved-ts gap in slow log
 const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
+const MEMORY_QUOTA_EXCEEDED_BACKOFF: Duration = Duration::from_secs(30);
 
 enum ResolverStatus {
     Pending {
@@ -226,7 +227,6 @@ impl ObserveRegion {
     }
 
     /// Track locks in incoming scan entries.
-    #[must_use]
     fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) -> Result<()> {
         for es in entries {
             match es {
@@ -577,7 +577,7 @@ where
                     if let Err(e) = observe_region.track_change_log(&logs) {
                         drop(observe_region);
                         let backoff = match e {
-                            Error::MemoryQuotaExceeded => Some(Duration::from_secs(20)),
+                            Error::MemoryQuotaExceeded => Some(MEMORY_QUOTA_EXCEEDED_BACKOFF),
                             Error::Other(_) => None,
                         };
                         self.re_register_region(region_id, observe_id, e, backoff);
@@ -615,7 +615,7 @@ where
                 "observe_id" => ?observe_id);
         }
         if is_memory_quota_exceeded {
-            let backoff = Some(Duration::from_secs(20));
+            let backoff = Some(MEMORY_QUOTA_EXCEEDED_BACKOFF);
             self.re_register_region(region_id, observe_id, Error::MemoryQuotaExceeded, backoff);
         }
     }
@@ -919,7 +919,7 @@ where
                     unresolved_count += 1;
                 }
                 ResolverStatus::Ready { .. } => {
-                    lock_heap_size += observe_region.resolver.size();
+                    lock_heap_size += observe_region.resolver.approximate_heap_bytes();
                     resolved_count += 1;
                 }
             }

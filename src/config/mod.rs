@@ -2958,7 +2958,7 @@ impl Default for ResolvedTsConfig {
             enable: true,
             advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
-            memory_quota: ReadableSize::mb(512),
+            memory_quota: ReadableSize::mb(256),
         }
     }
 }

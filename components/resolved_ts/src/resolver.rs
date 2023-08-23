@@ -13,6 +13,7 @@ use txn_types::TimeStamp;
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -61,10 +62,19 @@ impl std::fmt::Debug for Resolver {
 impl Drop for Resolver {
     fn drop(&mut self) {
         // Free memory quota used by locks_by_key.
+        let mut bytes = 0;
+        let num_locks = self.num_locks();
         for key in self.locks_by_key.keys() {
-            let bytes = key.heap_size();
-            self.memory_quota.free(bytes);
+            bytes += key.heap_size();
         }
+        if bytes > ON_DROP_WARN_HEAP_SIZE {
+            warn!("drop huge resolver";
+                "region_id" => self.region_id,
+                "bytes" => bytes,
+                "num_locks" => num_locks,
+            );
+        }
+        self.memory_quota.free(bytes);
     }
 }
 
@@ -103,9 +113,23 @@ impl Resolver {
         self.stopped
     }
 
-    pub fn size(&self) -> usize {
-        self.locks_by_key.keys().map(|k| k.len()).sum::<usize>()
-            + self.locks_by_key.len() * std::mem::size_of::<TimeStamp>()
+    // Return an approximate heap memory usage in bytes.
+    pub fn approximate_heap_bytes(&self) -> usize {
+        if self.locks_by_key.is_empty() {
+            return 0;
+        }
+
+        const SAMPLE_COUNT: usize = 32;
+        let mut key_count = 0;
+        let mut key_bytes = 0;
+        for key in self.locks_by_key.keys() {
+            key_count += 1;
+            key_bytes += key.len();
+            if key_count >= SAMPLE_COUNT {
+                break;
+            }
+        }
+        self.locks_by_key.len() * (key_bytes / key_count + std::mem::size_of::<TimeStamp>())
             + self.lock_ts_heap.len()
                 * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
     }
@@ -142,7 +166,7 @@ impl Resolver {
             start_ts,
             self.region_id
         );
-        let bytes = key.as_slice().heap_size();
+        let bytes = key.as_slice().heap_size() + std::mem::size_of::<TimeStamp>();
         if !self.memory_quota.alloc(bytes) {
             return false;
         }
