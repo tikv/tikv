@@ -1561,3 +1561,18 @@ pub fn put_with_timeout<T: Simulator>(
     );
     cluster.call_command_on_node(node_id, req, timeout)
 }
+
+pub fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
+    }
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers, count, peer
+    );
+}
