@@ -42,6 +42,7 @@ use pin_project::pin_project;
 pub use profile::{
     activate_heap_profile, deactivate_heap_profile, heap_profiles_dir, jeprof_heap_profile,
     list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
+    HEAP_PROFILE_REGEX,
 };
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
@@ -207,6 +208,11 @@ where
         let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
 
         let result = if let Some(name) = query_pairs.get("name") {
+            let re = Regex::new(HEAP_PROFILE_REGEX).unwrap();
+            if !re.is_match(name) {
+                let errmsg = format!("heap profile name {} is invalid", name);
+                return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
+            }
             let profiles = match list_heap_profiles() {
                 Ok(s) => s,
                 Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),

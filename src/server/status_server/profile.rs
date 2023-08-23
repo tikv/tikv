@@ -31,7 +31,8 @@ pub use self::test_utils::TEST_PROFILE_MUTEX;
 use self::test_utils::{activate_prof, deactivate_prof, dump_prof};
 
 // File name suffix for periodically dumped heap profiles.
-const HEAP_PROFILE_SUFFIX: &str = ".heap";
+pub const HEAP_PROFILE_SUFFIX: &str = ".heap";
+pub const HEAP_PROFILE_REGEX: &str = r"^[0-9]{6,6}\.heap$";
 
 lazy_static! {
     // If it's locked it means there are already a heap or CPU profiling.
