@@ -57,7 +57,7 @@ pub struct AdvanceTsWorker {
     scheduler: Scheduler<Task>,
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
-    concurrency_manager: ConcurrencyManager,
+    pub(crate) concurrency_manager: ConcurrencyManager,
 
     // cache the last pd tso, used to approximate the next timestamp w/o an actual TSO RPC
     pub(crate) last_pd_tso: Arc<std::sync::Mutex<Option<(TimeStamp, Instant)>>>,

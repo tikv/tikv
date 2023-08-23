@@ -133,6 +133,11 @@ lazy_static! {
         "The minimal lock ts for the region whose leader peer has minimal resolved ts. 0 means no lock. -1 means no region found."
     )
     .unwrap();
+    pub static ref CONCURRENCY_MANAGER_MIN_LOCK_TS: IntGauge = register_int_gauge!(
+        "tikv_concurrency_manager_min_lock_ts",
+        "The minimal lock ts in concurrency manager. 0 means no lock."
+    )
+    .unwrap();
     pub static ref RTS_MIN_LEADER_RESOLVED_TS: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_leader_resolved_ts",
         "The minimal (non-zero) resolved ts for observe leader peers"

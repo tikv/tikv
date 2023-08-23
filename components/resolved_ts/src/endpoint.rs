@@ -937,7 +937,7 @@ where
         let min_leader_resolved_ts_gap =
             now.saturating_sub(TimeStamp::from(oldest_leader_ts).physical());
         RTS_MIN_LEADER_RESOLVED_TS_GAP.set(min_leader_resolved_ts_gap as i64);
-        let mut oldest_leader_region_min_lock_ts;
+        let oldest_leader_region_min_lock_ts;
         let mut oldest_leader_region_min_lock_key_sample = None;
         if let Some(region) = self.regions.get(&oldest_leader_region) {
             if let Some((start_ts, keys)) = region.resolver.lock_ts_heap.iter().next() {
@@ -952,6 +952,8 @@ where
             // region not found. should be unreachable
             oldest_leader_region_min_lock_ts = -1;
         }
+
+        let cm_global_min_lock_ts = self.advance_worker.concurrency_manager.global_min_lock_ts();
         if min_leader_resolved_ts_gap
             > self.cfg.advance_ts_interval.as_millis()
                 + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64
@@ -965,11 +967,14 @@ where
                 "advance_ts_interval" => ?self.cfg.advance_ts_interval,
                 "oldest_leader_region_min_lock_ts" => oldest_leader_region_min_lock_ts,
                 "oldest_leader_region_min_lock_key_sample" => ?oldest_leader_region_min_lock_key_sample,
+                "concurrency_manager_global_min_lock_ts" => cm_global_min_lock_ts,
             );
         }
         RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS.set(oldest_leader_region_min_lock_ts);
 
         // misc
+        CONCURRENCY_MANAGER_MIN_LOCK_TS
+            .set(cm_global_min_lock_ts.unwrap_or_default().into_inner() as i64);
         RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
             .with_label_values(&["resolved"])
