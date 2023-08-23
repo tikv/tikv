@@ -244,9 +244,17 @@ pub fn jeprof_heap_profile(path: &str) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
+pub fn heap_profiles_dir() -> Option<PathBuf> {
+    PROFILE_ACTIVE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(_, dir)| dir.path().to_owned())
+}
+
 pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
-    let path = match &*PROFILE_ACTIVE.lock().unwrap() {
-        Some((_, ref dir)) => dir.path().to_str().unwrap().to_owned(),
+    let path = match heap_profiles_dir() {
+        Some(path) => path.into_os_string().into_string().unwrap(),
         None => return Ok(vec![]),
     };
 
@@ -257,7 +265,7 @@ pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
             Ok(x) => x,
             _ => continue,
         };
-        let f = item.path().to_str().unwrap().to_owned();
+        let f = item.file_name().to_str().unwrap().to_owned();
         if !f.ends_with(HEAP_PROFILE_SUFFIX) {
             continue;
         }
