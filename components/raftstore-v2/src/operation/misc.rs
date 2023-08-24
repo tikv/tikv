@@ -8,7 +8,10 @@ use std::collections::{
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
-use raftstore::{store::TabletSnapKey, Result};
+use raftstore::{
+    store::{CompactThreshold, TabletSnapKey},
+    Result,
+};
 use slog::{debug, error, info};
 
 use crate::{
@@ -16,7 +19,7 @@ use crate::{
     fsm::{Store, StoreFsmDelegate},
     router::{PeerMsg, StoreTick},
     worker::{
-        cleanup::{self, CompactThreshold},
+        cleanup::{self},
         tablet,
     },
     CompactTask::CheckAndCompact,
@@ -99,7 +102,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     self.store_ctx.cfg.region_compact_min_tombstones,
                     self.store_ctx.cfg.region_compact_tombstones_percent,
                     self.store_ctx.cfg.region_compact_min_redundant_rows,
-                    self.store_ctx.cfg.region_compact_redundant_rows_percent,
+                    self.store_ctx.cfg.region_compact_redundant_rows_percent(),
                 ),
             }))
         {

@@ -36,6 +36,7 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.region_compact_min_tombstones = 500;
     cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
+    cluster.cfg.raft_store.region_compact_redundant_rows_percent = Some(1);
     cluster.cfg.raft_store.region_compact_check_step = Some(1);
     cluster.cfg.rocksdb.titan.enabled = true;
     cluster.run();
@@ -97,8 +98,10 @@ fn test_node_compact_after_delete_v2() {
     cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
     // disable it
     cluster.cfg.raft_store.region_compact_min_redundant_rows = 10000000;
+    cluster.cfg.raft_store.region_compact_redundant_rows_percent = Some(100);
     cluster.cfg.raft_store.region_compact_check_step = Some(2);
-    cluster.cfg.rocksdb.titan.enabled = true;
+    // TODO: v2 doesn't support titan.
+    // cluster.cfg.rocksdb.titan.enabled = true;
     cluster.run();
 
     let region = cluster.get_region(b"");
@@ -166,10 +169,11 @@ fn test_node_compact_after_update_v2() {
     cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::millis(100);
     // disable it
     cluster.cfg.raft_store.region_compact_min_tombstones = 1000000;
-    cluster.cfg.raft_store.region_compact_redundant_rows_percent = 40;
+    cluster.cfg.raft_store.region_compact_redundant_rows_percent = Some(40);
     cluster.cfg.raft_store.region_compact_min_redundant_rows = 50;
     cluster.cfg.raft_store.region_compact_check_step = Some(2);
-    cluster.cfg.rocksdb.titan.enabled = true;
+    // TODO: titan is not supported in v2.
+    // cluster.cfg.rocksdb.titan.enabled = true;
     cluster.run();
 
     let region = cluster.get_region(b"");
