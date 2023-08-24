@@ -773,6 +773,16 @@ impl Config {
             ));
         }
 
+        let region_compact_redundant_rows_percent = self.region_compact_redundant_rows_percent.unwrap();
+        if region_compact_redundant_rows_percent < 1
+            || region_compact_redundant_rows_percent > 100
+        {
+            return Err(box_err!(
+                "region-compact-redundant-rows-percent must between 1 and 100, current value is {}",
+                region_compact_redundant_rows_percent
+            ));
+        }
+
         if self.local_read_batch_size == 0 {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
