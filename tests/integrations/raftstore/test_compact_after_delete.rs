@@ -167,7 +167,7 @@ fn test_node_compact_after_update_v2() {
     cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::millis(100);
     // disable it
     cluster.cfg.raft_store.region_compact_min_tombstones = 1000000;
-    cluster.cfg.raft_store.region_compact_redundant_rows_percent = 40;
+    cluster.cfg.raft_store.region_compact_redundant_rows_percent = Some(40);
     cluster.cfg.raft_store.region_compact_min_redundant_rows = 50;
     cluster.cfg.raft_store.region_compact_check_step = Some(2);
     // TODO: titan is not supported in v2.
