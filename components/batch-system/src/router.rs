@@ -396,9 +396,6 @@ where
 
 impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
     fn clone(&self) -> Router<N, C, Ns, Cs> {
-        info!("cloning router";
-            "backtrace" => ?std::backtrace::Backtrace::force_capture(),
-            "count" => Arc::strong_count(&self.normals) + 1);
         Router {
             normals: self.normals.clone(),
             caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
