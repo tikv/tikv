@@ -3105,7 +3105,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=pick-compaction#99a7c147a2ff0dc5649006900afff9f775d54a97"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d861ede96cc2aae3c2ed5ea1c1c71454130a325e"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3124,7 +3124,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=pick-compaction#99a7c147a2ff0dc5649006900afff9f775d54a97"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d861ede96cc2aae3c2ed5ea1c1c71454130a325e"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5098,7 +5098,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/rust-rocksdb?branch=pick-compaction#99a7c147a2ff0dc5649006900afff9f775d54a97"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d861ede96cc2aae3c2ed5ea1c1c71454130a325e"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
