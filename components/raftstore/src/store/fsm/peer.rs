@@ -97,7 +97,7 @@ use crate::{
             UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
         util,
-        util::{KeysInfoFormatter, LeaseState},
+        util::{is_region_initialized, KeysInfoFormatter, LeaseState},
         worker::{
             Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
             ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
@@ -2952,6 +2952,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "target_peer" => ?target,
+                            "job.initialized" => job.initialized,
                         );
                         if self.handle_destroy_peer(job) {
                             // It's not frequent, so use 0 as `heap_size` is ok.
@@ -3662,13 +3663,15 @@ where
             return false;
         }
 
+        let region_id = self.region_id();
+        let is_initialized = self.fsm.peer.is_initialized();
         info!(
             "starts destroy";
-            "region_id" => self.fsm.region_id(),
+            "region_id" => region_id,
             "peer_id" => self.fsm.peer_id(),
             "merged_by_target" => merged_by_target,
+            "is_initialized" => is_initialized,
         );
-        let region_id = self.region_id();
         // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
 
@@ -3686,6 +3689,25 @@ where
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        let is_region_initialized_in_meta = meta
+            .regions
+            .get(&region_id)
+            .map_or(false, |region| is_region_initialized(region));
+        if !is_initialized && is_region_initialized_in_meta {
+            let region_in_meta = meta.regions.get(&region_id).unwrap();
+            error!(
+                "peer is destroyed inconsistently";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "peers" => ?self.region().get_peers(),
+                "merged_by_target" => merged_by_target,
+                "is_initialized" => is_initialized,
+                "is_region_initialized_in_meta" => is_region_initialized_in_meta,
+                "start_key_in_meta" => log_wrappers::Value::key(region_in_meta.get_start_key()),
+                "end_key_in_meta" => log_wrappers::Value::key(region_in_meta.get_end_key()),
+                "peers_in_meta" => ?region_in_meta.get_peers(),
+            );
+        }
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -3723,7 +3745,6 @@ where
                 "err" => %e,
             );
         }
-        let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
             &mut self.ctx.raft_perf_context,
@@ -4117,11 +4138,7 @@ where
             }
 
             // Insert new regions and validation
-            info!(
-                "insert new region";
-                "region_id" => new_region_id,
-                "region" => ?new_region,
-            );
+            let mut is_uninitialized_peer_exist = false;
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
@@ -4135,8 +4152,15 @@ where
                         new_region_id, r, new_region
                     );
                 }
+                is_uninitialized_peer_exist = true;
                 self.ctx.router.close(new_region_id);
             }
+            info!(
+                "insert new region";
+                "region_id" => new_region_id,
+                "region" => ?new_region,
+                "is_uninitialized_peer_exist" => is_uninitialized_peer_exist,
+            );
 
             let (sender, mut new_peer) = match PeerFsm::create(
                 self.ctx.store_id(),
