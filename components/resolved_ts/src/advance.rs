@@ -114,6 +114,7 @@ impl AdvanceTsWorker {
             if let Ok(mut last_pd_tso) = last_pd_tso.try_lock() {
                 *last_pd_tso = Some((min_ts, Instant::now()));
             }
+            let mut ts_source = "pd-tso";
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
@@ -123,6 +124,7 @@ impl AdvanceTsWorker {
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
+                    ts_source = "concurrency_manager_min_lock";
                 }
             }
 
@@ -131,6 +133,7 @@ impl AdvanceTsWorker {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
                     regions,
                     ts: min_ts,
+                    ts_source,
                 }) {
                     info!("failed to schedule advance event"; "err" => ?e);
                 }

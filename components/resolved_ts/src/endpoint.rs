@@ -507,7 +507,7 @@ where
 
     // Update advanced resolved ts.
     // Must ensure all regions are leaders at the point of ts.
-    fn handle_resolved_ts_advanced(&mut self, regions: Vec<u64>, ts: TimeStamp) {
+    fn handle_resolved_ts_advanced(&mut self, regions: Vec<u64>, ts: TimeStamp, ts_source: &str) {
         if regions.is_empty() {
             return;
         }
@@ -515,9 +515,11 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region
-                        .resolver
-                        .resolve(ts, Some(now), "resolved_ts_advance");
+                    let _ = observe_region.resolver.resolve(
+                        ts,
+                        Some(now),
+                        format!("resolved-ts-{}", ts_source).as_str(),
+                    );
                 }
             }
         }
@@ -648,6 +650,7 @@ pub enum Task {
     ResolvedTsAdvanced {
         regions: Vec<u64>,
         ts: TimeStamp,
+        ts_source: &'static str,
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
@@ -702,10 +705,12 @@ impl fmt::Debug for Task {
             Task::ResolvedTsAdvanced {
                 ref regions,
                 ref ts,
+                ref ts_source,
             } => de
                 .field("name", &"advance_resolved_ts")
                 .field("regions", &regions)
                 .field("ts", &ts)
+                .field("ts_source", &ts_source)
                 .finish(),
             Task::ChangeLog { .. } => de.field("name", &"change_log").finish(),
             Task::ScanLocks {
@@ -762,9 +767,11 @@ where
             Task::AdvanceResolvedTs { leader_resolver } => {
                 self.handle_advance_resolved_ts(leader_resolver)
             }
-            Task::ResolvedTsAdvanced { regions, ts } => {
-                self.handle_resolved_ts_advanced(regions, ts)
-            }
+            Task::ResolvedTsAdvanced {
+                regions,
+                ts,
+                ts_source,
+            } => self.handle_resolved_ts_advanced(regions, ts, ts_source),
             Task::ChangeLog { cmd_batch } => self.handle_change_log(cmd_batch),
             Task::ScanLocks {
                 region_id,
