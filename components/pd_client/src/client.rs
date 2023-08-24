@@ -27,6 +27,7 @@ use kvproto::{
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
+    resource_manager::TokenBucketsRequest,
 };
 use security::SecurityManager;
 use tikv_util::{
@@ -1177,6 +1178,50 @@ impl PdClient for RpcClient {
         self.pd_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
+    }
+
+    fn report_ru_metrics(&self, req: TokenBucketsRequest) -> PdFuture<()> {
+        let executor = |client: &Client, req: TokenBucketsRequest| {
+            let mut inner = client.inner.wl();
+            if let Either::Left(ref mut left) = inner.rg_sender {
+                let sender = left.take().expect("expect report_ru_metrics sink");
+                let (tx, rx) = mpsc::unbounded();
+                inner.rg_sender = Either::Right(tx);
+                let resp = inner.rg_resp.take().unwrap();
+                // Note that for now we don't care about the result of the response stream.
+                inner.client_stub.spawn(async {
+                    resp.for_each(|_| future::ready(())).await;
+                    debug!("report_ru_metrics stream exited");
+                });
+                inner.client_stub.spawn(async move {
+                    let mut sender = sender.sink_map_err(Error::Grpc);
+                    let result = sender
+                        .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            sender.get_mut().cancel();
+                            info!("cancel report_ru_metrics sender");
+                        }
+                        Err(e) => {
+                            error!(?e; "failed to report_ru_metrics buckets");
+                        }
+                    };
+                });
+            }
+
+            let sender = inner
+                .rg_sender
+                .as_mut()
+                .right()
+                .expect("expect report_ru_metrics sender");
+            let ret = sender
+                .unbounded_send(req)
+                .map_err(|e| Error::StreamDisconnect(e.into_send_error()));
+            Box::pin(future::ready(ret)) as PdFuture<_>
+        };
+
+        self.pd_client.request(req, executor, NO_RETRY).execute()
     }
 }
 

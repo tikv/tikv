@@ -10,6 +10,8 @@ use tikv_util::{box_err, box_try, codec::bytes, error, warn};
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::{store::util, Error};
 
+pub const NO_VALID_SPLIT_KEY: &str = "no valid key found for split.";
+
 pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     let mut slice = key.as_slice();
     let strip_len = match bytes::decode_bytes(&mut slice, false) {
@@ -35,6 +37,9 @@ pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
     }
 
     if let Err(Error::KeyNotInRegion(..)) = util::check_key_in_region_exclusive(key, region) {
+        // use this to distinguish whether the key is at the edge or outside of the
+        // region.
+        let equal_start_key = key == region.get_start_key();
         warn!(
             "skip invalid split key: key is not in region";
             "key" => log_wrappers::Value::key(key),
@@ -42,6 +47,7 @@ pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
             "start_key" => log_wrappers::Value::key(region.get_start_key()),
             "end_key" => log_wrappers::Value::key(region.get_end_key()),
             "index" => index,
+            "equal_start_key" => equal_start_key,
         );
         return false;
     }
@@ -90,7 +96,7 @@ impl SplitObserver {
             .collect::<Vec<_>>();
 
         if ajusted_splits.is_empty() {
-            Err("no valid key found for split.".to_owned())
+            Err(NO_VALID_SPLIT_KEY.to_owned())
         } else {
             // Rewrite the splits.
             *splits = ajusted_splits;

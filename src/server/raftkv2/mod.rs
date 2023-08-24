@@ -12,7 +12,7 @@ use std::{
 
 use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
-use futures::{future::BoxFuture, Future, Stream, StreamExt};
+use futures::{future::BoxFuture, Future, Stream, StreamExt, TryFutureExt};
 use kvproto::{
     kvrpcpb::Context,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, Request},
@@ -356,19 +356,35 @@ fn exec_admin<EK: KvEngine, ER: RaftEngine>(
     req: RaftCmdRequest,
 ) -> BoxFuture<'static, tikv_kv::Result<()>> {
     let region_id = req.get_header().get_region_id();
+    let peer_id = req.get_header().get_peer().get_id();
+    let term = req.get_header().get_term();
+    let epoch = req.get_header().get_region_epoch().clone();
     let admin_type = req.get_admin_request().get_cmd_type();
     let (msg, sub) = PeerMsg::admin_command(req);
     let res = router.check_send(region_id, msg);
-    Box::pin(async move {
-        res?;
-        let mut resp = sub.result().await.ok_or_else(|| -> tikv_kv::Error {
-            box_err!(
-                "region {} exec_admin {:?} without response",
-                region_id,
-                admin_type
-            )
-        })?;
-        check_raft_cmd_response(&mut resp)?;
-        Ok(())
-    })
+    Box::pin(
+        async move {
+            res?;
+            let mut resp = sub.result().await.ok_or_else(|| -> tikv_kv::Error {
+                box_err!(
+                    "region {} exec_admin {:?} without response",
+                    region_id,
+                    admin_type
+                )
+            })?;
+            check_raft_cmd_response(&mut resp)?;
+            Ok(())
+        }
+        .map_err(move |e| {
+            warn!("failed to execute admin command";
+                "err" => ?e,
+                "admin_type" => ?admin_type,
+                "term" => term,
+                "region_epoch" => ?epoch,
+                "peer_id" => peer_id,
+                "region_id" => region_id,
+            );
+            e
+        }),
+    )
 }

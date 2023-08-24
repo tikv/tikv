@@ -584,6 +584,7 @@ dependencies = [
  "dashmap",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "etcd-client",
@@ -617,6 +618,7 @@ dependencies = [
  "tempdir",
  "tempfile",
  "test_pd",
+ "test_pd_client",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -3097,7 +3099,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#770f7183434ca05887a3f63265b8745017130e1f"
+source = "git+https://github.com/pingcap/kvproto.git#7b612d935bf96f9daf7a537db379bcc88b4644e0"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3226,7 +3228,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0c78f4072d766b152e83b25d3068b5c72b5feca1"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3245,7 +3247,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0c78f4072d766b152e83b25d3068b5c72b5feca1"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4512,6 +4514,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "procinfo"
+version = "0.4.2"
+source = "git+https://github.com/tikv/procinfo-rs?rev=7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1#7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1"
+dependencies = [
+ "byteorder",
+ "libc 0.2.146",
+ "nom 2.2.1",
+ "rustc_version 0.2.3",
+]
+
+[[package]]
 name = "profiler"
 version = "0.0.1"
 dependencies = [
@@ -4809,7 +4822,7 @@ dependencies = [
  "paste",
  "pd_client",
  "perfcnt",
- "procinfo",
+ "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs?rev=6599eb9dca74229b2c1fcc44118bef7eff127128)",
  "profiler",
  "protobuf",
  "proxy_ffi",
@@ -5413,6 +5426,7 @@ dependencies = [
  "protobuf",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "strum 0.20.0",
@@ -5438,7 +5452,7 @@ dependencies = [
  "online_config",
  "pdqselect",
  "pin-project",
- "procinfo",
+ "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs?rev=7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1)",
  "prometheus",
  "rand 0.8.5",
  "serde",
@@ -5481,7 +5495,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#3dee8778c2666030c174952db67f39356d60e1dc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0c78f4072d766b152e83b25d3068b5c72b5feca1"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -6138,6 +6152,7 @@ dependencies = [
  "engine_traits",
  "futures 0.3.15",
  "grpcio",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6156,6 +6171,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "toml",
  "txn_types",
 ]
@@ -6800,7 +6816,7 @@ dependencies = [
  "paste",
  "pd_client",
  "perfcnt",
- "procinfo",
+ "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs?rev=7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1)",
  "profiler",
  "protobuf",
  "raft",
@@ -6842,6 +6858,7 @@ dependencies = [
  "tipb_helper",
  "tokio",
  "toml",
+ "tracker",
  "txn_types",
  "uuid 0.8.2",
 ]
@@ -7043,7 +7060,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "7.3.0-alpha"
+version = "7.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -7115,7 +7132,7 @@ dependencies = [
  "pin-project",
  "pnet_datalink",
  "pprof",
- "procinfo",
+ "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs?rev=7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1)",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -7292,7 +7309,7 @@ dependencies = [
  "parking_lot_core 0.9.1",
  "pin-project",
  "procfs",
- "procinfo",
+ "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs?rev=7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1)",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -7389,7 +7406,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#55b921cfdca1e29bcc29a83c1532bfdf53f88c51"
+source = "git+https://github.com/pingcap/tipb.git#711da6fede03533302fbc9fa3a8fca3556683197"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

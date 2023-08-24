@@ -324,8 +324,8 @@ mod tests {
         fn get_current_stats(&mut self, t: ResourceType) -> IoResult<ResourceUsageStats> {
             match t {
                 ResourceType::Cpu => Ok(ResourceUsageStats {
-                    total_quota: self.cpu_total * 1_000_000.0,
-                    current_used: self.cpu_used * 1_000_000.0,
+                    total_quota: self.cpu_total * MICROS_PER_SEC,
+                    current_used: self.cpu_used * MICROS_PER_SEC,
                 }),
                 ResourceType::Io => Ok(ResourceUsageStats {
                     total_quota: self.io_total,
@@ -400,45 +400,115 @@ mod tests {
             );
         }
 
-        fn check_limiter(limiter: &Arc<ResourceLimiter>, cpu: f64, io: f64) {
+        fn check_limiter(limiter: &Arc<ResourceLimiter>, cpu: f64, io: IoBytes) {
             check(
                 limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
-                cpu * 1_000_000.0,
+                cpu * MICROS_PER_SEC,
             );
-            check(limiter.get_limiter(ResourceType::Io).get_rate_limit(), io);
+            check(
+                limiter.get_limiter(ResourceType::Io).get_rate_limit(),
+                (io.read + io.write) as f64,
+            );
             reset_limiter(limiter);
         }
 
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter(&limiter, 6.4, 8000.0);
+        check_limiter(
+            &limiter,
+            6.4,
+            IoBytes {
+                read: 4000,
+                write: 4000,
+            },
+        );
 
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_millis(500));
         worker.adjust_quota();
-        check_limiter(&limiter, 6.4, 8000.0);
+        check_limiter(
+            &limiter,
+            6.4,
+            IoBytes {
+                read: 4000,
+                write: 4000,
+            },
+        );
 
         reset_quota(&mut worker, 4.0, 2000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter(&limiter, 3.2, 6400.0);
+        check_limiter(
+            &limiter,
+            3.2,
+            IoBytes {
+                read: 3200,
+                write: 3200,
+            },
+        );
 
         reset_quota(&mut worker, 6.0, 4000.0, Duration::from_secs(1));
-        limiter.consume(Duration::from_secs(2), 2000);
+        limiter.consume(
+            Duration::from_secs(2),
+            IoBytes {
+                read: 1000,
+                write: 1000,
+            },
+        );
         worker.adjust_quota();
-        check_limiter(&limiter, 3.2, 6400.0);
+        check_limiter(
+            &limiter,
+            3.2,
+            IoBytes {
+                read: 3200,
+                write: 3200,
+            },
+        );
 
         reset_quota(&mut worker, 8.0, 9500.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter(&limiter, 0.8, 1000.0);
+        check_limiter(
+            &limiter,
+            0.8,
+            IoBytes {
+                read: 500,
+                write: 500,
+            },
+        );
 
         reset_quota(&mut worker, 7.5, 9500.0, Duration::from_secs(1));
-        limiter.consume(Duration::from_secs(2), 2000);
+        limiter.consume(
+            Duration::from_secs(2),
+            IoBytes {
+                read: 1000,
+                write: 1000,
+            },
+        );
         worker.adjust_quota();
-        check_limiter(&limiter, 2.0, 2000.0);
+        check_limiter(
+            &limiter,
+            2.0,
+            IoBytes {
+                read: 1000,
+                write: 1000,
+            },
+        );
 
         reset_quota(&mut worker, 7.5, 9500.0, Duration::from_secs(5));
-        limiter.consume(Duration::from_secs(10), 10000);
+        limiter.consume(
+            Duration::from_secs(10),
+            IoBytes {
+                read: 5000,
+                write: 5000,
+            },
+        );
         worker.adjust_quota();
-        check_limiter(&limiter, 2.0, 2000.0);
+        check_limiter(
+            &limiter,
+            2.0,
+            IoBytes {
+                read: 1000,
+                write: 1000,
+            },
+        );
 
         let default =
             new_background_resource_group_ru("default".into(), 2000, 8, vec!["br".into()]);
@@ -454,15 +524,55 @@ mod tests {
 
         reset_quota(&mut worker, 5.0, 7000.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter(&limiter, 1.6, 1600.0);
-        check_limiter(&bg_limiter, 0.8, 800.0);
+        check_limiter(
+            &limiter,
+            1.6,
+            IoBytes {
+                read: 800,
+                write: 800,
+            },
+        );
+        check_limiter(
+            &bg_limiter,
+            0.8,
+            IoBytes {
+                read: 400,
+                write: 400,
+            },
+        );
 
         reset_quota(&mut worker, 6.0, 5000.0, Duration::from_secs(1));
-        limiter.consume(Duration::from_millis(1200), 1200);
-        bg_limiter.consume(Duration::from_millis(1800), 1800);
+        limiter.consume(
+            Duration::from_millis(1200),
+            IoBytes {
+                read: 600,
+                write: 600,
+            },
+        );
+        bg_limiter.consume(
+            Duration::from_millis(1800),
+            IoBytes {
+                read: 900,
+                write: 900,
+            },
+        );
         worker.adjust_quota();
-        check_limiter(&limiter, 2.4, 2800.0);
-        check_limiter(&bg_limiter, 1.6, 3600.0);
+        check_limiter(
+            &limiter,
+            2.4,
+            IoBytes {
+                read: 1400,
+                write: 1400,
+            },
+        );
+        check_limiter(
+            &bg_limiter,
+            1.6,
+            IoBytes {
+                read: 1800,
+                write: 1800,
+            },
+        );
 
         let bg = new_resource_group_ru("background".into(), 1000, 15);
         resource_ctl.add_resource_group(bg);
@@ -489,15 +599,55 @@ mod tests {
 
         reset_quota(&mut worker, 0.0, 0.0, Duration::from_secs(1));
         worker.adjust_quota();
-        check_limiter(&limiter, 4.27, 5333.3);
-        check_limiter(&new_bg_limiter, 2.13, 2666.7);
+        check_limiter(
+            &limiter,
+            4.27,
+            IoBytes {
+                read: 2667,
+                write: 2667,
+            },
+        );
+        check_limiter(
+            &new_bg_limiter,
+            2.13,
+            IoBytes {
+                read: 1334,
+                write: 1334,
+            },
+        );
 
         reset_quota(&mut worker, 6.0, 5000.0, Duration::from_secs(1));
-        limiter.consume(Duration::from_millis(1200), 1200);
-        new_bg_limiter.consume(Duration::from_millis(1800), 1800);
+        limiter.consume(
+            Duration::from_millis(1200),
+            IoBytes {
+                read: 600,
+                write: 600,
+            },
+        );
+        new_bg_limiter.consume(
+            Duration::from_millis(1800),
+            IoBytes {
+                read: 900,
+                write: 900,
+            },
+        );
 
         worker.adjust_quota();
-        check_limiter(&limiter, 2.4, 2800.0);
-        check_limiter(&new_bg_limiter, 1.6, 3600.0);
+        check_limiter(
+            &limiter,
+            2.4,
+            IoBytes {
+                read: 1400,
+                write: 1400,
+            },
+        );
+        check_limiter(
+            &new_bg_limiter,
+            1.6,
+            IoBytes {
+                read: 1800,
+                write: 1800,
+            },
+        );
     }
 }

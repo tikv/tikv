@@ -266,7 +266,7 @@ pub fn batch_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
         request.mut_header().set_peer(peer.clone());
         let snap = cluster.sim.wl().async_snapshot(node_id, request);
         let resp = block_on_timeout(
-            Box::pin(async move {
+            async move {
                 match snap.await {
                     Ok(snap) => ReadResponse {
                         response: Default::default(),
@@ -279,7 +279,7 @@ pub fn batch_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
                         txn_extra_op: Default::default(),
                     },
                 }
-            }),
+            },
             Duration::from_secs(1),
         )
         .unwrap();
@@ -427,4 +427,23 @@ pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
             .clone(),
     );
     cluster.call_command_on_node(node_id, req, timeout)
+}
+
+pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    count: u64,
+    peer: Option<u64>,
+) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
+    }
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers, count, peer
+    );
 }

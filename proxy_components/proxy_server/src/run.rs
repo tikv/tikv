@@ -1286,6 +1286,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             unified_read_pool_scale_receiver,
         );
 
+        let safe_point = Arc::new(AtomicU64::new(0));
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -1300,6 +1301,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             collector_reg_handle,
             None,
             self.grpc_service_mgr.clone(),
+            safe_point,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

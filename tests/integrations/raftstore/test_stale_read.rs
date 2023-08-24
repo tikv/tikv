@@ -8,7 +8,7 @@ use kvproto::{
     metapb::{Peer, Region},
     tikvpb_grpc::TikvClient,
 };
-use test_raftstore::{must_get_equal, new_mutation, new_peer, new_server_cluster, PeerClient};
+use test_raftstore::{must_get_equal, new_mutation, new_peer, PeerClient};
 use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, time::Instant};
 
@@ -78,11 +78,13 @@ fn test_stale_read_with_ts0() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_stale_read_resolved_ts_advance() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.resolved_ts.enable = true;
     cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(200);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
 
-    cluster.run();
+    cluster.run_conf_change();
     let cluster = RefCell::new(cluster);
 
     let must_resolved_ts_advance = |region: &Region| {
@@ -112,12 +114,26 @@ fn test_stale_read_resolved_ts_advance() {
             }
         }
     };
+    // Now region 1 only has peer (1, 1);
+    let (key, value) = (b"k1", b"v1");
+
+    cluster.borrow_mut().must_put(key, value);
+    assert_eq!(cluster.borrow_mut().get(key), Some(value.to_vec()));
 
     // Make sure resolved ts advances.
     let region = cluster.borrow().get_region(&[]);
     must_resolved_ts_advance(&region);
 
+    // Add peer (2, 2) to region 1.
+    pd_client.must_add_peer(region.id, new_peer(2, 2));
+    must_get_equal(&cluster.borrow().get_engine(2), key, value);
+
+    // Test conf change.
+    let region = cluster.borrow().get_region(&[]);
+    must_resolved_ts_advance(&region);
+
     // Test transfer leader.
+    let region = cluster.borrow().get_region(&[]);
     cluster
         .borrow_mut()
         .must_transfer_leader(region.get_id(), region.get_peers()[1].clone());

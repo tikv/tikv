@@ -137,24 +137,21 @@ impl<F: Future> Future for LimitedFuture<F> {
         let dur = start.saturating_elapsed();
         let io_bytes = if let Some(last_io_bytes) = last_io_bytes {
             match get_thread_io_bytes_stats() {
-                Ok(io_bytes) => {
-                    let delta = io_bytes - last_io_bytes;
-                    delta.read + delta.write
-                }
+                Ok(io_bytes) => io_bytes - last_io_bytes,
                 Err(e) => {
                     warn!("load thread io bytes failed"; "err" => e);
-                    0
+                    IoBytes::default()
                 }
             }
         } else {
-            0
+            IoBytes::default()
         };
         let mut wait_dur = this.resource_limiter.consume(dur, io_bytes);
         if wait_dur == Duration::ZERO {
             return res;
         }
         if wait_dur > MAX_WAIT_DURATION {
-            warn!("limiter future wait too long"; "wait" => ?wait_dur, "io" => io_bytes, "cpu" => ?dur);
+            warn!("limiter future wait too long"; "wait" => ?wait_dur, "io_read" => io_bytes.read, "io_write" => io_bytes.write, "cpu" => ?dur);
             wait_dur = MAX_WAIT_DURATION;
         }
         *this.post_delay = Some(

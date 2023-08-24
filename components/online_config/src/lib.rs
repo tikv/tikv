@@ -140,6 +140,8 @@ mod tests {
 
     #[derive(Clone, OnlineConfig, Debug, Default, PartialEq)]
     pub struct TestConfig {
+        // Test doc hidden fields support online config change.
+        #[doc(hidden)]
         field1: usize,
         field2: String,
         optional_field1: Option<usize>,

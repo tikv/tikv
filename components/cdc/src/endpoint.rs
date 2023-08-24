@@ -498,7 +498,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let change = self.config.diff(&validate_cfg);
         info!(
             "cdc config updated";
-            "current config" => ?self.config,
+            "current_config" => ?self.config,
             "change" => ?change
         );
         // Update the config here. The following adjustments will all use the new

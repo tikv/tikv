@@ -481,7 +481,7 @@ impl ResourceController {
 
         // TODO: use different threshold for different resource type
         // needn't do update if the virtual different is less than 100ms/100KB.
-        if min_vt + 100_000 >= max_vt && max_vt < RESET_VT_THRESHOLD {
+        if min_vt >= max_vt.saturating_sub(100_000) && max_vt < RESET_VT_THRESHOLD {
             return;
         }
 

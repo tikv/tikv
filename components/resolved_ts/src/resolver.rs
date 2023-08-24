@@ -4,6 +4,7 @@ use std::{cmp, collections::BTreeMap, sync::Arc};
 
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
+use tikv_util::time::Instant;
 use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
@@ -159,7 +160,7 @@ impl Resolver {
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
+    pub fn resolve(&mut self, min_ts: TimeStamp, now: Option<Instant>) -> TimeStamp {
         // The `Resolver` is stopped, not need to advance, just return the current
         // `resolved_ts`
         if self.stopped {
@@ -184,7 +185,7 @@ impl Resolver {
 
         // Publish an `(apply index, safe ts)` item into the region read progress
         if let Some(rrp) = &self.read_progress {
-            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
+            rrp.update_safe_ts_with_time(self.tracked_index, self.resolved_ts.into_inner(), now);
         }
 
         let new_min_ts = if has_lock {
@@ -217,7 +218,7 @@ impl Resolver {
                 "locks with the minimum start_ts in resolver";
                 "region_id" => self.region_id,
                 "start_ts" => start_ts,
-                "sampled keys" => ?keys_for_log,
+                "sampled_keys" => ?keys_for_log,
             );
         }
     }
@@ -307,7 +308,12 @@ mod tests {
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
-                        assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
+                        assert_eq!(
+                            resolver.resolve(min_ts.into(), None),
+                            expect.into(),
+                            "case {}",
+                            i
+                        )
                     }
                 }
             }

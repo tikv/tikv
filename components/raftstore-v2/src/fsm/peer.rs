@@ -383,6 +383,24 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_unsafe_recovery_fill_out_report(syncer),
+                PeerMsg::UnsafeRecoveryWaitInitialized(syncer) => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_wait_initialized(syncer),
+                PeerMsg::UnsafeRecoveryDestroy(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_destroy_peer(syncer)
+                }
+                PeerMsg::UnsafeRecoveryDemoteFailedVoters {
+                    failed_voters,
+                    syncer,
+                } => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_pre_demote_failed_voters(
+                        self.store_ctx,
+                        syncer,
+                        failed_voters,
+                    ),
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

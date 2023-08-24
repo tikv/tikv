@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,
@@ -584,6 +584,8 @@ impl ServerCluster {
             max_unified_read_pool_thread_count,
             None,
         );
+
+        let safe_point = Arc::new(AtomicU64::new(0));
         node.start(
             engines,
             simulate_trans.clone(),
@@ -598,6 +600,7 @@ impl ServerCluster {
             collector_reg_handle,
             None,
             GrpcServiceManager::dummy(),
+            safe_point,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

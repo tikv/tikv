@@ -142,7 +142,7 @@ impl RaftStoreProxy {
         // We don't use information stored in `GlobalReplicationState` to decouple.
         *self.cluster_raftstore_ver.write().unwrap() = RaftstoreVer::Uncertain;
         let mut retry_count: u64 = 0;
-        const RETRY_LIMIT: u64 = 40;
+        const RETRY_LIMIT: u64 = 60;
         let stores = loop {
             match self.pd_client.as_ref().unwrap().get_all_stores(false) {
                 Ok(stores) => break stores,

@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
 };
 
 use collections::{HashMap, HashSet};
@@ -378,6 +378,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
 
         node.try_bootstrap_store(engines.clone())?;
 
+        let safe_point = Arc::new(AtomicU64::new(0));
         node.start(
             engines.clone(),
             simulate_trans.clone(),
@@ -392,6 +393,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             CollectorRegHandle::new_for_test(),
             None,
             GrpcServiceManager::dummy(),
+            safe_point,
         )?;
         assert!(
             engines

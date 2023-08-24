@@ -87,6 +87,11 @@ pub struct Config {
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
     pub raft_log_gc_size_limit: Option<ReadableSize>,
+    // follower will reject this follower request to avoid falling behind leader too far,
+    // when the read index is ahead of the sum between the applied index and
+    // follower_read_max_log_gap,
+    #[doc(hidden)]
+    pub follower_read_max_log_gap: u64,
     // Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
     // GC them after ticks `raft_log_reserve_max_ticks` times.
     #[doc(hidden)]
@@ -411,6 +416,7 @@ impl Default for Config {
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
+            follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
             max_manual_flush_rate: 3.0,
@@ -565,6 +571,10 @@ impl Config {
 
     pub fn raft_log_gc_size_limit(&self) -> ReadableSize {
         self.raft_log_gc_size_limit.unwrap()
+    }
+
+    pub fn follower_read_max_log_gap(&self) -> u64 {
+        self.follower_read_max_log_gap
     }
 
     pub fn region_compact_check_step(&self) -> u64 {

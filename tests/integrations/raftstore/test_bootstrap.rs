@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
-    sync::{mpsc::sync_channel, Arc, Mutex},
+    sync::{atomic::AtomicU64, mpsc::sync_channel, Arc, Mutex},
     time::Duration,
 };
 
@@ -122,6 +122,7 @@ fn test_node_bootstrap_with_prepared_data() {
         CollectorRegHandle::new_for_test(),
         None,
         GrpcServiceManager::dummy(),
+        Arc::new(AtomicU64::new(0)),
     )
     .unwrap();
     assert!(
