@@ -611,7 +611,7 @@ impl Config {
                 self.region_compact_redundant_rows_percent = Some(20);
             } else {
                 self.region_compact_check_step = Some(100);
-                // Disable redundant rows check in defaul for v1.
+                // Disable redundant rows check in default for v1.
                 self.region_compact_redundant_rows_percent = Some(100);
             }
         }
