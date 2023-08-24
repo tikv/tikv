@@ -302,10 +302,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.schedule_apply_fsm(ctx);
             if self.remove_tombstone_tablets(snapshot_index) {
+                let counter = self.remember_persisted_tablet_index();
                 let _ = ctx
                     .schedulers
                     .tablet
                     .schedule(tablet::Task::destroy(region_id, snapshot_index));
+                counter.store(snapshot_index, Ordering::Relaxed);
             }
         }
     }
