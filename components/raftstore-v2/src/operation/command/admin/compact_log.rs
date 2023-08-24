@@ -13,7 +13,13 @@
 //! Updates truncated index, and compacts logs if the corresponding changes have
 //! been persisted in kvdb.
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
@@ -50,6 +56,10 @@ pub struct CompactLogContext {
     /// persisted. When persisted_apply is advanced, we need to notify tablet
     /// worker to destroy them.
     tombstone_tablets_wait_index: Vec<u64>,
+    /// Sometimes a tombstone tablet can be registered after tablet index is
+    /// advanced. We should not consider it as an active tablet otherwise it
+    /// might block peer destroy progress.
+    persisted_tablet_index: Arc<AtomicU64>,
 }
 
 impl CompactLogContext {
@@ -60,6 +70,7 @@ impl CompactLogContext {
             last_applying_index,
             last_compacted_idx: 0,
             tombstone_tablets_wait_index: vec![],
+            persisted_tablet_index: AtomicU64::new(0).into(),
         }
     }
 
@@ -379,7 +390,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ));
     }
 
-    /// Returns if there's any tombstone being removed.
+    /// Returns if there's any tombstone being removed. `persisted` state may
+    /// not be persisted yet, caller is responsible for actually destroying the
+    /// physical tablets afterwards.
     #[inline]
     pub fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
         let compact_log_context = self.compact_log_context_mut();
@@ -398,11 +411,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    /// User can only increase this counter.
+    #[inline]
+    pub fn remember_persisted_tablet_index(&self) -> Arc<AtomicU64> {
+        self.compact_log_context().persisted_tablet_index.clone()
+    }
+
+    /// Returns whether there's any tombstone tablet newer than persisted tablet
+    /// index. They might still be referenced by inflight apply and cannot be
+    /// destroyed.
     pub fn has_pending_tombstone_tablets(&self) -> bool {
-        !self
-            .compact_log_context()
-            .tombstone_tablets_wait_index
-            .is_empty()
+        let ctx = self.compact_log_context();
+        let persisted = ctx.persisted_tablet_index.load(Ordering::Relaxed);
+        ctx.tombstone_tablets_wait_index
+            .iter()
+            .any(|i| *i > persisted)
     }
 
     #[inline]
@@ -411,6 +434,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &StoreContext<EK, ER, T>,
         task: &mut WriteTask<EK, ER>,
     ) {
+        let applied_index = self.entry_storage().applied_index();
+        self.remove_tombstone_tablets(applied_index);
         assert!(
             !self.has_pending_tombstone_tablets(),
             "{} all tombstone should be cleared before being destroyed.",
@@ -421,7 +446,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None => return,
         };
         let region_id = self.region_id();
-        let applied_index = self.entry_storage().applied_index();
         let sched = ctx.schedulers.tablet.clone();
         let _ = sched.schedule(tablet::Task::prepare_destroy(
             tablet,
@@ -557,13 +581,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             if self.remove_tombstone_tablets(new_persisted) {
                 let sched = store_ctx.schedulers.tablet.clone();
+                let counter = self.remember_persisted_tablet_index();
                 if !task.has_snapshot {
                     task.persisted_cbs.push(Box::new(move || {
                         let _ = sched.schedule(tablet::Task::destroy(region_id, new_persisted));
+                        // Writer guarantees no race between different callbacks.
+                        counter.store(new_persisted, Ordering::Relaxed);
                     }));
                 } else {
                     // In snapshot, the index is persisted, tablet can be destroyed directly.
                     let _ = sched.schedule(tablet::Task::destroy(region_id, new_persisted));
+                    counter.store(new_persisted, Ordering::Relaxed);
                 }
             }
         }

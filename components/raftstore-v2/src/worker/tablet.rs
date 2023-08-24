@@ -298,6 +298,8 @@ impl<EK: KvEngine> Runner<EK> {
             .spawn(async move {
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
+                // Note: Refer to https://github.com/facebook/rocksdb/pull/11468. There's could be
+                // some files missing from compaction if dynamic_level_bytes is off.
                 for r in [range1, range2] {
                     // When compaction filter is present, trivial move is disallowed.
                     if let Err(e) =
@@ -322,6 +324,16 @@ impl<EK: KvEngine> Runner<EK> {
                         }
                         return;
                     }
+                }
+                if let Err(e) = tablet.check_in_range(Some(&start_key), Some(&end_key)) {
+                    debug_assert!(false, "check_in_range failed {:?}, is titan enabled?", e);
+                    error!(
+                        logger,
+                        "trim did not remove all dirty data";
+                        "path" => tablet.path(),
+                        "err" => %e,
+                    );
+                    return;
                 }
                 // drop before callback.
                 drop(tablet);
