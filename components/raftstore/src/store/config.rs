@@ -773,9 +773,9 @@ impl Config {
             ));
         }
 
-        let region_compact_redundant_rows_percent = self.region_compact_redundant_rows_percent.unwrap();
-        if region_compact_redundant_rows_percent < 1
-            || region_compact_redundant_rows_percent > 100
+        let region_compact_redundant_rows_percent =
+            self.region_compact_redundant_rows_percent.unwrap();
+        if region_compact_redundant_rows_percent < 1 || region_compact_redundant_rows_percent > 100
         {
             return Err(box_err!(
                 "region-compact-redundant-rows-percent must between 1 and 100, current value is {}",
@@ -1010,7 +1010,10 @@ impl Config {
             .set(self.region_compact_min_redundant_rows as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_redundant_rows_percent"])
-            .set(self.region_compact_redundant_rows_percent.unwrap_or_default() as f64);
+            .set(
+                self.region_compact_redundant_rows_percent
+                    .unwrap_or_default() as f64,
+            );
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs_f64());
