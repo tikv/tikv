@@ -179,6 +179,11 @@ fn test_serde_custom_tikv_config() {
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
+<<<<<<< HEAD
+=======
+        region_compact_min_redundant_rows: 999,
+        region_compact_redundant_rows_percent: Some(33),
+>>>>>>> 8a44a2c4c1 (raftstore: disable duplicated mvcc key compaction check by default (#15427))
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,

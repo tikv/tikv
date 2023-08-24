@@ -2041,8 +2041,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             CompactTask::CheckAndCompact {
                 cf_names,
                 ranges: ranges_need_check,
+<<<<<<< HEAD
                 tombstones_num_threshold: self.ctx.cfg.region_compact_min_tombstones,
                 tombstones_percent_threshold: self.ctx.cfg.region_compact_tombstones_percent,
+=======
+                compact_threshold: CompactThreshold::new(
+                    self.ctx.cfg.region_compact_min_tombstones,
+                    self.ctx.cfg.region_compact_tombstones_percent,
+                    self.ctx.cfg.region_compact_min_redundant_rows,
+                    self.ctx.cfg.region_compact_redundant_rows_percent(),
+                ),
+>>>>>>> 8a44a2c4c1 (raftstore: disable duplicated mvcc key compaction check by default (#15427))
             },
         )) {
             error!(
