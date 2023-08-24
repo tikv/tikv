@@ -1946,12 +1946,24 @@ impl<D: ConfigurableDb> DbConfigManger<D> {
         }
     }
 
-    fn update_background_cfg(&self, max_background_jobs: i32, max_background_flushes: i32) -> Result<(), Box<dyn Error>> {
+    fn update_background_cfg(
+        &self,
+        max_background_jobs: i32,
+        max_background_flushes: i32,
+    ) -> Result<(), Box<dyn Error>> {
         assert!(max_background_jobs > 0 && max_background_flushes > 0);
-        let max_background_compacts = std::cmp::max(max_background_jobs - max_background_flushes, 1);
-        self.db.set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
-        self.db.set_db_config(&[("max_background_flushes", &max_background_flushes.to_string())])?;
-        self.db.set_db_config(&[("max_background_compactions", &max_background_compacts.to_string())])
+        let max_background_compacts =
+            std::cmp::max(max_background_jobs - max_background_flushes, 1);
+        self.db
+            .set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
+        self.db.set_db_config(&[(
+            "max_background_flushes",
+            &max_background_flushes.to_string(),
+        )])?;
+        self.db.set_db_config(&[(
+            "max_background_compactions",
+            &max_background_compacts.to_string(),
+        )])
     }
 }
 
@@ -4964,7 +4976,11 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg);
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DbConfigManger::new(cfg_controller.get_current().rocksdb, engine.clone(), DbType::Kv)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                engine.clone(),
+                DbType::Kv,
+            )),
         );
         let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(

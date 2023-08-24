@@ -760,10 +760,13 @@ impl ConfiguredRaftEngine for RocksEngine {
     }
 
     fn register_config(&self, cfg_controller: &mut ConfigController) {
-        let rocks_cfg = cfg_controller.get_current().rocksdb;
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(rocks_cfg, self.clone(), DbType::Raft)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                self.clone(),
+                DbType::Raft,
+            )),
         );
     }
 }
