@@ -13,31 +13,29 @@ pub struct MemoryTraceManager {
 
 impl MemoryTraceManager {
     pub fn flush(&mut self, _now: Instant) {
-        let raft_router = "raft_router".to_string();
-        let apply_router = "apply_router".to_string();
         for provider in &self.providers {
             let provider_name = provider.name();
             let ids = provider.get_children_ids();
             for id in ids {
                 let sub_trace = provider.sub_trace(id);
                 let sub_trace_name = sub_trace.name();
-                if sub_trace_name == raft_router || sub_trace_name == apply_router {
-                    let alive = sub_trace.sub_trace(Id::Name("alive"));
-                    let leak = sub_trace.sub_trace(Id::Name("leak"));
-                    MEM_TRACE_SUM_GAUGE
-                        .with_label_values(&[&format!(
-                            "{}-{}-alive",
-                            provider_name, sub_trace_name
-                        )])
-                        .set(alive.sum() as i64);
-
-                    MEM_TRACE_SUM_GAUGE
-                        .with_label_values(&[&format!("{}-{}-leak", provider_name, sub_trace_name)])
-                        .set(leak.sum() as i64);
-                } else {
+                let leaf_ids = sub_trace.get_children_ids();
+                if leaf_ids.is_empty() {
                     MEM_TRACE_SUM_GAUGE
                         .with_label_values(&[&format!("{}-{}", provider_name, sub_trace_name)])
                         .set(sub_trace.sum() as i64);
+                } else {
+                    for leaf_id in leaf_ids {
+                        let leaf = sub_trace.sub_trace(leaf_id);
+                        MEM_TRACE_SUM_GAUGE
+                            .with_label_values(&[&format!(
+                                "{}-{}-{}",
+                                provider_name,
+                                sub_trace_name,
+                                leaf.name(),
+                            )])
+                            .set(leaf.sum() as i64);
+                    }
                 }
             }
 
