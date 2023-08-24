@@ -2604,7 +2604,7 @@ mod tests {
 
             let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
             let mut resolver = Resolver::new(id, memory_quota);
-            resolver.track_lock(TimeStamp::compose(0, id), vec![], None);
+            let _ = resolver.track_lock(TimeStamp::compose(0, id), vec![], None);
             let mut region = Region::default();
             region.id = id;
             region.set_region_epoch(region_epoch);
