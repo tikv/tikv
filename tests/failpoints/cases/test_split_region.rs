@@ -31,6 +31,7 @@ use raftstore::{
     Result,
 };
 use test_raftstore::*;
+use test_util::init_log_for_test;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -42,6 +43,7 @@ use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_meta_inconsistency() {
+    init_log_for_test();
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
@@ -116,6 +118,7 @@ fn test_meta_inconsistency() {
     cluster.sim.wl().clear_recv_filters(3);
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k1", b"v1");
 }
 
 #[test]

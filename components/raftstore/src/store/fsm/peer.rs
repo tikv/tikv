@@ -3699,6 +3699,16 @@ where
                 false
             }
         };
+
+        if !is_peer_initialized && is_latest_initialized {
+            info!("skip destroy uninitialized peer as it's already initialized in meta";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "merged_by_target" => merged_by_target,
+            );
+            return false;
+        }
+
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -3763,22 +3773,14 @@ where
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
-        if !merged_by_target {
-            let key = if is_peer_initialized {
-                let region_info = self.fsm.peer.region();
-                Some(enc_end_key(region_info))
-            } else if is_latest_initialized {
-                let latest_region_info = meta.regions.get(&region_id).unwrap();
-                Some(enc_end_key(latest_region_info))
-            } else {
-                None
-            };
-
-            if let Some(delete_key) = key {
-                if meta.region_ranges.remove(&delete_key).is_none() {
-                    panic!("{} meta corruption detected", self.fsm.peer.tag);
-                }
-            }
+        if is_peer_initialized
+            && !merged_by_target
+            && meta
+                .region_ranges
+                .remove(&enc_end_key(self.fsm.peer.region()))
+                .is_none()
+        {
+            panic!("{} meta corruption detected", self.fsm.peer.tag);
         }
 
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
