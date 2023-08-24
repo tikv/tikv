@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use tikv::server::MEM_TRACE_SUM_GAUGE;
-use tikv_alloc::{trace::MemoryTrace, Id};
+use tikv_alloc::trace::MemoryTrace;
 use tikv_util::time::Instant;
 
 #[derive(Default)]
