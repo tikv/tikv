@@ -97,6 +97,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             }
+            fail::fail_point!("resolved_ts_before_scanner_get_snapshot");
             let snap = match Self::get_snapshot(&mut task, cdc_handle).await {
                 Ok(snap) => snap,
                 Err(e) => {

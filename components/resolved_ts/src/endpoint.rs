@@ -139,6 +139,7 @@ impl ResolverStatus {
                         // Check if adding a new lock or unlock will exceed the memory
                         // quota.
                         if !memory_quota.alloc(lock.heap_size()) {
+                            fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
                             return Err(Error::MemoryQuotaExceeded);
                         }
                         locks.push(lock);
