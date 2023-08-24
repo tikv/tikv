@@ -81,15 +81,14 @@ pub fn must_get<EK: KvEngine>(
     }
     debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
     let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-    if value.is_none() && res.is_none()
-        || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
-    {
+    if value == res.as_ref().map(|r| r.as_ref()) {
         return;
     }
     panic!(
-        "can't get value {:?} for key {}",
+        "can't get value {:?} for key {}, actual={:?}",
         value.map(escape),
-        log_wrappers::hex_encode_upper(key)
+        log_wrappers::hex_encode_upper(key),
+        res
     )
 }
 
