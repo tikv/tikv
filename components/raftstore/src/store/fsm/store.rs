@@ -2525,7 +2525,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     self.ctx.cfg.region_compact_min_tombstones,
                     self.ctx.cfg.region_compact_tombstones_percent,
                     self.ctx.cfg.region_compact_min_redundant_rows,
-                    self.ctx.cfg.region_compact_redundant_rows_percent,
+                    self.ctx.cfg.region_compact_redundant_rows_percent(),
                 ),
             },
         )) {

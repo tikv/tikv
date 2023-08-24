@@ -102,7 +102,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     self.store_ctx.cfg.region_compact_min_tombstones,
                     self.store_ctx.cfg.region_compact_tombstones_percent,
                     self.store_ctx.cfg.region_compact_min_redundant_rows,
-                    self.store_ctx.cfg.region_compact_redundant_rows_percent,
+                    self.store_ctx.cfg.region_compact_redundant_rows_percent(),
                 ),
             }))
         {
