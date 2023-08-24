@@ -35,6 +35,7 @@ lazy_static! {
     pub static ref MEMTRACE_ENTRY_CACHE: Arc<MemoryTrace> =
         MEMTRACE_ROOT.sub_trace(Id::Name("entry_cache"));
 
+    /// NOTE: DON'T change the trace name below, or MemoryTraceManager::flush will break
     pub static ref MEMTRACE_RAFT_ROUTER_ALIVE: Arc<MemoryTrace> = MEMTRACE_ROOT
         .sub_trace(Id::Name("raft_router"))
         .sub_trace(Id::Name("alive"));
