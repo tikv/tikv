@@ -903,19 +903,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.maybe_force_forward_commit_index();
         }
 
-        let persisted_admin = cmp::min(
-            self.storage().apply_trace().persisted_apply_index(),
-            persisted_index,
-        );
-        if self.remember_persisted_tablet_index(persisted_admin) {
-            let _ = ctx
-                .schedulers
-                .tablet
-                .schedule(tablet::Task::destroy(self.region_id(), persisted_admin));
-            if !self.serving() {
-                self.set_has_ready();
-            }
-        }
         if !self.destroy_progress().started() {
             // We may need to check if there is persisted committed logs.
             self.set_has_ready();

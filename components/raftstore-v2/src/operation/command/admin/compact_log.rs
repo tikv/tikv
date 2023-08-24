@@ -13,7 +13,13 @@
 //! Updates truncated index, and compacts logs if the corresponding changes have
 //! been persisted in kvdb.
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
@@ -53,7 +59,7 @@ pub struct CompactLogContext {
     /// Sometimes a tombstone tablet can be registered after tablet index is
     /// advanced. We should not consider it as an active tablet otherwise it
     /// might block peer destroy progress.
-    persisted_tablet_index: u64,
+    persisted_tablet_index: Arc<AtomicU64>,
 }
 
 impl CompactLogContext {
@@ -64,7 +70,7 @@ impl CompactLogContext {
             last_applying_index,
             last_compacted_idx: 0,
             tombstone_tablets_wait_index: vec![],
-            persisted_tablet_index: 0,
+            persisted_tablet_index: AtomicU64::new(0).into(),
         }
     }
 
@@ -405,20 +411,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    /// Removes tombstone records before `persisted`. Caller must guarantee
-    /// `persisted` state is already persisted. Subsequent calls to
-    /// `record_tombstone_tablet` with smaller index will not affect the result
-    /// of `has_pending_tombstone_tablets`. These tablets will be destroyed when
-    /// tablet index is advanced again, or peer is destroyed. Normally it should
-    /// be the latter case where peer destroys itself after `PrepareMerge`.
+    /// User can only increase this counter.
     #[inline]
-    pub fn remember_persisted_tablet_index(&mut self, persisted: u64) -> bool {
-        if self.compact_log_context_mut().persisted_tablet_index < persisted {
-            self.compact_log_context_mut().persisted_tablet_index = persisted;
-            self.remove_tombstone_tablets(persisted)
-        } else {
-            false
-        }
+    pub fn remember_persisted_tablet_index(&self) -> Arc<AtomicU64> {
+        self.compact_log_context().persisted_tablet_index.clone()
     }
 
     /// Returns whether there's any tombstone tablet newer than persisted tablet
@@ -426,9 +422,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// destroyed.
     pub fn has_pending_tombstone_tablets(&self) -> bool {
         let ctx = self.compact_log_context();
+        let persisted = ctx.persisted_tablet_index.load(Ordering::Relaxed);
         ctx.tombstone_tablets_wait_index
             .iter()
-            .any(|i| *i > ctx.persisted_tablet_index)
+            .any(|i| *i > persisted)
     }
 
     #[inline]
@@ -584,13 +581,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             if self.remove_tombstone_tablets(new_persisted) {
                 let sched = store_ctx.schedulers.tablet.clone();
+                let counter = self.remember_persisted_tablet_index();
                 if !task.has_snapshot {
                     task.persisted_cbs.push(Box::new(move || {
                         let _ = sched.schedule(tablet::Task::destroy(region_id, new_persisted));
+                        // Writer guarantees no race between different callbacks.
+                        counter.store(new_persisted, Ordering::Relaxed);
                     }));
                 } else {
                     // In snapshot, the index is persisted, tablet can be destroyed directly.
                     let _ = sched.schedule(tablet::Task::destroy(region_id, new_persisted));
+                    counter.store(new_persisted, Ordering::Relaxed);
                 }
             }
         }
