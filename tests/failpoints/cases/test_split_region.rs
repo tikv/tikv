@@ -64,10 +64,10 @@ fn test_meta_inconsistency() {
     // for peer 1003.
     let region_packet_filter_region_1000_peer_1003 =
         RegionPacketFilter::new(1000, 3).skip(MessageType::MsgHeartbeat);
-    cluster.sim.wl().add_recv_filter(
-        3,
-        Box::new(region_packet_filter_region_1000_peer_1003.clone()),
-    );
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, Box::new(region_packet_filter_region_1000_peer_1003));
 
     // Trigger a region split to create region 1000 with peer 1001, 1002 and 1003.
     let region = cluster.get_region(b"");
