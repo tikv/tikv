@@ -402,9 +402,9 @@ pub mod test_router {
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self.tx.send(Either::Left(PeerMsg::RaftMessage(
-                Box::new(InspectedRaftMessage { heap_size: 0, msg }),
-            )));
+            let _ = self.tx.send(Either::Left(PeerMsg::RaftMessage(Box::new(
+                InspectedRaftMessage { heap_size: 0, msg },
+            ))));
             Ok(())
         }
 

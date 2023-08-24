@@ -542,7 +542,9 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
     let wait_apply =
         UnsafeRecoveryWaitApplySyncer::new(report_id, router.clone(), exit_force_leader);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(Box::new(SignificantMsg::UnsafeRecoveryWaitApply(wait_apply.clone())))
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::UnsafeRecoveryWaitApply(
+            wait_apply.clone(),
+        )))
     });
 }
 

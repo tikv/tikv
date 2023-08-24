@@ -3764,9 +3764,8 @@ where
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let peer_msg = PeerMsg::RaftMessage(
-                        Box::new(InspectedRaftMessage { heap_size: 0, msg }),
-                    );
+                    let peer_msg =
+                        PeerMsg::RaftMessage(Box::new(InspectedRaftMessage { heap_size: 0, msg }));
                     if let Err(e) = self.ctx.router.force_send(new_region_id, peer_msg) {
                         warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }

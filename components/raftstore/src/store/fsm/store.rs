@@ -324,9 +324,7 @@ where
         for e in msg.get_message().get_entries() {
             heap_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
         }
-        let peer_msg = PeerMsg::RaftMessage(
-            Box::new(InspectedRaftMessage { heap_size, msg })
-        );
+        let peer_msg = PeerMsg::RaftMessage(Box::new(InspectedRaftMessage { heap_size, msg }));
         let event = TraceEvent::Add(heap_size);
         let send_failed = Cell::new(true);
 
@@ -1915,9 +1913,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 )? {
                     // Peer created, send the message again.
-                    let peer_msg = PeerMsg::RaftMessage(
-                        Box::new(InspectedRaftMessage { heap_size, msg }),
-                    );
+                    let peer_msg =
+                        PeerMsg::RaftMessage(Box::new(InspectedRaftMessage { heap_size, msg }));
                     if self.ctx.router.send(region_id, peer_msg).is_ok() {
                         forwarded.set(true);
                     }
