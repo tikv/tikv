@@ -326,6 +326,7 @@ impl<EK: KvEngine> Runner<EK> {
                     }
                 }
                 if let Err(e) = tablet.check_in_range(Some(&start_key), Some(&end_key)) {
+                    debug_assert!(false, "check_in_range failed {:?}, is titan enabled?", e);
                     error!(
                         logger,
                         "trim did not remove all dirty data";
