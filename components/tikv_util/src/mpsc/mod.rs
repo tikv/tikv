@@ -240,7 +240,7 @@ impl<T> LooseBoundedSender<T> {
             fail_point!("loose_bounded_sender_check_interval", |_| 0);
             CHECK_INTERVAL
         };
-        if self.tried_cnt.fetch_add(1, Ordering::AcqRel) > check_interval() {
+        if self.tried_cnt.fetch_add(1, Ordering::AcqRel) >= check_interval() {
             if self.len() < self.limit {
                 self.tried_cnt.store(1, Ordering::Release);
             } else {
