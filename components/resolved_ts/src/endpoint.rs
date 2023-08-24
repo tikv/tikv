@@ -565,7 +565,7 @@ where
                 if observe_region.handle.id == observe_id {
                     let logs = ChangeLog::encode_change_log(region_id, batch);
                     if let Err(e) = observe_region.track_change_log(&logs) {
-                        // TODO: handle memory quota exceed.
+                        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
                         drop(observe_region);
                         self.re_register_region(region_id, observe_id, e);
                     }
@@ -590,8 +590,8 @@ where
         match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
                 if observe_region.handle.id == observe_id {
-                    // TODO: handle memory quota exceed.
-                    let _ = observe_region.track_scan_locks(entries, apply_index);
+                    // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                    assert!(observe_region.track_scan_locks(entries, apply_index));
                 }
             }
             None => {

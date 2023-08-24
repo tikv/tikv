@@ -415,8 +415,8 @@ impl Delegate {
         for lock in mem::take(&mut pending.locks) {
             match lock {
                 PendingLock::Track { key, start_ts } => {
-                    // TODO: handle memory quota exceed.
-                    let _ = resolver.track_lock(start_ts, key, None);
+                    // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                    assert!(resolver.track_lock(start_ts, key, None));
                 }
                 PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
             }
@@ -825,8 +825,8 @@ impl Delegate {
                 // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
-                        // TODO: handle memory quota exceed.
-                        let _ = resolver.track_lock(row.start_ts.into(), row.key.clone(), None);
+                        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                        assert!(resolver.track_lock(row.start_ts.into(), row.key.clone(), None));
                     }
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
