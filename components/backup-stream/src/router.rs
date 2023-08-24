@@ -1071,7 +1071,7 @@ impl StreamTaskInfo {
             Ok(_) => {
                 debug!(
                     "backup stream flush success";
-                    "storage file" => ?filepath,
+                    "storage_file" => ?filepath,
                     "est_len" => ?stat_length,
                 );
             }

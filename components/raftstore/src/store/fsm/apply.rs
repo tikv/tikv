@@ -2384,8 +2384,8 @@ where
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
-                            "exist peer" => ?exist_peer,
-                            "confchange type" => ?change_type,
+                            "exist_peer" => ?exist_peer,
+                            "confchange_type" => ?change_type,
                             "region" => ?&self.region
                         );
                         return Err(box_err!(
@@ -4470,7 +4470,9 @@ where
             self.delegate.clear_all_commands_as_stale();
         }
         let mut event = TraceEvent::default();
-        self.delegate.update_memory_trace(&mut event);
+        if let Some(e) = self.delegate.trace.reset(ApplyMemoryTrace::default()) {
+            event = event + e;
+        }
         MEMTRACE_APPLYS.trace(event);
     }
 }

@@ -603,7 +603,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 continue;
             }
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                let elapsed = instant.saturating_duration_since(now);
+                let elapsed = now.saturating_duration_since(*instant);
                 if elapsed >= max_duration {
                     let mut stats = pdpb::PeerStats::default();
                     stats.set_peer(p.clone());

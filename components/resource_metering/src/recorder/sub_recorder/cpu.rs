@@ -49,10 +49,13 @@ impl SubRecorder for CpuRecorder {
     fn cleanup(
         &mut self,
         _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<Pid, LocalStorage>,
+        thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
-        const THREAD_STAT_LEN_THRESHOLD: usize = 500;
+        // Remove thread stats that are no longer in thread_stores.
+        self.thread_stats
+            .retain(|tid, _| thread_stores.contains_key(tid));
 
+        const THREAD_STAT_LEN_THRESHOLD: usize = 500;
         if self.thread_stats.capacity() > THREAD_STAT_LEN_THRESHOLD
             && self.thread_stats.len() < THREAD_STAT_LEN_THRESHOLD / 2
         {

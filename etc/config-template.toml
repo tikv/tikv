@@ -154,7 +154,7 @@
 # advertise-addr = ""
 
 ## Status address.
-## This is used for reporting the status of TiKV directly through 
+## This is used for reporting the status of TiKV directly through
 ## the HTTP address. Notice that there is a risk of leaking status
 ## information if this port is exposed to the public.
 ## Empty string means disabling it.
@@ -302,7 +302,7 @@
 ##   * throttle at scheduler, so raftstore and apply won't be blocked anymore
 ##   * better control on the throttle rate to avoid QPS drop under heavy write
 ##
-## Support change dynamically. 
+## Support change dynamically.
 ## When enabled, it disables kvdb's write stall and raftdb's write stall(except memtable) and vice versa.
 # enable = true
 
@@ -312,12 +312,12 @@
 ## When the number of SST files of level-0 of kvdb reaches the threshold, the flow controller begins to work
 # l0-files-threshold = 20
 
-## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
-## reject some write requests with `ServerIsBusy` error. 
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to
+## reject some write requests with `ServerIsBusy` error.
 # soft-pending-compaction-bytes-limit = "192GB"
 
-## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to 
-## reject all write requests with `ServerIsBusy` error. 
+## When the number of pending compaction bytes of kvdb reaches the threshold, the flow controller begins to
+## reject all write requests with `ServerIsBusy` error.
 # hard-pending-compaction-bytes-limit = "1024GB"
 
 [storage.io-rate-limit]
@@ -708,7 +708,7 @@
 ## lower levels. When this is set, `block-based-bloom-filter` will be ignored.
 ## Only effective for `format-version` >= 5.
 ## Disabled by default.
-# ribbon-filter-above-level = 0
+## ribbon-filter-above-level = 0
 
 # level0-file-num-compaction-trigger = 4
 
@@ -888,16 +888,16 @@
 
 ## SST files containing updates older than TTL will go through the compaction
 ## process. This usually happens in a cascading way so that those entries
-## will be compacted to bottommost level/file.
+## will be compacted to bottommost level/file. Disabled as default.
 ##
-## Default: 30 days.
-# ttl = "30d"
+## Default: 0s.
+# ttl = "0s"
 
 ## SST files older than this value will be picked up for compaction, and
-## re-written to the same level as they were before.
+## re-written to the same level as they were before. Disabled as default.
 ##
-## Default: 30 days.
-# periodic-compaction-seconds = "30d"
+## Default: 0s.
+# periodic-compaction-seconds = "0s"
 
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
@@ -1190,7 +1190,7 @@
 ##     Plaintext as master key means no master key is given and only applicable when
 ##     encryption is not enabled, i.e. data-encryption-method = "plaintext". This type doesn't
 ##     have sub-config items. Example:
-##     
+##
 ##     [security.encryption.master-key]
 ##     type = "plaintext"
 ##
@@ -1214,7 +1214,7 @@
 ##
 ##     Supply a custom encryption key stored in a file. It is recommended NOT to use in production,
 ##     as it breaks the purpose of encryption at rest, unless the file is stored in tempfs.
-##     The file must contain a 256-bits (32 bytes, regardless of key length implied by 
+##     The file must contain a 256-bits (32 bytes, regardless of key length implied by
 ##     data-encryption-method) key encoded as hex string and end with newline ("\n"). Example:
 ##
 ##     [security.encryption.master-key]
@@ -1252,16 +1252,16 @@
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
-# enable-auto-tune = true 
+# enable-auto-tune = true
 
-[log-backup] 
+[log-backup]
 ## Number of threads to perform backup stream tasks.
 ## The default value is CPU_NUM * 0.5, and limited to [2, 12].
 # num-threads = 8
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
-# enable = true 
+# enable = true
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

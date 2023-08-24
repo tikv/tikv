@@ -2,7 +2,7 @@
 
 use std::fmt::{self, Display, Formatter};
 
-pub use compact::{CompactThreshold, Runner as CompactRunner, Task as CompactTask};
+pub use compact::{Runner as CompactRunner, Task as CompactTask};
 use engine_traits::KvEngine;
 use tikv_util::worker::Runnable;
 
