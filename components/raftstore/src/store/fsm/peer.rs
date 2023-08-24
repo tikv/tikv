@@ -97,7 +97,7 @@ use crate::{
             UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
         util,
-        util::{is_region_initialized, KeysInfoFormatter, LeaseState},
+        util::{KeysInfoFormatter, LeaseState},
         worker::{
             Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
             ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
@@ -322,6 +322,7 @@ where
             "replicate peer";
             "region_id" => region_id,
             "peer_id" => peer.get_id(),
+            "store_id" => store_id,
         );
 
         let mut region = metapb::Region::default();
@@ -2460,6 +2461,7 @@ where
             }
         });
 
+        let is_initialized_peer = self.fsm.peer.is_initialized();
         debug!(
             "handle raft message";
             "region_id" => self.region_id(),
@@ -2467,6 +2469,7 @@ where
             "message_type" => %util::MsgType(&msg),
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
+            "is_initialized_peer" => is_initialized_peer,
         );
 
         if self.fsm.peer.pending_remove || self.fsm.stopped {
@@ -3664,14 +3667,7 @@ where
         }
 
         let region_id = self.region_id();
-        let is_initialized = self.fsm.peer.is_initialized();
-        info!(
-            "starts destroy";
-            "region_id" => region_id,
-            "peer_id" => self.fsm.peer_id(),
-            "merged_by_target" => merged_by_target,
-            "is_initialized" => is_initialized,
-        );
+        let is_peer_initialized = self.fsm.peer.is_initialized();
         // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
 
@@ -3688,26 +3684,29 @@ where
                 .snapshot_recovery_maybe_finish_wait_apply(/* force= */ true);
         }
 
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        let is_region_initialized_in_meta = meta
-            .regions
-            .get(&region_id)
-            .map_or(false, |region| is_region_initialized(region));
-        if !is_initialized && is_region_initialized_in_meta {
-            let region_in_meta = meta.regions.get(&region_id).unwrap();
-            error!(
-                "peer is destroyed inconsistently";
-                "region_id" => region_id,
-                "peer_id" => self.fsm.peer_id(),
-                "peers" => ?self.region().get_peers(),
-                "merged_by_target" => merged_by_target,
-                "is_initialized" => is_initialized,
-                "is_region_initialized_in_meta" => is_region_initialized_in_meta,
-                "start_key_in_meta" => log_wrappers::Value::key(region_in_meta.get_start_key()),
-                "end_key_in_meta" => log_wrappers::Value::key(region_in_meta.get_end_key()),
-                "peers_in_meta" => ?region_in_meta.get_peers(),
+        (|| {
+            fail_point!(
+                "before_destroy_peer_on_peer_1003",
+                self.fsm.peer.peer_id() == 1003,
+                |_| {}
             );
-        }
+        })();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let is_latest_initialized = {
+            if let Some(latest_region_info) = meta.regions.get(&region_id) {
+                util::is_region_initialized(latest_region_info)
+            } else {
+                false
+            }
+        };
+        info!(
+            "starts destroy";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "merged_by_target" => merged_by_target,
+            "is_peer_initialized" => is_peer_initialized,
+            "is_latest_initialized" => is_latest_initialized,
+        );
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -3764,15 +3763,24 @@ where
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
-        if is_initialized
-            && !merged_by_target
-            && meta
-                .region_ranges
-                .remove(&enc_end_key(self.fsm.peer.region()))
-                .is_none()
-        {
-            panic!("{} meta corruption detected", self.fsm.peer.tag);
+        if !merged_by_target {
+            let key = if is_peer_initialized {
+                let region_info = self.fsm.peer.region();
+                Some(enc_end_key(region_info))
+            } else if is_latest_initialized {
+                let latest_region_info = meta.regions.get(&region_id).unwrap();
+                Some(enc_end_key(latest_region_info))
+            } else {
+                None
+            };
+
+            if let Some(delete_key) = key {
+                if meta.region_ranges.remove(&delete_key).is_none() {
+                    panic!("{} meta corruption detected", self.fsm.peer.tag);
+                }
+            }
         }
+
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
@@ -4139,6 +4147,7 @@ where
 
             // Insert new regions and validation
             let mut is_uninitialized_peer_exist = false;
+            let self_store_id = self.ctx.store.get_id();
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
@@ -4160,6 +4169,7 @@ where
                 "region_id" => new_region_id,
                 "region" => ?new_region,
                 "is_uninitialized_peer_exist" => is_uninitialized_peer_exist,
+                "store_id" => self_store_id,
             );
 
             let (sender, mut new_peer) = match PeerFsm::create(
