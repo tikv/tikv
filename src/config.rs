@@ -5124,6 +5124,18 @@ mod tests {
         // When the default values are `None`, but are then resolved to `Some(_)` later on.
         default_cfg.readpool.storage.adjust_use_unified_pool();
         default_cfg.readpool.coprocessor.adjust_use_unified_pool();
+<<<<<<< HEAD:src/config.rs
+=======
+        default_cfg
+            .coprocessor
+            .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        default_cfg
+            .server
+            .optimize_for(default_cfg.coprocessor.region_split_size());
+        default_cfg
+            .raft_store
+            .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+>>>>>>> 8a44a2c4c1 (raftstore: disable duplicated mvcc key compaction check by default (#15427)):src/config/mod.rs
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
