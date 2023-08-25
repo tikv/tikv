@@ -65,7 +65,7 @@ impl Drop for Resolver {
         let mut bytes = 0;
         let num_locks = self.num_locks();
         for key in self.locks_by_key.keys() {
-            bytes += key.heap_size();
+            bytes += self.lock_heap_size(key);
         }
         if bytes > ON_DROP_WARN_HEAP_SIZE {
             warn!("drop huge resolver";
@@ -155,6 +155,12 @@ impl Resolver {
         self.tracked_index = index;
     }
 
+    fn lock_heap_size(&self, key: &[u8]) -> usize {
+        // locks_by_key: HashMap<Arc<[u8]>, TimeStamp>
+        // size of key and size of value.
+        key.heap_size() + std::mem::size_of::<TimeStamp>()
+    }
+
     #[must_use]
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) -> bool {
         if let Some(index) = index {
@@ -166,7 +172,7 @@ impl Resolver {
             start_ts,
             self.region_id
         );
-        let bytes = key.as_slice().heap_size() + std::mem::size_of::<TimeStamp>();
+        let bytes = self.lock_heap_size(&key);
         if !self.memory_quota.alloc(bytes) {
             return false;
         }
@@ -181,7 +187,7 @@ impl Resolver {
             self.update_tracked_index(index);
         }
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
-            let bytes = key.heap_size();
+            let bytes = self.lock_heap_size(key);
             self.memory_quota.free(bytes);
             start_ts
         } else {
@@ -382,12 +388,13 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(1024));
         let mut resolver = Resolver::new(1, memory_quota.clone());
         let mut key = vec![0; 77];
+        let lock_size = resolver.lock_heap_size(&key);
         let mut ts = TimeStamp::default();
         while resolver.track_lock(ts, key.clone(), None) {
             ts.incr();
             key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
         }
-        let remain = 1024 % key.len();
+        let remain = 1024 % lock_size;
         assert_eq!(memory_quota.in_use(), 1024 - remain);
 
         let mut ts = TimeStamp::default();
@@ -396,7 +403,7 @@ mod tests {
             key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
             resolver.untrack_lock(&key, None);
         }
-        assert_eq!(memory_quota.in_use(), 1024 - 5 * key.len() - remain);
+        assert_eq!(memory_quota.in_use(), 1024 - 5 * lock_size - remain);
         drop(resolver);
         assert_eq!(memory_quota.in_use(), 0);
     }
