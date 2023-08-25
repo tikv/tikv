@@ -1,13 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    fmt,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::{fmt, sync::Arc, time::Duration};
 
 use futures::{
     channel::mpsc::{
@@ -20,7 +13,7 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
-use tikv_util::{impl_display_as_debug, time::Instant, warn};
+use tikv_util::{impl_display_as_debug, memory::MemoryQuota, time::Instant, warn};
 
 use crate::metrics::*;
 
@@ -185,71 +178,7 @@ impl EventBatcher {
     }
 }
 
-#[derive(Clone)]
-pub struct MemoryQuota {
-    capacity: Arc<AtomicUsize>,
-    in_use: Arc<AtomicUsize>,
-}
-
-impl MemoryQuota {
-    pub fn new(capacity: usize) -> MemoryQuota {
-        MemoryQuota {
-            capacity: Arc::new(AtomicUsize::new(capacity)),
-            in_use: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    pub fn in_use(&self) -> usize {
-        self.in_use.load(Ordering::Relaxed)
-    }
-
-    pub(crate) fn capacity(&self) -> usize {
-        self.capacity.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn set_capacity(&self, capacity: usize) {
-        self.capacity.store(capacity, Ordering::Release)
-    }
-
-    fn alloc(&self, bytes: usize) -> bool {
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        let capacity = self.capacity.load(Ordering::Acquire);
-        loop {
-            if in_use_bytes + bytes > capacity {
-                return false;
-            }
-            let new_in_use_bytes = in_use_bytes + bytes;
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Acquire,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return true,
-                Err(current) => in_use_bytes = current,
-            }
-        }
-    }
-
-    fn free(&self, bytes: usize) {
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        loop {
-            // Saturating at the numeric bounds instead of overflowing.
-            let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Acquire,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(current) => in_use_bytes = current,
-            }
-        }
-    }
-}
-
-pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
+pub fn channel(buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = bounded(buffer);
     (
@@ -304,7 +233,7 @@ impl_from_future_send_error! {
 pub struct Sink {
     unbounded_sender: UnboundedSender<(CdcEvent, usize)>,
     bounded_sender: Sender<(CdcEvent, usize)>,
-    memory_quota: MemoryQuota,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl Sink {
@@ -354,7 +283,7 @@ impl Sink {
 pub struct Drain {
     unbounded_receiver: UnboundedReceiver<(CdcEvent, usize)>,
     bounded_receiver: Receiver<(CdcEvent, usize)>,
-    memory_quota: MemoryQuota,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl<'a> Drain {
@@ -466,7 +395,7 @@ mod tests {
 
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
     fn new_test_channel(buffer: usize, capacity: usize, force_send: bool) -> (Send, Drain) {
-        let memory_quota = MemoryQuota::new(capacity);
+        let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let (mut tx, rx) = channel(buffer, memory_quota);
         let mut flag = true;
         let send = move |event| {
@@ -614,7 +543,7 @@ mod tests {
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
-        let memory_quota = MemoryQuota::new(max_pending_bytes as _);
+        let memory_quota = Arc::new(MemoryQuota::new(max_pending_bytes as _));
         let (tx, _rx) = channel(buffer as _, memory_quota);
         for _ in 0..buffer {
             tx.unbounded_send(CdcEvent::Event(e.clone()), false)
