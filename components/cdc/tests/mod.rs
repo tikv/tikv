@@ -6,7 +6,7 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, MemoryQuota, Task, Validate};
+use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -25,6 +25,7 @@ use test_raftstore::*;
 use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID, storage::kv::LocalTablets};
 use tikv_util::{
     config::ReadableDuration,
+    memory::MemoryQuota,
     worker::{LazyWorker, Runnable},
     HandyRwLock,
 };
@@ -153,7 +154,7 @@ impl TestSuiteBuilder {
                 .push(Box::new(move || {
                     create_change_data(cdc::Service::new(
                         scheduler.clone(),
-                        MemoryQuota::new(memory_quota),
+                        Arc::new(MemoryQuota::new(memory_quota)),
                     ))
                 }));
             sim.txn_extra_schedulers.insert(
@@ -193,7 +194,7 @@ impl TestSuiteBuilder {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
-                MemoryQuota::new(usize::MAX),
+                Arc::new(MemoryQuota::new(usize::MAX)),
                 sim.get_causal_ts_provider(*id),
             );
             let mut updated_cfg = cfg.clone();

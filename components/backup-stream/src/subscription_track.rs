@@ -9,7 +9,7 @@ use dashmap::{
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
 use resolved_ts::Resolver;
-use tikv_util::{info, warn};
+use tikv_util::{info, memory::MemoryQuota, warn};
 use txn_types::TimeStamp;
 
 use crate::{debug, metrics::TRACK_REGION, utils};
@@ -401,7 +401,7 @@ impl<'a> SubscriptionRef<'a> {
     }
 }
 
-/// This enhanced version of `Resolver` allow some unordered lock events.  
+/// This enhanced version of `Resolver` allow some unordered lock events.
 /// The name "2-phase" means this is used for 2 *concurrency* phases of
 /// observing a region:
 /// 1. Doing the initial scanning.
@@ -479,7 +479,8 @@ impl TwoPhaseResolver {
         if !self.in_phase_one() {
             warn!("backup stream tracking lock as if in phase one"; "start_ts" => %start_ts, "key" => %utils::redact(&key))
         }
-        self.resolver.track_lock(start_ts, key, None)
+        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+        assert!(self.resolver.track_lock(start_ts, key, None));
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
@@ -487,7 +488,8 @@ impl TwoPhaseResolver {
             self.future_locks.push(FutureLock::Lock(key, start_ts));
             return;
         }
-        self.resolver.track_lock(start_ts, key, None)
+        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+        assert!(self.resolver.track_lock(start_ts, key, None));
     }
 
     pub fn untrack_lock(&mut self, key: &[u8]) {
@@ -501,7 +503,10 @@ impl TwoPhaseResolver {
 
     fn handle_future_lock(&mut self, lock: FutureLock) {
         match lock {
-            FutureLock::Lock(key, ts) => self.resolver.track_lock(ts, key, None),
+            FutureLock::Lock(key, ts) => {
+                // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                assert!(self.resolver.track_lock(ts, key, None));
+            }
             FutureLock::Unlock(key) => self.resolver.untrack_lock(&key, None),
         }
     }
@@ -523,8 +528,10 @@ impl TwoPhaseResolver {
     }
 
     pub fn new(region_id: u64, stable_ts: Option<TimeStamp>) -> Self {
+        // TODO: limit the memory usage of the resolver.
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         Self {
-            resolver: Resolver::new(region_id),
+            resolver: Resolver::new(region_id, memory_quota),
             future_locks: Default::default(),
             stable_ts,
         }
