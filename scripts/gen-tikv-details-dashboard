@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Check if python 3 is installed
+if ! command -v python3 &> /dev/null
+then
+    echo "python3 could not be found"
+    exit
+fi
+
+if ! pip3 show grafanalib 1>/dev/null; then
+    pip3 install grafanalib
+fi
+
+# Disable python bytecode generation.
+export PYTHONDONTWRITEBYTECODE=1
+
+generate-dashboard -o metrics/grafana/tikv_details1.json metrics/grafana/tikv_details.dashboard.py
