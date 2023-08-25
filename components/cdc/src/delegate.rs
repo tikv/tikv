@@ -677,24 +677,27 @@ impl Delegate {
         let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool)> = HashMap::default();
         let mut raw_rows: Vec<EventRow> = Vec::new();
         for mut req in requests {
-            match req.get_cmd_type() {
-                CmdType::Put => {
-                    self.sink_put(
-                        req.take_put(),
-                        is_one_pc,
-                        &mut txn_rows,
-                        &mut raw_rows,
-                        &mut read_old_value,
-                    )?;
-                }
-                CmdType::Delete => self.sink_delete(req.take_delete())?,
+            let res = match req.get_cmd_type() {
+                CmdType::Put => self.sink_put(
+                    req.take_put(),
+                    is_one_pc,
+                    &mut txn_rows,
+                    &mut raw_rows,
+                    &mut read_old_value,
+                ),
+                CmdType::Delete => self.sink_delete(req.take_delete()),
                 _ => {
                     debug!(
                         "skip other command";
                         "region_id" => self.region_id,
                         "command" => ?req,
                     );
+                    Ok(())
                 }
+            };
+            if res.is_err() {
+                self.mark_failed();
+                return res;
             }
         }
 
