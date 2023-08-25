@@ -227,4 +227,8 @@ pub trait PdMocker {
         });
         None
     }
+
+    fn scan_regions(&self, _: &ScanRegionsRequest) -> Option<Result<ScanRegionsResponse>> {
+        None
+    }
 }

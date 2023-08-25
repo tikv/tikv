@@ -9,7 +9,7 @@ use collections::HashMap;
 use fail::fail_point;
 use kvproto::{
     metapb::{Buckets, Peer, Region, Store, StoreState},
-    pdpb::*,
+    pdpb::{self, *},
 };
 
 use super::*;
@@ -351,6 +351,23 @@ impl PdMocker for Service {
         let mut resp = GetGcSafePointResponse::default();
         let header = Service::header();
         resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn scan_regions(&self, _: &ScanRegionsRequest) -> Option<Result<ScanRegionsResponse>> {
+        let mut resp = ScanRegionsResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        let regions = resp.mut_regions();
+        let leaders = self.leaders.lock().unwrap();
+        self.regions.lock().unwrap().values().for_each(|r| {
+            let mut region = pdpb::Region::default();
+            region.set_region(r.clone());
+            if let Some(leader) = leaders.get(&r.get_id()) {
+                region.set_leader(leader.clone());
+            }
+            regions.push(region);
+        });
         Some(Ok(resp))
     }
 }

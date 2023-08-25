@@ -52,6 +52,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let region = self.region_state_mut().mut_region();
         match req.get_cmd_type() {
             AdminCmdType::PrepareFlashback => {
+                println!("apply_flashback for prepare: {:?}", req);
                 PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
                 // First time enter into the flashback state, inc the counter.
                 if !region.is_in_flashback {
@@ -62,6 +63,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 region.set_flashback_start_ts(req.get_prepare_flashback().get_start_ts());
             }
             AdminCmdType::FinishFlashback => {
+                println!("apply_flashback for finish: {:?}", req);
                 PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
                 // Leave the flashback state, dec the counter.
                 if region.is_in_flashback {
