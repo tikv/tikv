@@ -9,6 +9,7 @@ use crossbeam::atomic::AtomicCell;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+<<<<<<< HEAD
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -18,6 +19,23 @@ use tikv_util::{error, info, warn};
 use crate::channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY};
 use crate::delegate::{Downstream, DownstreamID, DownstreamState};
 use crate::endpoint::{Deregister, Task};
+=======
+use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
+use kvproto::{
+    cdcpb::{
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi,
+        ChangeDataRequest_oneof_request,
+    },
+    kvrpcpb::ApiVersion,
+};
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
+
+use crate::{
+    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
+    delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
+    endpoint::{Deregister, Task},
+};
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -166,14 +184,14 @@ impl Conn {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
-    memory_quota: MemoryQuota,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: MemoryQuota) -> Service {
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
         Service {
             scheduler,
             memory_quota,
@@ -321,7 +339,7 @@ mod tests {
     use super::*;
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
-        let memory_quota = MemoryQuota::new(capacity);
+        let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = Service::new(scheduler, memory_quota);
         let env = Arc::new(EnvBuilder::new().build());
