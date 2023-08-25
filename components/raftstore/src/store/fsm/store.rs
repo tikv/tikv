@@ -1955,7 +1955,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
-                "region_id" => region_id
+                "region_id" => region_id,
+                "to_peer_id" => msg.get_to_peer().get_id(),
             );
             return Ok(CheckMsgStatus::FirstRequest);
         }
