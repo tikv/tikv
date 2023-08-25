@@ -43,7 +43,6 @@ use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_meta_inconsistency() {
-    init_log_for_test();
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
