@@ -31,7 +31,6 @@ use raftstore::{
     Result,
 };
 use test_raftstore::*;
-use test_util::init_log_for_test;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
