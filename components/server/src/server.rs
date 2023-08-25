@@ -26,7 +26,17 @@ use std::{
     u64,
 };
 
+<<<<<<< HEAD
 use cdc::{CdcConfigManager, MemoryQuota};
+=======
+use api_version::{dispatch_api_version, KvFormat};
+use backup_stream::{
+    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
+    BackupStreamResolver,
+};
+use causal_ts::CausalTsProviderImpl;
+use cdc::CdcConfigManager;
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
@@ -91,9 +101,17 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
+<<<<<<< HEAD
     config::{ensure_dir_exist, VersionTrack},
     math::MovingAvgU32,
     sys::{disk, register_memory_usage_high_water, SysQuota},
+=======
+    config::VersionTrack,
+    memory::MemoryQuota,
+    mpsc as TikvMpsc,
+    quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
+    sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
@@ -205,7 +223,14 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     node: Node<RpcClient, EK, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
+<<<<<<< HEAD
     cdc_memory_quota: MemoryQuota,
+=======
+    cdc_memory_quota: Arc<MemoryQuota>,
+    rsmeter_pubsub_service: resource_metering::PubSubService,
+    backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
+    debugger: DebuggerImpl<ER, RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, LockManager, F>,
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 }
 
 type LocalServer<EK, ER> =
@@ -868,7 +893,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start CDC.
+<<<<<<< HEAD
         let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
+=======
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.cdc.sink_memory_quota.0 as _,
+        ));
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,

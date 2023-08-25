@@ -3,6 +3,11 @@
 use std::sync::*;
 use std::time::Duration;
 
+<<<<<<< HEAD
+=======
+use causal_ts::CausalTsProvider;
+use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -14,11 +19,21 @@ use kvproto::tikvpb::TikvClient;
 use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
+<<<<<<< HEAD
 use tikv::config::CdcConfig;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::{LazyWorker, Runnable};
 use tikv_util::HandyRwLock;
+=======
+use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID, storage::kv::LocalTablets};
+use tikv_util::{
+    config::ReadableDuration,
+    memory::MemoryQuota,
+    worker::{LazyWorker, Runnable},
+    HandyRwLock,
+};
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 use txn_types::TimeStamp;
 
 use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
@@ -137,7 +152,7 @@ impl TestSuiteBuilder {
                 .push(Box::new(move || {
                     create_change_data(cdc::Service::new(
                         scheduler.clone(),
-                        MemoryQuota::new(memory_quota),
+                        Arc::new(MemoryQuota::new(memory_quota)),
                     ))
                 }));
             sim.txn_extra_schedulers.insert(
@@ -174,7 +189,12 @@ impl TestSuiteBuilder {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
+<<<<<<< HEAD
                 MemoryQuota::new(usize::MAX),
+=======
+                Arc::new(MemoryQuota::new(usize::MAX)),
+                sim.get_causal_ts_provider(*id),
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);
