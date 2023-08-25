@@ -40,8 +40,17 @@ use resolved_ts::Resolver;
 use security::SecurityManager;
 use tikv::{config::CdcConfig, storage::Statistics};
 use tikv_util::{
+<<<<<<< HEAD
     debug, error, impl_display_as_debug, info,
     time::Limiter,
+=======
+    debug, defer, error, impl_display_as_debug, info,
+    memory::MemoryQuota,
+    mpsc::bounded,
+    slow_log,
+    sys::thread::ThreadBuildWrapper,
+    time::{Instant, Limiter, SlowTimer},
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
     timer::SteadyTimer,
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
@@ -53,8 +62,13 @@ use tokio::{
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
+<<<<<<< HEAD
     channel::{CdcEvent, MemoryQuota, SendError},
     delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState},
+=======
+    channel::{CdcEvent, SendError},
+    delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -334,7 +348,7 @@ pub struct Endpoint<T, E> {
     scan_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
-    sink_memory_quota: MemoryQuota,
+    sink_memory_quota: Arc<MemoryQuota>,
 
     old_value_cache: OldValueCache,
     resolved_region_heap: ResolvedRegionHeap,
@@ -368,8 +382,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
+<<<<<<< HEAD
         sink_memory_quota: MemoryQuota,
     ) -> Endpoint<T, E> {
+=======
+        sink_memory_quota: Arc<MemoryQuota>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    ) -> Endpoint<T, E, S> {
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
             .worker_threads(config.incremental_scan_threads)
@@ -1341,9 +1361,16 @@ mod tests {
             CdcObserver::new(task_sched),
             Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
+<<<<<<< HEAD
             Arc::new(Environment::new(1)),
             Arc::new(SecurityManager::default()),
             MemoryQuota::new(usize::MAX),
+=======
+            env,
+            security_mgr,
+            Arc::new(MemoryQuota::new(usize::MAX)),
+            causal_ts_provider,
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
         );
 
         TestEndpointSuite {
@@ -1359,7 +1386,7 @@ mod tests {
         let cfg = CdcConfig::default();
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
@@ -1607,7 +1634,7 @@ mod tests {
 
     #[test]
     fn test_raftstore_is_busy() {
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, _rx) = channel::channel(1, quota);
         let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
 
@@ -1657,7 +1684,7 @@ mod tests {
         };
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
@@ -1838,7 +1865,7 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
 
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
         let mut region = Region::default();
@@ -1867,7 +1894,8 @@ mod tests {
             conn_id,
             version: version.clone(),
         });
-        let resolver = Resolver::new(1);
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let resolver = Resolver::new(1, memory_quota);
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
         suite.on_region_ready(observe_id, resolver, region.clone());
         suite.run(Task::MinTS {
@@ -1901,7 +1929,8 @@ mod tests {
             conn_id,
             version,
         });
-        let resolver = Resolver::new(2);
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let resolver = Resolver::new(2, memory_quota);
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
         suite.on_region_ready(observe_id, resolver, region);
@@ -1921,7 +1950,7 @@ mod tests {
         }
 
         // Register region 3 to another conn which is not support batch resolved ts.
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx2) = channel::channel(1, quota);
         let mut rx2 = rx2.drain();
         let mut region = Region::default();
@@ -1945,7 +1974,8 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 5),
         });
-        let resolver = Resolver::new(3);
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let resolver = Resolver::new(3, memory_quota);
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
         suite.on_region_ready(observe_id, resolver, region);
@@ -1987,7 +2017,7 @@ mod tests {
     fn test_deregister() {
         let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
@@ -2131,7 +2161,7 @@ mod tests {
         // Open two connections a and b, registers region 1, 2 to conn a and
         // region 3 to conn b.
         let mut conn_rxs = vec![];
-        let quota = channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         for region_ids in vec![vec![1, 2], vec![3]] {
             let (tx, rx) = channel::channel(1, quota.clone());
             conn_rxs.push(rx);
@@ -2160,7 +2190,8 @@ mod tests {
                     conn_id,
                     version: FeatureGate::batch_resolved_ts(),
                 });
-                let resolver = Resolver::new(region_id);
+                let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+                let resolver = Resolver::new(region_id, memory_quota);
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
                 region.set_id(region_id);
@@ -2237,7 +2268,7 @@ mod tests {
     fn test_deregister_conn_then_delegate() {
         let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
 
         // Open conn a
         let (tx1, _rx1) = channel::channel(1, quota.clone());
@@ -2305,10 +2336,11 @@ mod tests {
         let mut region = Region::default();
         region.id = 1;
         region.set_region_epoch(region_epoch_2);
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         suite.run(Task::ResolverReady {
             observe_id,
             region: region.clone(),
-            resolver: Resolver::new(1),
+            resolver: Resolver::new(1, memory_quota),
         });
 
         // Deregister deletgate due to epoch not match for conn b.
@@ -2395,4 +2427,295 @@ mod tests {
         heap1.clear();
         assert!(heap1.heap.is_empty());
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_on_min_ts() {
+        let cfg = CdcConfig {
+            // Disable automatic advance resolved ts during test.
+            min_ts_interval: ReadableDuration(Duration::from_secs(1000)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, mut rx) = channel::channel(1, quota);
+        let mut rx = rx.drain();
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        // Enable batch resolved ts in the test.
+        let version = FeatureGate::batch_resolved_ts();
+        suite.run(set_conn_verion_task(conn_id, version));
+
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+
+        let mut regions = vec![];
+        for id in 1..4097 {
+            regions.push(id);
+            suite.add_region(id, 100);
+
+            let mut req = ChangeDataRequest::default();
+            req.set_region_id(id);
+            let region_epoch = req.get_region_epoch().clone();
+            let downstream = Downstream::new(
+                "".to_string(),
+                region_epoch.clone(),
+                0,
+                conn_id,
+                ChangeDataRequestKvApi::TiDb,
+                false,
+                ObservedRange::default(),
+            );
+            on_init_downstream(&downstream.get_state());
+            post_init_downstream(&downstream.get_state());
+            suite.run(Task::Register {
+                request: req.clone(),
+                downstream,
+                conn_id,
+            });
+
+            let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+            let mut resolver = Resolver::new(id, memory_quota);
+            assert!(resolver.track_lock(TimeStamp::compose(0, id), vec![], None));
+            let mut region = Region::default();
+            region.id = id;
+            region.set_region_epoch(region_epoch);
+            let failed = suite
+                .capture_regions
+                .get_mut(&id)
+                .unwrap()
+                .on_region_ready(resolver, region);
+            assert!(failed.is_empty());
+        }
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        suite.run(Task::MinTs {
+            regions,
+            min_ts: TimeStamp::compose(0, 4096),
+            current_ts: TimeStamp::compose(0, 4096),
+        });
+
+        // There should be at least 3 resolved ts events.
+        let mut last_resolved_ts = 0;
+        let mut last_batch_count = 0;
+        for _ in 0..3 {
+            let event = recv_timeout(&mut rx, Duration::from_millis(100))
+                .unwrap()
+                .unwrap()
+                .0;
+            assert!(last_resolved_ts < event.resolved_ts().ts, "{:?}", event);
+            assert!(
+                last_batch_count < event.resolved_ts().regions.len(),
+                "{:?}",
+                event
+            );
+            last_resolved_ts = event.resolved_ts().ts;
+            last_batch_count = event.resolved_ts().regions.len();
+        }
+    }
+
+    #[test]
+    fn test_register_deregister_with_multiplexing() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, mut rx) = channel::channel(1, quota);
+        let mut rx = rx.drain();
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+
+        let version = FeatureGate::batch_resolved_ts();
+        suite.run(set_conn_verion_task(conn_id, version));
+
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+
+        req.set_region_id(1);
+        req.set_request_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+
+        // Subscribe one region with a different request_id is allowed.
+        req.set_request_id(2);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            2,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+
+        // Subscribe one region with a same request_id is not allowed.
+        req.set_request_id(2);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            2,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+            matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                err.has_duplicate_request()
+            })
+        });
+        assert!(check);
+
+        // Deregister an unexist downstream.
+        suite.run(Task::Deregister(Deregister::Downstream {
+            conn_id,
+            request_id: 1,
+            region_id: 1,
+            downstream_id: DownstreamId::new(),
+            err: None,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+
+        // Deregister an unexist delegate.
+        suite.run(Task::Deregister(Deregister::Delegate {
+            region_id: 1,
+            observe_id: ObserveId::new(),
+            err: Error::Rocks("test error".to_owned()),
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+
+        // Deregister an exist downstream.
+        let downstream_id = suite.capture_regions[&1].downstreams()[0].get_id();
+        suite.run(Task::Deregister(Deregister::Downstream {
+            conn_id,
+            request_id: 1,
+            region_id: 1,
+            downstream_id,
+            err: Some(Error::Rocks("test error".to_owned())),
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+            matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                err.has_region_not_found()
+            })
+        });
+        assert!(check);
+
+        // Subscribe one region with a different request_id is allowed.
+        req.set_request_id(1);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+
+        // Deregister an exist delegate.
+        let observe_id = suite.capture_regions[&1].handle.id;
+        suite.run(Task::Deregister(Deregister::Delegate {
+            region_id: 1,
+            observe_id,
+            err: Error::Rocks("test error".to_owned()),
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        assert_eq!(suite.capture_regions.len(), 0);
+        for _ in 0..2 {
+            let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
+            let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+                matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                    err.has_region_not_found()
+                })
+            });
+            assert!(check);
+        }
+
+        // Resubscribe the region.
+        for i in 1..=2 {
+            req.set_request_id(i as _);
+            let downstream = Downstream::new(
+                "".to_string(),
+                region_epoch.clone(),
+                i as _,
+                conn_id,
+                ChangeDataRequestKvApi::TiDb,
+                false,
+                ObservedRange::default(),
+            );
+            suite.run(Task::Register {
+                request: req.clone(),
+                downstream,
+                conn_id,
+            });
+            assert_eq!(suite.connections[&conn_id].downstreams_count(), i);
+        }
+
+        // Deregister the request.
+        suite.run(Task::Deregister(Deregister::Request {
+            conn_id,
+            request_id: 1,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        suite.run(Task::Deregister(Deregister::Request {
+            conn_id,
+            request_id: 2,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        assert_eq!(suite.capture_regions.len(), 0);
+    }
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 }

@@ -26,8 +26,17 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
+<<<<<<< HEAD
 use backup_stream::{config::BackupStreamConfigManager, observer::BackupStreamObserver};
 use cdc::{CdcConfigManager, MemoryQuota};
+=======
+use backup_stream::{
+    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
+    BackupStreamResolver,
+};
+use causal_ts::CausalTsProviderImpl;
+use cdc::CdcConfigManager;
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -99,9 +108,15 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
+<<<<<<< HEAD
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
+=======
+    config::VersionTrack,
+    memory::MemoryQuota,
+    mpsc as TikvMpsc,
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{cpu_time::ProcessStat, disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
@@ -232,7 +247,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     node: Node<RpcClient, EK, ER>,
     importer: Arc<SstImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
-    cdc_memory_quota: MemoryQuota,
+    cdc_memory_quota: Arc<MemoryQuota>,
     rsmeter_pubsub_service: resource_metering::PubSubService,
 }
 
@@ -997,7 +1012,13 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
 
         // Start CDC.
+<<<<<<< HEAD
         let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
+=======
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.cdc.sink_memory_quota.0 as _,
+        ));
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,

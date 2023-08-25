@@ -6,7 +6,7 @@ use dashmap::{mapref::one::RefMut, DashMap};
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
 use resolved_ts::Resolver;
-use tikv_util::{info, warn};
+use tikv_util::{info, memory::MemoryQuota, warn};
 use txn_types::TimeStamp;
 
 use crate::{debug, metrics::TRACK_REGION, utils};
@@ -207,8 +207,72 @@ impl SubscriptionTracer {
     }
 }
 
+<<<<<<< HEAD
 /// This enhanced version of `Resolver` allow some unorder of lock events.  
 /// The name "2-phase" means this is used for 2 *concurrency* phases of observing a region:
+=======
+pub trait Ref {
+    type Key;
+    type Value;
+
+    fn key(&self) -> &Self::Key;
+    fn value(&self) -> &Self::Value;
+}
+
+pub trait RefMut: Ref {
+    fn value_mut(&mut self) -> &mut <Self as Ref>::Value;
+}
+
+impl<'a> Ref for SubscriptionRef<'a> {
+    type Key = u64;
+    type Value = ActiveSubscription;
+
+    fn key(&self) -> &Self::Key {
+        DashRefMut::key(&self.0)
+    }
+
+    fn value(&self) -> &Self::Value {
+        self.sub()
+    }
+}
+
+impl<'a> RefMut for SubscriptionRef<'a> {
+    fn value_mut(&mut self) -> &mut <Self as Ref>::Value {
+        self.sub_mut()
+    }
+}
+
+struct SubscriptionRef<'a>(DashRefMut<'a, u64, SubscribeState>);
+
+impl<'a> SubscriptionRef<'a> {
+    fn try_from_dash(mut d: DashRefMut<'a, u64, SubscribeState>) -> Option<Self> {
+        match d.value_mut() {
+            SubscribeState::Pending(_) => None,
+            SubscribeState::Running(_) => Some(Self(d)),
+        }
+    }
+
+    fn sub(&self) -> &ActiveSubscription {
+        match self.0.value() {
+            // Panic Safety: the constructor would prevent us from creating pending subscription
+            // ref.
+            SubscribeState::Pending(_) => unreachable!(),
+            SubscribeState::Running(s) => s,
+        }
+    }
+
+    fn sub_mut(&mut self) -> &mut ActiveSubscription {
+        match self.0.value_mut() {
+            SubscribeState::Pending(_) => unreachable!(),
+            SubscribeState::Running(s) => s,
+        }
+    }
+}
+
+/// This enhanced version of `Resolver` allow some unordered lock events.
+/// The name "2-phase" means this is used for 2 *concurrency* phases of
+/// observing a region:
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 /// 1. Doing the initial scanning.
 /// 2. Listening at the incremental data.
 ///
@@ -272,7 +336,8 @@ impl TwoPhaseResolver {
         if !self.in_phase_one() {
             warn!("backup stream tracking lock as if in phase one"; "start_ts" => %start_ts, "key" => %utils::redact(&key))
         }
-        self.resolver.track_lock(start_ts, key, None)
+        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+        assert!(self.resolver.track_lock(start_ts, key, None));
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
@@ -280,7 +345,8 @@ impl TwoPhaseResolver {
             self.future_locks.push(FutureLock::Lock(key, start_ts));
             return;
         }
-        self.resolver.track_lock(start_ts, key, None)
+        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+        assert!(self.resolver.track_lock(start_ts, key, None));
     }
 
     pub fn untrack_lock(&mut self, key: &[u8]) {
@@ -294,7 +360,10 @@ impl TwoPhaseResolver {
 
     fn handle_future_lock(&mut self, lock: FutureLock) {
         match lock {
-            FutureLock::Lock(key, ts) => self.resolver.track_lock(ts, key, None),
+            FutureLock::Lock(key, ts) => {
+                // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                assert!(self.resolver.track_lock(ts, key, None));
+            }
             FutureLock::Unlock(key) => self.resolver.untrack_lock(&key, None),
         }
     }
@@ -316,8 +385,10 @@ impl TwoPhaseResolver {
     }
 
     pub fn new(region_id: u64, stable_ts: Option<TimeStamp>) -> Self {
+        // TODO: limit the memory usage of the resolver.
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         Self {
-            resolver: Resolver::new(region_id),
+            resolver: Resolver::new(region_id, memory_quota),
             future_locks: Default::default(),
             stable_ts,
         }
