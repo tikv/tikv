@@ -6438,7 +6438,12 @@ mod tests {
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
-        assert_eq!(cfg.raft_store.region_compact_redundant_rows_percent.unwrap(), 100);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            100
+        );
 
         let content = r#"
             [raftstore]
@@ -6449,7 +6454,12 @@ mod tests {
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
-        assert_eq!(cfg.raft_store.region_compact_redundant_rows_percent.unwrap(), 20);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            20
+        );
 
         let content = r#"
             [raftstore]
@@ -6458,7 +6468,12 @@ mod tests {
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 100);
-        assert_eq!(cfg.raft_store.region_compact_redundant_rows_percent.unwrap(), 50);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            50
+        );
 
         let content = r#"
             [raftstore]
@@ -6469,6 +6484,11 @@ mod tests {
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 5);
-        assert_eq!(cfg.raft_store.region_compact_redundant_rows_percent.unwrap(), 50);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            50
+        );
     }
 }
