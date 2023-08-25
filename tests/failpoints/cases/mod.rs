@@ -28,6 +28,7 @@ mod test_replica_read;
 mod test_replica_stale_read;
 mod test_server;
 mod test_snap;
+mod test_engine;
 mod test_split_region;
 mod test_sst_recovery;
 mod test_stale_peer;

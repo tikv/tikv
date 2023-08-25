@@ -328,6 +328,7 @@ fn test_serde_custom_tikv_config() {
         allow_concurrent_memtable_write: Some(false),
         enable_unordered_write: true,
         write_buffer_limit: Some(ReadableSize::gb(1)),
+        lock_write_buffer_limit: Some(ReadableSize::mb(32)),
         write_buffer_stall_ratio: 0.0,
         write_buffer_flush_oldest_first: true,
         defaultcf: DefaultCfConfig {
