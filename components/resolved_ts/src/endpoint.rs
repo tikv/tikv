@@ -820,17 +820,28 @@ where
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
         let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
         let (mut oldest_safe_ts, mut oldest_safe_ts_region) = (u64::MAX, 0);
-        let mut oldest_duration_to_last_update_ms = 0;
-        let mut oldest_duration_to_last_consume_leader_ms = 0;
+        let mut oldest_leader_duration_to_last_update_ms = 0; // for the region with min resolved ts
+        let mut oldest_safe_ts_duration_to_last_consume_leader_ms = 0; // for the region with min safe ts
+        let mut oldest_safe_ts_is_leader = None;
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
+                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
+
                 let safe_ts = read_progress.safe_ts();
                 if safe_ts > 0 && safe_ts < oldest_safe_ts {
                     oldest_safe_ts = safe_ts;
                     oldest_safe_ts_region = *region_id;
+                    oldest_safe_ts_duration_to_last_consume_leader_ms = read_progress
+                        .get_core()
+                        .last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as i64)
+                        .unwrap_or(-1);
+
+                    if let (Some(store_id), Some(leader_store_id)) = (store_id, leader_store_id) {
+                        oldest_safe_ts_is_leader = Some(store_id == leader_store_id);
+                    }
                 }
 
-                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
                 // this is maximum resolved-ts pushed to region_read_progress, namely candidates
                 // of safe_ts. It may not be the safe_ts yet
                 let ts = leader_info.get_read_state().get_safe_ts();
@@ -841,23 +852,18 @@ where
                 if ts < oldest_ts {
                     oldest_ts = ts;
                     oldest_region = *region_id;
-                    // use -1 to denote none.
-                    oldest_duration_to_last_update_ms = read_progress
-                        .get_core()
-                        .last_instant_of_consume_leader()
-                        .map(|t| t.saturating_elapsed().as_millis() as i64)
-                        .unwrap_or(-1);
-                    oldest_duration_to_last_consume_leader_ms = read_progress
-                        .get_core()
-                        .last_instant_of_consume_leader()
-                        .map(|t| t.saturating_elapsed().as_millis() as i64)
-                        .unwrap_or(-1);
                 }
 
                 if let (Some(store_id), Some(leader_store_id)) = (store_id, leader_store_id) {
                     if leader_store_id == store_id && ts < oldest_leader_ts {
                         oldest_leader_ts = ts;
                         oldest_leader_region = *region_id;
+                        // use -1 to denote none.
+                        oldest_leader_duration_to_last_update_ms = read_progress
+                            .get_core()
+                            .last_instant_of_consume_leader()
+                            .map(|t| t.saturating_elapsed().as_millis() as i64)
+                            .unwrap_or(-1);
                     }
                 }
             }
@@ -904,32 +910,19 @@ where
                 + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64
                 + SLOW_LOG_GRACE_PERIOD_MS
         {
-            let mut lock_num = None;
-            let mut min_start_ts = None;
-            if let Some(ob) = self.regions.get(&oldest_safe_ts_region) {
-                min_start_ts = ob
-                    .resolver
-                    .locks()
-                    .keys()
-                    .next()
-                    .cloned()
-                    .map(TimeStamp::into_inner);
-                lock_num = Some(ob.resolver.locks_by_key.len());
-            }
             info!(
                 "the max gap of safe-ts is large";
                 "gap" => safe_ts_gap,
                 "oldest_safe_ts" => ?oldest_safe_ts,
                 "region_id" => oldest_safe_ts_region,
                 "advance_ts_interval" => ?self.cfg.advance_ts_interval,
-                "lock_num" => lock_num,
-                "min_start_ts" => min_start_ts,
+                "duration_to_last_consume_leader" => format!("{} ms", oldest_safe_ts_duration_to_last_consume_leader_ms),
+                "is_leader" => ?oldest_safe_ts_is_leader,
             );
         }
         RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);
-        RTS_MIN_SAFE_TS_DUATION_TO_UPDATE_SAFE_TS.set(oldest_duration_to_last_update_ms);
         RTS_MIN_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER
-            .set(oldest_duration_to_last_consume_leader_ms);
+            .set(oldest_safe_ts_duration_to_last_consume_leader_ms);
 
         // min resolved ts
         RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
@@ -941,23 +934,28 @@ where
         // min leader
         RTS_MIN_LEADER_RESOLVED_TS_REGION.set(oldest_leader_region as i64);
         RTS_MIN_LEADER_RESOLVED_TS.set(oldest_leader_ts as i64);
+        RTS_MIN_LEADER_DUATION_TO_UPDATE_SAFE_TS.set(oldest_leader_duration_to_last_update_ms);
         let min_leader_resolved_ts_gap =
             now.saturating_sub(TimeStamp::from(oldest_leader_ts).physical());
         RTS_MIN_LEADER_RESOLVED_TS_GAP.set(min_leader_resolved_ts_gap as i64);
         let oldest_leader_region_min_lock_ts;
+        let lock_num;
         let mut oldest_leader_region_min_lock_key_sample: Option<Key> = None;
         if let Some(region) = self.regions.get(&oldest_leader_region) {
             if let Some((start_ts, keys)) = region.resolver.lock_ts_heap.iter().next() {
                 oldest_leader_region_min_lock_ts = start_ts.into_inner() as i64;
                 oldest_leader_region_min_lock_key_sample =
                     keys.iter().next().map(|k| Key::from_encoded(k.to_vec()));
+                lock_num = region.resolver.lock_ts_heap.len() as i64;
             } else {
                 // no locks
+                lock_num = 0;
                 oldest_leader_region_min_lock_ts = 0;
             }
         } else {
             // region not found. should be unreachable
             oldest_leader_region_min_lock_ts = -1;
+            lock_num = -1;
         }
 
         let (cm_global_min_lock_ts, cm_global_min_lock_key) = self
@@ -972,14 +970,16 @@ where
         {
             info!(
                 "the max gap of leader resolved-ts is large";
-                "gap" => min_leader_resolved_ts_gap,
-                "oldest_leader_resolved_ts" => ?oldest_leader_ts,
                 "region_id" => oldest_leader_region,
+                "gap" => min_leader_resolved_ts_gap,
+                "resolved_ts" => ?oldest_leader_ts,
                 "advance_ts_interval" => ?self.cfg.advance_ts_interval,
-                "oldest_leader_region_min_lock_ts" => oldest_leader_region_min_lock_ts,
-                "oldest_leader_region_min_lock_key_sample" => ?oldest_leader_region_min_lock_key_sample,
+                "lock_num" => lock_num,
+                "min_lock_ts" => oldest_leader_region_min_lock_ts,
+                "min_lock_key_sample" => ?oldest_leader_region_min_lock_key_sample,
                 "concurrency_manager_global_min_lock_ts" => cm_global_min_lock_ts,
                 "concurrency_manager_global_min_lock" => %cm_global_min_lock_key,
+                "duration_to_last_update_safe_ts" => format!("{} ms", oldest_leader_duration_to_last_update_ms),
             );
         }
         RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS.set(oldest_leader_region_min_lock_ts);

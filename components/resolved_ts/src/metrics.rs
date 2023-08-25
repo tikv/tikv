@@ -84,14 +84,14 @@ lazy_static! {
         "The minimal (non-zero) safe ts gap for observed regions"
     )
     .unwrap();
-    pub static ref RTS_MIN_SAFE_TS_DUATION_TO_UPDATE_SAFE_TS: IntGauge = register_int_gauge!(
+    pub static ref RTS_MIN_LEADER_DUATION_TO_UPDATE_SAFE_TS: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_safe_ts_duration_to_update_safe_ts",
-        "The duration since last update_safe_ts() called by resolved-ts routine. -1 denotes None."
+        "The duration since last update_safe_ts() called by resolved-ts routine in the leader with min resolved ts. -1 denotes None."
     )
     .unwrap();
     pub static ref RTS_MIN_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_safe_ts_duration_to_last_consume_leader",
-        "The duration since last check_leader(). -1 denotes None."
+        "The duration since last check_leader() in the region with min safe ts. -1 denotes None."
     )
     .unwrap();
     pub static ref RTS_ZERO_RESOLVED_TS: IntGauge = register_int_gauge!(
