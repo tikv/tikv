@@ -317,6 +317,7 @@ where
             "replicate peer";
             "region_id" => region_id,
             "peer_id" => peer.get_id(),
+            "store_id" => store_id,
         );
 
         let mut region = metapb::Region::default();
@@ -2457,6 +2458,7 @@ where
             }
         });
 
+        let is_initialized_peer = self.fsm.peer.is_initialized();
         debug!(
             "handle raft message";
             "region_id" => self.region_id(),
@@ -2464,6 +2466,7 @@ where
             "message_type" => %util::MsgType(&msg),
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
+            "is_initialized_peer" => is_initialized_peer,
         );
 
         if self.fsm.peer.pending_remove || self.fsm.stopped {
@@ -3654,6 +3657,7 @@ where
             return false;
         }
 
+<<<<<<< HEAD
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -3661,6 +3665,10 @@ where
             "merged_by_target" => merged_by_target,
         );
         let region_id = self.region_id();
+=======
+        let region_id = self.region_id();
+        let is_peer_initialized = self.fsm.peer.is_initialized();
+>>>>>>> 40b225f70c (raftstore: fix meta inconsistency issue (#15423))
         // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
 
@@ -3677,7 +3685,43 @@ where
                 .snapshot_recovery_maybe_finish_wait_apply(/* force= */ true);
         }
 
+<<<<<<< HEAD
         let mut meta = self.ctx.store_meta.lock().unwrap();
+=======
+        (|| {
+            fail_point!(
+                "before_destroy_peer_on_peer_1003",
+                self.fsm.peer.peer_id() == 1003,
+                |_| {}
+            );
+        })();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let is_latest_initialized = {
+            if let Some(latest_region_info) = meta.regions.get(&region_id) {
+                util::is_region_initialized(latest_region_info)
+            } else {
+                false
+            }
+        };
+
+        if !is_peer_initialized && is_latest_initialized {
+            info!("skip destroy uninitialized peer as it's already initialized in meta";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "merged_by_target" => merged_by_target,
+            );
+            return false;
+        }
+>>>>>>> 40b225f70c (raftstore: fix meta inconsistency issue (#15423))
+
+        info!(
+            "starts destroy";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "merged_by_target" => merged_by_target,
+            "is_peer_initialized" => is_peer_initialized,
+            "is_latest_initialized" => is_latest_initialized,
+        );
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -3735,7 +3779,7 @@ where
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
-        if is_initialized
+        if is_peer_initialized
             && !merged_by_target
             && meta
                 .region_ranges
@@ -3744,6 +3788,7 @@ where
         {
             panic!("{} meta corruption detected", self.fsm.peer.tag);
         }
+
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
@@ -4118,11 +4163,16 @@ where
             }
 
             // Insert new regions and validation
+<<<<<<< HEAD
             info!(
                 "insert new region";
                 "region_id" => new_region_id,
                 "region" => ?new_region,
             );
+=======
+            let mut is_uninitialized_peer_exist = false;
+            let self_store_id = self.ctx.store.get_id();
+>>>>>>> 40b225f70c (raftstore: fix meta inconsistency issue (#15423))
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
@@ -4138,6 +4188,16 @@ where
                 }
                 self.ctx.router.close(new_region_id);
             }
+<<<<<<< HEAD
+=======
+            info!(
+                "insert new region";
+                "region_id" => new_region_id,
+                "region" => ?new_region,
+                "is_uninitialized_peer_exist" => is_uninitialized_peer_exist,
+                "store_id" => self_store_id,
+            );
+>>>>>>> 40b225f70c (raftstore: fix meta inconsistency issue (#15423))
 
             let (sender, mut new_peer) = match PeerFsm::create(
                 self.ctx.store_id(),
