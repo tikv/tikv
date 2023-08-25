@@ -7,6 +7,7 @@ use std::sync::{
 };
 
 use crossbeam::channel::{SendError, TrySendError};
+use dashmap::DashMap;
 use tikv_util::{
     debug, info,
     time::{duration_to_sec, Instant},
@@ -261,7 +262,7 @@ where
         let timer = Instant::now_coarse();
         self.normals.iter().for_each(|mailbox| {
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
-        }
+        });
         BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
