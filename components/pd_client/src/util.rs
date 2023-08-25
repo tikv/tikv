@@ -364,7 +364,7 @@ impl Client {
     /// Note: Retrying too quickly will return an error due to cancellation.
     /// Please always try to reconnect after sending the request first.
     pub async fn reconnect(&self, force: bool) -> Result<()> {
-        PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
+        PD_RECONNECT_COUNTER_VEC.try_connect.inc();
         let start = Instant::now();
 
         let future = {
@@ -372,9 +372,7 @@ impl Client {
             if start.saturating_duration_since(inner.last_try_reconnect) < inner.bo.get_interval() {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["cancel"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.cancel.inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
@@ -398,9 +396,7 @@ impl Client {
             if start.saturating_duration_since(inner.last_try_reconnect) < inner.bo.get_interval() {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["cancel"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.cancel.inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             inner.last_try_reconnect = start;
@@ -410,9 +406,7 @@ impl Client {
         slow_log!(start.saturating_elapsed(), "try reconnect pd");
         let (client, target_info, members, tso) = match future.await {
             Err(e) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["failure"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.failure.inc();
                 return Err(e);
             }
             Ok(res) => {
@@ -423,15 +417,11 @@ impl Client {
                 }
                 match res {
                     None => {
-                        PD_RECONNECT_COUNTER_VEC
-                            .with_label_values(&["no-need"])
-                            .inc();
+                        PD_RECONNECT_COUNTER_VEC.no_need.inc();
                         return Ok(());
                     }
                     Some(tuple) => {
-                        PD_RECONNECT_COUNTER_VEC
-                            .with_label_values(&["success"])
-                            .inc();
+                        PD_RECONNECT_COUNTER_VEC.success.inc();
                         tuple
                     }
                 }
