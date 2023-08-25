@@ -98,15 +98,15 @@ where
     #[inline]
     fn check_do<F, R>(&self, addr: u64, mut f: F) -> CheckDoResult<R>
     where
-        F: FnMut(BasicMailbox<N>) -> Option<R>,
+        F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
         let mailbox = match self.normals.get_mut(&addr) {
-            Some(mailbox) => mailbox.clone(),
+            Some(mailbox) => mailbox,
             None => {
                 return CheckDoResult::NotExist;
             }
         };
-        match f(mailbox) {
+        match f(&mailbox) {
             Some(r) => CheckDoResult::Valid(r),
             None => CheckDoResult::Invalid,
         }
@@ -150,7 +150,7 @@ where
     pub fn mailbox(&self, addr: u64) -> Option<Mailbox<N, Ns>> {
         let res = self.check_do(addr, |mailbox| {
             if mailbox.is_connected() {
-                Some(Mailbox::new(mailbox, self.normal_scheduler.clone()))
+                Some(Mailbox::new(mailbox.clone(), self.normal_scheduler.clone()))
             } else {
                 None
             }
