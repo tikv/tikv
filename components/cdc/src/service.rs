@@ -22,11 +22,16 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, warn, worker::*};
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 
 use crate::{
+<<<<<<< HEAD
     channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, DownstreamState},
+=======
+    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
+    delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
     endpoint::{Deregister, Task},
 };
 
@@ -182,14 +187,14 @@ impl Conn {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
-    memory_quota: MemoryQuota,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: MemoryQuota) -> Service {
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
         Service {
             scheduler,
             memory_quota,
@@ -337,7 +342,7 @@ mod tests {
     use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
-        let memory_quota = MemoryQuota::new(capacity);
+        let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = Service::new(scheduler, memory_quota);
         let env = Arc::new(EnvBuilder::new().build());

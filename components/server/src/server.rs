@@ -34,7 +34,7 @@ use backup_stream::{
     observer::BackupStreamObserver,
 };
 use causal_ts::CausalTsProviderImpl;
-use cdc::{CdcConfigManager, MemoryQuota};
+use cdc::CdcConfigManager;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -115,9 +115,14 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
+<<<<<<< HEAD
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
+=======
+    config::VersionTrack,
+    memory::MemoryQuota,
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{
@@ -288,7 +293,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine, F: KvFormat> {
     node: Node<RpcClient, EK, ER>,
     importer: Arc<SstImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
-    cdc_memory_quota: MemoryQuota,
+    cdc_memory_quota: Arc<MemoryQuota>,
     rsmeter_pubsub_service: resource_metering::PubSubService,
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
     debugger: Debugger<ER, RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, LockManager, F>,
@@ -1166,7 +1171,13 @@ where
         }
 
         // Start CDC.
+<<<<<<< HEAD
         let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
+=======
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.cdc.sink_memory_quota.0 as _,
+        ));
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,

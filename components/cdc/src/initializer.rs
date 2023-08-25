@@ -36,6 +36,7 @@ use tikv_util::{
     box_err,
     codec::number,
     debug, error, info,
+    memory::MemoryQuota,
     sys::inspector::{self_thread_inspector, ThreadInspector},
     time::{Instant, Limiter},
     warn,
@@ -214,7 +215,9 @@ impl<E: KvEngine> Initializer<E> {
             "end_key" => log_wrappers::Value::key(snap.upper_bound().unwrap_or_default()));
 
         let mut resolver = if self.build_resolver {
-            Some(Resolver::new(region_id))
+            // TODO: limit the memory usage of the resolver.
+            let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+            Some(Resolver::new(region_id, memory_quota))
         } else {
             None
         };
@@ -416,7 +419,11 @@ impl<E: KvEngine> Initializer<E> {
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
                     match lock.lock_type {
-                        LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key, None),
+                        LockType::Put | LockType::Delete => {
+                            // TODO: handle memory quota exceed, for now, quota is set to
+                            // usize::MAX.
+                            assert!(resolver.track_lock(lock.ts, key, None));
+                        }
                         _ => (),
                     };
                 }
@@ -579,6 +586,7 @@ mod tests {
         TestEngineBuilder,
     };
     use tikv_util::{
+        memory::MemoryQuota,
         sys::thread::ThreadBuildWrapper,
         worker::{LazyWorker, Runnable},
     };
@@ -621,7 +629,7 @@ mod tests {
         crate::channel::Drain,
     ) {
         let (receiver_worker, rx) = new_receiver_worker();
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (sink, drain) = crate::channel::channel(buffer, quota);
 
         let pool = Builder::new_multi_thread()
