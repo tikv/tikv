@@ -29,6 +29,8 @@ enum CheckDoResult<T> {
     Valid(T),
 }
 
+const ROUTER_SHRINK_SIZE: usize = 1000;
+
 /// Router routes messages to its target FSM's mailbox.
 ///
 /// In our abstract model, every batch system has two different kind of
@@ -281,6 +283,9 @@ where
         info!("shutdown mailbox"; "region_id" => addr);
         if let Some((_, mb)) = self.normals.remove(&addr) {
             mb.close();
+        }
+        if self.normals.capacity() - self.normals.len() > ROUTER_SHRINK_SIZE {
+            self.normals.shrink_to_fit();
         }
     }
 
