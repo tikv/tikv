@@ -1198,7 +1198,8 @@ pub fn new_debugger(path: &std::path::Path) -> DebuggerImplV2<raft_log_engine::R
     let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
     let reg = TabletRegistry::new(Box::new(factory), path).unwrap();
 
-    let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
+    let raft_engine =
+        raft_log_engine::RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
 
     DebuggerImplV2::new(reg, raft_engine, ConfigController::default())
 }
