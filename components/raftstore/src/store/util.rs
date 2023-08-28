@@ -1255,7 +1255,7 @@ impl Default for RegionReadProgressRegistry {
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
     // not be accessed outside to avoid dead lock
-    core: Mutex<RegionReadProgressCore>,
+    pub core: Mutex<RegionReadProgressCore>,
     // The fast path to read `safe_ts` without acquiring the mutex
     // on `core`
     safe_ts: AtomicU64,

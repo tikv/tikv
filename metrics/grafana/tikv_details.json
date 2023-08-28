@@ -39119,7 +39119,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(tikv_resolved_ts_min_safe_ts_gap_millis{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
+              "expr": "sum(tikv_resolved_ts_min_follower_safe_ts_gap_millis{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -39348,7 +39348,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(tikv_resolved_ts_min_safe_ts_region{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}) by (instance)",
+              "expr": "sum(tikv_resolved_ts_min_follower_safe_ts_region{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "interval": "",
