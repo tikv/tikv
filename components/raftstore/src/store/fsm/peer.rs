@@ -9,7 +9,7 @@ use std::{
         Bound::{Excluded, Unbounded},
         VecDeque,
     },
-    iter::{FromIterator, Iterator},
+    iter::Iterator,
     mem,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -71,6 +71,7 @@ use crate::{
     coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         cmd_resp::{bind_term, new_error},
+        demote_failed_voters_request,
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
@@ -90,15 +91,16 @@ use crate::{
         region_meta::RegionMeta,
         transport::Transport,
         unsafe_recovery::{
-            ForceLeaderState, SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+            exit_joint_request, ForceLeaderState, SnapshotRecoveryState,
+            SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
         util,
-        util::{KeysInfoFormatter, LeaseState},
+        util::{is_region_initialized, KeysInfoFormatter, LeaseState},
         worker::{
-            new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
-            GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
+            Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
+            ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
@@ -126,6 +128,7 @@ enum DelayReason {
 /// in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
 
@@ -769,11 +772,12 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, demote failed voters has already been initiated";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -870,11 +874,12 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't destroy, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -888,11 +893,12 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't wait apply, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -919,11 +925,12 @@ where
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
     fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
-        if self.fsm.peer.snapshot_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -2945,6 +2952,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "target_peer" => ?target,
+                            "job.initialized" => job.initialized,
                         );
                         if self.handle_destroy_peer(job) {
                             // It's not frequent, so use 0 as `heap_size` is ok.
@@ -3655,13 +3663,15 @@ where
             return false;
         }
 
+        let region_id = self.region_id();
+        let is_initialized = self.fsm.peer.is_initialized();
         info!(
             "starts destroy";
-            "region_id" => self.fsm.region_id(),
+            "region_id" => region_id,
             "peer_id" => self.fsm.peer_id(),
             "merged_by_target" => merged_by_target,
+            "is_initialized" => is_initialized,
         );
-        let region_id = self.region_id();
         // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
 
@@ -3679,6 +3689,25 @@ where
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        let is_region_initialized_in_meta = meta
+            .regions
+            .get(&region_id)
+            .map_or(false, |region| is_region_initialized(region));
+        if !is_initialized && is_region_initialized_in_meta {
+            let region_in_meta = meta.regions.get(&region_id).unwrap();
+            error!(
+                "peer is destroyed inconsistently";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "peers" => ?self.region().get_peers(),
+                "merged_by_target" => merged_by_target,
+                "is_initialized" => is_initialized,
+                "is_region_initialized_in_meta" => is_region_initialized_in_meta,
+                "start_key_in_meta" => log_wrappers::Value::key(region_in_meta.get_start_key()),
+                "end_key_in_meta" => log_wrappers::Value::key(region_in_meta.get_end_key()),
+                "peers_in_meta" => ?region_in_meta.get_peers(),
+            );
+        }
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -3716,7 +3745,6 @@ where
                 "err" => %e,
             );
         }
-        let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
             &mut self.ctx.raft_perf_context,
@@ -4110,11 +4138,7 @@ where
             }
 
             // Insert new regions and validation
-            info!(
-                "insert new region";
-                "region_id" => new_region_id,
-                "region" => ?new_region,
-            );
+            let mut is_uninitialized_peer_exist = false;
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
@@ -4128,8 +4152,15 @@ where
                         new_region_id, r, new_region
                     );
                 }
+                is_uninitialized_peer_exist = true;
                 self.ctx.router.close(new_region_id);
             }
+            info!(
+                "insert new region";
+                "region_id" => new_region_id,
+                "region" => ?new_region,
+                "is_uninitialized_peer_exist" => is_uninitialized_peer_exist,
+            );
 
             let (sender, mut new_peer) = match PeerFsm::create(
                 self.ctx.store_id(),
@@ -6022,6 +6053,7 @@ where
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.fsm.peer.get_role(),
         );
+        let keys = region_buckets.meta.keys.clone();
         let old_region_buckets: Option<BucketStat> =
             self.fsm.peer.region_buckets.replace(region_buckets);
         self.fsm.peer.last_region_buckets = old_region_buckets;
@@ -6044,6 +6076,7 @@ where
                 extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
                 let mut refresh_buckets = RefreshBuckets::new();
                 refresh_buckets.set_version(version);
+                refresh_buckets.set_keys(keys.clone().into());
                 extra_msg.set_refresh_buckets(refresh_buckets);
                 self.fsm
                     .peer
@@ -6054,8 +6087,8 @@ where
         debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
-            "buckets count" => buckets_count,
-            "buckets size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
+            "buckets_count" => buckets_count,
+            "buckets_size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
         );
         // test purpose
         #[cfg(any(test, feature = "testexport"))]
@@ -6071,13 +6104,14 @@ where
             return;
         }
         let version = msg.get_extra_msg().get_refresh_buckets().get_version();
+        let keys = msg.get_extra_msg().get_refresh_buckets().get_keys();
         let region_epoch = msg.get_region_epoch().clone();
 
         let meta = BucketMeta {
             region_id: self.region_id(),
             version,
             region_epoch,
-            keys: vec![],
+            keys: keys.to_vec(),
             sizes: vec![],
         };
 
@@ -6292,13 +6326,22 @@ where
         if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
             // Clean up the force leader state after a timeout, since the PD recovery
             // process may have been aborted for some reasons.
-            if time.saturating_elapsed()
-                > cmp::max(
-                    self.ctx.cfg.peer_stale_state_check_interval.0,
-                    Duration::from_secs(60),
-                )
-            {
+            if time.saturating_elapsed() > UNSAFE_RECOVERY_STATE_TIMEOUT {
                 self.on_exit_force_leader();
+            }
+        }
+        if let Some(state) = &mut self.fsm.peer.unsafe_recovery_state {
+            let unsafe_recovery_state_timeout_failpoint = || -> bool {
+                fail_point!("unsafe_recovery_state_timeout", |_| true);
+                false
+            };
+            // Clean up the unsafe recovery state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if unsafe_recovery_state_timeout_failpoint()
+                || state.check_timeout(UNSAFE_RECOVERY_STATE_TIMEOUT)
+            {
+                info!("timeout, abort unsafe recovery"; "state" => ?state);
+                state.abort();
             }
         }
 
@@ -6803,57 +6846,6 @@ fn new_compact_log_request(
         .set_voter_replicated_index(voter_replicated_index);
     request.set_admin_request(admin);
     request
-}
-
-fn demote_failed_voters_request(
-    region: &metapb::Region,
-    peer: &metapb::Peer,
-    failed_voters: Vec<metapb::Peer>,
-) -> Option<RaftCmdRequest> {
-    let failed_voter_ids = HashSet::from_iter(failed_voters.iter().map(|voter| voter.get_id()));
-    let mut req = new_admin_request(region.get_id(), peer.clone());
-    req.mut_header()
-        .set_region_epoch(region.get_region_epoch().clone());
-    let mut change_peer_reqs: Vec<pdpb::ChangePeer> = region
-        .get_peers()
-        .iter()
-        .filter_map(|peer| {
-            if failed_voter_ids.contains(&peer.get_id())
-                && peer.get_role() == metapb::PeerRole::Voter
-            {
-                let mut peer_clone = peer.clone();
-                peer_clone.set_role(metapb::PeerRole::Learner);
-                let mut cp = pdpb::ChangePeer::default();
-                cp.set_change_type(ConfChangeType::AddLearnerNode);
-                cp.set_peer(peer_clone);
-                return Some(cp);
-            }
-            None
-        })
-        .collect();
-
-    // Promote self if it is a learner.
-    if peer.get_role() == metapb::PeerRole::Learner {
-        let mut cp = pdpb::ChangePeer::default();
-        cp.set_change_type(ConfChangeType::AddNode);
-        let mut promote = peer.clone();
-        promote.set_role(metapb::PeerRole::Voter);
-        cp.set_peer(promote);
-        change_peer_reqs.push(cp);
-    }
-    if change_peer_reqs.is_empty() {
-        return None;
-    }
-    req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
-    Some(req)
-}
-
-fn exit_joint_request(region: &metapb::Region, peer: &metapb::Peer) -> RaftCmdRequest {
-    let mut req = new_admin_request(region.get_id(), peer.clone());
-    req.mut_header()
-        .set_region_epoch(region.get_region_epoch().clone());
-    req.set_admin_request(new_change_peer_v2_request(vec![]));
-    req
 }
 
 impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>

@@ -17,9 +17,7 @@ use engine_traits::{
     TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
-use futures::{
-    compat::Future01CompatExt, executor::block_on, future::BoxFuture, select, Future, FutureExt,
-};
+use futures::{executor::block_on, future::BoxFuture, Future};
 use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
@@ -65,7 +63,6 @@ use tikv_util::{
     safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
-    timer::GLOBAL_TIMER_HANDLE,
     warn,
     worker::LazyWorker,
     HandyRwLock,
@@ -109,17 +106,9 @@ pub trait Simulator<EK: KvEngine> {
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
-        let timeout_f = GLOBAL_TIMER_HANDLE
-            .delay(std::time::Instant::now() + timeout)
-            .compat();
-        futures::executor::block_on(async move {
-            futures::select! {
-                res = self.async_read(node_id, request).fuse() => res,
-                e = timeout_f.fuse() => {
-                    Err(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e)))
-                },
-            }
-        })
+        let f = self.async_read(node_id, request);
+        block_on_timeout(f, timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
     }
 
     fn async_read(
@@ -223,8 +212,7 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        let mut fut = Box::pin(sub.result());
-        match block_on_timeout(fut.as_mut(), timeout)
+        match block_on_timeout(sub.result(), timeout)
             .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
         {
             Some(QueryResult::Read(_)) => unreachable!(),
@@ -289,14 +277,9 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + timeout);
-        block_on(async move {
-            select! {
-                // todo: unwrap?
-                res = sub.result().fuse() => Ok(res.unwrap()),
-                _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
-            }
-        })
+        Ok(block_on_timeout(sub.result(), timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
+            .unwrap())
     }
 
     fn async_command_on_node(
@@ -1659,6 +1642,30 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn must_remove_region(&mut self, store_id: u64, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            let peer = new_peer(store_id, 0);
+            let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+            let resp = self
+                .call_command(find_leader, Duration::from_secs(5))
+                .unwrap();
+
+            if is_error_response(&resp) {
+                assert!(
+                    resp.get_header().get_error().has_region_not_found(),
+                    "unexpected error resp: {:?}",
+                    resp
+                );
+                break;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(60) {
+                panic!("region {} is not removed after 60s.", region_id);
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
@@ -1785,6 +1792,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         debug!("all nodes are shut down.");
     }
 
+    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+        let timer = Instant::now_coarse();
+        while timer.saturating_elapsed() < Duration::from_secs(5) {
+            if self
+                .query_leader(node_id, region_id, Duration::from_secs(1))
+                .is_none()
+            {
+                return;
+            }
+            sleep_ms(100);
+        }
+        panic!(
+            "region {}'s replica in store {} still has a valid leader after 5 secs",
+            region_id, node_id
+        );
+    }
+
     pub fn must_send_store_heartbeat(&self, node_id: u64) {
         let router = self.sim.rl().get_router(node_id).unwrap();
         router
@@ -1869,6 +1893,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
                 );
             }
         });
+    }
+
+    pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
+        self.pd_client.get_down_peers()
     }
 }
 

@@ -160,7 +160,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "region" => ?self.region(),
             );
             self.region_heartbeat_pd(ctx);
-            let demote_self = tikv_util::store::is_learner(self.peer());
+            let demote_self =
+                tikv_util::store::is_learner(self.peer()) && !self.is_in_force_leader();
             if remove_self || demote_self {
                 warn!(self.logger, "removing or demoting leader"; "remove" => remove_self, "demote" => demote_self);
                 let term = self.term();
@@ -196,6 +197,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .lock()
             .unwrap()
             .set_region(self.region(), true, &self.logger);
+        // Update leader's peer list after conf change.
+        self.read_progress()
+            .update_leader_info(self.leader_id(), self.term(), self.region());
         ctx.coprocessor_host.on_region_changed(
             self.region(),
             RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
@@ -282,7 +286,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                         error!(self.logger, "failed to apply conf change";
                         "changes" => ?changes,
                         "legacy" => legacy,
-                        "original region" => ?region, "err" => ?e);
+                        "original_region" => ?region, "err" => ?e);
                         return Err(e);
                     }
                 }
@@ -296,8 +300,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             "conf change successfully";
             "changes" => ?changes,
             "legacy" => legacy,
-            "original region" => ?region,
-            "current region" => ?new_region,
+            "original_region" => ?region,
+            "current_region" => ?new_region,
         );
         let my_id = self.peer().get_id();
         let state = self.region_state_mut();

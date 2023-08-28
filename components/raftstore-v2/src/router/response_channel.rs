@@ -240,7 +240,7 @@ impl<Res> BaseSubscriber<Res> {
     }
 
     /// Synchronous version of `result`. It cannot be called concurrently with
-    /// another `take_result` or `result`.
+    /// another `try_result`, `take_result` or `result`.
     #[inline]
     pub fn take_result(&self) -> Option<Res> {
         let e = self.core.event.load(Ordering::Relaxed);
@@ -248,6 +248,16 @@ impl<Res> BaseSubscriber<Res> {
             let r = unsafe { (*self.core.res.get()).take() };
             assert!(r.is_some());
             r
+        } else {
+            None
+        }
+    }
+
+    /// Return an reference of the result. It be called concurrently with
+    /// other `try_result`.
+    pub fn try_result(&self) -> Option<&Res> {
+        if self.has_result() {
+            unsafe { (*self.core.res.get()).as_ref() }
         } else {
             None
         }

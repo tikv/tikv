@@ -130,10 +130,10 @@ impl<E: KvEngine> TxnSstWriter<E> {
         }
 
         info!("finish write to sst";
-            "default entries" => default_entries,
-            "default bytes" => default_bytes,
-            "write entries" => write_entries,
-            "write bytes" => write_bytes,
+            "default_entries" => default_entries,
+            "default_bytes" => default_bytes,
+            "write_entries" => write_entries,
+            "write_bytes" => write_bytes,
         );
         IMPORT_LOCAL_WRITE_KEYS_VEC
             .with_label_values(&["txn_default_cf"])
@@ -270,9 +270,9 @@ impl<E: KvEngine> RawSstWriter<E> {
 
         info!(
             "finish raw write to sst";
-            "default entries" => self.default_entries,
-            "default bytes" => self.default_deletes,
-            "default bytes" => self.default_bytes
+            "default_entries" => self.default_entries,
+            "default_deletes" => self.default_deletes,
+            "default_bytes" => self.default_bytes
         );
         IMPORT_LOCAL_WRITE_KEYS_VEC
             .with_label_values(&["raw_default_cf"])

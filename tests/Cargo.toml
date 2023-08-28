@@ -112,11 +112,12 @@ tikv_util = { workspace = true }
 time = "0.1"
 tipb = { workspace = true }
 toml = "0.5"
+tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
 
 [dev-dependencies]
 arrow = "13.0"

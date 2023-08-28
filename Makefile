@@ -212,7 +212,7 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@cargo install --force -q cargo-sort
+	@cargo install --force --locked -q cargo-sort
 
 pre-format-fast: unset-override
 	@rustup component add rustfmt

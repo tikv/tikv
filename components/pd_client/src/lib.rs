@@ -21,6 +21,7 @@ use futures::future::BoxFuture;
 use kvproto::{
     metapb, pdpb,
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
+    resource_manager::TokenBucketsRequest,
 };
 use pdpb::QueryStats;
 use tikv_util::time::{Instant, UnixSecs};
@@ -247,6 +248,7 @@ impl BucketStat {
 pub const INVALID_ID: u64 = 0;
 // TODO: Implementation of config registration for each module
 pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
+pub const RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH: &str = "resource_group/controller";
 
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
@@ -536,6 +538,10 @@ pub trait PdClient: Send + Sync {
 
     /// Region's Leader uses this to report buckets to PD.
     fn report_region_buckets(&self, _bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+        unimplemented!();
+    }
+
+    fn report_ru_metrics(&self, _req: TokenBucketsRequest) -> PdFuture<()> {
         unimplemented!();
     }
 }

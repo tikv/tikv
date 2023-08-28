@@ -2,7 +2,7 @@
 
 use std::{
     borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, result, str, string::ToString, sync::Arc,
-    time::Duration, u64,
+    time::Duration,
 };
 
 use api_version::{ApiV1, KvFormat};
@@ -83,9 +83,9 @@ pub fn new_debug_executor(
     data_dir: Option<&str>,
     host: Option<&str>,
     mgr: Arc<SecurityManager>,
-) -> Box<dyn DebugExecutor> {
+) -> Box<dyn DebugExecutor + Send> {
     if let Some(remote) = host {
-        return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
+        return Box::new(new_debug_client(remote, mgr)) as Box<_>;
     }
 
     // TODO: perhaps we should allow user skip specifying data path.
@@ -128,7 +128,7 @@ pub fn new_debug_executor(
         let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
             DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
 
-        Box::new(debugger) as Box<dyn DebugExecutor>
+        Box::new(debugger) as Box<_>
     } else {
         let mut config = cfg.raft_engine.config();
         config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
@@ -146,14 +146,14 @@ pub fn new_debug_executor(
 
                 let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
                     DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
-                Box::new(debugger) as Box<dyn DebugExecutor>
+                Box::new(debugger) as Box<_>
             }
             EngineType::RaftKv2 => {
                 let registry =
                     TabletRegistry::new(Box::new(factory), Path::new(data_dir).join("tablets"))
                         .unwrap_or_else(|e| fatal!("failed to create tablet registry {:?}", e));
                 let debugger = DebuggerImplV2::new(registry, raft_db, cfg_controller);
-                Box::new(debugger) as Box<dyn DebugExecutor>
+                Box::new(debugger) as Box<_>
             }
         }
     }
@@ -1008,15 +1008,20 @@ impl DebugExecutor for DebugClient {
             ),
             ("paused", resp.get_region_read_progress_paused().to_string()),
             ("discarding", resp.get_discard().to_string()),
-            // TODO: figure out the performance impact here before implementing it.
-            // (
-            //     "duration to last update_safe_ts",
-            //     format!("{} ms", resp.get_duration_to_last_update_safe_ts_ms()),
-            // ),
-            // (
-            //     "duration to last consume_leader_info",
-            //     format!("{} ms", resp.get_duration_to_last_consume_leader_ms()),
-            // ),
+            (
+                "duration since resolved-ts last called update_safe_ts()",
+                match resp.get_duration_to_last_update_safe_ts_ms() {
+                    u64::MAX => "none".to_owned(),
+                    x => format!("{} ms", x),
+                },
+            ),
+            (
+                "duration to last consume_leader_info()",
+                match resp.get_duration_to_last_consume_leader_ms() {
+                    u64::MAX => "none".to_owned(),
+                    x => format!("{} ms", x),
+                },
+            ),
             ("Resolver:", "".to_owned()),
             ("exist", resp.get_resolver_exist().to_string()),
             ("resolved_ts", resp.get_resolved_ts().to_string()),

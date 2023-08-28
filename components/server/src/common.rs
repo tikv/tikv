@@ -404,7 +404,7 @@ impl TikvServerCore {
                             debug!(
                                 "cpu_time_limiter tuned for backend request";
                                 "cpu_util" => ?cpu_util,
-                                "new quota" => ?target_quota);
+                                "new_quota" => ?target_quota);
                             INSTANCE_BACKEND_CPU_QUOTA.set(target_quota as i64);
                         }
                     }

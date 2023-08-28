@@ -10,7 +10,10 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
     u64,
 };
@@ -102,8 +105,9 @@ use crate::{
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
             SplitCheckTask,
         },
-        Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
-        PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
+        Callback, CasualMessage, CompactThreshold, GlobalReplicationState, InspectedRaftMessage,
+        MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager,
+        StoreMsg, StoreTick,
     },
     Error, Result,
 };
@@ -571,6 +575,8 @@ where
     pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
+
+    pub safe_point: Arc<AtomicU64>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -1194,6 +1200,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
+    safe_point: Arc<AtomicU64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1452,6 +1459,7 @@ where
             write_senders: self.write_senders.clone(),
             sync_write_worker,
             pending_latency_inspect: vec![],
+            safe_point: self.safe_point.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1504,6 +1512,7 @@ where
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
+            safe_point: self.safe_point.clone(),
         }
     }
 }
@@ -1578,6 +1587,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_mgr: GrpcServiceManager,
+        safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1702,6 +1712,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
             node_start_time: self.node_start_time,
+            safe_point,
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -2510,8 +2521,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             CompactTask::CheckAndCompact {
                 cf_names,
                 ranges: ranges_need_check,
-                tombstones_num_threshold: self.ctx.cfg.region_compact_min_tombstones,
-                tombstones_percent_threshold: self.ctx.cfg.region_compact_tombstones_percent,
+                compact_threshold: CompactThreshold::new(
+                    self.ctx.cfg.region_compact_min_tombstones,
+                    self.ctx.cfg.region_compact_tombstones_percent,
+                    self.ctx.cfg.region_compact_min_redundant_rows,
+                    self.ctx.cfg.region_compact_redundant_rows_percent,
+                ),
             },
         )) {
             error!(

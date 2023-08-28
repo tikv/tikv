@@ -27,12 +27,13 @@ impl Store {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if self.unsafe_recovery_state().is_some() {
-            warn!(self.logger,
-                "Unsafe recovery, can't wait apply, another plan is executing in progress";
-            );
-            syncer.abort();
-            return;
+        if let Some(state) = self.unsafe_recovery_state() && !state.is_abort() {
+                warn!(self.logger,
+                    "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                    "state" => ?state,
+                );
+                syncer.abort();
+                return;
         }
         let target_index = if self.has_force_leader() {
             // For regions that lose quorum (or regions have force leader), whatever has
@@ -101,15 +102,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         syncer.report_for_self(self_report);
     }
 
-    pub fn check_unsafe_recovery_state(&mut self) {
+    pub fn check_unsafe_recovery_state<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         match self.unsafe_recovery_state() {
             Some(UnsafeRecoveryState::WaitApply { .. }) => {
                 self.unsafe_recovery_maybe_finish_wait_apply(false)
             }
-            Some(UnsafeRecoveryState::DemoteFailedVoters { .. }) => {
-                // TODO: support demote.
+            Some(UnsafeRecoveryState::WaitInitialize { .. }) => {
+                self.unsafe_recovery_maybe_finish_wait_initialized(false)
             }
-            Some(_) | None => {}
+            Some(UnsafeRecoveryState::DemoteFailedVoters { .. }) => {
+                self.unsafe_recovery_maybe_finish_demote_failed_voters(ctx)
+            }
+            Some(UnsafeRecoveryState::Destroy(_)) | None => {}
         }
     }
 }

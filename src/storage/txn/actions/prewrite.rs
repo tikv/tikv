@@ -474,12 +474,12 @@ impl<'a> PrewriteMutation<'a> {
                             continue;
                         }
 
-                        warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
-                            "key" => %self.key, 
-                            "start_ts" => self.txn_props.start_ts, 
+                        warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key";
+                            "key" => %self.key,
+                            "start_ts" => self.txn_props.start_ts,
                             "for_update_ts" => for_update_ts,
-                            "conflicting start_ts" => write.start_ts,
-                            "conflicting commit_ts" => commit_ts);
+                            "conflicting_start_ts" => write.start_ts,
+                            "conflicting_commit_ts" => commit_ts);
                         return Err(ErrorInner::PessimisticLockNotFound {
                             start_ts: self.txn_props.start_ts,
                             key: self.key.clone().into_raw()?,

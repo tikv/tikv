@@ -402,7 +402,7 @@ where
                         observe_id,
                         cause: format!("met error while handle scan task {:?}", e),
                     })
-                    .unwrap_or_else(|schedule_err| warn!("schedule re-register task failed"; "err" => ?schedule_err, "re-register cause" => ?e));
+                    .unwrap_or_else(|schedule_err| warn!("schedule re-register task failed"; "err" => ?schedule_err, "re_register_cause" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
         }
@@ -511,10 +511,11 @@ where
         if regions.is_empty() {
             return;
         }
+        let now = tikv_util::time::Instant::now_coarse();
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region.resolver.resolve(ts);
+                    let _ = observe_region.resolver.resolve(ts, Some(now));
                 }
             }
         }
@@ -810,6 +811,8 @@ where
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
         let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
         let (mut oldest_safe_ts, mut oldest_safe_ts_region) = (u64::MAX, 0);
+        let mut oldest_duration_to_last_update_ms = 0;
+        let mut oldest_duration_to_last_consume_leader_ms = 0;
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
                 let safe_ts = read_progress.safe_ts();
@@ -829,6 +832,17 @@ where
                 if ts < oldest_ts {
                     oldest_ts = ts;
                     oldest_region = *region_id;
+                    // use -1 to denote none.
+                    oldest_duration_to_last_update_ms = read_progress
+                        .get_core()
+                        .last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as i64)
+                        .unwrap_or(-1);
+                    oldest_duration_to_last_consume_leader_ms = read_progress
+                        .get_core()
+                        .last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as i64)
+                        .unwrap_or(-1);
                 }
 
                 if let (Some(store_id), Some(leader_store_id)) = (store_id, leader_store_id) {
@@ -895,14 +909,17 @@ where
             info!(
                 "the max gap of safe-ts is large";
                 "gap" => safe_ts_gap,
-                "oldest safe-ts" => ?oldest_safe_ts,
-                "region id" => oldest_safe_ts_region,
-                "advance-ts-interval" => ?self.cfg.advance_ts_interval,
-                "lock num" => lock_num,
-                "min start ts" => min_start_ts,
+                "oldest_safe_ts" => ?oldest_safe_ts,
+                "region_id" => oldest_safe_ts_region,
+                "advance_ts_interval" => ?self.cfg.advance_ts_interval,
+                "lock_num" => lock_num,
+                "min_start_ts" => min_start_ts,
             );
         }
         RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);
+        RTS_MIN_SAFE_TS_DUATION_TO_UPDATE_SAFE_TS.set(oldest_duration_to_last_update_ms);
+        RTS_MIN_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER
+            .set(oldest_duration_to_last_consume_leader_ms);
 
         RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
