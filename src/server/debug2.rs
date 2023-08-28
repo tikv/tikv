@@ -1,7 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[allow(unused_imports)]
-use std::{path::Path, sync::Arc, thread::JoinHandle};
+use std::{sync::Arc, thread::JoinHandle};
 
 use engine_rocks::{
     raw::CompactOptions, util::get_cf_handle, RocksEngine, RocksEngineIterator, RocksStatistics,
@@ -20,8 +19,6 @@ use kvproto::{
 };
 use nom::AsBytes;
 use raft::{prelude::Entry, RawNode};
-#[allow(unused_imports)]
-use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{get_region_approximate_middle, get_region_approximate_size},
     store::util::check_key_in_region,
@@ -40,11 +37,11 @@ use crate::{
 };
 
 // `key1` and `key2` should both be start_key or end_key.
-fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
-    if end_key && key1.is_empty() {
+fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], is_end_key: bool) -> &'a [u8] {
+    if is_end_key && key1.is_empty() {
         return key2;
     }
-    if end_key && key2.is_empty() {
+    if is_end_key && key2.is_empty() {
         return key1;
     }
     if key1 < key2 {
@@ -54,11 +51,11 @@ fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
 }
 
 // `key1` and `key2` should both be start_key or end_key.
-fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
-    if end_key && key1.is_empty() {
+fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], is_end_key: bool) -> &'a [u8] {
+    if is_end_key && key1.is_empty() {
         return key1;
     }
-    if end_key && key2.is_empty() {
+    if is_end_key && key2.is_empty() {
         return key2;
     }
     if key1 < key2 {
@@ -1188,7 +1185,7 @@ fn deivde_regions_for_concurrency<ER: RaftEngine>(
 }
 
 #[cfg(any(test, feature = "testexport"))]
-pub fn new_debugger(path: &Path) -> DebuggerImplV2<RaftLogEngine> {
+pub fn new_debugger(path: &std::path::Path) -> DebuggerImplV2<raft_log_engine::RaftLogEngine> {
     use crate::{config::TikvConfig, server::KvEngineFactoryBuilder};
 
     let mut cfg = TikvConfig::default();
