@@ -174,9 +174,13 @@ impl Resolver {
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
         if self.resolved_ts >= new_resolved_ts {
-            let label = if has_lock { "has_lock" } else { "stale_ts" };
+            let reason = match (min_lock, min_ts) {
+                (Some(lock), min_ts) if lock < min_ts => "lock",
+                (Some(_), _) => source,
+                (None, _) => source,
+            };
             RTS_RESOLVED_FAIL_ADVANCE_VEC
-                .with_label_values(&[label, source])
+                .with_label_values(&[reason])
                 .inc();
         }
 
