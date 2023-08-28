@@ -1,3 +1,5 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::path::Path;
 
 use engine_traits::{RaftEngine, RaftLogBatch, TabletRegistry};
@@ -19,12 +21,12 @@ const INITIAL_APPLY_INDEX: u64 = 5;
 
 // Prepare some data
 // Region meta range and rocksdb range of each region:
-// Region 1: k01 .. k04 rocksdb: k00 .. k04
-// Region 2: k05 .. k09 rocksdb: k05 .. k09
-// Region 3: k10 .. k14 rocksdb: k10 .. k14
-// Region 4: k15 .. k19 rocksdb: k15 .. k19 <tombstone>
-// Region 5: k20 .. k24 rocksdb: k20 .. k24
-// Region 6: k26 .. k27 rocksdb: k25 .. k29
+// Region 1: k01 .. k04 rocksdb: zk00 .. zk04
+// Region 2: k05 .. k09 rocksdb: zk05 .. zk09
+// Region 3: k10 .. k14 rocksdb: zk10 .. zk14
+// Region 4: k15 .. k19 rocksdb: zk15 .. zk19 <tombstone>
+// Region 5: k20 .. k24 rocksdb: zk20 .. zk24
+// Region 6: k26 .. k27 rocksdb: zk25 .. zk29
 fn prepare_data_on_disk(path: &Path) {
     let mut cfg = TikvConfig::default();
     cfg.storage.data_dir = path.to_str().unwrap().to_string();

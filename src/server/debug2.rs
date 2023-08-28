@@ -1,5 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[allow(unused_imports)]
 use std::{path::Path, sync::Arc, thread::JoinHandle};
 
 use engine_rocks::{
@@ -19,6 +20,7 @@ use kvproto::{
 };
 use nom::AsBytes;
 use raft::{prelude::Entry, RawNode};
+#[allow(unused_imports)]
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{get_region_approximate_middle, get_region_approximate_size},
