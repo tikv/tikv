@@ -65,6 +65,8 @@ pub struct Resolver {
     pub(crate) last_attempt: Option<LastAttempt>,
 }
 
+#[derive(Clone, Debug)]
+#[allow(unused)]
 pub(crate) struct LastAttempt {
     success: bool,
     ts: TimeStamp,

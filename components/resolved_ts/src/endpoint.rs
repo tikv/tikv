@@ -40,7 +40,7 @@ use crate::{
     advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
-    resolver::Resolver,
+    resolver::{LastAttempt, Resolver},
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
     TsSource,
 };
@@ -314,8 +314,10 @@ where
                 if self.is_leader(store_id, leader_store_id) {
                     // leader resolved-ts
                     if resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
+                        let resolver = self.regions.get(region_id).map(|x| &x.resolver);
                         stats.min_leader_resolved_ts.set(
                             *region_id,
+                            resolver,
                             &core,
                             &leader_info,
                             &self.advance_worker.concurrency_manager,
@@ -415,7 +417,7 @@ where
         RTS_MIN_LEADER_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
         RTS_MIN_LEADER_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
         RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS
-            .set(stats.min_leader_resolved_ts.min_lock_ts as i64);
+            .set(stats.min_leader_resolved_ts.min_memory_lock_ts as i64);
         RTS_MIN_LEADER_RESOLVED_TS_GAP
             .set(now.saturating_sub(
                 TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
@@ -462,7 +464,75 @@ where
     }
 
     fn log_slow_regions(&self, stats: &Stats) {
-        todo!()
+        let leader_threshold = self.cfg.advance_ts_interval.as_millis() + SLOW_LOG_GRACE_PERIOD_MS;
+        let follower_threshold = self.cfg.advance_ts_interval.as_millis()
+            + SLOW_LOG_GRACE_PERIOD_MS
+            + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64;
+        let now = self.approximate_now_tso();
+
+        // min leader resolved ts
+        let min_leader_resolved_ts_gap = now
+            .saturating_sub(TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical());
+        if min_leader_resolved_ts_gap > leader_threshold {
+            info!(
+                "the max gap of leader resolved-ts is large";
+                "region_id" => stats.min_leader_resolved_ts.region_id,
+                "gap" => format!("{}ms", min_leader_resolved_ts_gap),
+                "safe_ts" => stats.min_leader_resolved_ts.safe_ts,
+                "min_memory_lock_ts" => stats.min_leader_resolved_ts.min_memory_lock_ts,
+                "duration_to_last_update_safe_ts" => match stats.min_leader_resolved_ts.duration_to_last_update_ms {
+                    Some(d) => format!("{}ms", d),
+                    None => "none".to_owned(),
+                },
+                "last_resolve_attempt" => ?stats.min_leader_resolved_ts.last_resolve_attempt,
+            );
+        }
+
+        // min follower safe ts
+        let min_follower_safe_ts_gap =
+            now.saturating_sub(TimeStamp::from(stats.min_follower_safe_ts.safe_ts).physical());
+        if min_follower_safe_ts_gap > follower_threshold {
+            info!(
+                "the max gap of follower safe-ts is large";
+                "region_id" => stats.min_follower_safe_ts.region_id,
+                "gap" => format!("{}ms", min_follower_safe_ts_gap),
+                "safe_ts" => stats.min_follower_safe_ts.safe_ts,
+                "resolved_ts" => stats.min_follower_safe_ts.resolved_ts,
+                "duration_to_last_consume_leader" => match stats.min_follower_safe_ts.duration_to_last_consume_leader {
+                    Some(d) => format!("{}ms", d),
+                    None => "none".to_owned(),
+                },
+                "applied_index" => stats.min_follower_safe_ts.applied_index,
+                "latest_candidate" => ?stats.min_follower_safe_ts.latest_candidate,
+                "oldest_candidate" => ?stats.min_follower_safe_ts.oldest_candidate,
+            );
+        }
+
+        // min follower resolved ts
+        let min_follower_resolved_ts_gap = now
+            .saturating_sub(TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical());
+        if min_follower_resolved_ts_gap > follower_threshold {
+            if stats.min_follower_resolved_ts.region_id == stats.min_follower_safe_ts.region_id {
+                info!(
+                    "the max gap of follower resolved-ts is large; it's the same region that has the min safe-ts"
+                );
+            } else {
+                info!(
+                    "the max gap of follower resolved-ts is large";
+                    "region_id" => stats.min_follower_resolved_ts.region_id,
+                    "gap" => format!("{}ms", min_follower_resolved_ts_gap),
+                    "safe_ts" => stats.min_follower_resolved_ts.safe_ts,
+                    "resolved_ts" => stats.min_follower_resolved_ts.resolved_ts,
+                    "duration_to_last_consume_leader" => match stats.min_follower_resolved_ts.duration_to_last_consume_leader {
+                        Some(d) => format!("{}ms", d),
+                        None => "none".to_owned(),
+                    },
+                    "applied_index" => stats.min_follower_resolved_ts.applied_index,
+                    "latest_candidate" => ?stats.min_follower_resolved_ts.latest_candidate,
+                    "oldest_candidate" => ?stats.min_follower_resolved_ts.oldest_candidate,
+                );
+            }
+        }
     }
 }
 
@@ -1015,8 +1085,8 @@ struct LeaderStats {
     resolved_ts: u64,
     safe_ts: u64,
     duration_to_last_update_ms: Option<u64>,
-    min_lock_ts: u64,
-    // TODO: last_push {reason, ts, result}
+    min_memory_lock_ts: u64,
+    last_resolve_attempt: Option<LastAttempt>,
 }
 
 impl Default for LeaderStats {
@@ -1026,7 +1096,8 @@ impl Default for LeaderStats {
             resolved_ts: u64::MAX,
             safe_ts: u64::MAX,
             duration_to_last_update_ms: None,
-            min_lock_ts: 0,
+            min_memory_lock_ts: 0,
+            last_resolve_attempt: None,
         }
     }
 }
@@ -1035,6 +1106,7 @@ impl LeaderStats {
     fn set(
         &mut self,
         region_id: u64,
+        resolver: Option<&Resolver>,
         region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
         leader_info: &LeaderInfo,
         concurrency_manager: &ConcurrencyManager,
@@ -1046,10 +1118,11 @@ impl LeaderStats {
         self.duration_to_last_update_ms = region_read_progress
             .last_instant_of_update_ts()
             .map(|i| i.saturating_elapsed().as_millis() as u64);
-        self.min_lock_ts = concurrency_manager
+        self.min_memory_lock_ts = concurrency_manager
             .global_min_lock_ts()
             .unwrap_or_default()
             .into_inner();
+        self.last_resolve_attempt = resolver.and_then(|r| r.last_attempt.clone());
     }
 }
 
@@ -1059,7 +1132,7 @@ struct FollowerStats {
     safe_ts: u64,
     latest_candidate: Option<ReadState>,
     oldest_candidate: Option<ReadState>,
-    apply_index: u64,
+    applied_index: u64,
     duration_to_last_consume_leader: Option<u64>,
 }
 
@@ -1071,7 +1144,7 @@ impl Default for FollowerStats {
             resolved_ts: u64::MAX,
             latest_candidate: None,
             oldest_candidate: None,
-            apply_index: 0,
+            applied_index: 0,
             duration_to_last_consume_leader: None,
         }
     }
@@ -1089,7 +1162,7 @@ impl FollowerStats {
             .get_read_state()
             .get_safe_ts();
         self.safe_ts = read_state.ts;
-        self.apply_index = read_state.idx;
+        self.applied_index = region_read_progress.applied_index();
         self.region_id = region_id;
         self.latest_candidate = region_read_progress.pending_items().back().cloned();
         self.oldest_candidate = region_read_progress.pending_items().front().cloned();
