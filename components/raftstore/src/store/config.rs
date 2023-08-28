@@ -140,7 +140,7 @@ pub struct Config {
     pub region_compact_min_redundant_rows: u64,
     /// Minimum percentage of redundant rows to trigger manual compaction.
     /// Should between 1 and 100.
-    pub region_compact_redundant_rows_percent: u64,
+    pub region_compact_redundant_rows_percent: Option<u64>,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -429,7 +429,7 @@ impl Default for Config {
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
-            region_compact_redundant_rows_percent: 20,
+            region_compact_redundant_rows_percent: None,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -581,6 +581,10 @@ impl Config {
         self.region_compact_check_step.unwrap()
     }
 
+    pub fn region_compact_redundant_rows_percent(&self) -> u64 {
+        self.region_compact_redundant_rows_percent.unwrap()
+    }
+
     #[inline]
     pub fn warmup_entry_cache_enabled(&self) -> bool {
         self.max_entry_cache_warmup_duration.0 != Duration::from_secs(0)
@@ -606,6 +610,15 @@ impl Config {
                 self.region_compact_check_step = Some(5);
             } else {
                 self.region_compact_check_step = Some(100);
+            }
+        }
+
+        if self.region_compact_redundant_rows_percent.is_none() {
+            if raft_kv_v2 {
+                self.region_compact_redundant_rows_percent = Some(20);
+            } else {
+                // Disable redundant rows check in default for v1.
+                self.region_compact_redundant_rows_percent = Some(100);
             }
         }
 
@@ -763,6 +776,15 @@ impl Config {
             return Err(box_err!(
                 "region-compact-tombstones-percent must between 1 and 100, current value is {}",
                 self.region_compact_tombstones_percent
+            ));
+        }
+
+        let region_compact_redundant_rows_percent =
+            self.region_compact_redundant_rows_percent.unwrap();
+        if !(1..=100).contains(&region_compact_redundant_rows_percent) {
+            return Err(box_err!(
+                "region-compact-redundant-rows-percent must between 1 and 100, current value is {}",
+                region_compact_redundant_rows_percent
             ));
         }
 
@@ -992,8 +1014,11 @@ impl Config {
             .with_label_values(&["region_compact_min_redundant_rows"])
             .set(self.region_compact_min_redundant_rows as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_tombstones_percent"])
-            .set(self.region_compact_tombstones_percent as f64);
+            .with_label_values(&["region_compact_redundant_rows_percent"])
+            .set(
+                self.region_compact_redundant_rows_percent
+                    .unwrap_or_default() as f64,
+            );
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs_f64());
