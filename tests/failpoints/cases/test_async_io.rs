@@ -14,6 +14,8 @@ use tikv_util::HandyRwLock;
 // leader's io is paused.
 #[test]
 fn test_async_io_commit_without_leader_persist() {
+    use test_raftstore_v2::*;
+    
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
     cluster.cfg.raft_store.store_io_pool_size = 2;
