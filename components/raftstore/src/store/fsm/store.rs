@@ -468,10 +468,6 @@ where
         self.update_trace();
     }
 
-    pub fn clear_cache(&self) {
-        self.router.clear_cache();
-    }
-
     fn update_trace(&self) {
         let router_trace = self.router.trace();
         MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
@@ -1847,8 +1843,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         self.workers = Some(workers);
-        // This router will not be accessed again, free all caches.
-        self.router.clear_cache();
         Ok(())
     }
 
@@ -1961,7 +1955,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
-                "region_id" => region_id
+                "region_id" => region_id,
+                "to_peer_id" => msg.get_to_peer().get_id(),
             );
             return Ok(CheckMsgStatus::FirstRequest);
         }
@@ -2525,7 +2520,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     self.ctx.cfg.region_compact_min_tombstones,
                     self.ctx.cfg.region_compact_tombstones_percent,
                     self.ctx.cfg.region_compact_min_redundant_rows,
-                    self.ctx.cfg.region_compact_redundant_rows_percent,
+                    self.ctx.cfg.region_compact_redundant_rows_percent(),
                 ),
             },
         )) {
