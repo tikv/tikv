@@ -7092,6 +7092,7 @@ mod tests {
             regions,
             derived: _,
             new_split_regions: _,
+            skip_size_check: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();
