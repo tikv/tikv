@@ -45,7 +45,6 @@ fn test_one_node_leader_missing() {
     fail::remove(check_stale_state);
 }
 
-// pass
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_update_localreader_after_removed() {
