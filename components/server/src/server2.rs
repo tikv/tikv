@@ -1485,7 +1485,11 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DbConfigManger::new(registry.clone(), DbType::Kv)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                registry.clone(),
+                DbType::Kv,
+            )),
         );
         self.tablet_registry = Some(registry.clone());
         raft_engine.register_config(cfg_controller);
