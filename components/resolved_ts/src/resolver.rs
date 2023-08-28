@@ -5,11 +5,44 @@ use std::{cmp, collections::BTreeMap, sync::Arc};
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use tikv_util::time::Instant;
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+
+#[derive(Clone)]
+pub enum TsSource {
+    // A lock in LOCK CF
+    Lock(Key),
+    // A memory lock in concurrency manager
+    MemoryLock(Key),
+    PdTso,
+    // The following sources can also come from PD or memory lock, but we care more about sources
+    // in resolved-ts.
+    BackupStream,
+    Cdc,
+}
+
+impl TsSource {
+    pub fn label(&self) -> &str {
+        match self {
+            TsSource::Lock(_) => "lock",
+            TsSource::MemoryLock(_) => "rts_cm_min_lock",
+            TsSource::PdTso => "pd_tso",
+            TsSource::BackupStream => "backup_stream",
+            TsSource::Cdc => "cdc",
+        }
+    }
+
+    pub fn key(&self) -> Option<&Key> {
+        match self {
+            TsSource::Lock(k) => Some(k),
+            TsSource::MemoryLock(k) => Some(k),
+            _ => None,
+        }
+    }
+}
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -29,6 +62,14 @@ pub struct Resolver {
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped
     stopped: bool,
+    pub(crate) last_attempt: Option<LastAttempt>,
+}
+
+pub(crate) struct LastAttempt {
+    success: bool,
+    ts: TimeStamp,
+    reason: String,
+    lock: Option<Key>,
 }
 
 impl std::fmt::Debug for Resolver {
@@ -70,6 +111,7 @@ impl Resolver {
             tracked_index: 0,
             min_ts: TimeStamp::zero(),
             stopped: false,
+            last_attempt: None,
         }
     }
 
@@ -157,31 +199,63 @@ impl Resolver {
     }
 
     /// Try to advance resolved ts.
+    /// `memory_lock`: If the source is from a memory lock in concurrency
+    /// manger, pass the key for diagnosis
+    ///
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp, now: Option<Instant>, source: &str) -> TimeStamp {
+    pub fn resolve(
+        &mut self,
+        min_ts: TimeStamp,
+        now: Option<Instant>,
+        source: TsSource,
+    ) -> TimeStamp {
         // The `Resolver` is stopped, not need to advance, just return the current
         // `resolved_ts`
         if self.stopped {
             return self.resolved_ts;
         }
         // Find the min start ts.
-        let min_lock = self.lock_ts_heap.keys().next().cloned();
+        let (min_lock, min_lock_key) = match self.lock_ts_heap.iter().next() {
+            None => (None, None),
+            Some((ts, locks)) => (
+                Some(*ts),
+                locks
+                    .iter()
+                    .next()
+                    .map(|k| Key::from_encoded_slice(k.as_ref())),
+            ),
+        };
         let has_lock = min_lock.is_some();
         let min_start_ts = min_lock.unwrap_or(min_ts);
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+        // reason is the min source of the new resolved ts.
+        let reason = match (min_lock, min_ts) {
+            (Some(lock), min_ts) if lock < min_ts => TsSource::Lock(min_lock_key.unwrap()),
+            (Some(_), _) => source,
+            (None, _) => source,
+        };
+
         if self.resolved_ts >= new_resolved_ts {
-            let reason = match (min_lock, min_ts) {
-                (Some(lock), min_ts) if lock < min_ts => "lock",
-                (Some(_), _) => source,
-                (None, _) => source,
-            };
             RTS_RESOLVED_FAIL_ADVANCE_VEC
-                .with_label_values(&[reason])
+                .with_label_values(&[reason.label()])
                 .inc();
+            self.last_attempt = Some(LastAttempt {
+                success: false,
+                ts: new_resolved_ts,
+                reason: reason.label().to_owned(),
+                lock: reason.key().cloned(),
+            });
+        } else {
+            self.last_attempt = Some(LastAttempt {
+                success: true,
+                ts: new_resolved_ts,
+                reason: reason.label().to_owned(),
+                lock: reason.key().cloned(),
+            })
         }
 
         // Resolved ts never decrease.
@@ -313,7 +387,7 @@ mod tests {
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(
-                            resolver.resolve(min_ts.into(), None, "test"),
+                            resolver.resolve(min_ts.into(), None, TsSource::PdTso),
                             expect.into(),
                             "case {}",
                             i

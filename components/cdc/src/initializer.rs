@@ -23,7 +23,7 @@ use raftstore::{
         msg::{Callback, ReadResponse},
     },
 };
-use resolved_ts::Resolver;
+use resolved_ts::{Resolver, TsSource};
 use tikv::storage::{
     kv::Snapshot,
     mvcc::{DeltaScanner, ScannerBuilder},
@@ -458,7 +458,7 @@ impl<E: KvEngine> Initializer<E> {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
         let observe_id = self.observe_id;
-        let rts = resolver.resolve(TimeStamp::zero(), None, "cdc_initialize");
+        let rts = resolver.resolve(TimeStamp::zero(), None, TsSource::Cdc);
         info!(
             "cdc resolver initialized and schedule resolver ready";
             "region_id" => region.get_id(),

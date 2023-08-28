@@ -42,6 +42,7 @@ use crate::{
     metrics::*,
     resolver::Resolver,
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
+    TsSource,
 };
 
 /// grace period for logging safe-ts and resolved-ts gap in slow log
@@ -690,7 +691,12 @@ where
 
     // Update advanced resolved ts.
     // Must ensure all regions are leaders at the point of ts.
-    fn handle_resolved_ts_advanced(&mut self, regions: Vec<u64>, ts: TimeStamp, ts_source: &str) {
+    fn handle_resolved_ts_advanced(
+        &mut self,
+        regions: Vec<u64>,
+        ts: TimeStamp,
+        ts_source: TsSource,
+    ) {
         if regions.is_empty() {
             return;
         }
@@ -698,11 +704,9 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region.resolver.resolve(
-                        ts,
-                        Some(now),
-                        format!("resolved-ts-{}", ts_source).as_str(),
-                    );
+                    let _ = observe_region
+                        .resolver
+                        .resolve(ts, Some(now), ts_source.clone());
                 }
             }
         }
@@ -833,7 +837,7 @@ pub enum Task {
     ResolvedTsAdvanced {
         regions: Vec<u64>,
         ts: TimeStamp,
-        ts_source: &'static str,
+        ts_source: TsSource,
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
@@ -893,7 +897,7 @@ impl fmt::Debug for Task {
                 .field("name", &"advance_resolved_ts")
                 .field("regions", &regions)
                 .field("ts", &ts)
-                .field("ts_source", &ts_source)
+                .field("ts_source", &ts_source.label())
                 .finish(),
             Task::ChangeLog { .. } => de.field("name", &"change_log").finish(),
             Task::ScanLocks {
@@ -1009,7 +1013,6 @@ struct Stats {
 struct LeaderStats {
     region_id: u64,
     resolved_ts: u64,
-    // from resolver
     safe_ts: u64,
     duration_to_last_update_ms: Option<u64>,
     min_lock_ts: u64,
