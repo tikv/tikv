@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_track() {
-        let check = move |tag: ReqTag| {
+        let check = move |tag: ReqTag, flow: u64| {
             let mut context = kvrpcpb::Context::default();
             context.set_region_id(1);
             let mut req_ctx = ReqContext::new(
@@ -491,29 +491,42 @@ mod tests {
             track.track();
             drop(track);
             TLS_COP_METRICS.with(|m| {
-                assert_eq!(
-                    10,
-                    m.borrow()
-                        .local_read_stats()
-                        .region_infos
-                        .get(&1)
-                        .unwrap()
-                        .flow
-                        .read_keys
-                );
-                assert_eq!(
-                    vec![10],
-                    m.borrow()
-                        .local_read_stats()
-                        .region_buckets
-                        .get(&1)
-                        .unwrap()
-                        .stats
-                        .read_keys
-                );
+                if flow > 0 {
+                    assert_eq!(
+                        flow as usize,
+                        m.borrow()
+                            .local_read_stats()
+                            .region_infos
+                            .get(&1)
+                            .unwrap()
+                            .flow
+                            .read_keys
+                    );
+                    assert_eq!(
+                        flow,
+                        m.borrow()
+                            .local_read_stats()
+                            .region_buckets
+                            .get(&1)
+                            .unwrap()
+                            .stats
+                            .read_keys[0]
+                    );
+                } else {
+                    assert!(m.borrow().local_read_stats().region_infos.get(&1).is_none());
+                    assert!(
+                        m.borrow()
+                            .local_read_stats()
+                            .region_buckets
+                            .get(&1)
+                            .is_none()
+                    );
+                }
+
+                m.borrow_mut().clear();
             });
         };
-        check(ReqTag::select);
-        check(ReqTag::analyze_full_sampling);
+        check(ReqTag::select, 10);
+        check(ReqTag::analyze_full_sampling, 0);
     }
 }
