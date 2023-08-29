@@ -2677,6 +2677,7 @@ pub struct ResolvedTsConfig {
     pub advance_ts_interval: ReadableDuration,
     #[online_config(skip)]
     pub scan_lock_pool_size: usize,
+    pub memory_quota: ReadableSize,
 }
 
 impl ResolvedTsConfig {
@@ -2697,6 +2698,7 @@ impl Default for ResolvedTsConfig {
             enable: true,
             advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
+            memory_quota: ReadableSize::mb(256),
         }
     }
 }
