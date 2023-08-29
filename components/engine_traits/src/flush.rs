@@ -166,6 +166,11 @@ impl PersistenceListener {
     ///
     /// `smallest_seqno` should be the smallest seqno of the memtable.
     pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64) {
+        (|| {
+            fail_point!("on_memtable_sealed", |t| {
+                assert_eq!(t.unwrap().as_str(), cf);
+            })
+        })();
         // The correctness relies on the assumption that there will be only one
         // thread writting to the DB and increasing apply index.
         // Apply index will be set within DB lock, so it's correct even with manual

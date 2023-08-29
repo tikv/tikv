@@ -109,10 +109,18 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 /// Tentative value.
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.25;
 
+<<<<<<< HEAD
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
 const RAFT_MIN_MEM: usize = 256 * MIB as usize;
 const RAFT_MAX_MEM: usize = 2 * GIB as usize;
+=======
+const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
+// Too large will increase Raft Engine memory usage.
+const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: u64 = ReadableSize::mb(32).0;
+
+>>>>>>> 517522b5e7 (raftstore-v2: support column family based write buffer manager (#15453))
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
@@ -319,7 +327,12 @@ macro_rules! cf_config {
             #[serde(with = "rocks_config::compression_type_level_serde")]
             #[online_config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
+<<<<<<< HEAD
             pub write_buffer_size: ReadableSize,
+=======
+            pub write_buffer_size: Option<ReadableSize>,
+            pub write_buffer_limit: Option<ReadableSize>,
+>>>>>>> 517522b5e7 (raftstore-v2: support column family based write buffer manager (#15453))
             pub max_write_buffer_number: i32,
             #[online_config(skip)]
             pub min_write_buffer_number_to_merge: i32,
@@ -649,6 +662,7 @@ macro_rules! build_cf_opt {
 pub struct CfResources {
     pub cache: Cache,
     pub compaction_thread_limiters: HashMap<&'static str, ConcurrentTaskLimiter>,
+    pub write_buffer_managers: HashMap<&'static str, Arc<WriteBufferManager>>,
 }
 
 cf_config!(DefaultCfConfig);
@@ -713,6 +727,7 @@ impl Default for DefaultCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
+            write_buffer_limit: None,
         }
     }
 }
@@ -811,6 +826,9 @@ impl DefaultCfConfig {
             }
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_DEFAULT) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -883,6 +901,7 @@ impl Default for WriteCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -939,6 +958,9 @@ impl WriteCfConfig {
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_WRITE) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -1003,6 +1025,7 @@ impl Default for LockCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -1037,6 +1060,9 @@ impl LockCfConfig {
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_LOCK) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -1098,6 +1124,7 @@ impl Default for RaftCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -1342,6 +1369,19 @@ impl DbConfig {
                 self.writecf.disable_write_stall = true;
                 self.lockcf.disable_write_stall = true;
                 self.raftcf.disable_write_stall = true;
+<<<<<<< HEAD
+=======
+                // Initially only allow one compaction. Pace up when pending bytes is high. This
+                // strategy is consistent with single RocksDB.
+                self.defaultcf.max_compactions.get_or_insert(1);
+                self.writecf.max_compactions.get_or_insert(1);
+                self.lockcf
+                    .write_buffer_size
+                    .get_or_insert(ReadableSize::mb(4));
+                self.lockcf
+                    .write_buffer_limit
+                    .get_or_insert(ReadableSize::mb(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT));
+>>>>>>> 517522b5e7 (raftstore-v2: support column family based write buffer manager (#15453))
             }
         }
     }
@@ -1462,9 +1502,29 @@ impl DbConfig {
                 ConcurrentTaskLimiter::new(CF_RAFT, self.raftcf.max_compactions),
             );
         }
+        let mut write_buffer_managers = HashMap::default();
+        self.lockcf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_LOCK,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
+        self.defaultcf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_DEFAULT,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
+        self.writecf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_WRITE,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
         CfResources {
             cache,
             compaction_thread_limiters,
+            write_buffer_managers,
         }
     }
 
@@ -1508,6 +1568,9 @@ impl DbConfig {
         self.writecf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
+        if self.raftcf.write_buffer_limit.is_some() {
+            return Err("raftcf does not support cf based write buffer manager".into());
+        }
         if self.enable_unordered_write {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
@@ -1619,6 +1682,7 @@ impl Default for RaftDefaultCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
+            write_buffer_limit: None,
         }
     }
 }
