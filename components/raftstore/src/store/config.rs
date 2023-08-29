@@ -608,9 +608,15 @@ impl Config {
         if self.region_compact_check_step.is_none() {
             if raft_kv_v2 {
                 self.region_compact_check_step = Some(5);
-                self.region_compact_redundant_rows_percent = Some(20);
             } else {
                 self.region_compact_check_step = Some(100);
+            }
+        }
+
+        if self.region_compact_redundant_rows_percent.is_none() {
+            if raft_kv_v2 {
+                self.region_compact_redundant_rows_percent = Some(20);
+            } else {
                 // Disable redundant rows check in default for v1.
                 self.region_compact_redundant_rows_percent = Some(100);
             }
