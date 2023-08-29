@@ -12,7 +12,7 @@ fn test_write_buffer_manager() {
     use test_raftstore_v2::*;
     let count = 1;
     let mut cluster = new_node_cluster(0, count);
-    cluster.cfg.rocksdb.lock_write_buffer_limit = Some(ReadableSize::kb(10));
+    cluster.cfg.rocksdb.lockcf.write_buffer_limit = Some(ReadableSize::kb(10));
     cluster.cfg.rocksdb.write_buffer_limit = Some(ReadableSize::kb(20));
 
     // Let write buffer size small to make memtable request fewer memories.
