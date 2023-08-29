@@ -113,27 +113,6 @@ impl Resolver {
         self.stopped
     }
 
-    // Return an approximate heap memory usage in bytes.
-    pub fn approximate_heap_bytes(&self) -> usize {
-        if self.locks_by_key.is_empty() {
-            return 0;
-        }
-
-        const SAMPLE_COUNT: usize = 32;
-        let mut key_count = 0;
-        let mut key_bytes = 0;
-        for key in self.locks_by_key.keys() {
-            key_count += 1;
-            key_bytes += key.len();
-            if key_count >= SAMPLE_COUNT {
-                break;
-            }
-        }
-        self.locks_by_key.len() * (key_bytes / key_count + std::mem::size_of::<TimeStamp>())
-            + self.lock_ts_heap.len()
-                * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
-    }
-
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
         &self.lock_ts_heap
     }
@@ -155,9 +134,30 @@ impl Resolver {
         self.tracked_index = index;
     }
 
+    // Return an approximate heap memory usage in bytes.
+    pub fn approximate_heap_bytes(&self) -> usize {
+        // memory used by locks_by_key.
+        let memory_quota_in_use = self.memory_quota.in_use();
+
+        // memory used by lock_ts_heap.
+        let memory_lock_ts_heap = self.lock_ts_heap.len()
+            * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
+            // memory used by HashSet<Arc<u8>>
+            + self.locks_by_key.len() * std::mem::size_of::<Arc<[u8]>>();
+
+        memory_quota_in_use + memory_lock_ts_heap
+    }
+
     fn lock_heap_size(&self, key: &[u8]) -> usize {
-        // locks_by_key: HashMap<Arc<[u8]>, TimeStamp>
-        // size of key and size of value.
+        // A resolver has
+        // * locks_by_key: HashMap<Arc<[u8]>, TimeStamp>
+        // * lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>
+        //
+        // We only count memory used by locks_by_key. Because the majority of
+        // memory is consumed by keys, locks_by_key and lock_ts_heap shares
+        // the same Arc<[u8]>, so lock_ts_heap is negligible. Also, it's hard to
+        // track accurate memory usage of lock_ts_heap as a timestamp may have
+        // many keys.
         key.heap_size() + std::mem::size_of::<TimeStamp>()
     }
 
