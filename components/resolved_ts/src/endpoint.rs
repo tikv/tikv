@@ -341,13 +341,9 @@ where
                     // leader resolved-ts
                     if resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
                         let resolver = self.regions.get(region_id).map(|x| &x.resolver);
-                        stats.min_leader_resolved_ts.set(
-                            *region_id,
-                            resolver,
-                            &core,
-                            &leader_info,
-                            &self.advance_worker.concurrency_manager,
-                        );
+                        stats
+                            .min_leader_resolved_ts
+                            .set(*region_id, resolver, &core, &leader_info);
                     }
                 } else {
                     // follower safe-ts
@@ -364,7 +360,7 @@ where
         });
 
         stats.resolver = self.collect_resolver_stats();
-
+        stats.cm_min_lock = self.advance_worker.concurrency_manager.global_min_lock();
         stats
     }
 
@@ -420,7 +416,7 @@ where
             stats
                 .cm_min_lock
                 .clone()
-                .map(|(ts, _)| ts)
+                .map(|(ts, _)| ts.into_inner())
                 .unwrap_or_default() as i64,
         );
 
@@ -442,8 +438,14 @@ where
         // min leader resolved ts
         RTS_MIN_LEADER_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
         RTS_MIN_LEADER_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
-        RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS
-            .set(stats.min_leader_resolved_ts.min_memory_lock_ts as i64);
+        RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS.set(
+            stats
+                .min_leader_resolved_ts
+                .min_lock
+                .as_ref()
+                .map(|(ts, _)| (*ts).into_inner() as i64)
+                .unwrap_or(-1),
+        );
         RTS_MIN_LEADER_RESOLVED_TS_GAP
             .set(now.saturating_sub(
                 TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
@@ -505,7 +507,8 @@ where
                 "region_id" => stats.min_leader_resolved_ts.region_id,
                 "gap" => format!("{}ms", min_leader_resolved_ts_gap),
                 "safe_ts" => stats.min_leader_resolved_ts.safe_ts,
-                "min_memory_lock_ts" => stats.min_leader_resolved_ts.min_memory_lock_ts,
+                "min_lock" => ?stats.min_leader_resolved_ts.min_lock,
+                "min_memory_lock" => ?stats.cm_min_lock,
                 "duration_to_last_update_safe_ts" => match stats.min_leader_resolved_ts.duration_to_last_update_ms {
                     Some(d) => format!("{}ms", d),
                     None => "none".to_owned(),
@@ -1104,10 +1107,8 @@ struct Stats {
     resolver: ResolverStats,
     // we don't care about min_safe_ts_leader, because safe_ts should be equal to resolved_ts in
     // leaders
-
-    // (start_ts, key)
-    cm_min_lock: Option<(u64, Key)>,
-    // TODO: stats for logs
+    // The min memory lock in concurrency manager.
+    cm_min_lock: Option<(TimeStamp, Key)>,
 }
 
 struct LeaderStats {
@@ -1115,8 +1116,9 @@ struct LeaderStats {
     resolved_ts: u64,
     safe_ts: u64,
     duration_to_last_update_ms: Option<u64>,
-    min_memory_lock_ts: u64,
     last_resolve_attempt: Option<LastAttempt>,
+    // min lock in LOCK CF
+    min_lock: Option<(TimeStamp, Key)>,
 }
 
 impl Default for LeaderStats {
@@ -1126,8 +1128,8 @@ impl Default for LeaderStats {
             resolved_ts: u64::MAX,
             safe_ts: u64::MAX,
             duration_to_last_update_ms: None,
-            min_memory_lock_ts: 0,
             last_resolve_attempt: None,
+            min_lock: None,
         }
     }
 }
@@ -1139,7 +1141,6 @@ impl LeaderStats {
         resolver: Option<&Resolver>,
         region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
         leader_info: &LeaderInfo,
-        concurrency_manager: &ConcurrencyManager,
     ) {
         self.resolved_ts = leader_info.get_read_state().get_safe_ts();
         self.region_id = region_id;
@@ -1148,11 +1149,18 @@ impl LeaderStats {
         self.duration_to_last_update_ms = region_read_progress
             .last_instant_of_update_ts()
             .map(|i| i.saturating_elapsed().as_millis() as u64);
-        self.min_memory_lock_ts = concurrency_manager
-            .global_min_lock_ts()
-            .unwrap_or_default()
-            .into_inner();
         self.last_resolve_attempt = resolver.and_then(|r| r.last_attempt.clone());
+        self.min_lock = resolver.and_then(|r| {
+            r.lock_ts_heap.iter().next().map(|(ts, keys)| {
+                (
+                    *ts,
+                    keys.iter()
+                        .next()
+                        .map(|k| Key::from_encoded_slice(k.as_ref()))
+                        .unwrap_or_else(|| Key::from_encoded_slice("no_keys_found".as_ref())),
+                )
+            })
+        });
     }
 }
 
