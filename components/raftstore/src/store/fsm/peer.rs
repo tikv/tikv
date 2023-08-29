@@ -5747,7 +5747,7 @@ where
             return;
         }
 
-        fail_point!("on_split_region_check_tick");
+        fail_point!("on_split_region_check_tick", |_| {});
         self.register_split_region_check_tick();
 
         // To avoid frequent scan, we only add new scan tasks if all previous tasks

@@ -75,6 +75,7 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
+    pub skip_size_check: bool,
     // Hack: in common case we should use generic, but split is an infrequent
     // event that performance is not critical. And using `Any` can avoid polluting
     // all existing code.
@@ -236,6 +237,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             return true;
         }
+        fail_point!("on_split_region_check_tick", |_| true);
         if ctx.schedulers.split_check.is_busy() {
             return false;
         }
@@ -337,7 +339,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.set_result(cmd_resp::new_error(e));
             return;
         }
-        self.ask_batch_split_pd(ctx, rs.split_keys, ch);
+        self.ask_batch_split_pd(ctx, rs.split_keys, rs.skip_size_check, ch);
     }
 
     pub fn on_request_half_split<T>(
@@ -480,6 +482,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let derived_req = &[derived_req];
 
         let right_derive = split_reqs.get_right_derive();
+        let skip_size_check = split_reqs.get_skip_size_check();
         let reqs = if right_derive {
             split_reqs.get_requests().iter().chain(derived_req)
         } else {
@@ -616,6 +619,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 derived_index,
                 tablet_index: log_index,
                 tablet: Box::new(tablet),
+                skip_size_check,
             }),
         ))
     }
@@ -666,6 +670,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
 
         let derived = &res.regions[res.derived_index];
+        let skip_size_check = res.skip_size_check;
         let region_id = derived.get_id();
 
         let region_locks = self.txn_context().split(&res.regions, derived);
@@ -696,8 +701,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let new_region_count = res.regions.len() as u64;
         let control = self.split_flow_control_mut();
-        let estimated_size = control.approximate_size.map(|v| v / new_region_count);
-        let estimated_keys = control.approximate_keys.map(|v| v / new_region_count);
+        let mut estimated_size = control.approximate_size.map(|v| v / new_region_count);
+        let mut estimated_keys = control.approximate_keys.map(|v| v / new_region_count);
+        if skip_size_check {
+            estimated_size = None;
+            estimated_keys = None;
+        }
 
         self.post_split();
 
@@ -715,8 +724,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // After split, the peer may need to update its metrics.
             let control = self.split_flow_control_mut();
             control.may_skip_split_check = false;
-            control.approximate_size = estimated_size;
-            control.approximate_keys = estimated_keys;
+            if !skip_size_check {
+                control.approximate_size = estimated_size;
+                control.approximate_keys = estimated_keys;
+            }
+
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
         self.storage_mut().set_has_dirty_data(true);
