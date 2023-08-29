@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::min,
     collections::HashMap,
     fmt,
     marker::PhantomData,
@@ -46,7 +47,7 @@ use crate::{
     TsSource,
 };
 
-/// grace period for logging safe-ts and resolved-ts gap in slow log
+/// grace period for identifying identifying slow resolved-ts and safe-ts.
 const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
 
 enum ResolverStatus {
@@ -492,10 +493,12 @@ where
     }
 
     fn log_slow_regions(&self, stats: &Stats) {
-        let leader_threshold = self.cfg.advance_ts_interval.as_millis() + SLOW_LOG_GRACE_PERIOD_MS;
-        let follower_threshold = self.cfg.advance_ts_interval.as_millis()
-            + SLOW_LOG_GRACE_PERIOD_MS
-            + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64;
+        let expected_interval = min(
+            self.cfg.advance_ts_interval.as_millis(),
+            DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64,
+        ) + self.cfg.advance_ts_interval.as_millis();
+        let leader_threshold = expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
+        let follower_threshold = 2 * expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
         let now = self.approximate_now_tso();
 
         // min leader resolved ts
