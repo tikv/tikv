@@ -509,7 +509,7 @@ where
                 "the max gap of leader resolved-ts is large";
                 "region_id" => stats.min_leader_resolved_ts.region_id,
                 "gap" => format!("{}ms", min_leader_resolved_ts_gap),
-                "safe_ts" => stats.min_leader_resolved_ts.safe_ts,
+                "read_state" => ?stats.min_leader_resolved_ts.read_state,
                 "min_lock" => ?stats.min_leader_resolved_ts.min_lock,
                 "lock_num" => stats.min_leader_resolved_ts.lock_num,
                 "txn_num" => stats.min_leader_resolved_ts.txn_num,
@@ -1119,9 +1119,10 @@ struct Stats {
 struct LeaderStats {
     region_id: u64,
     resolved_ts: u64,
-    safe_ts: u64,
+    read_state: ReadState,
     duration_to_last_update_ms: Option<u64>,
     last_resolve_attempt: Option<LastAttempt>,
+    applied_index: u64,
     // min lock in LOCK CF
     min_lock: Option<(TimeStamp, Key)>,
     lock_num: Option<u64>,
@@ -1133,8 +1134,9 @@ impl Default for LeaderStats {
         Self {
             region_id: 0,
             resolved_ts: u64::MAX,
-            safe_ts: u64::MAX,
+            read_state: ReadState::default(),
             duration_to_last_update_ms: None,
+            applied_index: 0,
             last_resolve_attempt: None,
             min_lock: None,
             lock_num: None,
@@ -1154,7 +1156,7 @@ impl LeaderStats {
         *self = LeaderStats {
             region_id,
             resolved_ts: leader_info.get_read_state().get_safe_ts(),
-            safe_ts: region_read_progress.read_state().ts,
+            read_state: region_read_progress.read_state().clone(),
             duration_to_last_update_ms: region_read_progress
                 .last_instant_of_update_ts()
                 .map(|i| i.saturating_elapsed().as_millis() as u64),
@@ -1170,6 +1172,7 @@ impl LeaderStats {
                     )
                 })
             }),
+            applied_index: region_read_progress.applied_index(),
             lock_num: resolver.map(|r| r.num_locks()),
             txn_num: resolver.map(|r| r.num_transactions()),
         };
