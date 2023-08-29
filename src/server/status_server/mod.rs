@@ -40,8 +40,9 @@ use openssl::{
 };
 use pin_project::pin_project;
 pub use profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
+    activate_heap_profile, deactivate_heap_profile, heap_profiles_dir, jeprof_heap_profile,
+    list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
+    HEAP_PROFILE_REGEX,
 };
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
@@ -207,10 +208,34 @@ where
         let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
 
         let result = if let Some(name) = query_pairs.get("name") {
-            if use_jeprof {
-                jeprof_heap_profile(name)
+            let re = Regex::new(HEAP_PROFILE_REGEX).unwrap();
+            if !re.is_match(name) {
+                let errmsg = format!("heap profile name {} is invalid", name);
+                return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
+            }
+            let profiles = match list_heap_profiles() {
+                Ok(s) => s,
+                Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
+            };
+            if profiles.iter().any(|(f, _)| f == name) {
+                let dir = match heap_profiles_dir() {
+                    Some(path) => path,
+                    None => {
+                        return Ok(make_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "heap profile is not active",
+                        ));
+                    }
+                };
+                let path = dir.join(name.as_ref());
+                if use_jeprof {
+                    jeprof_heap_profile(path.to_str().unwrap())
+                } else {
+                    read_file(path.to_str().unwrap())
+                }
             } else {
-                read_file(name)
+                let errmsg = format!("heap profile {} not found", name);
+                return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
             }
         } else {
             let mut seconds = 10;
@@ -649,9 +674,9 @@ where
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 Self::deactivate_heap_prof(req)
                             }
-                            // (Method::GET, "/debug/pprof/heap") => {
-                            //     Self::dump_heap_prof_to_resp(req).await
-                            // }
+                            (Method::GET, "/debug/pprof/heap") => {
+                                Self::dump_heap_prof_to_resp(req).await
+                            }
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }

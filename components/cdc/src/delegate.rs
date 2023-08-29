@@ -414,7 +414,10 @@ impl Delegate {
 
         for lock in mem::take(&mut pending.locks) {
             match lock {
-                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key, None),
+                PendingLock::Track { key, start_ts } => {
+                    // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                    assert!(resolver.track_lock(start_ts, key, None));
+                }
                 PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
             }
         }
@@ -822,7 +825,8 @@ impl Delegate {
                 // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
-                        resolver.track_lock(row.start_ts.into(), row.key.clone(), None)
+                        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                        assert!(resolver.track_lock(row.start_ts.into(), row.key.clone(), None));
                     }
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
@@ -1151,9 +1155,10 @@ mod tests {
     use api_version::RawValue;
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
+    use tikv_util::memory::MemoryQuota;
 
     use super::*;
-    use crate::channel::{channel, recv_timeout, MemoryQuota};
+    use crate::channel::{channel, recv_timeout};
 
     #[test]
     fn test_error() {
@@ -1165,7 +1170,7 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (sink, mut drain) = crate::channel::channel(1, quota);
         let rx = drain.drain();
         let request_id = 123;
@@ -1182,7 +1187,8 @@ mod tests {
         let mut delegate = Delegate::new(region_id, Default::default());
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
-        let resolver = Resolver::new(region_id);
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let resolver = Resolver::new(region_id, memory_quota);
         assert!(delegate.on_region_ready(resolver, region).is_empty());
         assert!(delegate.downstreams()[0].observed_range.all_key_covered);
 
@@ -1333,7 +1339,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(1);
         region.mut_region_epoch().set_version(1);
         {
-            let failures = delegate.on_region_ready(Resolver::new(1), region);
+            let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+            let failures = delegate.on_region_ready(Resolver::new(1, memory_quota), region);
             assert_eq!(failures.len(), 1);
             let id = failures[0].0.id;
             delegate.unsubscribe(id, None);
@@ -1456,7 +1463,7 @@ mod tests {
         }
         assert_eq!(map.len(), 5);
 
-        let (sink, mut drain) = channel(1, MemoryQuota::new(1024));
+        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
@@ -1529,7 +1536,7 @@ mod tests {
         }
         assert_eq!(map.len(), 5);
 
-        let (sink, mut drain) = channel(1, MemoryQuota::new(1024));
+        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,

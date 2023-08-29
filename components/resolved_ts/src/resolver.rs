@@ -4,7 +4,10 @@ use std::{cmp, collections::BTreeMap, sync::Arc};
 
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
-use tikv_util::time::Instant;
+use tikv_util::{
+    memory::{HeapSize, MemoryQuota},
+    time::Instant,
+};
 use txn_types::{Key, TimeStamp};
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
@@ -49,7 +52,7 @@ impl TsSource {
 pub struct Resolver {
     region_id: u64,
     // key -> start_ts
-    pub(crate) locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
+    locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
     pub(crate) lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
@@ -57,11 +60,14 @@ pub struct Resolver {
     // The highest index `Resolver` had been tracked
     tracked_index: u64,
     // The region read progress used to utilize `resolved_ts` to serve stale read request
-    pub(crate) read_progress: Option<Arc<RegionReadProgress>>,
+    read_progress: Option<Arc<RegionReadProgress>>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped
     stopped: bool,
+    // The memory quota for the `Resolver` and its lock keys and timestamps.
+    memory_quota: Arc<MemoryQuota>,
+    // The last attempt of resolve(), used for diagnosis.
     pub(crate) last_attempt: Option<LastAttempt>,
 }
 
@@ -82,27 +88,38 @@ impl std::fmt::Debug for Resolver {
 
         if let Some((ts, keys)) = far_lock {
             dt.field(&format_args!(
-                "far_lock={:?}",
+                "oldest_lock={:?}",
                 keys.iter()
                     // We must use Display format here or the redact won't take effect.
                     .map(|k| format!("{}", log_wrappers::Value::key(k)))
                     .collect::<Vec<_>>()
             ));
-            dt.field(&format_args!("far_lock_ts={:?}", ts));
+            dt.field(&format_args!("oldest_lock_ts={:?}", ts));
         }
 
         dt.finish()
     }
 }
 
+impl Drop for Resolver {
+    fn drop(&mut self) {
+        // Free memory quota used by locks_by_key.
+        for key in self.locks_by_key.keys() {
+            let bytes = key.heap_size();
+            self.memory_quota.free(bytes);
+        }
+    }
+}
+
 impl Resolver {
-    pub fn new(region_id: u64) -> Resolver {
-        Resolver::with_read_progress(region_id, None)
+    pub fn new(region_id: u64, memory_quota: Arc<MemoryQuota>) -> Resolver {
+        Resolver::with_read_progress(region_id, None, memory_quota)
     }
 
     pub fn with_read_progress(
         region_id: u64,
         read_progress: Option<Arc<RegionReadProgress>>,
+        memory_quota: Arc<MemoryQuota>,
     ) -> Resolver {
         Resolver {
             region_id,
@@ -113,6 +130,7 @@ impl Resolver {
             tracked_index: 0,
             min_ts: TimeStamp::zero(),
             stopped: false,
+            memory_quota,
             last_attempt: None,
         }
     }
@@ -131,11 +149,9 @@ impl Resolver {
 
     pub fn size(&self) -> usize {
         self.locks_by_key.keys().map(|k| k.len()).sum::<usize>()
-            + self
-                .lock_ts_heap
-                .values()
-                .map(|h| h.iter().map(|k| k.len()).sum::<usize>())
-                .sum::<usize>()
+            + self.locks_by_key.len() * std::mem::size_of::<TimeStamp>()
+            + self.lock_ts_heap.len()
+                * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
     }
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
@@ -159,7 +175,8 @@ impl Resolver {
         self.tracked_index = index;
     }
 
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
+    #[must_use]
+    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) -> bool {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
@@ -169,9 +186,14 @@ impl Resolver {
             start_ts,
             self.region_id
         );
+        let bytes = key.as_slice().heap_size();
+        if !self.memory_quota.alloc(bytes) {
+            return false;
+        }
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         self.locks_by_key.insert(key.clone(), start_ts);
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
+        true
     }
 
     pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
@@ -179,6 +201,8 @@ impl Resolver {
             self.update_tracked_index(index);
         }
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
+            let bytes = key.heap_size();
+            self.memory_quota.free(bytes);
             start_ts
         } else {
             debug!("untrack a lock that was not tracked before"; "key" => &log_wrappers::Value::key(key));
@@ -310,6 +334,10 @@ impl Resolver {
     pub(crate) fn num_transactions(&self) -> u64 {
         self.lock_ts_heap.len() as u64
     }
+
+    pub(crate) fn read_progress(&self) -> Option<&Arc<RegionReadProgress>> {
+        self.read_progress.as_ref()
+    }
 }
 
 #[cfg(test)]
@@ -380,11 +408,16 @@ mod tests {
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
-            let mut resolver = Resolver::new(1);
+            let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+            let mut resolver = Resolver::new(1, memory_quota);
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), None)
+                        assert!(resolver.track_lock(
+                            start_ts.into(),
+                            key.into_raw().unwrap(),
+                            None
+                        ));
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
@@ -398,5 +431,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_memory_quota() {
+        let memory_quota = Arc::new(MemoryQuota::new(1024));
+        let mut resolver = Resolver::new(1, memory_quota.clone());
+        let mut key = vec![0; 77];
+        let mut ts = TimeStamp::default();
+        while resolver.track_lock(ts, key.clone(), None) {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+        }
+        let remain = 1024 % key.len();
+        assert_eq!(memory_quota.in_use(), 1024 - remain);
+
+        let mut ts = TimeStamp::default();
+        for _ in 0..5 {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+            resolver.untrack_lock(&key, None);
+        }
+        assert_eq!(memory_quota.in_use(), 1024 - 5 * key.len() - remain);
+        drop(resolver);
+        assert_eq!(memory_quota.in_use(), 0);
     }
 }

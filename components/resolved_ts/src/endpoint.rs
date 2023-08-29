@@ -30,6 +30,7 @@ use raftstore::{
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
 use tikv_util::{
+    memory::MemoryQuota,
     warn,
     worker::{Runnable, RunnableWithTimer, Scheduler},
 };
@@ -83,9 +84,9 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-    fn new(meta: Region, rrp: Arc<RegionReadProgress>) -> Self {
+    fn new(meta: Region, rrp: Arc<RegionReadProgress>, memory_quota: Arc<MemoryQuota>) -> Self {
         ObserveRegion {
-            resolver: Resolver::with_read_progress(meta.id, Some(rrp)),
+            resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota),
             meta,
             handle: ObserveHandle::new(),
             resolver_status: ResolverStatus::Pending {
@@ -96,8 +97,8 @@ impl ObserveRegion {
         }
     }
 
-    fn read_progress(&self) -> &RegionReadProgress {
-        self.resolver.read_progress.as_ref().unwrap()
+    fn read_progress(&self) -> &Arc<RegionReadProgress> {
+        self.resolver.read_progress().unwrap()
     }
 
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> std::result::Result<(), String> {
@@ -195,21 +196,29 @@ impl ObserveRegion {
                             }
                         },
                         ChangeLog::Rows { rows, index } => {
-                            rows.iter().for_each(|row| match row {
-                                ChangeRow::Prewrite { key, start_ts, .. } => self
-                                    .resolver
-                                    .track_lock(*start_ts, key.to_raw().unwrap(), Some(*index)),
-                                ChangeRow::Commit { key, .. } => self
-                                    .resolver
-                                    .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
-                                // One pc command do not contains any lock, so just skip it
-                                ChangeRow::OnePc { .. } => {
-                                    self.resolver.update_tracked_index(*index);
+                            for row in rows {
+                                match row {
+                                    ChangeRow::Prewrite { key, start_ts, .. } => {
+                                        if !self.resolver.track_lock(
+                                            *start_ts,
+                                            key.to_raw().unwrap(),
+                                            Some(*index),
+                                        ) {
+                                            return Err("memory quota exceed".to_owned());
+                                        }
+                                    }
+                                    ChangeRow::Commit { key, .. } => self
+                                        .resolver
+                                        .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
+                                    // One pc command do not contains any lock, so just skip it
+                                    ChangeRow::OnePc { .. } => {
+                                        self.resolver.update_tracked_index(*index);
+                                    }
+                                    ChangeRow::IngestSsT => {
+                                        self.resolver.update_tracked_index(*index);
+                                    }
                                 }
-                                ChangeRow::IngestSsT => {
-                                    self.resolver.update_tracked_index(*index);
-                                }
-                            });
+                            }
                         }
                     }
                 }
@@ -218,7 +227,10 @@ impl ObserveRegion {
         Ok(())
     }
 
-    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) {
+    /// Track locks in incoming scan entries.
+    /// Return false if resolver exceeds memory quota.
+    #[must_use]
+    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) -> bool {
         for es in entries {
             match es {
                 ScanEntry::Lock(locks) => {
@@ -226,8 +238,13 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
-                        self.resolver
-                            .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index));
+                        if !self.resolver.track_lock(
+                            lock.ts,
+                            key.to_raw().unwrap(),
+                            Some(apply_index),
+                        ) {
+                            return false;
+                        }
                     }
                 }
                 ScanEntry::None => {
@@ -240,18 +257,25 @@ impl ObserveRegion {
                                 tracked_index,
                                 ..
                             } => {
-                                locks.into_iter().for_each(|lock| match lock {
-                                    PendingLock::Track { key, start_ts } => {
-                                        self.resolver.track_lock(
-                                            start_ts,
-                                            key.to_raw().unwrap(),
-                                            Some(tracked_index),
-                                        )
+                                for lock in locks {
+                                    match lock {
+                                        PendingLock::Track { key, start_ts } => {
+                                            if !self.resolver.track_lock(
+                                                start_ts,
+                                                key.to_raw().unwrap(),
+                                                Some(tracked_index),
+                                            ) {
+                                                return false;
+                                            }
+                                        }
+                                        PendingLock::Untrack { key, .. } => {
+                                            self.resolver.untrack_lock(
+                                                &key.to_raw().unwrap(),
+                                                Some(tracked_index),
+                                            )
+                                        }
                                     }
-                                    PendingLock::Untrack { key, .. } => self
-                                        .resolver
-                                        .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
-                                });
+                                }
                                 tracked_index
                             }
                             ResolverStatus::Ready => {
@@ -269,12 +293,14 @@ impl ObserveRegion {
                 ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
             }
         }
+        true
     }
 }
 
 pub struct Endpoint<T, E: KvEngine, S> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
+    memory_quota: Arc<MemoryQuota>,
     advance_notify: Arc<Notify>,
     store_meta: Arc<Mutex<S>>,
     region_read_progress: RegionReadProgressRegistry,
@@ -575,6 +601,8 @@ where
         let ep = Self {
             store_id: Some(store_id),
             cfg: cfg.clone(),
+            // TODO: add memory quota to config.
+            memory_quota: Arc::new(MemoryQuota::new(std::usize::MAX)),
             advance_notify: Arc::new(Notify::new()),
             scheduler,
             store_meta,
@@ -597,7 +625,7 @@ where
                     "register observe region";
                     "region" => ?region
                 );
-                ObserveRegion::new(region.clone(), read_progress)
+                ObserveRegion::new(region.clone(), read_progress, self.memory_quota.clone())
             } else {
                 warn!(
                     "try register unexit region";
@@ -798,6 +826,7 @@ where
                 if observe_region.handle.id == observe_id {
                     let logs = ChangeLog::encode_change_log(region_id, batch);
                     if let Err(e) = observe_region.track_change_log(&logs) {
+                        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
                         drop(observe_region);
                         self.re_register_region(region_id, observe_id, e);
                     }
@@ -822,7 +851,8 @@ where
         match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
                 if observe_region.handle.id == observe_id {
-                    observe_region.track_scan_locks(entries, apply_index);
+                    // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                    assert!(observe_region.track_scan_locks(entries, apply_index));
                 }
             }
             None => {
