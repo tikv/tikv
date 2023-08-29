@@ -729,6 +729,7 @@ fn test_serde_custom_tikv_config() {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+        memory_quota: ReadableSize::mb(1),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

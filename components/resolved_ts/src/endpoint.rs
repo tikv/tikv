@@ -25,12 +25,27 @@ use tikv::config::ResolvedTsConfig;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 
+<<<<<<< HEAD
 use crate::advance::AdvanceTsWorker;
 use crate::cmd::{ChangeLog, ChangeRow};
 use crate::metrics::*;
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 use crate::sinker::{CmdSinker, SinkCmd};
+=======
+use crate::{
+    advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
+    cmd::{ChangeLog, ChangeRow},
+    metrics::*,
+    resolver::Resolver,
+    scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
+    Error, Result,
+};
+
+/// grace period for logging safe-ts and resolved-ts gap in slow log
+const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
+const MEMORY_QUOTA_EXCEEDED_BACKOFF: Duration = Duration::from_secs(30);
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
 
 enum ResolverStatus {
     Pending {
@@ -80,7 +95,15 @@ impl ObserveRegion {
         }
     }
 
+<<<<<<< HEAD
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> std::result::Result<(), String> {
+=======
+    fn read_progress(&self) -> &Arc<RegionReadProgress> {
+        self.resolver.read_progress().unwrap()
+    }
+
+    fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> Result<()> {
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
         match &mut self.resolver_status {
             ResolverStatus::Pending {
                 locks,
@@ -98,9 +121,16 @@ impl ObserveRegion {
                             continue;
                         }
                         ChangeLog::Admin(req_type) => {
+<<<<<<< HEAD
                             // TODO: for admin cmd that won't change the region meta like peer list and key range
                             // (i.e. `CompactLog`, `ComputeHash`) we may not need to return error
                             return Err(format!(
+=======
+                            // TODO: for admin cmd that won't change the region meta like peer list
+                            // and key range (i.e. `CompactLog`, `ComputeHash`) we may not need to
+                            // return error
+                            return Err(box_err!(
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
                                 "region met admin command {:?} while initializing resolver",
                                 req_type
                             ));
@@ -172,6 +202,7 @@ impl ObserveRegion {
                             }
                         },
                         ChangeLog::Rows { rows, index } => {
+<<<<<<< HEAD
                             rows.iter().for_each(|row| match row {
                                 ChangeRow::Prewrite { key, start_ts, .. } => self
                                     .resolver
@@ -182,6 +213,31 @@ impl ObserveRegion {
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
                             });
+=======
+                            for row in rows {
+                                match row {
+                                    ChangeRow::Prewrite { key, start_ts, .. } => {
+                                        if !self.resolver.track_lock(
+                                            *start_ts,
+                                            key.to_raw().unwrap(),
+                                            Some(*index),
+                                        ) {
+                                            return Err(Error::MemoryQuotaExceeded);
+                                        }
+                                    }
+                                    ChangeRow::Commit { key, .. } => self
+                                        .resolver
+                                        .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
+                                    // One pc command do not contains any lock, so just skip it
+                                    ChangeRow::OnePc { .. } => {
+                                        self.resolver.update_tracked_index(*index);
+                                    }
+                                    ChangeRow::IngestSsT => {
+                                        self.resolver.update_tracked_index(*index);
+                                    }
+                                }
+                            }
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
                         }
                     }
                 }
@@ -190,7 +246,12 @@ impl ObserveRegion {
         Ok(())
     }
 
+<<<<<<< HEAD
     fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) {
+=======
+    /// Track locks in incoming scan entries.
+    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) -> Result<()> {
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
         for es in entries {
             match es {
                 ScanEntry::Lock(locks) => {
@@ -198,8 +259,18 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
+<<<<<<< HEAD
                         self.resolver
                             .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index));
+=======
+                        if !self.resolver.track_lock(
+                            lock.ts,
+                            key.to_raw().unwrap(),
+                            Some(apply_index),
+                        ) {
+                            return Err(Error::MemoryQuotaExceeded);
+                        }
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
                     }
                 }
                 ScanEntry::None => {
@@ -212,6 +283,7 @@ impl ObserveRegion {
                                 tracked_index,
                                 ..
                             } => {
+<<<<<<< HEAD
                                 locks.into_iter().for_each(|lock| match lock {
                                     PendingLock::Track { key, start_ts } => {
                                         self.resolver.track_lock(
@@ -219,6 +291,25 @@ impl ObserveRegion {
                                             key.to_raw().unwrap(),
                                             Some(tracked_index),
                                         )
+=======
+                                for lock in locks {
+                                    match lock {
+                                        PendingLock::Track { key, start_ts } => {
+                                            if !self.resolver.track_lock(
+                                                start_ts,
+                                                key.to_raw().unwrap(),
+                                                Some(tracked_index),
+                                            ) {
+                                                return Err(Error::MemoryQuotaExceeded);
+                                            }
+                                        }
+                                        PendingLock::Untrack { key, .. } => {
+                                            self.resolver.untrack_lock(
+                                                &key.to_raw().unwrap(),
+                                                Some(tracked_index),
+                                            )
+                                        }
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
                                     }
                                     PendingLock::Untrack { key, .. } => self
                                         .resolver
@@ -241,6 +332,10 @@ impl ObserveRegion {
                 ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
             }
         }
+<<<<<<< HEAD
+=======
+        Ok(())
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
     }
 }
 
@@ -287,7 +382,12 @@ where
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
             cfg: cfg.clone(),
+<<<<<<< HEAD
             cfg_version: 0,
+=======
+            memory_quota: Arc::new(MemoryQuota::new(cfg.memory_quota.0 as usize)),
+            advance_notify: Arc::new(Notify::new()),
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
             scheduler,
             store_meta,
             region_read_progress,
@@ -301,7 +401,7 @@ where
         ep
     }
 
-    fn register_region(&mut self, region: Region) {
+    fn register_region(&mut self, region: Region, backoff: Option<Duration>) {
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
@@ -326,7 +426,7 @@ where
         };
         self.regions.insert(region_id, observe_region);
 
-        let scan_task = self.build_scan_task(region, observe_handle, cancelled);
+        let scan_task = self.build_scan_task(region, observe_handle, cancelled, backoff);
         self.scanner_pool.spawn_task(scan_task);
         RTS_SCAN_TASKS.with_label_values(&["total"]).inc();
     }
@@ -336,6 +436,7 @@ where
         region: Region,
         observe_handle: ObserveHandle,
         cancelled: Arc<AtomicBool>,
+        backoff: Option<Duration>,
     ) -> ScanTask {
         let scheduler = self.scheduler.clone();
         let scheduler_error = self.scheduler.clone();
@@ -347,6 +448,7 @@ where
             mode: ScanMode::LockOnly,
             region,
             checkpoint_ts: TimeStamp::zero(),
+            backoff,
             is_cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
             send_entries: Box::new(move |entries, apply_index| {
                 scheduler
@@ -360,6 +462,7 @@ where
                 RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
             }),
             on_error: Some(Box::new(move |observe_id, _region, e| {
+<<<<<<< HEAD
                 scheduler_error
                     .schedule(Task::ReRegisterRegion {
                         region_id,
@@ -367,6 +470,18 @@ where
                         cause: format!("met error while handle scan task {:?}", e),
                     })
                     .unwrap();
+=======
+                if let Err(e) = scheduler_error.schedule(Task::ReRegisterRegion {
+                    region_id,
+                    observe_id,
+                    cause: e,
+                }) {
+                    warn!("schedule re-register task failed";
+                        "region_id" => region_id,
+                        "observe_id" => ?observe_id,
+                        "error" => ?e);
+                }
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
         }
@@ -411,7 +526,7 @@ where
             // - `Split/BatchSplit`, which can be handled by remove out-of-range locks from the `Resolver`'s lock heap
             // - `PrepareMerge` and `RollbackMerge`, the key range is unchanged
             self.deregister_region(region_id);
-            self.register_region(incoming_region);
+            self.register_region(incoming_region, None);
         }
     }
 
@@ -441,7 +556,17 @@ where
     }
 
     // Deregister current observed region and try to register it again.
+<<<<<<< HEAD
     fn re_register_region(&mut self, region_id: u64, observe_id: ObserveID, cause: String) {
+=======
+    fn re_register_region(
+        &mut self,
+        region_id: u64,
+        observe_id: ObserveId,
+        cause: Error,
+        backoff: Option<Duration>,
+    ) {
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
         if let Some(observe_region) = self.regions.get(&region_id) {
             if observe_region.handle.id != observe_id {
                 warn!("resolved ts deregister region failed due to observe_id not match");
@@ -452,7 +577,7 @@ where
                 "register region again";
                 "region_id" => region_id,
                 "observe_id" => ?observe_id,
-                "cause" => cause
+                "cause" => ?cause
             );
             self.deregister_region(region_id);
             let region;
@@ -463,7 +588,7 @@ where
                     None => return,
                 }
             }
-            self.register_region(region);
+            self.register_region(region, backoff);
         }
     }
 
@@ -497,6 +622,7 @@ where
     ) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
+<<<<<<< HEAD
         let logs = cmd_batch
             .into_iter()
             .filter_map(|batch| {
@@ -522,6 +648,24 @@ where
                                 "current" => ?observe_region.handle.id,
                             );
                         }
+=======
+        for batch in cmd_batch {
+            if batch.is_empty() {
+                continue;
+            }
+            if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
+                let observe_id = batch.rts_id;
+                let region_id = observe_region.meta.id;
+                if observe_region.handle.id == observe_id {
+                    let logs = ChangeLog::encode_change_log(region_id, batch);
+                    if let Err(e) = observe_region.track_change_log(&logs) {
+                        drop(observe_region);
+                        let backoff = match e {
+                            Error::MemoryQuotaExceeded => Some(MEMORY_QUOTA_EXCEEDED_BACKOFF),
+                            Error::Other(_) => None,
+                        };
+                        self.re_register_region(region_id, observe_id, e, backoff);
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
                     }
                 }
                 None
@@ -540,15 +684,30 @@ where
         entries: Vec<ScanEntry>,
         apply_index: u64,
     ) {
+<<<<<<< HEAD
         match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
                 if observe_region.handle.id == observe_id {
                     observe_region.track_scan_locks(entries, apply_index);
+=======
+        let mut is_memory_quota_exceeded = false;
+        if let Some(observe_region) = self.regions.get_mut(&region_id) {
+            if observe_region.handle.id == observe_id {
+                if let Err(Error::MemoryQuotaExceeded) =
+                    observe_region.track_scan_locks(entries, apply_index)
+                {
+                    is_memory_quota_exceeded = true;
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
                 }
             }
-            None => {
-                debug!("scan locks region not exist"; "region_id" => region_id, "observe_id" => ?observe_id);
-            }
+        } else {
+            debug!("scan locks region not exist";
+                "region_id" => region_id,
+                "observe_id" => ?observe_id);
+        }
+        if is_memory_quota_exceeded {
+            let backoff = Some(MEMORY_QUOTA_EXCEEDED_BACKOFF);
+            self.re_register_region(region_id, observe_id, Error::MemoryQuotaExceeded, backoff);
         }
     }
 
@@ -565,6 +724,7 @@ where
 
     fn handle_change_config(&mut self, change: ConfigChange) {
         let prev = format!("{:?}", self.cfg);
+<<<<<<< HEAD
         let prev_advance_ts_interval = self.cfg.advance_ts_interval;
         self.cfg.update(change);
         if self.cfg.advance_ts_interval != prev_advance_ts_interval {
@@ -572,6 +732,50 @@ where
             self.cfg_version += 1;
             // Advance `resolved-ts` immediately after `advance_ts_interval` changed
             self.register_advance_event(self.cfg_version);
+=======
+        if let Err(e) = self.cfg.update(change) {
+            warn!("resolved-ts config fails"; "error" => ?e);
+        } else {
+            self.advance_notify.notify_waiters();
+            self.memory_quota
+                .set_capacity(self.cfg.memory_quota.0 as usize);
+            info!(
+                "resolved-ts config changed";
+                "prev" => prev,
+                "current" => ?self.cfg,
+            );
+        }
+    }
+
+    fn get_or_init_store_id(&mut self) -> Option<u64> {
+        self.store_id.or_else(|| {
+            let meta = self.store_meta.lock().unwrap();
+            self.store_id = Some(meta.store_id());
+            self.store_id
+        })
+    }
+
+    fn handle_get_diagnosis_info(
+        &self,
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
+    ) {
+        if let Some(r) = self.regions.get(&region_id) {
+            if log_locks {
+                r.resolver.log_locks(min_start_ts);
+            }
+            callback(Some((
+                r.resolver.stopped(),
+                r.resolver.resolved_ts().into_inner(),
+                r.resolver.tracked_index(),
+                r.resolver.num_locks(),
+                r.resolver.num_transactions(),
+            )));
+        } else {
+            callback(None);
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
         }
         info!(
             "resolved-ts config changed";
@@ -592,8 +796,13 @@ pub enum Task<S: Snapshot> {
     },
     ReRegisterRegion {
         region_id: u64,
+<<<<<<< HEAD
         observe_id: ObserveID,
         cause: String,
+=======
+        observe_id: ObserveId,
+        cause: Error,
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
     },
     RegisterAdvanceEvent {
         cfg_version: usize,
@@ -697,18 +906,29 @@ where
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
             Task::RegionUpdated(region) => self.region_updated(region),
-            Task::RegisterRegion { region } => self.register_region(region),
+            Task::RegisterRegion { region } => self.register_region(region, None),
             Task::DeRegisterRegion { region_id } => self.deregister_region(region_id),
             Task::ReRegisterRegion {
                 region_id,
                 observe_id,
                 cause,
+<<<<<<< HEAD
             } => self.re_register_region(region_id, observe_id, cause),
             Task::AdvanceResolvedTs { regions, ts } => self.advance_resolved_ts(regions, ts),
             Task::ChangeLog {
                 cmd_batch,
                 snapshot,
             } => self.handle_change_log(cmd_batch, snapshot),
+=======
+            } => self.re_register_region(region_id, observe_id, cause, None),
+            Task::AdvanceResolvedTs { leader_resolver } => {
+                self.handle_advance_resolved_ts(leader_resolver)
+            }
+            Task::ResolvedTsAdvanced { regions, ts } => {
+                self.handle_resolved_ts_advanced(regions, ts)
+            }
+            Task::ChangeLog { cmd_batch } => self.handle_change_log(cmd_batch),
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
             Task::ScanLocks {
                 region_id,
                 observe_id,
@@ -775,7 +995,7 @@ where
                     unresolved_count += 1;
                 }
                 ResolverStatus::Ready { .. } => {
-                    lock_heap_size += observe_region.resolver.size();
+                    lock_heap_size += observe_region.resolver.approximate_heap_bytes();
                     resolved_count += 1;
                 }
             }
