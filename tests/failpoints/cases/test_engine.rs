@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv_util::config::ReadableSize;
 
 fn dummy_string(len: usize) -> String {
@@ -13,7 +13,8 @@ fn test_write_buffer_manager() {
     let count = 1;
     let mut cluster = new_node_cluster(0, count);
     cluster.cfg.rocksdb.lockcf.write_buffer_limit = Some(ReadableSize::kb(10));
-    cluster.cfg.rocksdb.write_buffer_limit = Some(ReadableSize::kb(20));
+    cluster.cfg.rocksdb.defaultcf.write_buffer_limit = Some(ReadableSize::kb(10));
+    cluster.cfg.rocksdb.write_buffer_limit = Some(ReadableSize::kb(30));
 
     // Let write buffer size small to make memtable request fewer memories.
     // Otherwise, one single memory request can exceeds the write buffer limit set
@@ -30,6 +31,15 @@ fn test_write_buffer_manager() {
     for i in 0..10 {
         let key = format!("key-{:03}", i);
         for cf in &[CF_WRITE, CF_LOCK] {
+            cluster.must_put_cf(cf, key.as_bytes(), dummy.as_bytes());
+        }
+    }
+
+    fail::cfg(fp, "return(default)").unwrap();
+
+    for i in 0..10 {
+        let key = format!("key-{:03}", i);
+        for cf in &[CF_WRITE, CF_DEFAULT] {
             cluster.must_put_cf(cf, key.as_bytes(), dummy.as_bytes());
         }
     }

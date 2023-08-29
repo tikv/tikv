@@ -670,7 +670,7 @@ macro_rules! build_cf_opt {
 pub struct CfResources {
     pub cache: Cache,
     pub compaction_thread_limiters: HashMap<&'static str, ConcurrentTaskLimiter>,
-    pub write_buffer_manager: Option<Arc<WriteBufferManager>>,
+    pub write_buffer_managers: HashMap<&'static str, Arc<WriteBufferManager>>,
 }
 
 cf_config!(DefaultCfConfig);
@@ -836,6 +836,9 @@ impl DefaultCfConfig {
             }
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_DEFAULT) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -967,6 +970,9 @@ impl WriteCfConfig {
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_WRITE) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -1068,7 +1074,7 @@ impl LockCfConfig {
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
-        if let Some(ref write_buffer_manager) = shared.write_buffer_manager {
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_LOCK) {
             cf_opts.set_write_buffer_manager(write_buffer_manager);
         }
         cf_opts
@@ -1523,13 +1529,29 @@ impl DbConfig {
                 ConcurrentTaskLimiter::new(CF_RAFT, n),
             );
         }
+        let mut write_buffer_managers = HashMap::default();
+        self.lockcf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_LOCK,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
+        self.defaultcf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_DEFAULT,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
+        self.writecf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_WRITE,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
         CfResources {
             cache,
             compaction_thread_limiters,
-            write_buffer_manager: self
-                .lockcf
-                .write_buffer_limit
-                .map(|limit| Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true))),
+            write_buffer_managers,
         }
     }
 
@@ -1573,13 +1595,8 @@ impl DbConfig {
         self.writecf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
-        if self.writecf.write_buffer_limit.is_some()
-            || self.defaultcf.write_buffer_limit.is_some()
-            || self.raftcf.write_buffer_limit.is_some()
-        {
-            return Err(
-                "writecf/defaultcf/raftcf does not support cf based write buffer manager".into(),
-            );
+        if self.raftcf.write_buffer_limit.is_some() {
+            return Err("raftcf does not support cf based write buffer manager".into());
         }
         if self.enable_unordered_write {
             if self.titan.enabled {
