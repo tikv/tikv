@@ -8,6 +8,12 @@ use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
+<<<<<<< HEAD
+=======
+const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
+
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
 pub struct Resolver {
@@ -49,6 +55,28 @@ impl std::fmt::Debug for Resolver {
     }
 }
 
+<<<<<<< HEAD
+=======
+impl Drop for Resolver {
+    fn drop(&mut self) {
+        // Free memory quota used by locks_by_key.
+        let mut bytes = 0;
+        let num_locks = self.num_locks();
+        for key in self.locks_by_key.keys() {
+            bytes += self.lock_heap_size(key);
+        }
+        if bytes > ON_DROP_WARN_HEAP_SIZE {
+            warn!("drop huge resolver";
+                "region_id" => self.region_id,
+                "bytes" => bytes,
+                "num_locks" => num_locks,
+            );
+        }
+        self.memory_quota.free(bytes);
+    }
+}
+
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
 impl Resolver {
     pub fn new(region_id: u64) -> Resolver {
         Resolver::with_read_progress(region_id, None)
@@ -74,6 +102,7 @@ impl Resolver {
         self.resolved_ts
     }
 
+<<<<<<< HEAD
     pub fn size(&self) -> usize {
         self.locks_by_key.keys().map(|k| k.len()).sum::<usize>()
             + self
@@ -81,6 +110,14 @@ impl Resolver {
                 .values()
                 .map(|h| h.iter().map(|k| k.len()).sum::<usize>())
                 .sum::<usize>()
+=======
+    pub fn tracked_index(&self) -> u64 {
+        self.tracked_index
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stopped
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
     }
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
@@ -104,7 +141,39 @@ impl Resolver {
         self.tracked_index = index;
     }
 
+<<<<<<< HEAD
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
+=======
+    // Return an approximate heap memory usage in bytes.
+    pub fn approximate_heap_bytes(&self) -> usize {
+        // memory used by locks_by_key.
+        let memory_quota_in_use = self.memory_quota.in_use();
+
+        // memory used by lock_ts_heap.
+        let memory_lock_ts_heap = self.lock_ts_heap.len()
+            * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
+            // memory used by HashSet<Arc<u8>>
+            + self.locks_by_key.len() * std::mem::size_of::<Arc<[u8]>>();
+
+        memory_quota_in_use + memory_lock_ts_heap
+    }
+
+    fn lock_heap_size(&self, key: &[u8]) -> usize {
+        // A resolver has
+        // * locks_by_key: HashMap<Arc<[u8]>, TimeStamp>
+        // * lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>
+        //
+        // We only count memory used by locks_by_key. Because the majority of
+        // memory is consumed by keys, locks_by_key and lock_ts_heap shares
+        // the same Arc<[u8]>, so lock_ts_heap is negligible. Also, it's hard to
+        // track accurate memory usage of lock_ts_heap as a timestamp may have
+        // many keys.
+        key.heap_size() + std::mem::size_of::<TimeStamp>()
+    }
+
+    #[must_use]
+    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) -> bool {
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
@@ -114,6 +183,13 @@ impl Resolver {
             start_ts,
             self.region_id
         );
+<<<<<<< HEAD
+=======
+        let bytes = self.lock_heap_size(&key);
+        if !self.memory_quota.alloc(bytes) {
+            return false;
+        }
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         self.locks_by_key.insert(key.clone(), start_ts);
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
@@ -124,6 +200,11 @@ impl Resolver {
             self.update_tracked_index(index);
         }
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
+<<<<<<< HEAD
+=======
+            let bytes = self.lock_heap_size(key);
+            self.memory_quota.free(bytes);
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
             start_ts
         } else {
             debug!("untrack a lock that was not tracked before"; "key" => &log_wrappers::Value::key(key));
@@ -274,4 +355,32 @@ mod tests {
             }
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_memory_quota() {
+        let memory_quota = Arc::new(MemoryQuota::new(1024));
+        let mut resolver = Resolver::new(1, memory_quota.clone());
+        let mut key = vec![0; 77];
+        let lock_size = resolver.lock_heap_size(&key);
+        let mut ts = TimeStamp::default();
+        while resolver.track_lock(ts, key.clone(), None) {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+        }
+        let remain = 1024 % lock_size;
+        assert_eq!(memory_quota.in_use(), 1024 - remain);
+
+        let mut ts = TimeStamp::default();
+        for _ in 0..5 {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+            resolver.untrack_lock(&key, None);
+        }
+        assert_eq!(memory_quota.in_use(), 1024 - 5 * lock_size - remain);
+        drop(resolver);
+        assert_eq!(memory_quota.in_use(), 0);
+    }
+>>>>>>> c66bfe87c1 (resolved_ts: re-register region if memory quota exceeded  (#15411))
 }

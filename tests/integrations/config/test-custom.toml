@@ -644,6 +644,7 @@ sink-memory-quota = "7MB"
 enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
+memory-quota = "1MB"
 
 [split]
 detect-times = 10

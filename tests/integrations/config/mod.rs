@@ -769,6 +769,7 @@ fn test_serde_custom_tikv_config() {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+        memory_quota: ReadableSize::mb(1),
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),
