@@ -1522,13 +1522,9 @@ impl DbConfig {
         CfResources {
             cache,
             compaction_thread_limiters,
-            write_buffer_manager: self.lock_write_buffer_limit.map(|limit| {
-                Arc::new(WriteBufferManager::new(
-                    limit.0 as usize,
-                    0f32,
-                    true
-                ))
-            }),
+            write_buffer_manager: self
+                .lock_write_buffer_limit
+                .map(|limit| Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true))),
         }
     }
 
