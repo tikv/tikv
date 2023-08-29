@@ -25,21 +25,7 @@ pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
     Vec::from_raw_parts(ptr as _, len, cap)
 }
 
-// pub trait TotalSize {
-//     /// Return the size of the object itself and all objects it refers to.
-//     fn total_size(&self) -> usize {
-//         0
-//     }
-// }
-
-// impl<T: HeapSize> TotalSize for T {
-//     fn total_size(&self) -> usize {
-//         self.heap_size() + mem::size_of::<T>()
-//     }
-// }
-
 pub trait HeapSize {
-    /// Return the size of objects it refers to.
     fn heap_size(&self) -> usize {
         0
     }
