@@ -1142,25 +1142,26 @@ impl LeaderStats {
         region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
         leader_info: &LeaderInfo,
     ) {
-        self.resolved_ts = leader_info.get_read_state().get_safe_ts();
-        self.region_id = region_id;
-        let read_state = region_read_progress.read_state();
-        self.safe_ts = read_state.ts;
-        self.duration_to_last_update_ms = region_read_progress
-            .last_instant_of_update_ts()
-            .map(|i| i.saturating_elapsed().as_millis() as u64);
-        self.last_resolve_attempt = resolver.and_then(|r| r.last_attempt.clone());
-        self.min_lock = resolver.and_then(|r| {
-            r.lock_ts_heap.iter().next().map(|(ts, keys)| {
-                (
-                    *ts,
-                    keys.iter()
-                        .next()
-                        .map(|k| Key::from_encoded_slice(k.as_ref()))
-                        .unwrap_or_else(|| Key::from_encoded_slice("no_keys_found".as_ref())),
-                )
-            })
-        });
+        *self = LeaderStats {
+            region_id,
+            resolved_ts: leader_info.get_read_state().get_safe_ts(),
+            safe_ts: region_read_progress.read_state().ts,
+            duration_to_last_update_ms: region_read_progress
+                .last_instant_of_update_ts()
+                .map(|i| i.saturating_elapsed().as_millis() as u64),
+            last_resolve_attempt: resolver.and_then(|r| r.last_attempt.clone()),
+            min_lock: resolver.and_then(|r| {
+                r.lock_ts_heap.iter().next().map(|(ts, keys)| {
+                    (
+                        *ts,
+                        keys.iter()
+                            .next()
+                            .map(|k| Key::from_encoded_slice(k.as_ref()))
+                            .unwrap_or_else(|| Key::from_encoded_slice("no_keys_found".as_ref())),
+                    )
+                })
+            }),
+        };
     }
 }
 
@@ -1195,18 +1196,20 @@ impl FollowerStats {
         region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
     ) {
         let read_state = region_read_progress.read_state();
-        self.resolved_ts = region_read_progress
-            .get_leader_info()
-            .get_read_state()
-            .get_safe_ts();
-        self.safe_ts = read_state.ts;
-        self.applied_index = region_read_progress.applied_index();
-        self.region_id = region_id;
-        self.latest_candidate = region_read_progress.pending_items().back().cloned();
-        self.oldest_candidate = region_read_progress.pending_items().front().cloned();
-        self.duration_to_last_consume_leader = region_read_progress
-            .last_instant_of_consume_leader()
-            .map(|i| i.saturating_elapsed().as_millis() as u64);
+        *self = FollowerStats {
+            region_id,
+            resolved_ts: region_read_progress
+                .get_leader_info()
+                .get_read_state()
+                .get_safe_ts(),
+            safe_ts: read_state.ts,
+            applied_index: region_read_progress.applied_index(),
+            latest_candidate: region_read_progress.pending_items().back().cloned(),
+            oldest_candidate: region_read_progress.pending_items().front().cloned(),
+            duration_to_last_consume_leader: region_read_progress
+                .last_instant_of_consume_leader()
+                .map(|i| i.saturating_elapsed().as_millis() as u64),
+        };
     }
 }
 
