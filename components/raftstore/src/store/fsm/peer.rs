@@ -4034,16 +4034,16 @@ where
         fail_point!("on_split_invalidate_locks");
 
         // Roughly estimate the size and keys for new regions.
+        // if skip_size_check is true, it means the new region don't contains any data
+        // from the origin region
         let new_region_count = regions.len() as u64;
-        let mut estimated_size = None;
-        let mut estimated_keys = None;
-        if !skip_size_check {
-            estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
-            estimated_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+        let mut estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
+        let mut estimated_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+        if skip_size_check {
+            estimated_size = None;
+            estimated_keys = None;
         }
-        // let estimated_size = self.fsm.peer.approximate_size.map(|v| v /
-        // new_region_count); let estimated_keys =
-        // self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.set_region(
             &self.ctx.coprocessor_host,
