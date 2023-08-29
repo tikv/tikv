@@ -1043,14 +1043,14 @@ where
                 split_keys,
                 callback,
                 source,
-                skip_size_check,
+                amortize_source_region_size,
             } => {
                 self.on_prepare_split_region(
                     region_epoch,
                     split_keys,
                     callback,
                     &source,
-                    skip_size_check,
+                    amortize_source_region_size,
                 );
             }
             CasualMessage::ComputeHashResult {
@@ -4013,7 +4013,7 @@ where
         derived: metapb::Region,
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
-        skip_size_check: bool,
+        amortize_source_region_size: bool,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
@@ -4034,16 +4034,16 @@ where
         fail_point!("on_split_invalidate_locks");
 
         // Roughly estimate the size and keys for new regions.
+        // if amortize_source_region_size is true, it means the new region don't contains any data
+        // from the origin region
         let new_region_count = regions.len() as u64;
-        let mut estimated_size = None;
-        let mut estimated_keys = None;
-        if !skip_size_check {
-            estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
-            estimated_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+        let mut amortize_size = None;
+        let mut amortize_keys = None;
+        if amortize_source_region_size {
+            amortize_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
+            amortize_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
         }
-        // let estimated_size = self.fsm.peer.approximate_size.map(|v| v /
-        // new_region_count); let estimated_keys =
-        // self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.set_region(
             &self.ctx.coprocessor_host,
@@ -4058,9 +4058,9 @@ where
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
-            if !skip_size_check {
-                self.fsm.peer.approximate_size = estimated_size;
-                self.fsm.peer.approximate_keys = estimated_keys;
+            if amortize_source_region_size {
+                self.fsm.peer.approximate_size = amortize_size;
+                self.fsm.peer.approximate_keys = amortize_keys;
             }
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
@@ -4191,8 +4191,8 @@ where
             new_peer.has_ready |= campaigned;
 
             if is_leader {
-                new_peer.peer.approximate_size = estimated_size;
-                new_peer.peer.approximate_keys = estimated_keys;
+                new_peer.peer.approximate_size = amortize_size;
+                new_peer.peer.approximate_keys = amortize_keys;
                 *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to
                 // reduce client query miss.
@@ -5019,9 +5019,9 @@ where
                     derived,
                     regions,
                     new_split_regions,
-                    skip_size_check,
+                    amortize_source_region_size,
                 } => {
-                    self.on_ready_split_region(derived, regions, new_split_regions, skip_size_check)
+                    self.on_ready_split_region(derived, regions, new_split_regions, amortize_source_region_size)
                 }
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
@@ -5807,7 +5807,7 @@ where
         split_keys: Vec<Vec<u8>>,
         cb: Callback<EK::Snapshot>,
         source: &str,
-        skip_size_check: bool,
+        amortize_source_region_size: bool,
     ) {
         info!(
             "on split";
@@ -5853,7 +5853,7 @@ where
             split_keys,
             peer: self.fsm.peer.peer.clone(),
             right_derive: self.ctx.cfg.right_derive_when_split,
-            skip_size_check,
+            amortize_source_region_size,
             callback: cb,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {

@@ -290,7 +290,7 @@ fn test_region_size_after_split() {
     // from 000000001 to 000000020
     let mut range = 1..;
     put_till_size(&mut cluster, region_max_size - 100, &mut range);
-    sleep_ms(1000);
+    sleep_ms(100);
     // disable check split.
     fail::cfg("on_split_region_check_tick", "return").unwrap();
     let max_key = put_till_size(&mut cluster, region_max_size, &mut range);
@@ -316,7 +316,7 @@ fn test_region_size_after_split() {
     // 3. and the region3 will contains one half region size data.
     let region = pd_client.get_region(&max_key).unwrap();
     pd_client.split_region(region.clone(), CheckPolicy::Scan, vec![]);
-    sleep_ms(1000);
+    sleep_ms(200);
     let size2 = cluster
         .pd_client
         .get_region_approximate_size(region.get_id())

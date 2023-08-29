@@ -1461,7 +1461,7 @@ impl<T: Simulator> Cluster<T> {
                 split_keys: vec![split_key],
                 callback: cb,
                 source: "test".into(),
-                skip_size_check: true,
+                amortize_source_region_size: false,
             },
         )
         .unwrap();

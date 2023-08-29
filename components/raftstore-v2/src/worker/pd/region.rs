@@ -288,7 +288,7 @@ where
                                     epoch,
                                     split_keys: split_region.take_keys().into(),
                                     source: "pd".into(),
-                                    skip_size_check: true,
+                                    amortize_source_region_size: false,
                                 },
                                 ch,
                             }
