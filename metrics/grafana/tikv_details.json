@@ -39068,7 +39068,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The gap between safe ts and current time",
+          "description": "The gap between now() and the minimal (non-zero) safe ts for followers",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -39132,7 +39132,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Max gap of safe-ts",
+          "title": "Max gap of follower safe-ts",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -39292,7 +39292,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The region that has minimal safe ts",
+          "description": "The region id of the follower that has minimal safe ts",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -39362,7 +39362,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Min Safe TS Region",
+          "title": "Min Safe TS Follower Region",
           "tooltip": {
             "msResolution": false,
             "shared": true,
