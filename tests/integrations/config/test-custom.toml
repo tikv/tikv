@@ -278,6 +278,7 @@ enable-multi-batch-write = true
 enable-unordered-write = true
 allow-concurrent-memtable-write = false
 write-buffer-limit = "1GB"
+lock-write-buffer-limit = "32MB"
 
 [rocksdb.titan]
 enabled = true
