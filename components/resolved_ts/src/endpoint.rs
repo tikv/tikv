@@ -508,6 +508,8 @@ where
                 "gap" => format!("{}ms", min_leader_resolved_ts_gap),
                 "safe_ts" => stats.min_leader_resolved_ts.safe_ts,
                 "min_lock" => ?stats.min_leader_resolved_ts.min_lock,
+                "lock_num" => stats.min_leader_resolved_ts.lock_num,
+                "txn_num" => stats.min_leader_resolved_ts.txn_num,
                 "min_memory_lock" => ?stats.cm_min_lock,
                 "duration_to_last_update_safe_ts" => match stats.min_leader_resolved_ts.duration_to_last_update_ms {
                     Some(d) => format!("{}ms", d),
@@ -1119,6 +1121,8 @@ struct LeaderStats {
     last_resolve_attempt: Option<LastAttempt>,
     // min lock in LOCK CF
     min_lock: Option<(TimeStamp, Key)>,
+    lock_num: Option<u64>,
+    txn_num: Option<u64>,
 }
 
 impl Default for LeaderStats {
@@ -1130,6 +1134,8 @@ impl Default for LeaderStats {
             duration_to_last_update_ms: None,
             last_resolve_attempt: None,
             min_lock: None,
+            lock_num: None,
+            txn_num: None,
         }
     }
 }
@@ -1161,6 +1167,8 @@ impl LeaderStats {
                     )
                 })
             }),
+            lock_num: resolver.map(|r| r.num_locks()),
+            txn_num: resolver.map(|r| r.num_transactions()),
         };
     }
 }
