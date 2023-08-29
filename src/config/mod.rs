@@ -1903,13 +1903,14 @@ pub enum DbType {
 }
 
 pub struct DbConfigManger<D> {
+    cfg: DbConfig,
     db: D,
     db_type: DbType,
 }
 
 impl<D> DbConfigManger<D> {
-    pub fn new(db: D, db_type: DbType) -> Self {
-        DbConfigManger { db, db_type }
+    pub fn new(cfg: DbConfig, db: D, db_type: DbType) -> Self {
+        DbConfigManger { cfg, db, db_type }
     }
 }
 
@@ -1944,10 +1945,31 @@ impl<D: ConfigurableDb> DbConfigManger<D> {
             _ => Err(format!("invalid cf {:?} for db {:?}", cf, self.db_type).into()),
         }
     }
+
+    fn update_background_cfg(
+        &self,
+        max_background_jobs: i32,
+        max_background_flushes: i32,
+    ) -> Result<(), Box<dyn Error>> {
+        assert!(max_background_jobs > 0 && max_background_flushes > 0);
+        let max_background_compacts =
+            std::cmp::max(max_background_jobs - max_background_flushes, 1);
+        self.db
+            .set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
+        self.db.set_db_config(&[(
+            "max_background_flushes",
+            &max_background_flushes.to_string(),
+        )])?;
+        self.db.set_db_config(&[(
+            "max_background_compactions",
+            &max_background_compacts.to_string(),
+        )])
+    }
 }
 
 impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        self.cfg.update(change.clone())?;
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
         let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
@@ -2011,8 +2033,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .next()
         {
             let max_background_jobs: i32 = background_jobs_config.1.into();
-            self.db
-                .set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
+            self.update_background_cfg(max_background_jobs, self.cfg.max_background_flushes)?;
         }
 
         if let Some(background_subcompactions_config) = change
@@ -2029,10 +2050,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .next()
         {
             let max_background_flushes: i32 = background_flushes_config.1.into();
-            self.db.set_db_config(&[(
-                "max_background_flushes",
-                &max_background_flushes.to_string(),
-            )])?;
+            self.update_background_cfg(self.cfg.max_background_jobs, max_background_flushes)?;
         }
 
         if !change.is_empty() {
@@ -4960,7 +4978,11 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg);
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DbConfigManger::new(engine.clone(), DbType::Kv)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                engine.clone(),
+                DbType::Kv,
+            )),
         );
         let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(
@@ -5110,6 +5132,7 @@ mod tests {
             .update_config("rocksdb.max-background-jobs", "8")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
+        assert_eq!(db.get_db_options().get_max_background_compactions(), 6);
 
         // update max_background_flushes, set to a bigger value
         assert_eq!(db.get_db_options().get_max_background_flushes(), 2);
@@ -5118,6 +5141,7 @@ mod tests {
             .update_config("rocksdb.max-background-flushes", "5")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_flushes(), 5);
+        assert_eq!(db.get_db_options().get_max_background_compactions(), 3);
 
         // update rate_bytes_per_sec
         assert_eq!(
