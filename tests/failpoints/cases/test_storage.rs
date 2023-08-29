@@ -24,6 +24,7 @@ use kvproto::{
 };
 use resource_control::ResourceGroupManager;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::{
     config::{ConfigController, Module},
     storage::{
@@ -44,7 +45,8 @@ use tikv::{
 use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
 use txn_types::{Key, Mutation, TimeStamp};
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_scheduler_leader_change_twice() {
     let snapshot_fp = "scheduler_async_snapshot_finish";
     let mut cluster = new_server_cluster(0, 2);
@@ -108,7 +110,8 @@ fn test_scheduler_leader_change_twice() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_server_catching_api_error() {
     let raftkv_fp = "raftkv_early_error_report";
     let mut cluster = new_server_cluster(0, 1);
@@ -168,7 +171,8 @@ fn test_server_catching_api_error() {
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_raftkv_early_error_report() {
     let raftkv_fp = "raftkv_early_error_report";
     let mut cluster = new_server_cluster(0, 1);
@@ -233,7 +237,8 @@ fn test_raftkv_early_error_report() {
     fail::remove(raftkv_fp);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_scale_scheduler_pool() {
     let snapshot_fp = "scheduler_start_execute";
     let mut cluster = new_server_cluster(0, 1);
@@ -332,7 +337,8 @@ fn test_scale_scheduler_pool() {
     fail::remove(snapshot_fp);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_scheduler_pool_auto_switch_for_resource_ctl() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -780,7 +786,8 @@ fn test_pessimistic_lock_resumable_blocked_twice() {
     test_pessimistic_lock_resumable_blocked_twice_impl(true);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster_with_api_ver)]
+#[test_case(test_raftstore_v2::new_server_cluster_with_api_ver)]
 fn test_async_commit_prewrite_with_stale_max_ts() {
     test_async_commit_prewrite_with_stale_max_ts_impl::<ApiV1>();
     test_async_commit_prewrite_with_stale_max_ts_impl::<ApiV2>();
@@ -1090,7 +1097,8 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_async_apply_prewrite() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -1188,7 +1196,8 @@ fn test_async_apply_prewrite() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_async_apply_prewrite_fallback() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -1378,7 +1387,8 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_async_apply_prewrite_1pc() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -1405,7 +1415,8 @@ fn test_async_apply_prewrite_1pc() {
     test_async_apply_prewrite_1pc_impl(&storage, ctx, b"key", b"value2", 20, true);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_atomic_cas_lock_by_latch() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -1493,7 +1504,8 @@ fn test_atomic_cas_lock_by_latch() {
     assert_eq!(b"v2".to_vec(), ret);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_before_async_write_deadline() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -1532,7 +1544,8 @@ fn test_before_async_write_deadline() {
     ));
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_deadline_exceeded_on_get_and_batch_get() {
     use tikv_util::time::Instant;
     use tracker::INVALID_TRACKER_TOKEN;
@@ -1591,7 +1604,8 @@ fn test_deadline_exceeded_on_get_and_batch_get() {
     fail::remove("after-snapshot");
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_before_propose_deadline() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -1629,7 +1643,8 @@ fn test_before_propose_deadline() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_resolve_lock_deadline() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -1705,7 +1720,8 @@ fn test_resolve_lock_deadline() {
 /// processed, which can break the correctness of latch: underlying command
 /// result is always determined, it should be either always success written or
 /// never be written.
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client_mul)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client_mul)]
 fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     let (mut cluster, mut client, mut ctx) = must_new_cluster_and_kv_client_mul(3);
     let k = b"key".to_vec();
@@ -1789,7 +1805,8 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     assert_eq!(get_resp.value, v);
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_raw_put_deadline() {
     let deadline_fp = "deadline_check_fail";
     let mut cluster = new_server_cluster(0, 1);
