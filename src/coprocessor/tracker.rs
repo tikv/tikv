@@ -386,7 +386,6 @@ mod tests {
 
     use kvproto::kvrpcpb;
     use pd_client::BucketMeta;
-    use tikv_kv::RocksEngine;
 
     use super::{PerfLevel, ReqContext, ReqTag, TimeStamp, Tracker, TLS_COP_METRICS};
     use crate::storage::Statistics;
@@ -413,7 +412,7 @@ mod tests {
         req_ctx.upper_bound = vec![
             116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 167,
         ];
-        let mut track: Tracker<RocksEngine> = Tracker::new(req_ctx, Duration::default());
+        let mut track = Tracker::new(req_ctx, Duration::default());
         let mut bucket = BucketMeta::default();
         bucket.region_id = 1;
         bucket.version = 1;
