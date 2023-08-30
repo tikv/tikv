@@ -363,7 +363,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             cmp::Ordering::Greater => {
                 // We need to create the target peer.
-                info!(self.logger, "mark for destroy for larger ID"; "larger_id" => to_peer.get_id());
+                info!(self.logger, "mark for destroy for larger ID";
+                    "larger_id" => to_peer.get_id(),
+                    "msg" => ?msg,
+                );
                 self.mark_for_destroy(Some(msg));
                 return;
             }
