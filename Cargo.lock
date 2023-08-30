@@ -652,6 +652,7 @@ dependencies = [
  "collections",
  "criterion",
  "crossbeam",
+ "dashmap",
  "derive_more",
  "fail",
  "file_system",
@@ -1449,9 +1450,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "5.1.0"
+version = "5.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
+checksum = "4c8858831f7781322e539ea39e72449c46b059638250c14344fec8d0aa6e539c"
 dependencies = [
  "cfg-if 1.0.0",
  "num_cpus",
@@ -3107,7 +3108,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d861ede96cc2aae3c2ed5ea1c1c71454130a325e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b68565569d711d78f8ae0d24e2d2b59f0fd03ef1"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3126,7 +3127,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d861ede96cc2aae3c2ed5ea1c1c71454130a325e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b68565569d711d78f8ae0d24e2d2b59f0fd03ef1"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5100,7 +5101,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d861ede96cc2aae3c2ed5ea1c1c71454130a325e"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b68565569d711d78f8ae0d24e2d2b59f0fd03ef1"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
