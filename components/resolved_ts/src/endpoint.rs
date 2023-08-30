@@ -88,100 +88,62 @@ impl Drop for ResolverStatus {
 }
 
 impl ResolverStatus {
-    fn track_change_log(&mut self, region_id: u64, change_logs: &[ChangeLog]) -> Result<()> {
+    fn push_pending_lock(&mut self, lock: PendingLock, region_id: u64) -> Result<()> {
         let ResolverStatus::Pending {
             locks,
-            tracked_index,
             memory_quota,
             ..
         } = self else {
             panic!("region {:?} resolver has ready", region_id)
         };
-        for log in change_logs {
-            match log {
-                ChangeLog::Error(e) => {
-                    debug!(
-                        "skip change log error";
-                        "region" => region_id,
-                        "error" => ?e,
-                    );
-                    continue;
-                }
-                ChangeLog::Admin(req_type) => {
-                    // TODO: for admin cmd that won't change the region meta like peer list
-                    // and key range (i.e. `CompactLog`, `ComputeHash`) we may not need to
-                    // return error
-                    return Err(box_err!(
-                        "region met admin command {:?} while initializing resolver",
-                        req_type
-                    ));
-                }
-                ChangeLog::Rows { rows, index } => {
-                    for row in rows {
-                        let lock = match row {
-                            ChangeRow::Prewrite { key, start_ts, .. } => PendingLock::Track {
-                                key: key.clone(),
-                                start_ts: *start_ts,
-                            },
-                            ChangeRow::Commit {
-                                key,
-                                start_ts,
-                                commit_ts,
-                                ..
-                            } => PendingLock::Untrack {
-                                key: key.clone(),
-                                start_ts: *start_ts,
-                                commit_ts: *commit_ts,
-                            },
-                            // One pc command do not contains any lock, so just skip it
-                            ChangeRow::OnePc { .. } | ChangeRow::IngestSsT => continue,
-                        };
-                        // Check if adding a new lock or unlock will exceed the memory
-                        // quota.
-                        if !memory_quota.alloc(lock.heap_size()) {
-                            fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
-                            return Err(Error::MemoryQuotaExceeded);
-                        }
-                        locks.push(lock);
-                    }
-                    assert!(
-                        *tracked_index < *index,
-                        "region {}, tracked_index: {}, incoming index: {}",
-                        region_id,
-                        *tracked_index,
-                        *index
-                    );
-                    *tracked_index = *index;
-                }
-            }
+        // Check if adding a new lock or unlock will exceed the memory
+        // quota.
+        if !memory_quota.alloc(lock.heap_size()) {
+            fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
+            return Err(Error::MemoryQuotaExceeded);
         }
+        locks.push(lock);
         Ok(())
     }
 
-    fn on_scan_finished(mut self, region_id: u64, resolver: &mut Resolver) -> Result<u64> {
+    fn update_tracked_index(&mut self, index: u64, region_id: u64) {
         let ResolverStatus::Pending {
-                locks,
-                tracked_index,
-                memory_quota,
-                ..
-            } = &mut self else {
-                panic!("region {:?} resolver has ready", region_id)
-            };
+            tracked_index,
+            ..
+        } = self else {
+            panic!("region {:?} resolver has ready", region_id)
+        };
+        assert!(
+            *tracked_index < index,
+            "region {}, tracked_index: {}, incoming index: {}",
+            region_id,
+            *tracked_index,
+            index
+        );
+        *tracked_index = index;
+    }
+
+    fn drain_pending_locks(
+        &mut self,
+        region_id: u64,
+    ) -> (u64, impl Iterator<Item = PendingLock> + '_) {
+        let ResolverStatus::Pending {
+            locks,
+            memory_quota,
+            tracked_index,
+            ..
+        } = self else {
+            panic!("region {:?} resolver has ready", region_id)
+        };
         // Must take locks, otherwise it may double free memory quota on drop.
-        for lock in std::mem::take(locks) {
-            memory_quota.free(lock.heap_size());
-            match lock {
-                PendingLock::Track { key, start_ts } => {
-                    if !resolver.track_lock(start_ts, key.to_raw().unwrap(), Some(*tracked_index)) {
-                        return Err(Error::MemoryQuotaExceeded);
-                    }
-                }
-                PendingLock::Untrack { key, .. } => {
-                    resolver.untrack_lock(&key.to_raw().unwrap(), Some(*tracked_index))
-                }
-            }
-        }
-        Ok(*tracked_index)
+        let locks = std::mem::take(locks);
+        (
+            *tracked_index,
+            locks.into_iter().map(|lock| {
+                memory_quota.free(lock.heap_size());
+                lock
+            }),
+        )
     }
 }
 
@@ -241,8 +203,52 @@ impl ObserveRegion {
 
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> Result<()> {
         if matches!(self.resolver_status, ResolverStatus::Pending { .. }) {
-            self.resolver_status
-                .track_change_log(self.meta.id, change_logs)
+            for log in change_logs {
+                match log {
+                    ChangeLog::Error(e) => {
+                        debug!(
+                            "skip change log error";
+                            "region" => self.meta.id,
+                            "error" => ?e,
+                        );
+                        continue;
+                    }
+                    ChangeLog::Admin(req_type) => {
+                        // TODO: for admin cmd that won't change the region meta like peer list
+                        // and key range (i.e. `CompactLog`, `ComputeHash`) we may not need to
+                        // return error
+                        return Err(box_err!(
+                            "region met admin command {:?} while initializing resolver",
+                            req_type
+                        ));
+                    }
+                    ChangeLog::Rows { rows, index } => {
+                        for row in rows {
+                            let lock = match row {
+                                ChangeRow::Prewrite { key, start_ts, .. } => PendingLock::Track {
+                                    key: key.clone(),
+                                    start_ts: *start_ts,
+                                },
+                                ChangeRow::Commit {
+                                    key,
+                                    start_ts,
+                                    commit_ts,
+                                    ..
+                                } => PendingLock::Untrack {
+                                    key: key.clone(),
+                                    start_ts: *start_ts,
+                                    commit_ts: *commit_ts,
+                                },
+                                // One pc command do not contains any lock, so just skip it
+                                ChangeRow::OnePc { .. } | ChangeRow::IngestSsT => continue,
+                            };
+                            self.resolver_status.push_pending_lock(lock, self.meta.id)?;
+                        }
+                        self.resolver_status
+                            .update_tracked_index(*index, self.meta.id);
+                    }
+                }
+            }
         } else {
             for log in change_logs {
                 match log {
@@ -304,8 +310,8 @@ impl ObserveRegion {
                     }
                 }
             }
-            Ok(())
         }
+        Ok(())
     }
 
     /// Track locks in incoming scan entries.
@@ -329,10 +335,26 @@ impl ObserveRegion {
                 ScanEntry::None => {
                     // Update the `tracked_index` to the snapshot's `apply_index`
                     self.resolver.update_tracked_index(apply_index);
-                    let resolver_status =
+                    let mut resolver_status =
                         std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
-                    let pending_tracked_index =
-                        resolver_status.on_scan_finished(self.meta.id, &mut self.resolver)?;
+                    let (pending_tracked_index, pending_locks) =
+                        resolver_status.drain_pending_locks(self.meta.id);
+                    for lock in pending_locks {
+                        match lock {
+                            PendingLock::Track { key, start_ts } => {
+                                if !self.resolver.track_lock(
+                                    start_ts,
+                                    key.to_raw().unwrap(),
+                                    Some(pending_tracked_index),
+                                ) {
+                                    return Err(Error::MemoryQuotaExceeded);
+                                }
+                            }
+                            PendingLock::Untrack { key, .. } => self
+                                .resolver
+                                .untrack_lock(&key.to_raw().unwrap(), Some(pending_tracked_index)),
+                        }
+                    }
                     info!(
                         "Resolver initialized";
                         "region" => self.meta.id,

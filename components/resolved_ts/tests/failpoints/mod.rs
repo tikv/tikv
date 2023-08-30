@@ -137,7 +137,7 @@ fn test_report_min_resolved_ts_disable() {
 #[test]
 fn test_pending_locks_memory_quota_exceeded() {
     // Pause scan lock so that locks will be put in pending locks.
-    fail::cfg("resolved_ts_before_scanner_get_snapshot", "pause").unwrap();
+    fail::cfg("resolved_ts_after_scanner_get_snapshot", "pause").unwrap();
     // Check if memory quota exceeded is triggered.
     let (tx, rx) = channel();
     let tx = Mutex::new(tx);
@@ -167,9 +167,9 @@ fn test_pending_locks_memory_quota_exceeded() {
     suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
 
     // Must trigger memory quota exceeded.
-    rx.recv_timeout(Duration::from_secs(5)).unwrap_err();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    fail::remove("resolved_ts_before_scanner_get_snapshot");
+    fail::remove("resolved_ts_after_scanner_get_snapshot");
     fail::remove("resolved_ts_on_pending_locks_memory_quota_exceeded");
     suite.stop();
 }
