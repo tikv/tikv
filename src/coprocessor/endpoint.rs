@@ -418,10 +418,24 @@ impl<E: Engine> Endpoint<E> {
         let snapshot =
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
                 .await?;
+        let latest_buckets = snapshot.ext().get_buckets();
+
+        // Check if the buckets version is latest.
+        // skip if request don't carry this bucket version.
+        if let Some(ref buckets) = latest_buckets&&
+            buckets.version > tracker.req_ctx.context.buckets_version &&
+            tracker.req_ctx.context.buckets_version!=0 {
+                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+                bucket_not_match.set_version(buckets.version);
+                bucket_not_match.set_keys(buckets.keys.clone().into());
+                let mut err = errorpb::Error::default();
+                err.set_bucket_version_not_match(bucket_not_match);
+                return Err(Error::Region(err));
+        }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
-        tracker.buckets = snapshot.ext().get_buckets();
+        tracker.buckets = latest_buckets;
         let buckets_version = tracker.buckets.as_ref().map_or(0, |b| b.version);
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()

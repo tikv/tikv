@@ -448,24 +448,38 @@ fn test_follower_buckets() {
     };
 
     cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
-    thread::sleep(Duration::from_millis(1000));
-    let wait_refresh_buckets = |endpoint, req: Request, old_buckets_ver| {
-        let mut resp = Default::default();
+    thread::sleep(Duration::from_millis(100));
+    let wait_refresh_buckets = |endpoint, req: &mut Request| {
         for _ in 0..10 {
-            resp = handle_request(&endpoint, req.clone());
-            if resp.get_latest_buckets_version() != old_buckets_ver {
-                break;
+            req.mut_context().set_buckets_version(0);
+            let resp = handle_request(&endpoint, req.clone());
+            if resp.get_latest_buckets_version() == 0 {
+                thread::sleep(Duration::from_millis(100));
+                continue;
             }
-            thread::sleep(Duration::from_millis(100));
+
+            req.mut_context().set_buckets_version(1);
+            let resp = handle_request(&endpoint, req.clone());
+            if !resp.has_region_error() {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            assert_ge!(
+                resp.get_region_error()
+                    .get_bucket_version_not_match()
+                    .version,
+                1
+            );
+            return;
         }
-        assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
+        panic!("test_follower_buckets test case failed, can not get bucket version in time");
     };
-    wait_refresh_buckets(endpoint, req.clone(), 0);
+    wait_refresh_buckets(endpoint, &mut req.clone());
     for (engine, ctx) in follower_raft_engine!(cluster, "") {
         req.set_context(ctx.clone());
         let (_, endpoint, _) =
             init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
-        wait_refresh_buckets(endpoint, req.clone(), 0);
+        wait_refresh_buckets(endpoint, &mut req.clone());
     }
     fail::remove("skip_check_stale_read_safe");
 }

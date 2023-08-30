@@ -2114,14 +2114,14 @@ where
 
         match change_type {
             ConfChangeType::AddNode => {
-                let add_ndoe_fp = || {
+                let add_node_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
                         self.id() == 2 && self.region_id() == 1,
                         |_| {}
                     )
                 };
-                add_ndoe_fp();
+                add_node_fp();
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "all"])
@@ -4470,7 +4470,9 @@ where
             self.delegate.clear_all_commands_as_stale();
         }
         let mut event = TraceEvent::default();
-        self.delegate.update_memory_trace(&mut event);
+        if let Some(e) = self.delegate.trace.reset(ApplyMemoryTrace::default()) {
+            event = event + e;
+        }
         MEMTRACE_APPLYS.trace(event);
     }
 }
