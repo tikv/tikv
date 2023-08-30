@@ -247,7 +247,7 @@ impl Resolver {
     pub fn resolve(&mut self, min_ts: TimeStamp, now: Option<Instant>) -> TimeStamp {
         // Use a small ratio to shrink the memory usage aggressively.
         const AGGRESSIVE_SHRINK_RATIO: usize = 2;
-        const AGGRESSIVE_SHRINK_INTERVAL: Duration = Duration::from_secs(5);
+        const AGGRESSIVE_SHRINK_INTERVAL: Duration = Duration::from_secs(10);
         if self.last_aggressive_shrink_time.saturating_elapsed() > AGGRESSIVE_SHRINK_INTERVAL {
             self.shrink_ratio(AGGRESSIVE_SHRINK_RATIO, None);
             self.last_aggressive_shrink_time = Instant::now_coarse();
@@ -486,6 +486,16 @@ mod tests {
         }
         assert!(
             resolver.locks_by_key.capacity() < 100,
+            "{}, {}",
+            resolver.locks_by_key.capacity(),
+            resolver.locks_by_key.len(),
+        );
+
+        // Trigger aggressive shrink.
+        resolver.last_aggressive_shrink_time = Instant::now_coarse() - Duration::from_secs(600);
+        resolver.resolve(TimeStamp::new(0), None);
+        assert!(
+            resolver.locks_by_key.capacity() == 0,
             "{}, {}",
             resolver.locks_by_key.capacity(),
             resolver.locks_by_key.len(),
