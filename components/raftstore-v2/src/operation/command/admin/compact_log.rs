@@ -50,12 +50,16 @@ pub struct CompactLogContext {
 }
 
 impl CompactLogContext {
-    pub fn new(last_applying_index: u64) -> CompactLogContext {
+    pub fn new(last_applying_index: u64, persisted_applied: u64) -> CompactLogContext {
         CompactLogContext {
             skipped_ticks: 0,
             approximate_log_size: 0,
             last_applying_index,
             tombstone_tablets_wait_index: vec![],
+<<<<<<< HEAD
+=======
+            persisted_tablet_index: AtomicU64::new(persisted_applied).into(),
+>>>>>>> fb9a40d20d (raftstore-v2: init persisted_tablet_index on startup (#15441))
         }
     }
 
