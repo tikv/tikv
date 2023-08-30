@@ -208,9 +208,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         };
 
         async move {
-            if let Err(e) = res {
-                return Err(e);
-            }
+            res?;
             let res = f.unwrap().await;
             match res {
                 Ok(snap) => {
