@@ -167,8 +167,8 @@ impl ResolverStatus {
             } = &mut self else {
                 panic!("region {:?} resolver has ready", region_id)
             };
-        // Must replace with an empty vec, otherwise it may double free memory quota.
-        for lock in std::mem::replace(locks, vec![]) {
+        // Must take locks, otherwise it may double free memory quota on drop.
+        for lock in std::mem::take(locks) {
             memory_quota.free(lock.heap_size());
             match lock {
                 PendingLock::Track { key, start_ts } => {
