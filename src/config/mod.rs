@@ -6094,12 +6094,12 @@ mod tests {
         assert_eq!(default_cfg.coprocessor.region_split_size(), SPLIT_SIZE);
         assert!(!default_cfg.coprocessor.enable_region_bucket());
 
-        assert_eq!(default_cfg.split.qps_threshold, DEFAULT_QPS_THRESHOLD);
+        assert_eq!(default_cfg.split.qps_threshold(), DEFAULT_QPS_THRESHOLD);
         assert_eq!(
-            default_cfg.split.region_cpu_overload_threshold_ratio,
+            default_cfg.split.region_cpu_overload_threshold_ratio(),
             REGION_CPU_OVERLOAD_THRESHOLD_RATIO
         );
-        assert_eq!(default_cfg.split.byte_threshold, DEFAULT_BYTE_THRESHOLD);
+        assert_eq!(default_cfg.split.byte_threshold(), DEFAULT_BYTE_THRESHOLD);
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.storage.engine = EngineType::RaftKv2;
@@ -6109,15 +6109,15 @@ mod tests {
             RAFTSTORE_V2_SPLIT_SIZE
         );
         assert_eq!(
-            default_cfg.split.qps_threshold,
+            default_cfg.split.qps_threshold(),
             DEFAULT_BIG_REGION_QPS_THRESHOLD
         );
         assert_eq!(
-            default_cfg.split.region_cpu_overload_threshold_ratio,
+            default_cfg.split.region_cpu_overload_threshold_ratio(),
             BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO
         );
         assert_eq!(
-            default_cfg.split.byte_threshold,
+            default_cfg.split.byte_threshold(),
             DEFAULT_BIG_REGION_BYTE_THRESHOLD
         );
         assert!(default_cfg.coprocessor.enable_region_bucket());
