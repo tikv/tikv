@@ -3,6 +3,7 @@
 use std::{ffi::CString, fs, path::Path, str::FromStr, sync::Arc};
 
 use engine_traits::{Engines, Range, Result, CF_DEFAULT};
+use fail::fail_point;
 use rocksdb::{
     load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
     CompactionFilterContext, CompactionFilterDecision, CompactionFilterFactory,
@@ -462,6 +463,13 @@ pub struct RangeCompactionFilterFactory(Arc<OwnedRange>);
 
 impl RangeCompactionFilterFactory {
     pub fn new(start_key: Box<[u8]>, end_key: Box<[u8]>) -> Self {
+        fail_point!("unlimited_range_compaction_filter", |_| {
+            let range = OwnedRange {
+                start_key: keys::data_key(b"").into_boxed_slice(),
+                end_key: keys::data_end_key(b"").into_boxed_slice(),
+            };
+            Self(Arc::new(range))
+        });
         let range = OwnedRange { start_key, end_key };
         Self(Arc::new(range))
     }
