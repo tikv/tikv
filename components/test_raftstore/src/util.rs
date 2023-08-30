@@ -31,7 +31,8 @@ use kvproto::{
         RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType, StatusRequest,
     },
     raft_serverpb::{
-        PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
+        PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+        RegionLocalState,
     },
     tikvpb::TikvClient,
 };
@@ -1574,4 +1575,8 @@ pub fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Opt
         "got {:?}, want {} peers which should include {:?}",
         peers, count, peer
     );
+}
+
+pub fn raft_message(msg: RaftMessage) -> RaftMessage {
+    msg
 }

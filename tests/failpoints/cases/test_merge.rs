@@ -21,7 +21,7 @@ use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use tikv_util::{config::*, time::Instant, HandyRwLock, future::block_on_timeout};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is rollback as expected.
@@ -1530,9 +1530,9 @@ fn test_retry_pending_prepare_merge_fail() {
     let (propose_tx, propose_rx) = mpsc::sync_channel(10);
     fail::cfg_callback("after_propose", move || propose_tx.send(()).unwrap()).unwrap();
 
-    let mut rx = cluster.async_put(b"k1", b"v11").unwrap();
+    let mut rx = cluster.async_put_future(b"k1", b"v11").unwrap();
     propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    rx.recv_timeout(Duration::from_millis(200)).unwrap_err();
+    block_on_timeout(rx.as_mut(), Duration::from_millis(200)).unwrap_err();
 
     // Then, start merging. PrepareMerge should become pending because applied_index
     // is smaller than proposed_index.
@@ -1546,7 +1546,7 @@ fn test_retry_pending_prepare_merge_fail() {
     fail::cfg("disk_already_full_peer_1", "return").unwrap();
     fail::cfg("disk_already_full_peer_2", "return").unwrap();
     fail::remove("on_handle_apply");
-    let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    let res = block_on_timeout(rx, Duration::from_secs(1)).unwrap();
     assert!(!res.get_header().has_error(), "{:?}", res);
 
     propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();

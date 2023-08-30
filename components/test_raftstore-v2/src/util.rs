@@ -13,6 +13,7 @@ use kvproto::{
     kvrpcpb::Context,
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
+    raft_serverpb::RaftMessage,
 };
 use raftstore::{store::ReadResponse, Result};
 use rand::{prelude::SliceRandom, RngCore};
@@ -446,4 +447,8 @@ pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
         "got {:?}, want {} peers which should include {:?}",
         peers, count, peer
     );
+}
+
+pub fn raft_message(msg: RaftMessage) -> Box<RaftMessage> {
+    Box::new(msg)
 }

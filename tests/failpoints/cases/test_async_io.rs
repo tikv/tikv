@@ -5,11 +5,37 @@ use std::{
     time::Duration,
 };
 
+use engine_traits::{MiscExt, SyncMutable};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv_util::HandyRwLock;
+
+#[test]
+fn test_temp() {
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.run();
+
+    let a = cluster.get_engine(1);
+    let rocksdb = a.get_tablet_by_id(1).unwrap();
+    let r2 = rocksdb.clone();
+    fail::cfg("on_flush_completed", "pause").unwrap();
+    rocksdb.put(b"key", b"val").unwrap();
+    let a = std::thread::spawn(move || {
+        rocksdb.flush_cf("default", true).unwrap();
+        println!("flush done");
+    });
+
+    std::thread::sleep(Duration::from_secs(1));
+
+    r2.flush_cf("default", true).unwrap();
+    println!("flush done 2");
+
+    a.join().unwrap();
+}
 
 // Test if the entries can be committed and applied on followers even when
 // leader's io is paused.
@@ -51,9 +77,10 @@ fn test_async_io_commit_without_leader_persist() {
 
 /// Test if the leader delays its destroy after applying conf change to
 /// remove itself.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_async_io_delay_destroy_after_conf_change() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.store_io_pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -79,7 +106,7 @@ fn test_async_io_delay_destroy_after_conf_change() {
 
     for i in 2..10 {
         cluster
-            .async_put(format!("k{}", i).as_bytes(), b"v")
+            .async_put_future(format!("k{}", i).as_bytes(), b"v")
             .unwrap();
     }
 
@@ -95,9 +122,10 @@ fn test_async_io_delay_destroy_after_conf_change() {
 
 /// Test if the peer can be destroyed when it receives a tombstone msg and
 /// its snapshot is persisting.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_async_io_cannot_destroy_when_persist_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.store_io_pool_size = 2;
     configure_for_snapshot(&mut cluster.cfg);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -162,7 +190,7 @@ fn test_async_io_cannot_destroy_when_persist_snapshot() {
     let router = cluster.sim.wl().get_router(1).unwrap();
     for raft_msg in dropped_msgs.lock().unwrap().drain(..).rev() {
         if raft_msg.get_to_peer().get_store_id() == 1 {
-            router.send_raft_message(raft_msg).unwrap();
+            router.send_raft_message(raft_message(raft_msg)).unwrap();
             break;
         }
     }
