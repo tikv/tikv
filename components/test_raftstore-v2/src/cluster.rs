@@ -60,7 +60,6 @@ use tikv::{server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
     box_err, box_try, debug, error,
     future::block_on_timeout,
-    mpsc::future,
     safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
@@ -1264,28 +1263,27 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
-    pub fn async_request(
+    pub fn async_request_future(
         &mut self,
-        req: RaftCmdRequest,
-    ) -> Result<future::Receiver<RaftCmdResponse>> {
+        mut req: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
         let region_id = req.get_header().get_region_id();
         let leader = self.leader_of_region(region_id).unwrap();
         req.mut_header().set_peer(leader.clone());
-        let a = self
-            .sim
-            .rl()
-            .async_command_on_node(leader.get_store_id(), req);
+        self.sim
+            .wl()
+            .async_command_on_node(leader.get_store_id(), req)
     }
 
-    pub fn async_put(
+    pub fn async_put_future(
         &mut self,
         key: &[u8],
         value: &[u8],
-    ) -> Result<future::Receiver<RaftCmdResponse>> {
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
         let mut region = self.get_region(key);
         let reqs = vec![new_put_cmd(key, value)];
         let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
-        self.async_request(put)
+        Ok(self.async_request_future(put))
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {

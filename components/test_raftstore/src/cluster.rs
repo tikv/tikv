@@ -10,7 +10,7 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
-use crossbeam::channel::TrySendError;
+use crossbeam::channel::{RecvTimeoutError, TryRecvError, TrySendError};
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
@@ -19,7 +19,7 @@ use engine_traits::{
     WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture};
+use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context, DiskFullOpt},
@@ -973,6 +973,17 @@ impl<T: Simulator> Cluster<T> {
         self.async_request_with_opts(req, Default::default())
     }
 
+    pub fn async_request_future(
+        &mut self,
+        req: RaftCmdRequest,
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let mut rx = self.async_request(req)?;
+        Ok(Box::pin(async move {
+            let fut = rx.next();
+            fut.await.unwrap()
+        }))
+    }
+
     pub fn async_request_with_opts(
         &mut self,
         mut req: RaftCmdRequest,
@@ -1012,6 +1023,18 @@ impl<T: Simulator> Cluster<T> {
         let reqs = vec![new_put_cmd(key, value)];
         let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
         self.async_request(put)
+    }
+
+    pub fn async_put_future(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let mut rx = self.async_put(key, value)?;
+        Ok(Box::pin(async move {
+            let fut = rx.next();
+            fut.await.unwrap()
+        }))
     }
 
     pub fn async_remove_peer(
@@ -1992,5 +2015,24 @@ impl RawEngine<RocksEngine> for RocksEngine {
 
     fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
         self.get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
+    }
+}
+
+pub trait FutureReceiver<T> {
+    fn try_recv(&mut self) -> std::result::Result<T, TryRecvError>;
+
+    fn recv_timeout(&mut self, dur: Duration) -> std::result::Result<T, RecvTimeoutError>;
+}
+
+impl FutureReceiver<RaftCmdResponse> for future::Receiver<RaftCmdResponse> {
+    fn try_recv(&mut self) -> std::result::Result<RaftCmdResponse, TryRecvError> {
+        self.try_recv()
+    }
+
+    fn recv_timeout(
+        &mut self,
+        dur: Duration,
+    ) -> std::result::Result<RaftCmdResponse, RecvTimeoutError> {
+        self.recv_timeout(dur)
     }
 }

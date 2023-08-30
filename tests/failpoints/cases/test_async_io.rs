@@ -8,15 +8,15 @@ use std::{
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::HandyRwLock;
 
 // Test if the entries can be committed and applied on followers even when
 // leader's io is paused.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_async_io_commit_without_leader_persist() {
-    use test_raftstore_v2::*;
-    
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
     cluster.cfg.raft_store.store_io_pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -35,7 +35,7 @@ fn test_async_io_commit_without_leader_persist() {
 
     for i in 2..10 {
         cluster
-            .async_put(format!("k{}", i).as_bytes(), b"v1")
+            .async_put_future(format!("k{}", i).as_bytes(), b"v1")
             .unwrap();
     }
 
