@@ -8,18 +8,25 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
+use engine_traits::{
+    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
+};
+use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
+use raftstore::store::{TabletSnapKey, TabletSnapManager};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
+    config::ReadableDuration,
+    slog_panic,
     time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
 
-const DEFAULT_BACKGROUND_POOL_SIZE: usize = 6;
+const DEFAULT_HIGH_PRI_POOL_SIZE: usize = 2;
+const DEFAULT_LOW_PRI_POOL_SIZE: usize = 6;
 
 pub enum Task<EK> {
     Trim {
@@ -33,23 +40,39 @@ pub enum Task<EK> {
         tablet: Either<EK, PathBuf>,
         region_id: u64,
         wait_for_persisted: u64,
+        cb: Option<Box<dyn FnOnce() + Send>>,
     },
     Destroy {
         region_id: u64,
         persisted_index: u64,
     },
     /// Sometimes we know for sure a tablet can be destroyed directly.
-    DirectDestroy { tablet: Either<EK, PathBuf> },
+    DirectDestroy {
+        tablet: Either<EK, PathBuf>,
+    },
     /// Cleanup ssts.
     CleanupImportSst(Box<[SstMeta]>),
-    /// Flush memtable before split
-    ///
-    /// cb is some iff the task is sent from leader, it is used to real propose
-    /// split when flush finishes
+    /// Flush memtable.
     Flush {
         region_id: u64,
+        reason: &'static str,
+        high_priority: bool,
+        /// Do not flush if the active memtable is just flushed within this
+        /// threshold.
+        threshold: Option<Duration>,
+        /// Callback will be called regardless of whether the flush succeeds.
         cb: Option<Box<dyn FnOnce() + Send>>,
     },
+    DeleteRange {
+        region_id: u64,
+        tablet: EK,
+        cf: CfName,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
+        cb: Box<dyn FnOnce(bool) + Send>,
+    },
+    // Gc snapshot
+    SnapGc(Box<[TabletSnapKey]>),
 }
 
 impl<EK> Display for Task<EK> {
@@ -69,33 +92,55 @@ impl<EK> Display for Task<EK> {
                 ..
             } => write!(
                 f,
-                "prepare destroy tablet for region_id {}, wait_for_persisted {}",
-                region_id, wait_for_persisted,
+                "prepare destroy tablet for region_id {region_id}, wait_for_persisted {wait_for_persisted}",
             ),
             Task::Destroy {
                 region_id,
                 persisted_index,
             } => write!(
                 f,
-                "destroy tablet for region_id {} persisted_index {}",
-                region_id, persisted_index,
+                "destroy tablet for region_id {region_id}, persisted_index {persisted_index}",
             ),
             Task::DirectDestroy { .. } => {
                 write!(f, "direct destroy tablet")
             }
             Task::CleanupImportSst(ssts) => {
-                write!(f, "cleanup import ssts {:?}", ssts)
+                write!(f, "cleanup import ssts {ssts:?}")
             }
             Task::Flush {
                 region_id,
+                reason,
+                high_priority,
+                threshold,
                 cb: on_flush_finish,
             } => {
                 write!(
                     f,
-                    "flush tablet for region_id {}, is leader {}",
-                    region_id,
-                    on_flush_finish.is_some()
+                    "flush tablet for region_id {region_id}, reason {reason}, high_priority \
+                    {high_priority}, threshold {:?}, has_cb {}",
+                    threshold,
+                    on_flush_finish.is_some(),
                 )
+            }
+            Task::DeleteRange {
+                region_id,
+                cf,
+                start_key,
+                end_key,
+                ..
+            } => {
+                write!(
+                    f,
+                    "delete range cf {} [{}, {}) for region_id {}",
+                    cf,
+                    log_wrappers::Value::key(start_key),
+                    log_wrappers::Value::key(end_key),
+                    region_id,
+                )
+            }
+
+            Task::SnapGc(snap_keys) => {
+                write!(f, "gc snapshot {:?}", snap_keys)
             }
         }
     }
@@ -118,6 +163,7 @@ impl<EK> Task<EK> {
             tablet: Either::Left(tablet),
             region_id,
             wait_for_persisted,
+            cb: None,
         }
     }
 
@@ -127,6 +173,22 @@ impl<EK> Task<EK> {
             tablet: Either::Right(path),
             region_id,
             wait_for_persisted,
+            cb: None,
+        }
+    }
+
+    #[inline]
+    pub fn prepare_destroy_path_callback(
+        path: PathBuf,
+        region_id: u64,
+        wait_for_persisted: u64,
+        cb: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        Task::PrepareDestroy {
+            tablet: Either::Right(path),
+            region_id,
+            wait_for_persisted,
+            cb: Some(Box::new(cb)),
         }
     }
 
@@ -151,41 +213,63 @@ impl<EK> Task<EK> {
             tablet: Either::Right(path),
         }
     }
+
+    pub fn delete_range(
+        region_id: u64,
+        tablet: EK,
+        cf: CfName,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
+        cb: Box<dyn FnOnce(bool) + Send>,
+    ) -> Self {
+        Task::DeleteRange {
+            region_id,
+            tablet,
+            cf,
+            start_key,
+            end_key,
+            cb,
+        }
+    }
 }
 
 pub struct Runner<EK: KvEngine> {
     tablet_registry: TabletRegistry<EK>,
     sst_importer: Arc<SstImporter>,
+    snap_mgr: TabletSnapManager,
     logger: Logger,
 
-    // region_id -> [(tablet_path, wait_for_persisted)].
-    waiting_destroy_tasks: HashMap<u64, Vec<(PathBuf, u64)>>,
-    pending_destroy_tasks: Vec<PathBuf>,
+    // region_id -> [(tablet_path, wait_for_persisted, callback)].
+    waiting_destroy_tasks: HashMap<u64, Vec<(PathBuf, u64, Option<Box<dyn FnOnce() + Send>>)>>,
+    pending_destroy_tasks: Vec<(PathBuf, Option<Box<dyn FnOnce() + Send>>)>,
 
     // An independent pool to run tasks that are time-consuming but doesn't take CPU resources,
     // such as waiting for RocksDB compaction.
-    background_pool: FuturePool,
+    high_pri_pool: FuturePool,
+    low_pri_pool: FuturePool,
 }
 
 impl<EK: KvEngine> Runner<EK> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
         sst_importer: Arc<SstImporter>,
+        snap_mgr: TabletSnapManager,
         logger: Logger,
     ) -> Self {
         Self {
             tablet_registry,
             sst_importer,
+            snap_mgr,
             logger,
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
-            background_pool: YatpPoolBuilder::new(DefaultTicker::default())
+            high_pri_pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("tablet-high")
+                .thread_count(0, DEFAULT_HIGH_PRI_POOL_SIZE, DEFAULT_HIGH_PRI_POOL_SIZE)
+                .build_future_pool(),
+            low_pri_pool: YatpPoolBuilder::new(DefaultTicker::default())
                 .name_prefix("tablet-bg")
-                .thread_count(
-                    0,
-                    DEFAULT_BACKGROUND_POOL_SIZE,
-                    DEFAULT_BACKGROUND_POOL_SIZE,
-                )
+                .thread_count(0, DEFAULT_LOW_PRI_POOL_SIZE, DEFAULT_LOW_PRI_POOL_SIZE)
                 .build_future_pool(),
         }
     }
@@ -195,7 +279,11 @@ impl<EK: KvEngine> Runner<EK> {
         let end_key = keys::data_end_key(&end);
         let range1 = Range::new(&[], &start_key);
         let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
-        if let Err(e) = tablet.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2]) {
+        let mut wopts = WriteOptions::default();
+        wopts.set_disable_wal(true);
+        if let Err(e) =
+            tablet.delete_ranges_cfs(&wopts, DeleteStrategy::DeleteFiles, &[range1, range2])
+        {
             error!(
                 self.logger,
                 "failed to trim tablet";
@@ -206,10 +294,12 @@ impl<EK: KvEngine> Runner<EK> {
             return;
         }
         let logger = self.logger.clone();
-        self.background_pool
+        self.low_pri_pool
             .spawn(async move {
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
+                // Note: Refer to https://github.com/facebook/rocksdb/pull/11468. There's could be
+                // some files missing from compaction if dynamic_level_bytes is off.
                 for r in [range1, range2] {
                     // When compaction filter is present, trivial move is disallowed.
                     if let Err(e) =
@@ -235,8 +325,19 @@ impl<EK: KvEngine> Runner<EK> {
                         return;
                     }
                 }
+                if let Err(e) = tablet.check_in_range(Some(&start_key), Some(&end_key)) {
+                    debug_assert!(false, "check_in_range failed {:?}, is titan enabled?", e);
+                    error!(
+                        logger,
+                        "trim did not remove all dirty data";
+                        "path" => tablet.path(),
+                        "err" => %e,
+                    );
+                    return;
+                }
                 // drop before callback.
                 drop(tablet);
+                fail_point!("tablet_trimmed_finished");
                 cb();
             })
             .unwrap();
@@ -247,8 +348,14 @@ impl<EK: KvEngine> Runner<EK> {
             Either::Left(tablet) => {
                 // The tablet is about to be deleted, flush is a waste and will block destroy.
                 let _ = tablet.set_db_options(&[("avoid_flush_during_shutdown", "true")]);
-                let _ = tablet.pause_background_work();
-                PathBuf::from(tablet.path())
+                // `pause_background_work` needs to wait for outstanding compactions.
+                let path = PathBuf::from(tablet.path());
+                self.low_pri_pool
+                    .spawn(async move {
+                        let _ = tablet.pause_background_work();
+                    })
+                    .unwrap();
+                path
             }
             Either::Right(path) => path,
         }
@@ -259,20 +366,25 @@ impl<EK: KvEngine> Runner<EK> {
         region_id: u64,
         tablet: Either<EK, PathBuf>,
         wait_for_persisted: u64,
+        cb: Option<Box<dyn FnOnce() + Send>>,
     ) {
         let path = self.pause_background_work(tablet);
-        self.waiting_destroy_tasks
-            .entry(region_id)
-            .or_default()
-            .push((path, wait_for_persisted));
+        let list = self.waiting_destroy_tasks.entry(region_id).or_default();
+        if list.iter().any(|(p, ..)| p == &path) {
+            return;
+        }
+        list.push((path, wait_for_persisted, cb));
     }
 
     fn destroy(&mut self, region_id: u64, persisted: u64) {
         if let Some(v) = self.waiting_destroy_tasks.get_mut(&region_id) {
-            v.retain(|(path, wait)| {
+            v.retain_mut(|(path, wait, cb)| {
                 if *wait <= persisted {
+                    let cb = cb.take();
                     if !Self::process_destroy_task(&self.logger, &self.tablet_registry, path) {
-                        self.pending_destroy_tasks.push(path.clone());
+                        self.pending_destroy_tasks.push((path.clone(), cb));
+                    } else if let Some(cb) = cb {
+                        cb();
                     }
                     return false;
                 }
@@ -284,19 +396,23 @@ impl<EK: KvEngine> Runner<EK> {
     fn direct_destroy(&mut self, tablet: Either<EK, PathBuf>) {
         let path = self.pause_background_work(tablet);
         if !Self::process_destroy_task(&self.logger, &self.tablet_registry, &path) {
-            self.pending_destroy_tasks.push(path);
+            self.pending_destroy_tasks.push((path, None));
         }
     }
 
     /// Returns true if task is consumed. Failure is considered consumed.
     fn process_destroy_task(logger: &Logger, registry: &TabletRegistry<EK>, path: &Path) -> bool {
         match EK::locked(path.to_str().unwrap()) {
-            Err(e) => warn!(
-                logger,
-                "failed to check whether the tablet path is locked";
-                "err" => ?e,
-                "path" => path.display(),
-            ),
+            Err(e) if !e.to_string().contains("No such file or directory") => {
+                warn!(
+                    logger,
+                    "failed to check whether the tablet path is locked";
+                    "err" => ?e,
+                    "path" => path.display(),
+                );
+                return false;
+            }
+            Err(_) => (),
             Ok(false) => {
                 let (_, region_id, tablet_index) =
                     registry.parse_tablet_name(path).unwrap_or(("", 0, 0));
@@ -315,13 +431,13 @@ impl<EK: KvEngine> Runner<EK> {
                             "path" => path.display(),
                         )
                     });
-                return true;
             }
             Ok(true) => {
                 debug!(logger, "ignore locked tablet"; "path" => path.display());
+                return false;
             }
         }
-        false
+        true
     }
 
     fn cleanup_ssts(&self, ssts: Box<[SstMeta]>) {
@@ -332,44 +448,148 @@ impl<EK: KvEngine> Runner<EK> {
         }
     }
 
-    fn flush_tablet(&self, region_id: u64, cb: Option<Box<dyn FnOnce() + Send>>) {
+    fn snap_gc(&self, keys: Box<[TabletSnapKey]>) {
+        for key in Vec::from(keys) {
+            if !self.snap_mgr.delete_snapshot(&key) {
+                warn!(self.logger, "failed to gc snap"; "key" => ?key);
+            }
+        }
+    }
+
+    fn flush_tablet(
+        &self,
+        region_id: u64,
+        reason: &'static str,
+        high_priority: bool,
+        threshold: Option<Duration>,
+        cb: Option<Box<dyn FnOnce() + Send>>,
+    ) {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
-            .map(|mut cache| cache.latest().cloned()) else {return};
-
+            .map(|mut cache| cache.latest().cloned()) else {
+            warn!(
+                self.logger,
+                "flush memtable failed to acquire tablet";
+                "region_id" => region_id,
+                "reason" => reason,
+            );
+            if let Some(cb) = cb {
+                cb();
+            }
+            return;
+        };
+        let threshold = threshold.map(|t| std::time::SystemTime::now() - t);
         // The callback `cb` being some means it's the task sent from
         // leader, we should sync flush memtables and call it after the flush complete
         // where the split will be proposed again with extra flag.
         if let Some(cb) = cb {
             let logger = self.logger.clone();
             let now = Instant::now();
-            self.background_pool
-                .spawn(async move {
-                    // sync flush for leader to let the flush happend before later checkpoint.
-                    tablet.flush_cfs(DATA_CFS, true).unwrap();
+            let pool = if high_priority
+                && self.low_pri_pool.get_running_task_count() >= DEFAULT_LOW_PRI_POOL_SIZE - 2
+            {
+                &self.high_pri_pool
+            } else {
+                &self.low_pri_pool
+            };
+            pool.spawn(async move {
+                // sync flush for leader to let the flush happen before later checkpoint.
+                if threshold.is_none() || tablet.has_old_active_memtable(threshold.unwrap()) {
+                    let r = tablet.flush_cfs(DATA_CFS, true);
                     let elapsed = now.saturating_elapsed();
-                    // to be removed after when it's stable
+                    if let Err(e) = r {
+                        warn!(
+                            logger,
+                            "flush memtable for leader failed";
+                            "region_id" => region_id,
+                            "reason" => reason,
+                            "err" => ?e,
+                        );
+                    } else {
+                        info!(
+                            logger,
+                            "flush memtable for leader";
+                            "region_id" => region_id,
+                            "reason" => reason,
+                            "duration" => %ReadableDuration(elapsed),
+                        );
+                    }
+                } else {
                     info!(
                         logger,
-                        "flush memtable for leader";
+                        "skipped flush memtable for leader";
                         "region_id" => region_id,
-                        "duration" => ?elapsed,
+                        "reason" => reason,
                     );
-
-                    drop(tablet);
-                    cb();
-                })
-                .unwrap();
+                }
+                drop(tablet);
+                cb();
+            })
+            .unwrap();
+        } else if threshold.is_none() || tablet.has_old_active_memtable(threshold.unwrap()) {
+            if let Err(e) = tablet.flush_cfs(DATA_CFS, false) {
+                warn!(
+                    self.logger,
+                    "flush memtable for follower failed";
+                    "region_id" => region_id,
+                    "reason" => reason,
+                    "err" => ?e,
+                );
+            } else {
+                info!(
+                    self.logger,
+                    "flush memtable for follower";
+                    "region_id" => region_id,
+                    "reason" => reason,
+                );
+            }
         } else {
             info!(
                 self.logger,
-                "flush memtable for follower";
+                "skipped flush memtable for follower";
                 "region_id" => region_id,
+                "reason" => reason,
             );
-
-            tablet.flush_cfs(DATA_CFS, false).unwrap();
         }
+    }
+
+    fn delete_range(&self, delete_range: Task<EK>) {
+        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, cb } = delete_range else {
+            slog_panic!(self.logger, "unexpected task"; "task" => format!("{}", delete_range))
+        };
+
+        let range = vec![Range::new(&start_key, &end_key)];
+        let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
+            slog_panic!(
+                self.logger,
+                "failed to delete";
+                "region_id" => region_id,
+                "strategy" => ?strategy,
+                "range_start" => log_wrappers::Value::key(&start_key),
+                "range_end" => log_wrappers::Value::key(&end_key),
+                "error" => ?e,
+            )
+        };
+        let mut wopts = WriteOptions::default();
+        wopts.set_disable_wal(true);
+        let mut written = tablet
+            .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteFiles, &range)
+            .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
+
+        let strategy = DeleteStrategy::DeleteByKey;
+        // Delete all remaining keys.
+        written |= tablet
+            .delete_ranges_cf(&wopts, cf, strategy.clone(), &range)
+            .unwrap_or_else(move |e| fail_f(e, strategy));
+
+        // TODO: support titan?
+        // tablet
+        //     .delete_ranges_cf(&wopts, cf, DeleteStrategy::DeleteBlobs, &range)
+        //     .unwrap_or_else(move |e| fail_f(e,
+        // DeleteStrategy::DeleteBlobs));
+
+        cb(written);
     }
 }
 
@@ -391,14 +611,23 @@ where
                 region_id,
                 tablet,
                 wait_for_persisted,
-            } => self.prepare_destroy(region_id, tablet, wait_for_persisted),
+                cb,
+            } => self.prepare_destroy(region_id, tablet, wait_for_persisted, cb),
             Task::Destroy {
                 region_id,
                 persisted_index,
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
             Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
-            Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
+            Task::Flush {
+                region_id,
+                reason,
+                high_priority,
+                threshold,
+                cb,
+            } => self.flush_tablet(region_id, reason, high_priority, threshold, cb),
+            delete_range @ Task::DeleteRange { .. } => self.delete_range(delete_range),
+            Task::SnapGc(keys) => self.snap_gc(keys),
         }
     }
 }
@@ -408,8 +637,13 @@ where
     EK: KvEngine,
 {
     fn on_timeout(&mut self) {
-        self.pending_destroy_tasks
-            .retain(|task| !Self::process_destroy_task(&self.logger, &self.tablet_registry, task));
+        self.pending_destroy_tasks.retain_mut(|(path, cb)| {
+            let r = Self::process_destroy_task(&self.logger, &self.tablet_registry, path);
+            if r && let Some(cb) = cb.take() {
+                cb();
+            }
+            !r
+        });
     }
 
     fn get_interval(&self) -> Duration {
@@ -442,7 +676,9 @@ mod tests {
         let registry = TabletRegistry::new(factory, dir.path()).unwrap();
         let logger = slog_global::borrow_global().new(slog::o!());
         let (_dir, importer) = create_tmp_importer();
-        let mut runner = Runner::new(registry.clone(), importer, logger);
+        let snap_dir = dir.path().join("snap");
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
+        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
 
         let mut region = Region::default();
         let rid = 1;
@@ -480,5 +716,115 @@ mod tests {
         rx.recv().unwrap();
         runner.on_timeout();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_destroy_locked_tablet() {
+        let dir = Builder::new()
+            .prefix("test_destroy_locked_tablet")
+            .tempdir()
+            .unwrap();
+        let factory = Box::new(TestTabletFactory::new(
+            DbOptions::default(),
+            vec![("default", CfOptions::default())],
+        ));
+        let registry = TabletRegistry::new(factory, dir.path()).unwrap();
+        let logger = slog_global::borrow_global().new(slog::o!());
+        let (_dir, importer) = create_tmp_importer();
+        let snap_dir = dir.path().join("snap");
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
+        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
+
+        let mut region = Region::default();
+        let r_1 = 1;
+        region.set_id(r_1);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"b".to_vec());
+        let tablet1 = registry
+            .load(TabletContext::new(&region, Some(1)), true)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+        let path1 = PathBuf::from(tablet1.path());
+        let r_2 = 2;
+        region.set_id(r_2);
+        region.set_start_key(b"c".to_vec());
+        region.set_end_key(b"d".to_vec());
+        let tablet2 = registry
+            .load(TabletContext::new(&region, Some(1)), true)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+        let path2 = PathBuf::from(tablet2.path());
+
+        // both tablets are locked.
+        runner.run(Task::prepare_destroy(tablet1, r_1, 10));
+        runner.run(Task::prepare_destroy(tablet2, r_2, 10));
+        runner.run(Task::destroy(r_1, 100));
+        runner.run(Task::destroy(r_2, 100));
+        assert!(path1.exists());
+        assert!(path2.exists());
+
+        registry.remove(r_1);
+        runner.on_timeout();
+        assert!(!path1.exists());
+        assert!(path2.exists());
+
+        registry.remove(r_2);
+        runner.on_timeout();
+        assert!(!path2.exists());
+    }
+
+    #[test]
+    fn test_destroy_missing() {
+        let dir = Builder::new()
+            .prefix("test_destroy_missing")
+            .tempdir()
+            .unwrap();
+        let factory = Box::new(TestTabletFactory::new(
+            DbOptions::default(),
+            vec![("default", CfOptions::default())],
+        ));
+        let registry = TabletRegistry::new(factory, dir.path()).unwrap();
+        let logger = slog_global::borrow_global().new(slog::o!());
+        let (_dir, importer) = create_tmp_importer();
+        let snap_dir = dir.path().join("snap");
+        let snap_mgr = TabletSnapManager::new(snap_dir, None).unwrap();
+        let mut runner = Runner::new(registry.clone(), importer, snap_mgr, logger);
+
+        let mut region = Region::default();
+        let r_1 = 1;
+        region.set_id(r_1);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"b".to_vec());
+        let tablet = registry
+            .load(TabletContext::new(&region, Some(1)), true)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .clone();
+        let path = PathBuf::from(tablet.path());
+        // submit for destroy twice.
+        runner.run(Task::prepare_destroy(tablet.clone(), r_1, 10));
+        runner.run(Task::destroy(r_1, 100));
+        runner.run(Task::prepare_destroy(tablet, r_1, 10));
+        runner.run(Task::destroy(r_1, 100));
+        assert!(path.exists());
+        registry.remove(r_1);
+        runner.on_timeout();
+        assert!(!path.exists());
+        assert!(runner.pending_destroy_tasks.is_empty());
+
+        // submit a non-existing path.
+        runner.run(Task::prepare_destroy_path(
+            dir.path().join("missing"),
+            r_1,
+            200,
+        ));
+        runner.run(Task::destroy(r_1, 500));
+        runner.on_timeout();
+        assert!(runner.pending_destroy_tasks.is_empty());
     }
 }

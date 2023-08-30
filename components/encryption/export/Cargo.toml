@@ -1,18 +1,19 @@
 [package]
 name = "encryption_export"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
 default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
 cloud-aws = ["aws"]
 cloud-gcp = []
-cloud-azure = []
+cloud-azure = ["azure"]
 
 [dependencies]
 async-trait = "0.1"
 aws = { workspace = true, optional = true }
+azure = { workspace = true, optional = true }
 cloud = { workspace = true }
 derive_more = "0.99.3"
 encryption = { workspace = true }

@@ -21,12 +21,19 @@ mod apply_trace;
 mod async_writer;
 mod snapshot;
 
-use std::{cmp, time::Instant};
+use std::{
+    cmp,
+    fmt::{self, Debug, Formatter},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{
-    metapb,
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessageType, RaftMessage},
 };
@@ -35,18 +42,19 @@ use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVA
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
+        fsm::store::StoreRegionMeta,
         needs_evict_entry_cache,
-        util::{self, is_initial_msg},
+        util::{self, is_first_append_entry, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
 };
-use slog::{debug, error, info, trace, warn};
+use slog::{debug, error, info, warn, Logger};
 use tikv_util::{
     log::SlogFormat,
     slog_panic,
     store::find_peer,
-    time::{duration_to_sec, monotonic_raw_now},
+    time::{duration_to_sec, monotonic_raw_now, Duration},
 };
 
 pub use self::{
@@ -63,7 +71,56 @@ use crate::{
     worker::tablet,
 };
 
-const PAUSE_FOR_RECOVERY_GAP: u64 = 128;
+const PAUSE_FOR_REPLAY_GAP: u64 = 128;
+
+pub struct ReplayWatch {
+    normal_peers: AtomicUsize,
+    paused_peers: AtomicUsize,
+    logger: Logger,
+    timer: Instant,
+}
+
+impl Debug for ReplayWatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReplayWatch")
+            .field("normal_peers", &self.normal_peers)
+            .field("paused_peers", &self.paused_peers)
+            .field("logger", &self.logger)
+            .field("timer", &self.timer)
+            .finish()
+    }
+}
+
+impl ReplayWatch {
+    pub fn new(logger: Logger) -> Self {
+        Self {
+            normal_peers: AtomicUsize::new(0),
+            paused_peers: AtomicUsize::new(0),
+            logger,
+            timer: Instant::now(),
+        }
+    }
+
+    pub fn inc_normal_peer(&self) {
+        self.normal_peers.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_paused_peer(&self) {
+        self.paused_peers.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Drop for ReplayWatch {
+    fn drop(&mut self) {
+        info!(
+            self.logger,
+            "The raft log replay completed";
+            "normal_peers" => self.normal_peers.load(Ordering::Relaxed),
+            "paused_peers" => self.paused_peers.load(Ordering::Relaxed),
+            "elapsed" => ?self.timer.elapsed()
+        );
+    }
+}
 
 impl Store {
     pub fn on_store_unreachable<EK, ER, T>(
@@ -115,7 +172,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn maybe_pause_for_recovery<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) -> bool {
+    pub fn maybe_pause_for_replay<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        watch: Option<Arc<ReplayWatch>>,
+    ) -> bool {
         // The task needs to be scheduled even if the tablet may be replaced during
         // recovery. Otherwise if there are merges during recovery, the FSM may
         // be paused forever.
@@ -131,7 +192,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 },
             ));
         }
-        let entry_storage = self.storage().entry_storage();
+        let entry_storage = self.entry_storage();
         let committed_index = entry_storage.commit_index();
         let applied_index = entry_storage.applied_index();
         if committed_index > applied_index {
@@ -139,14 +200,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // it may block for ever when there is unapplied conf change.
             self.set_has_ready();
         }
-        if committed_index > applied_index + PAUSE_FOR_RECOVERY_GAP {
+        if committed_index > applied_index + PAUSE_FOR_REPLAY_GAP {
             // If there are too many the missing logs, we need to skip ticking otherwise
             // it may block the raftstore thread for a long time in reading logs for
             // election timeout.
-            info!(self.logger, "pause for recovery"; "applied" => applied_index, "committed" => committed_index);
-            self.set_pause_for_recovery(true);
+            info!(self.logger, "pause for replay"; "applied" => applied_index, "committed" => committed_index);
+
+            // when committed_index > applied_index + PAUSE_FOR_REPLAY_GAP, the peer must be
+            // created from StoreSystem on TiKV Start
+            let w = watch.unwrap();
+            w.inc_paused_peer();
+            self.set_replay_watch(Some(w));
             true
         } else {
+            if let Some(w) = watch {
+                w.inc_normal_peer();
+            }
             false
         }
     }
@@ -160,6 +229,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
         self.retry_pending_reads(&store_ctx.cfg);
+        self.check_force_leader(store_ctx);
         self.raft_group_mut().tick()
     }
 
@@ -189,15 +259,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
-        if self.pause_for_recovery() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+        if self.pause_for_replay() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
             ctx.raft_metrics.message_dropped.recovery.inc();
             return;
         }
         if !self.serving() {
             return;
         }
-        if util::is_vote_msg(msg.get_message()) && self.maybe_gc_sender(&msg) {
-            return;
+        if util::is_vote_msg(msg.get_message()) {
+            if self.maybe_gc_sender(&msg) {
+                return;
+            }
+            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
+                debug!(self.logger,
+                    "drop request vote for one election timeout after node starts";
+                    "from_peer_id" => msg.get_message().get_from(),
+                    "remain_duration" => ?remain,
+                );
+                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
+                return;
+            }
         }
         if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
@@ -229,17 +310,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .tablet
                         .schedule(crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
+                            reason: "unknown",
+                            high_priority: false,
+                            threshold: Some(std::time::Duration::from_secs(10)),
                             cb: None,
                         });
                     return;
                 }
-                ExtraMessageType::MsgWantRollbackMerge => {
-                    if self.is_leader() {
-                        // TODO:
-                        // self.merge_context_mut().maybe_add_rollback_peer();
-                        return;
-                    }
-                }
+                ExtraMessageType::MsgWantRollbackMerge => return,
                 ExtraMessageType::MsgAvailabilityRequest => {
                     self.on_availability_request(
                         ctx,
@@ -256,6 +334,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         msg.get_from_peer().get_id(),
                         msg.get_extra_msg(),
                     );
+                    return;
+                }
+                ExtraMessageType::MsgRefreshBuckets => {
+                    self.on_msg_refresh_buckets(ctx, &msg);
                     return;
                 }
                 _ => (),
@@ -287,7 +369,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         if msg.has_extra_msg() {
-            unimplemented!();
+            warn!(
+                self.logger,
+                "unimplemented extra msg, ignore it now";
+                "extra_msg_type" => ?msg.get_extra_msg().get_type(),
+            );
+            return;
         }
 
         // TODO: drop all msg append when the peer is uninitialized and has conflict
@@ -302,10 +389,35 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // It prevents cache peer(0,0) which is sent by region split.
             self.insert_peer_cache(from_peer);
         }
+
+        // Delay first append message and wait for split snapshot,
+        // so that slow split does not trigger leader to send a snapshot.
+        if !self.storage().is_initialized() {
+            if is_initial_msg(msg.get_message()) {
+                let mut is_overlapped = false;
+                let meta = ctx.store_meta.lock().unwrap();
+                meta.search_region(msg.get_start_key(), msg.get_end_key(), |_| {
+                    is_overlapped = true;
+                });
+                self.split_pending_append_mut()
+                    .set_range_overlapped(is_overlapped);
+            } else if is_first_append_entry(msg.get_message())
+                && !self.ready_to_handle_first_append_message(ctx, &msg)
+            {
+                return;
+            }
+        }
+
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
         } else {
+            // As this peer is already created, the empty split message is meaningless.
+            if is_empty_split_message(&msg) {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
             if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
@@ -316,21 +428,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
+
             if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
                 && self.is_leader()
                 && self.on_step_read_index(ctx, msg.mut_message())
             {
-                // Read index has respond in `on_step_read_index`.
-                return;
-            }
-
-            // As this peer is already created, the empty split message is meaningless.
-            if is_empty_split_message(&msg) {
-                ctx.raft_metrics.message_dropped.stale_msg.inc();
-                return;
-            }
-
-            if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+                // Read index has respond in `on_step_read_index`,
+                // No need to step again.
+            } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
                 error!(self.logger, "raft step error"; "err" => ?e);
             } else {
                 let committed_index = self.raft_group().raft.raft_log.committed;
@@ -350,15 +455,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Callback for fetching logs asynchronously.
-    pub fn on_logs_fetched(&mut self, fetched_logs: FetchedLogs) {
+    pub fn on_raft_log_fetched(&mut self, fetched_logs: FetchedLogs) {
         let FetchedLogs { context, logs } = fetched_logs;
         let low = logs.low;
-        if !self.is_leader() {
+        // If the peer is not the leader anymore and it's not in entry cache warmup
+        // state, or it is being destroyed, ignore the result.
+        if !self.is_leader() && self.entry_storage().entry_cache_warmup_state().is_none()
+            || !self.serving()
+        {
             self.entry_storage_mut().clean_async_fetch_res(low);
             return;
         }
         if self.term() != logs.term {
             self.entry_storage_mut().clean_async_fetch_res(low);
+        } else if self.entry_storage().entry_cache_warmup_state().is_some() {
+            if self.entry_storage_mut().maybe_warm_up_entry_cache(*logs) {
+                self.ack_transfer_leader_msg(false);
+                self.set_has_ready();
+            }
+            self.entry_storage_mut().clean_async_fetch_res(low);
+            return;
         } else {
             self.entry_storage_mut()
                 .update_async_fetch_res(low, Some(logs));
@@ -391,11 +507,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
-                warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to, "message_type" => ?msg.msg_type);
+                warn!(
+                    self.logger,
+                    "failed to look up recipient peer";
+                    "to_peer" => msg.to,
+                    "message_type" => ?msg.msg_type
+                );
                 return None;
             }
         };
-        let to_peer_is_learner = to_peer.get_role() == metapb::PeerRole::Learner;
 
         let mut raft_msg = self.prepare_raft_message();
 
@@ -410,9 +530,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
-        // Filling start and end key is only needed for being compatible with
-        // raftstore v1 learners (e.g. tiflash engine).
-        //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
         //   leader yet
@@ -422,7 +539,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // and Heartbeat message for the store of that peer to check whether to create a
         // new peer when receiving these messages, or just to wait for a pending region
         // split to perform later.
-        if self.storage().is_initialized() && is_initial_msg(&msg) && to_peer_is_learner {
+        if self.storage().is_initialized() && is_initial_msg(&msg) {
             let region = self.region();
             raft_msg.set_start_key(region.get_start_key().to_vec());
             raft_msg.set_end_key(region.get_end_key().to_vec());
@@ -449,7 +566,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.update_last_sent_snapshot_index(index);
         }
 
-        trace!(
+        debug!(
             self.logger,
             "send raft msg";
             "msg_type" => ?msg_type,
@@ -741,7 +858,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        let (persisted_message, has_snapshot) =
+        let (persisted_message, flushed_epoch, has_snapshot) =
             self.async_writer
                 .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
@@ -765,11 +882,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
+
+            if self.unsafe_recovery_state().is_some() {
+                debug!(self.logger, "unsafe recovery finishes applying a snapshot");
+                self.check_unsafe_recovery_state(ctx);
+            }
+        }
+
+        if let Some(flushed_epoch) = flushed_epoch {
+            self.storage_mut().set_flushed_epoch(&flushed_epoch);
         }
 
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
+
+        if self.is_in_force_leader() {
+            // forward commit index, the committed entries will be applied in
+            // the next raft tick round.
+            self.maybe_force_forward_commit_index();
+        }
+
         if !self.destroy_progress().started() {
             // We may need to check if there is persisted committed logs.
             self.set_has_ready();
@@ -815,6 +948,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let now = Instant::now();
+        let stat_raft_commit_log = &mut ctx.raft_metrics.stat_commit_log;
         for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
@@ -825,10 +959,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         &ctx.raft_metrics.wf_commit_not_persist_log
                     };
                     for tracker in trackers {
-                        tracker.observe(now, hist, |t| {
-                            t.metrics.commit_not_persisted = !commit_persisted;
-                            &mut t.metrics.wf_commit_log_nanos
-                        });
+                        // Collect the metrics related to commit_log
+                        // durations.
+                        stat_raft_commit_log.record(Duration::from_nanos(tracker.observe(
+                            now,
+                            hist,
+                            |t| {
+                                t.metrics.commit_not_persisted = !commit_persisted;
+                                &mut t.metrics.wf_commit_log_nanos
+                            },
+                        )));
                     }
                 }
             }
@@ -862,7 +1002,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[cfg(feature = "testexport")]
     pub fn on_wait_flush(&mut self, ch: crate::router::FlushChannel) {
-        self.async_writer.subscirbe_flush(ch);
+        self.async_writer.subscribe_flush(ch);
     }
 
     pub fn on_role_changed<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
@@ -914,6 +1054,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
                     self.add_pending_tick(PeerTick::CheckLongUncommitted);
                     self.add_pending_tick(PeerTick::ReportBuckets);
+                    self.add_pending_tick(PeerTick::CheckLeaderLease);
                     self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
@@ -925,6 +1066,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+
+            if self.is_in_force_leader() && ss.raft_state != StateRole::Leader {
+                // for some reason, it's not leader anymore
+                info!(self.logger,
+                    "step down in force leader state";
+                    "state" => ?ss.raft_state,
+                );
+                self.on_force_leader_fail();
+            }
+
             self.read_progress()
                 .update_leader_info(ss.leader_id, term, self.region());
             let target = self.refresh_leader_transferee();
@@ -1016,6 +1167,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        fail::fail_point!(
+            "on_check_long_uncommitted_proposals_1",
+            self.peer_id() == 1,
+            |_| {}
+        );
         if self.has_long_uncommitted_proposals(ctx) {
             let status = self.raft_group().status();
             let mut buffer: Vec<(u64, u64, u64)> = Vec::new();

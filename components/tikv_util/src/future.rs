@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::BorrowMut,
     cell::UnsafeCell,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -16,7 +15,11 @@ use futures::{
     task::{self, ArcWake, Context, Poll},
 };
 
-use crate::{callback::must_call, timer::GLOBAL_TIMER_HANDLE};
+use crate::{
+    callback::must_call,
+    time::{Duration, Instant},
+    timer::GLOBAL_TIMER_HANDLE,
+};
 
 /// Generates a paired future and callback so that when callback is being
 /// called, its result is automatically passed as a future result.
@@ -212,10 +215,9 @@ pub fn try_poll<T>(f: impl Future<Output = T>) -> Option<T> {
 
 // Run a future with a timeout on the current thread. Returns Err if times out.
 #[allow(clippy::result_unit_err)]
-pub fn block_on_timeout<B, F, I>(mut fut: B, dur: std::time::Duration) -> Result<I, ()>
+pub fn block_on_timeout<F>(fut: F, dur: std::time::Duration) -> Result<F::Output, ()>
 where
-    F: std::future::Future<Output = I> + Unpin,
-    B: BorrowMut<F>,
+    F: std::future::Future,
 {
     use futures_util::compat::Future01CompatExt;
 
@@ -223,13 +225,37 @@ where
         .delay(std::time::Instant::now() + dur)
         .compat()
         .fuse();
-    let mut f = fut.borrow_mut().fuse();
+    futures::pin_mut!(fut);
+    let mut f = fut.fuse();
     futures::executor::block_on(async {
         futures::select! {
             _ = timeout => Err(()),
             item = f => Ok(item),
         }
     })
+}
+
+pub struct RescheduleChecker<B> {
+    duration: Duration,
+    start: Instant,
+    future_builder: B,
+}
+
+impl<T: Future, B: Fn() -> T> RescheduleChecker<B> {
+    pub fn new(future_builder: B, duration: Duration) -> Self {
+        Self {
+            duration,
+            start: Instant::now_coarse(),
+            future_builder,
+        }
+    }
+
+    pub async fn check(&mut self) {
+        if self.start.saturating_elapsed() >= self.duration {
+            (self.future_builder)().await;
+            self.start = Instant::now_coarse();
+        }
+    }
 }
 
 #[cfg(test)]

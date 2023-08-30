@@ -1,7 +1,7 @@
 [package]
 name = "tidb_query_common"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 description = "Common utility of a query engine to run TiDB pushed down executors"
 
@@ -25,4 +25,3 @@ yatp = { workspace = true }
 
 [dev-dependencies]
 byteorder = "1.2"
-

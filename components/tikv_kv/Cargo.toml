@@ -3,7 +3,7 @@ name = "tikv_kv"
 version = "0.1.0"
 authors = ["The TiKV Authors"]
 description = "The key-value abstraction directly used by TiKV"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
@@ -41,7 +41,7 @@ log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raftstore = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }

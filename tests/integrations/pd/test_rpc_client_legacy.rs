@@ -427,8 +427,8 @@ fn restart_leader(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
-    thread::sleep(Duration::from_millis(200));
+    // The default retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
 
     let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
@@ -518,7 +518,7 @@ fn test_pd_client_heartbeat_send_failed() {
             RegionStat::default(),
             None,
         ));
-        let rsp = rx.recv_timeout(Duration::from_millis(100));
+        let rsp = rx.recv_timeout(Duration::from_millis(300));
         if ok {
             assert!(rsp.is_ok());
             assert_eq!(rsp.unwrap().get_region_id(), 1);
@@ -677,9 +677,9 @@ fn test_cluster_version() {
     assert!(feature_gate.can_enable(feature_b));
     assert!(!feature_gate.can_enable(feature_c));
 
-    // After reconnect the version should be still accessable.
-    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
-    thread::sleep(Duration::from_millis(200));
+    // After reconnect the version should be still accessible.
+    // The default retry interval is 300ms so sleeps 400ms here.
+    thread::sleep(Duration::from_millis(400));
     client.reconnect().unwrap();
     assert!(feature_gate.can_enable(feature_b));
     assert!(!feature_gate.can_enable(feature_c));

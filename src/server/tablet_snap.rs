@@ -314,6 +314,9 @@ async fn cleanup_cache(
             }
         }
         fs::remove_file(entry.path())?;
+        if let Some(m) = key_manager {
+            m.delete_file(entry.path().to_str().unwrap(), None)?;
+        }
     }
     let mut missing = vec![];
     loop {
@@ -329,7 +332,10 @@ async fn cleanup_cache(
                     continue;
                 }
                 // We should not write to the file directly as it's hard linked.
-                fs::remove_file(p)?;
+                fs::remove_file(&p)?;
+                if let Some(m) = key_manager {
+                    m.delete_file(p.to_str().unwrap(), None)?;
+                }
             }
             missing.push(meta.file_name);
         }
@@ -338,7 +344,10 @@ async fn cleanup_cache(
         }
     }
     for (_, p) in exists {
-        fs::remove_file(p)?;
+        fs::remove_file(&p)?;
+        if let Some(m) = key_manager {
+            m.delete_file(p.to_str().unwrap(), None)?;
+        }
     }
     let mut resp = TabletSnapshotResponse::default();
     resp.mut_files().set_file_name(missing.clone().into());
@@ -487,7 +496,12 @@ async fn recv_snap_imp<'a>(
         ));
     }
     let path = snap_mgr.tmp_recv_path(&context.key);
-    info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
+    info!(
+        "begin to receive tablet snapshot files";
+        "file" => %path.display(),
+        "region_id" => region_id,
+        "temp_exists" => path.exists(),
+    );
     if path.exists() {
         if let Some(m) = snap_mgr.key_manager() {
             m.remove_dir(&path, None)?;
@@ -520,12 +534,19 @@ async fn recv_snap_imp<'a>(
     }
     fs::rename(&path, &final_path).map_err(|e| {
         if let Some(m) = snap_mgr.key_manager() {
-            let _ = m.delete_file(final_path.to_str().unwrap());
+            if let Err(e) = m.remove_dir(&final_path, Some(&path)) {
+                error!(
+                    "failed to clean up encryption keys after rename fails";
+                    "src" => %path.display(),
+                    "dst" => %final_path.display(),
+                    "err" => ?e,
+                );
+            }
         }
         e
     })?;
     if let Some(m) = snap_mgr.key_manager() {
-        m.delete_file(path.to_str().unwrap())?;
+        m.remove_dir(&path, Some(&final_path))?;
     }
     Ok(context)
 }
@@ -552,11 +573,13 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
                     context.io_type == IoType::LoadBalance,
                 )?;
             }
+            fail_point!("finish_receiving_snapshot");
             context.finish(raft_router)
         });
     match res {
         Ok(()) => sink.close().await?,
         Err(e) => {
+            info!("receive tablet snapshot aborted"; "err" => ?e);
             let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
             sink.fail(status).await?;
         }
@@ -732,7 +755,6 @@ pub async fn send_snap(
         let (snap_mgr, key) = (snap_mgr.clone(), key.clone());
         DeferContext::new(move || {
             snap_mgr.finish_snapshot(key.clone(), timer);
-            snap_mgr.delete_snapshot(&key);
         })
     };
     let (sink, mut receiver) = client.tablet_snapshot()?;
@@ -816,9 +838,8 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("tablet-snap-sender"))
+                .with_sys_hooks()
                 .worker_threads(DEFAULT_POOL_SIZE)
-                .after_start_wrapper(tikv_alloc::add_thread_memory_accessor)
-                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
             raft_router: r,
@@ -913,14 +934,8 @@ where
                 let region_id = msg.get_region_id();
                 let sending_count = self.snap_mgr.sending_count().clone();
                 if sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit {
-                    let key = TabletSnapKey::from_region_snap(
-                        msg.get_region_id(),
-                        msg.get_to_peer().get_id(),
-                        msg.get_message().get_snapshot(),
-                    );
-                    self.snap_mgr.delete_snapshot(&key);
                     warn!(
-                        "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
+                        "Too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg
                     );
                     cb(Err(Error::Other("Too many sending snapshot tasks".into())));
@@ -949,12 +964,13 @@ where
                 self.pool.spawn(async move {
                     let res = send_snap(
                         client,
-                        snap_mgr,
+                        snap_mgr.clone(),
                         msg,
                         limiter,
                     ).await;
                     match res {
                         Ok(stat) => {
+                            snap_mgr.delete_snapshot(&stat.key);
                             info!(
                                 "sent snapshot";
                                 "region_id" => region_id,
@@ -1024,14 +1040,20 @@ pub fn copy_tablet_snapshot(
     if let Some(m) = recver_snap_mgr.key_manager() {
         m.link_file(recv_path.to_str().unwrap(), final_path.to_str().unwrap())?;
     }
+    // Remove final path to make snapshot retryable.
+    if fs::remove_dir_all(&final_path).is_ok() {
+        if let Some(m) = recver_snap_mgr.key_manager() {
+            let _ = m.remove_dir(&final_path, None);
+        }
+    }
     fs::rename(&recv_path, &final_path).map_err(|e| {
         if let Some(m) = recver_snap_mgr.key_manager() {
-            let _ = m.delete_file(final_path.to_str().unwrap());
+            let _ = m.remove_dir(&final_path, Some(&recv_path));
         }
         e
     })?;
     if let Some(m) = recver_snap_mgr.key_manager() {
-        m.delete_file(recv_path.to_str().unwrap())?;
+        m.remove_dir(&recv_path, Some(&final_path))?;
     }
 
     Ok(())

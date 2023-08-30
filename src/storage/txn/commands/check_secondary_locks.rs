@@ -6,7 +6,7 @@ use txn_types::{Key, Lock, WriteType};
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{LockType, MvccTxn, SnapshotReader, TimeStamp, TxnCommitRecord},
+    mvcc::{MvccTxn, OverlappedWrite, ReleasedLock, SnapshotReader, TimeStamp, TxnCommitRecord},
     txn::{
         actions::check_txn_status::{collapse_prev_rollback, make_rollback},
         commands::{
@@ -54,6 +54,89 @@ enum SecondaryLockStatus {
     RolledBack,
 }
 
+// The returned `bool` indicates whether the rollback record should be written,
+// it should be true if and only if the txn commit record is not found, thus
+// a rollback record would be written later.
+fn check_determined_txn_status<S: Snapshot>(
+    reader: &mut ReaderWithStats<'_, S>,
+    key: &Key,
+) -> Result<(SecondaryLockStatus, bool, Option<OverlappedWrite>)> {
+    match reader.get_txn_commit_record(key)? {
+        TxnCommitRecord::SingleRecord { commit_ts, write } => {
+            let status = if write.write_type != WriteType::Rollback {
+                SecondaryLockStatus::Committed(commit_ts)
+            } else {
+                SecondaryLockStatus::RolledBack
+            };
+            // We needn't write a rollback once there is a write record for it:
+            // If it's a committed record, it cannot be changed.
+            // If it's a rollback record, it either comes from another
+            // check_secondary_lock (thus protected) or the client stops commit
+            // actively. So we don't need to make it protected again.
+            Ok((status, false, None))
+        }
+        TxnCommitRecord::OverlappedRollback { .. } => {
+            Ok((SecondaryLockStatus::RolledBack, false, None))
+        }
+        TxnCommitRecord::None { overlapped_write } => {
+            Ok((SecondaryLockStatus::RolledBack, true, overlapped_write))
+        }
+    }
+}
+
+fn check_status_from_lock<S: Snapshot>(
+    txn: &mut MvccTxn,
+    reader: &mut ReaderWithStats<'_, S>,
+    lock: Lock,
+    key: &Key,
+    region_id: u64,
+) -> Result<(
+    SecondaryLockStatus,
+    bool,
+    Option<OverlappedWrite>,
+    Option<ReleasedLock>,
+)> {
+    let mut overlapped_write = None;
+    if lock.is_pessimistic_lock_with_conflict() {
+        assert!(lock.is_pessimistic_lock());
+        let (status, need_rollback, rollback_overlapped_write) =
+            check_determined_txn_status(reader, key)?;
+        // If there exists commit or rollback record, the pessimistic lock is stale, in
+        // this case the returned need_rollback is false.
+        if !need_rollback {
+            let released_lock = txn.unlock_key(key.clone(), true, TimeStamp::zero());
+            return Ok((
+                status,
+                need_rollback,
+                rollback_overlapped_write,
+                released_lock,
+            ));
+        }
+        overlapped_write = rollback_overlapped_write;
+    }
+
+    if lock.is_pessimistic_lock() {
+        let released_lock = txn.unlock_key(key.clone(), true, TimeStamp::zero());
+        // If the `is_pessimistic_lock_with_conflict` is true, the `overlapped_write` is
+        // already fetched in the above `check_determined_txn_status` call. So
+        // we don't need to fetch it again and the `overlapped_write` could be
+        // reused here.
+        let overlapped_write_res = if lock.is_pessimistic_lock_with_conflict() {
+            overlapped_write
+        } else {
+            reader.get_txn_commit_record(key)?.unwrap_none(region_id)
+        };
+        Ok((
+            SecondaryLockStatus::RolledBack,
+            true,
+            overlapped_write_res,
+            released_lock,
+        ))
+    } else {
+        Ok((SecondaryLockStatus::Locked(lock), false, None, None))
+    }
+}
+
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // It is not allowed for commit to overwrite a protected rollback. So we update
@@ -76,40 +159,16 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             let (status, need_rollback, rollback_overlapped_write) = match reader.load_lock(&key)? {
                 // The lock exists, the lock information is returned.
                 Some(lock) if lock.ts == self.start_ts => {
-                    if lock.lock_type == LockType::Pessimistic {
-                        released_lock = txn.unlock_key(key.clone(), true, TimeStamp::zero());
-                        let overlapped_write =
-                            reader.get_txn_commit_record(&key)?.unwrap_none(region_id);
-                        (SecondaryLockStatus::RolledBack, true, overlapped_write)
-                    } else {
-                        (SecondaryLockStatus::Locked(lock), false, None)
-                    }
+                    let (status, need_rollback, rollback_overlapped_write, lock_released) =
+                        check_status_from_lock(&mut txn, &mut reader, lock, &key, region_id)?;
+                    released_lock = lock_released;
+                    (status, need_rollback, rollback_overlapped_write)
                 }
                 // Searches the write CF for the commit record of the lock and returns the commit
                 // timestamp (0 if the lock is not committed).
                 l => {
                     mismatch_lock = l;
-                    match reader.get_txn_commit_record(&key)? {
-                        TxnCommitRecord::SingleRecord { commit_ts, write } => {
-                            let status = if write.write_type != WriteType::Rollback {
-                                SecondaryLockStatus::Committed(commit_ts)
-                            } else {
-                                SecondaryLockStatus::RolledBack
-                            };
-                            // We needn't write a rollback once there is a write record for it:
-                            // If it's a committed record, it cannot be changed.
-                            // If it's a rollback record, it either comes from another
-                            // check_secondary_lock (thus protected) or the client stops commit
-                            // actively. So we don't need to make it protected again.
-                            (status, false, None)
-                        }
-                        TxnCommitRecord::OverlappedRollback { .. } => {
-                            (SecondaryLockStatus::RolledBack, false, None)
-                        }
-                        TxnCommitRecord::None { overlapped_write } => {
-                            (SecondaryLockStatus::RolledBack, true, overlapped_write)
-                        }
-                    }
+                    check_determined_txn_status(&mut reader, &key)?
                 }
             };
             // If the lock does not exist or is a pessimistic lock, to prevent the
@@ -346,5 +405,54 @@ pub mod tests {
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_get_overlapped_rollback(&mut engine, b"k1", 15, 13, WriteType::Lock, Some(0));
+
+        // Lock CF has an stale pessimistic lock, the transaction is already committed
+        // or rolled back.
+        //
+        // LOCK CF       | WRITE CF
+        // ------------------------------------
+        //               | 15: start_ts = 13 with overlapped rollback
+        //               | 14: rollback
+        //               | 11: rollback
+        //               |  9: start_ts = 7
+        //               |  5: rollback
+        //               |  3: start_ts = 1
+        must_acquire_pessimistic_lock_allow_lock_with_conflict(
+            &mut engine,
+            b"k1",
+            b"key",
+            7,
+            7,
+            true,
+            false,
+            10,
+        )
+        .assert_locked_with_conflict(None, 15);
+        match check_secondary(b"k1", 7) {
+            SecondaryLocksStatus::Committed(ts) => {
+                assert!(ts.eq(&9.into()));
+            }
+            res => panic!("unexpected lock status: {:?}", res),
+        }
+        must_unlocked(&mut engine, b"k1");
+
+        // Lock CF has an pessimistic lock, the transaction status is not found
+        // in storage.
+        must_acquire_pessimistic_lock_allow_lock_with_conflict(
+            &mut engine,
+            b"k1",
+            b"key",
+            8,
+            8,
+            true,
+            false,
+            10,
+        )
+        .assert_locked_with_conflict(None, 15);
+        match check_secondary(b"k1", 8) {
+            SecondaryLocksStatus::RolledBack => {}
+            res => panic!("unexpected lock status: {:?}", res),
+        }
+        must_unlocked(&mut engine, b"k1");
     }
 }

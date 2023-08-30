@@ -11,17 +11,19 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
-        AutoSplitController, GlobalReplicationState, TabletSnapManager, Transport,
-        RAFT_INIT_LOG_INDEX,
+        AutoSplitController, GlobalReplicationState, RefreshConfigTask, TabletSnapManager,
+        Transport, RAFT_INIT_LOG_INDEX,
     },
 };
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
+use resource_control::ResourceController;
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use slog::{info, o, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
     config::VersionTrack,
-    worker::{LazyWorker, Worker},
+    worker::{LazyWorker, Scheduler, Worker},
 };
 
 use crate::server::{node::init_store, Result};
@@ -35,6 +37,7 @@ pub struct NodeV2<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
 
     pd_client: Arc<C>,
     logger: Logger,
+    resource_ctl: Option<Arc<ResourceController>>,
 }
 
 impl<C, EK, ER> NodeV2<C, EK, ER>
@@ -48,6 +51,7 @@ where
         cfg: &crate::server::Config,
         pd_client: Arc<C>,
         store: Option<metapb::Store>,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> NodeV2<C, EK, ER> {
         let store = init_store(store, cfg);
 
@@ -58,6 +62,7 @@ where
             system: None,
             has_started: false,
             logger: slog_global::borrow_global().new(o!()),
+            resource_ctl,
         }
     }
 
@@ -75,8 +80,12 @@ where
         .bootstrap_store()?;
         self.store.set_id(store_id);
 
-        let (router, system) =
-            raftstore_v2::create_store_batch_system(cfg, store_id, self.logger.clone());
+        let (router, system) = raftstore_v2::create_store_batch_system(
+            cfg,
+            store_id,
+            self.logger.clone(),
+            self.resource_ctl.clone(),
+        );
         self.system = Some((router, system));
         Ok(())
     }
@@ -106,6 +115,7 @@ where
         state: &Mutex<GlobalReplicationState>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -146,6 +156,7 @@ where
             store_cfg,
             sst_importer,
             key_manager,
+            grpc_service_mgr,
         )?;
 
         Ok(())
@@ -209,6 +220,7 @@ where
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -242,8 +254,16 @@ where
             pd_worker,
             sst_importer,
             key_manager,
+            grpc_service_mgr,
+            self.resource_ctl.clone(),
         )?;
         Ok(())
+    }
+
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after
+    /// start.
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
+        self.system.as_mut().unwrap().1.refresh_config_scheduler()
     }
 
     /// Stops the Node.

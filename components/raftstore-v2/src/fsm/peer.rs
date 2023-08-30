@@ -2,7 +2,7 @@
 
 //! This module contains the peer implementation for batch system.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
@@ -20,6 +20,7 @@ use tikv_util::{
 
 use crate::{
     batch::StoreContext,
+    operation::ReplayWatch,
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick, QueryResult},
     Result,
@@ -187,8 +188,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         self.store_ctx.tick_batch[idx].ticks.push(cb);
     }
 
-    fn on_start(&mut self) {
-        if !self.fsm.peer.maybe_pause_for_recovery(self.store_ctx) {
+    fn on_start(&mut self, watch: Option<Arc<ReplayWatch>>) {
+        if !self.fsm.peer.maybe_pause_for_replay(self.store_ctx, watch) {
             self.schedule_tick(PeerTick::Raft);
         }
         self.schedule_tick(PeerTick::SplitRegionCheck);
@@ -214,6 +215,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_tick(&mut self, tick: PeerTick) {
         self.fsm.tick_registry[tick as usize] = false;
+        if !self.fsm.peer().serving() {
+            return;
+        }
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
@@ -222,7 +226,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::CheckMerge => self.fsm.peer_mut().on_check_merge(self.store_ctx),
             PeerTick::CheckPeerStaleState => unimplemented!(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict(),
-            PeerTick::CheckLeaderLease => unimplemented!(),
+            PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => {
                 self.fsm.peer.on_reactivate_memory_lock_tick(self.store_ctx)
             }
@@ -269,7 +273,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::SplitInitFinish(region_id) => {
                     self.fsm.peer.on_split_init_finish(region_id)
                 }
-                PeerMsg::Start => self.on_start(),
+                PeerMsg::Start(w) => self.on_start(w),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {
                     peer_id,
@@ -279,7 +283,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .peer_mut()
                     .on_persisted(self.store_ctx, peer_id, ready_number),
                 PeerMsg::LogsFetched(fetched_logs) => {
-                    self.fsm.peer_mut().on_logs_fetched(fetched_logs)
+                    self.fsm.peer_mut().on_raft_log_fetched(fetched_logs)
                 }
                 PeerMsg::SnapshotGenerated(snap_res) => {
                     self.fsm.peer_mut().on_snapshot_generated(snap_res)
@@ -290,9 +294,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     tablet_index,
                     flushed_index,
                 } => {
-                    self.fsm
-                        .peer_mut()
-                        .on_data_flushed(cf, tablet_index, flushed_index);
+                    self.fsm.peer_mut().on_data_flushed(
+                        self.store_ctx,
+                        cf,
+                        tablet_index,
+                        flushed_index,
+                    );
                 }
                 PeerMsg::PeerUnreachable { to_peer_id } => {
                     self.fsm.peer_mut().on_peer_unreachable(to_peer_id)
@@ -332,15 +339,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_cleanup_import_sst(self.store_ctx, ssts),
+                PeerMsg::SnapGc(keys) => self.fsm.peer_mut().on_snap_gc(self.store_ctx, keys),
                 PeerMsg::AskCommitMerge(req) => {
                     self.fsm.peer_mut().on_ask_commit_merge(self.store_ctx, req)
                 }
                 PeerMsg::AckCommitMerge { index, target_id } => {
                     self.fsm.peer_mut().on_ack_commit_merge(index, target_id)
                 }
-                PeerMsg::RejectCommitMerge { index } => {
-                    self.fsm.peer_mut().on_reject_commit_merge(index)
-                }
+                PeerMsg::RejectCommitMerge { index } => self
+                    .fsm
+                    .peer_mut()
+                    .on_reject_commit_merge(self.store_ctx, index),
                 PeerMsg::RedirectCatchUpLogs(c) => self
                     .fsm
                     .peer_mut()
@@ -350,6 +359,48 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::LeaderCallback(ch) => self.on_leader_callback(ch),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
+                PeerMsg::FlushBeforeClose { tx } => {
+                    self.fsm.peer_mut().flush_before_close(self.store_ctx, tx)
+                }
+                PeerMsg::EnterForceLeaderState {
+                    syncer,
+                    failed_stores,
+                } => self.fsm.peer_mut().on_enter_pre_force_leader(
+                    self.store_ctx,
+                    syncer,
+                    failed_stores,
+                ),
+                PeerMsg::ExitForceLeaderState => {
+                    self.fsm.peer_mut().on_exit_force_leader(self.store_ctx)
+                }
+                PeerMsg::ExitForceLeaderStateCampaign => {
+                    self.fsm.peer_mut().on_exit_force_leader_campaign()
+                }
+                PeerMsg::UnsafeRecoveryWaitApply(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_wait_apply(syncer)
+                }
+                PeerMsg::UnsafeRecoveryFillOutReport(syncer) => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_fill_out_report(syncer),
+                PeerMsg::UnsafeRecoveryWaitInitialized(syncer) => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_wait_initialized(syncer),
+                PeerMsg::UnsafeRecoveryDestroy(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_destroy_peer(syncer)
+                }
+                PeerMsg::UnsafeRecoveryDemoteFailedVoters {
+                    failed_voters,
+                    syncer,
+                } => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_pre_demote_failed_voters(
+                        self.store_ctx,
+                        syncer,
+                        failed_voters,
+                    ),
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

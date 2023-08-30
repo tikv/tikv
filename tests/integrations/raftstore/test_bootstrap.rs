@@ -1,17 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, mpsc::sync_channel, Arc, Mutex},
+    time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
+use engine_traits::{
+    DbOptionsExt, Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
+};
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{bootstrap_store, fsm, fsm::store::StoreMeta, AutoSplitController, SnapManager},
 };
+use raftstore_v2::router::PeerMsg;
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
 use test_pd_client::{bootstrap_with_first_region, TestPdClient};
 use test_raftstore::*;
@@ -94,7 +100,9 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
+        Arc::new(
+            SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version(), false).unwrap(),
+        )
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -113,6 +121,8 @@ fn test_node_bootstrap_with_prepared_data() {
         ConcurrencyManager::new(1.into()),
         CollectorRegHandle::new_for_test(),
         None,
+        GrpcServiceManager::dummy(),
+        Arc::new(AtomicU64::new(0)),
     )
     .unwrap();
     assert!(
@@ -188,4 +198,123 @@ fn test_node_switch_api_version() {
             }
         }
     }
+}
+
+#[test]
+fn test_flush_before_stop() {
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k020");
+
+    let region = cluster.get_region(b"k40");
+    cluster.must_split(&region, b"k040");
+
+    let region = cluster.get_region(b"k60");
+    cluster.must_split(&region, b"k070");
+
+    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+
+    for i in 0..100 {
+        let key = format!("k{:03}", i);
+        cluster.must_put_cf(CF_WRITE, key.as_bytes(), b"val");
+        cluster.must_put_cf(CF_LOCK, key.as_bytes(), b"val");
+    }
+
+    let router = cluster.get_router(1).unwrap();
+    let raft_engine = cluster.get_raft_engine(1);
+
+    let mut rxs = vec![];
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
+            let (tx, rx) = sync_channel(1);
+            rxs.push(rx);
+            let msg = PeerMsg::FlushBeforeClose { tx };
+            router.force_send(id, msg).unwrap();
+
+            Ok(())
+        })
+        .unwrap();
+
+    for rx in rxs {
+        rx.recv().unwrap();
+    }
+
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |id| {
+            let admin_flush = raft_engine.get_flushed_index(id, CF_RAFT).unwrap().unwrap();
+            assert!(admin_flush >= 40);
+            Ok(())
+        })
+        .unwrap();
+}
+
+// We cannot use a flushed index to call `maybe_advance_admin_flushed`
+// consider a case:
+// 1. lock `k` with index 6
+// 2. on_applied_res => lockcf's last_modified = 6
+// 3. flush lock cf => lockcf's flushed_index = 6
+// 4. batch {unlock `k`, write `k`} with index 7
+//    (last_modified is updated in store but RocksDB is modified in apply. So,
+// before on_apply_res, the last_modified is not updated.)
+//
+// flush-before-close:
+// 5. pick write cf to flush => writecf's flushed_index = 7
+//
+// 6. maybe_advance_admin_flushed(7): as lockcf's last_modified = flushed_index,
+// it will not block advancing admin index
+// 7. admin index 7 is persisted. => we may loss `unlock k`
+#[test]
+fn test_flush_index_exceed_last_modified() {
+    let mut cluster = test_raftstore_v2::new_node_cluster(0, 1);
+    cluster.run();
+
+    let key = b"key1";
+    cluster.must_put_cf(CF_LOCK, key, b"v");
+    cluster.must_put_cf(CF_WRITE, b"dummy", b"v");
+
+    fail::cfg("before_report_apply_res", "return").unwrap();
+    let reg = cluster.tablet_registries.get(&1).unwrap();
+    {
+        let mut cache = reg.get(1).unwrap();
+        let tablet = cache.latest().unwrap();
+        tablet
+            .set_db_options(&[("avoid_flush_during_shutdown", "true")])
+            .unwrap();
+
+        // previous flush before strategy is flush oldest one by one, where freshness
+        // comparison is in second, so sleep a second
+        std::thread::sleep(Duration::from_millis(1000));
+        tablet.flush_cf(CF_LOCK, true).unwrap();
+    }
+
+    cluster
+        .batch_put(
+            key,
+            vec![
+                new_put_cf_cmd(CF_WRITE, key, b"value"),
+                new_delete_cmd(CF_LOCK, key),
+            ],
+        )
+        .unwrap();
+
+    fail::cfg("flush_before_cluse_threshold", "return(1)").unwrap();
+    let router = cluster.get_router(1).unwrap();
+    let (tx, rx) = sync_channel(1);
+    let msg = PeerMsg::FlushBeforeClose { tx };
+    router.force_send(1, msg).unwrap();
+    rx.recv().unwrap();
+
+    assert!(cluster.get_cf(CF_WRITE, b"key1").is_some());
+    assert!(cluster.get_cf(CF_LOCK, b"key1").is_none());
+    cluster.stop_node(1);
+
+    fail::remove("before_report_apply_res");
+    cluster.start().unwrap();
+
+    assert!(cluster.get_cf(CF_WRITE, b"key1").is_some());
+    assert!(cluster.get_cf(CF_LOCK, b"key1").is_none());
 }

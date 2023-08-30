@@ -5,7 +5,7 @@ use std::{
     cmp,
     collections::{HashMap, VecDeque},
     fmt,
-    fmt::Display,
+    fmt::{Debug, Display},
     option::Option,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -35,7 +35,7 @@ use tikv_util::{
     codec::number::{decode_u64, NumberEncoder},
     debug, info,
     store::{find_peer_by_id, region},
-    time::monotonic_raw_now,
+    time::{monotonic_raw_now, Instant},
     Either,
 };
 use time::{Duration, Timespec};
@@ -98,13 +98,13 @@ fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
 /// received but there is no such region in `Store::region_peers`. In this case
 /// we should put `msg` into `pending_msg` instead of create the peer.
 #[inline]
-fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
+pub fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
     match msg.get_msg_type() {
         MessageType::MsgAppend => {
-            let ent = msg.get_entries();
-            ent.len() == 1
-                && ent[0].data.is_empty()
-                && ent[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
+            let entries = msg.get_entries();
+            !entries.is_empty()
+                && entries[0].data.is_empty()
+                && entries[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
         }
         _ => false,
     }
@@ -344,27 +344,28 @@ pub fn compare_region_epoch(
 pub fn check_flashback_state(
     is_in_flashback: bool,
     flashback_start_ts: u64,
-    req: &RaftCmdRequest,
+    header: &RaftRequestHeader,
+    admin_type: Option<AdminCmdType>,
     region_id: u64,
     skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
-    if req.has_admin_request()
-        && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
-            || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+    if let Some(ty) = admin_type
+        && (ty == AdminCmdType::PrepareFlashback
+            || ty == AdminCmdType::FinishFlashback)
     {
         return Ok(());
     }
     // TODO: only use `flashback_start_ts` to check flashback state.
     let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
-    let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+    let is_flashback_request = WriteBatchFlags::from_bits_truncate(header.get_flags())
         .contains(WriteBatchFlags::FLASHBACK);
     // If the region is in the flashback state:
     //   - A request with flashback flag will be allowed.
     //   - A read request whose `read_ts` is smaller than `flashback_start_ts` will
     //     be allowed.
     if is_in_flashback && !is_flashback_request {
-        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+        if let Ok(read_ts) = decode_u64(&mut header.get_flag_data()) {
             if read_ts != 0 && read_ts < flashback_start_ts {
                 return Ok(());
             }
@@ -422,11 +423,10 @@ pub fn check_peer_id(header: &RaftRequestHeader, peer_id: u64) -> Result<()> {
     if header.get_peer().get_id() == peer_id {
         Ok(())
     } else {
-        Err(box_err!(
-            "mismatch peer id {} != {}",
-            header.get_peer().get_id(),
-            peer_id
-        ))
+        Err(Error::MismatchPeerId {
+            request_peer_id: header.get_peer().get_id(),
+            store_peer_id: peer_id,
+        })
     }
 }
 
@@ -1085,7 +1085,7 @@ pub fn check_conf_change(
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         let first_index = node.raft.raft_log.first_index();
         if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
-                || promoted_commit_index + 1 >= first_index
+            || promoted_commit_index + 1 >= first_index
         {
             return Ok(());
         }
@@ -1095,10 +1095,12 @@ pub fn check_conf_change(
             .inc();
 
         Err(box_err!(
-            "{:?}: before: {:?}, after: {:?}, first index {}, promoted commit index {}",
+            "{:?}: before: {:?}, {:?}; after: {:?}, {:?}; first index {}; promoted commit index {}",
             change_peers,
-            current_progress.conf().to_conf_state(),
-            after_progress.conf().to_conf_state(),
+            current_progress.conf(),
+            current_progress.iter().collect::<Vec<_>>(),
+            after_progress.conf(),
+            current_progress.iter().collect::<Vec<_>>(),
             first_index,
             promoted_commit_index
         ))
@@ -1198,10 +1200,11 @@ impl RegionReadProgressRegistry {
     ) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
+        let now = Some(Instant::now_coarse());
         for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor) {
+                if rp.consume_leader_info(leader_info, coprocessor, now) {
                     regions.push(region_id);
                 }
             }
@@ -1307,7 +1310,7 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+    pub fn update_safe_ts_with_time(&self, apply_index: u64, ts: u64, now: Option<Instant>) {
         if apply_index == 0 || ts == 0 {
             return;
         }
@@ -1315,11 +1318,15 @@ impl RegionReadProgress {
         if core.discard {
             return;
         }
-        if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+        if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
             }
         }
+    }
+
+    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+        self.update_safe_ts_with_time(apply_index, ts, None)
     }
 
     pub fn merge_safe_ts<E: KvEngine>(
@@ -1345,15 +1352,21 @@ impl RegionReadProgress {
         &self,
         leader_info: &LeaderInfo,
         coprocessor: &CoprocessorHost<E>,
+        now: Option<Instant>,
     ) -> bool {
         let mut core = self.core.lock().unwrap();
+        if matches!((core.last_instant_of_consume_leader, now), (None, Some(_)))
+            || matches!((core.last_instant_of_consume_leader, now), (Some(l), Some(r)) if l < r)
+        {
+            core.last_instant_of_consume_leader = now;
+        }
         if leader_info.has_read_state() {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
             // `read_state` is guaranteed to be valid when it is published by the leader
             let rs = leader_info.get_read_state();
             let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
             if apply_index != 0 && ts != 0 && !core.discard {
-                if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+                if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
                     if !core.pause {
                         self.safe_ts.store(ts, AtomicOrdering::Release);
                     }
@@ -1455,6 +1468,11 @@ pub struct RegionReadProgressCore {
     discard: bool,
     // A notify to trigger advancing resolved ts immediately.
     advance_notify: Option<Arc<Notify>>,
+    // The approximate last instant of calling update_safe_ts(), used for diagnosis.
+    // Only the update from advance of resolved-ts is counted. Other sources like CDC or
+    // backup-stream are ignored.
+    last_instant_of_update_safe_ts: Option<Instant>,
+    last_instant_of_consume_leader: Option<Instant>,
 }
 
 // A helpful wrapper of `(apply_index, safe_ts)` item
@@ -1527,6 +1545,8 @@ impl RegionReadProgressCore {
             pause: is_witness,
             discard: is_witness,
             advance_notify: None,
+            last_instant_of_update_safe_ts: None,
+            last_instant_of_consume_leader: None,
         }
     }
 
@@ -1580,9 +1600,14 @@ impl RegionReadProgressCore {
     }
 
     // Return the `safe_ts` if it is updated
-    fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
+    fn update_safe_ts(&mut self, idx: u64, ts: u64, now: Option<Instant>) -> Option<u64> {
         // Discard stale item with `apply_index` before `last_merge_index`
         // in order to prevent the stale item makes the `safe_ts` larger again
+        if matches!((self.last_instant_of_update_safe_ts, now), (None, Some(_)))
+            || matches!((self.last_instant_of_update_safe_ts, now), (Some(l), Some(r)) if l < r)
+        {
+            self.last_instant_of_update_safe_ts = now;
+        }
         if idx < self.last_merge_index {
             return None;
         }
@@ -1652,6 +1677,34 @@ impl RegionReadProgressCore {
     pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
         &self.leader_info
     }
+
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index
+    }
+
+    pub fn paused(&self) -> bool {
+        self.pause
+    }
+
+    pub fn pending_items(&self) -> &VecDeque<ReadState> {
+        &self.pending_items
+    }
+
+    pub fn read_state(&self) -> &ReadState {
+        &self.read_state
+    }
+
+    pub fn discarding(&self) -> bool {
+        self.discard
+    }
+
+    pub fn last_instant_of_update_ts(&self) -> &Option<Instant> {
+        &self.last_instant_of_update_safe_ts
+    }
+
+    pub fn last_instant_of_consume_leader(&self) -> &Option<Instant> {
+        &self.last_instant_of_consume_leader
+    }
 }
 
 /// Represent the duration of all stages of raftstore recorded by one
@@ -1661,6 +1714,7 @@ pub struct RaftstoreDuration {
     pub store_wait_duration: Option<std::time::Duration>,
     pub store_process_duration: Option<std::time::Duration>,
     pub store_write_duration: Option<std::time::Duration>,
+    pub store_commit_duration: Option<std::time::Duration>,
     pub apply_wait_duration: Option<std::time::Duration>,
     pub apply_process_duration: Option<std::time::Duration>,
 }
@@ -1670,6 +1724,7 @@ impl RaftstoreDuration {
         self.store_wait_duration.unwrap_or_default()
             + self.store_process_duration.unwrap_or_default()
             + self.store_write_duration.unwrap_or_default()
+            + self.store_commit_duration.unwrap_or_default()
             + self.apply_wait_duration.unwrap_or_default()
             + self.apply_process_duration.unwrap_or_default()
     }
@@ -1680,6 +1735,16 @@ pub struct LatencyInspector {
     id: u64,
     duration: RaftstoreDuration,
     cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>,
+}
+
+impl Debug for LatencyInspector {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            fmt,
+            "LatencyInspector: id {} duration: {:?}",
+            self.id, self.duration
+        )
+    }
 }
 
 impl LatencyInspector {
@@ -1701,6 +1766,10 @@ impl LatencyInspector {
 
     pub fn record_store_write(&mut self, duration: std::time::Duration) {
         self.duration.store_write_duration = Some(duration);
+    }
+
+    pub fn record_store_commit(&mut self, duration: std::time::Duration) {
+        self.duration.store_commit_duration = Some(duration);
     }
 
     pub fn record_apply_wait(&mut self, duration: std::time::Duration) {
@@ -2074,12 +2143,12 @@ mod tests {
         for (msg_type, index, is_append) in tbl {
             let mut msg = Message::default();
             msg.set_msg_type(msg_type);
-            let ent = {
-                let mut e = Entry::default();
-                e.set_index(index);
-                e
-            };
-            msg.set_entries(vec![ent].into());
+            let mut ent = Entry::default();
+            ent.set_index(index);
+            msg.mut_entries().push(ent.clone());
+            assert_eq!(is_first_append_entry(&msg), is_append);
+            ent.set_index(index + 1);
+            msg.mut_entries().push(ent);
             assert_eq!(is_first_append_entry(&msg), is_append);
         }
     }
@@ -2377,5 +2446,24 @@ mod tests {
             rrp.core.lock().unwrap().get_local_leader_info().peers,
             *region.get_peers(),
         );
+    }
+
+    #[test]
+    fn test_peer_id_mismatch() {
+        use kvproto::errorpb::{Error, MismatchPeerId};
+        let mut header = RaftRequestHeader::default();
+        let mut peer = Peer::default();
+        peer.set_id(1);
+        header.set_peer(peer);
+        // match
+        check_peer_id(&header, 1).unwrap();
+        // mismatch
+        let err = check_peer_id(&header, 2).unwrap_err();
+        let region_err: Error = err.into();
+        assert!(region_err.has_mismatch_peer_id());
+        let mut mismatch_err = MismatchPeerId::default();
+        mismatch_err.set_request_peer_id(1);
+        mismatch_err.set_store_peer_id(2);
+        assert_eq!(region_err.get_mismatch_peer_id(), &mismatch_err)
     }
 }

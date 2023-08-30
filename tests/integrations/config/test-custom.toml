@@ -159,6 +159,7 @@ raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
 raft-log-reserve-max-ticks = 100
 raft-engine-purge-interval = "20m"
+max-manual-flush-rate = 5.0
 raft-entry-cache-life-time = "12s"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "20MB"
@@ -167,10 +168,13 @@ clean-stale-peer-delay = "0s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
 region-compact-tombstones-percent = 33
+region-compact-min-redundant-rows = 999
+region-compact-redundant-rows-percent = 33
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 snap-mgr-gc-tick-interval = "12m"
 snap-gc-timeout = "12h"
+snap-wait-split-duration = "12h"
 lock-cf-compact-interval = "12m"
 lock-cf-compact-bytes-threshold = "123MB"
 notify-capacity = 12345
@@ -181,6 +185,7 @@ abnormal-leader-missing-duration = "6h"
 peer-stale-state-check-interval = "2h"
 leader-transfer-max-log-lag = 123
 snap-apply-batch-size = "12MB"
+snap-apply-copy-symlink = true
 consistency-check-interval = "12s"
 report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
@@ -333,9 +338,11 @@ enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -398,9 +405,11 @@ enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -426,6 +435,7 @@ compression-per-level = [
     "lz4",
 ]
 write-buffer-size = "1MB"
+write-buffer-limit = "16MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
 max-bytes-for-level-base = "12KB"
@@ -450,9 +460,11 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -502,9 +514,11 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
@@ -586,7 +600,7 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
 
@@ -613,7 +627,7 @@ recovery-mode = "tolerate-tail-corruption"
 recovery-read-block-size = "1KB"
 recovery-threads = 2
 memory-limit = "1GB"
-enable-log-recycle = true # enable by default
+enable-log-recycle = false
 
 [security]
 ca-path = "invalid path"
@@ -692,6 +706,7 @@ sink-memory-quota = "7MB"
 enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
+memory-quota = "1MB"
 
 [split]
 detect-times = 10

@@ -190,10 +190,11 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        self.base_file_system.delete(path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
-            manager.delete_file(path.as_ref().to_str().unwrap())?;
+            manager.delete_file(path.as_ref().to_str().unwrap(), None)?;
         }
-        self.base_file_system.delete(path)
+        Ok(())
     }
 
     fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
@@ -205,8 +206,11 @@ impl FileSystem for ManagedFileSystem {
             let r = self
                 .base_file_system
                 .rename(src_path.as_ref(), dst_path.as_ref());
-            let del_file = if r.is_ok() { src_str } else { dst_str };
-            if let Err(e) = manager.delete_file(del_file) {
+            if r.is_ok() {
+                if let Err(e) = manager.delete_file(src_str, Some(dst_str)) {
+                    warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+                }
+            } else if let Err(e) = manager.delete_file(dst_str, Some(src_str)) {
                 warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
             }
             r
@@ -215,6 +219,7 @@ impl FileSystem for ManagedFileSystem {
         }
     }
 
+    // TODO: distinguish reuse to trash and from trash.
     fn reuse<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
         if let Some(ref manager) = self.key_manager {
             // Note: In contrast to `rename`, `reuse` will make sure the encryption
@@ -228,9 +233,12 @@ impl FileSystem for ManagedFileSystem {
             let r = self
                 .base_file_system
                 .rename(src_path.as_ref(), dst_path.as_ref());
-            let del_file = if r.is_ok() { src_str } else { dst_str };
-            if let Err(e) = manager.delete_file(del_file) {
-                warn!("fail to remove encryption metadata during 'reuse'"; "err" => ?e);
+            if r.is_ok() {
+                if let Err(e) = manager.delete_file(src_str, Some(dst_str)) {
+                    warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+                }
+            } else if let Err(e) = manager.delete_file(dst_str, Some(src_str)) {
+                warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
             }
             r
         } else {
@@ -252,7 +260,7 @@ impl FileSystem for ManagedFileSystem {
     fn delete_metadata<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
         if let Some(ref manager) = self.key_manager {
             // Note: no error if the file doesn't exist.
-            manager.delete_file(path.as_ref().to_str().unwrap())?;
+            manager.delete_file(path.as_ref().to_str().unwrap(), None)?;
         }
         self.base_file_system.delete_metadata(path)
     }
@@ -520,15 +528,6 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
-    fn get_all_entries_to(&self, raft_group_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
-        if let Some(first) = self.0.first_index(raft_group_id) {
-            let last = self.0.last_index(raft_group_id).unwrap();
-            buf.reserve((last - first + 1) as usize);
-            self.fetch_entries_to(raft_group_id, first, last + 1, None, buf)?;
-        }
-        Ok(())
-    }
-
     fn is_empty(&self) -> Result<bool> {
         self.get_store_ident().map(|i| i.is_none())
     }
@@ -628,12 +627,12 @@ impl RaftEngineReadOnly for RaftLogEngine {
 impl RaftEngineDebug for RaftLogEngine {
     fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
     where
-        F: FnMut(&Entry) -> Result<bool>,
+        F: FnMut(Entry) -> Result<bool>,
     {
         if let Some(first_index) = self.first_index(raft_group_id) {
             for idx in first_index..=self.last_index(raft_group_id).unwrap() {
                 if let Some(entry) = self.get_entry(raft_group_id, idx)? {
-                    if !f(&entry)? {
+                    if !f(entry)? {
                         break;
                     }
                 }

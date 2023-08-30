@@ -6,11 +6,6 @@
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-mod lock;
-mod timestamp;
-mod types;
-mod write;
-
 use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
@@ -19,10 +14,15 @@ pub use lock::{Lock, LockType, PessimisticLock};
 use thiserror::Error;
 pub use timestamp::{TimeStamp, TsSet, TSO_PHYSICAL_SHIFT_BITS};
 pub use types::{
-    insert_old_value_if_resolved, is_short_value, Key, KvPair, Mutation, MutationType, OldValue,
-    OldValues, TxnExtra, TxnExtraScheduler, Value, WriteBatchFlags, SHORT_VALUE_MAX_LEN,
+    insert_old_value_if_resolved, is_short_value, Key, KvPair, LastChange, Mutation, MutationType,
+    OldValue, OldValues, TxnExtra, TxnExtraScheduler, Value, WriteBatchFlags, SHORT_VALUE_MAX_LEN,
 };
 pub use write::{Write, WriteRef, WriteType};
+
+mod lock;
+mod timestamp;
+mod types;
+mod write;
 
 #[derive(Debug, Error)]
 pub enum ErrorInner {

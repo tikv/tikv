@@ -180,6 +180,7 @@ make_static_metric! {
         disk_full,
         non_witness,
         recovery,
+        unsafe_vote,
     }
 
     pub label_enum ProposalType {
@@ -419,13 +420,13 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_wf_commit_log_duration_seconds",
             "Bucketed histogram of proposals' commit and persist duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
     pub static ref STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
             "Bucketed histogram of proposals' commit but not persist duration",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
 
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -457,7 +458,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
             "Bucketed histogram of peer commits logs duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
 
     pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
@@ -769,7 +770,7 @@ lazy_static! {
         "Total number of pending write tasks from io rescheduling peers"
     ).unwrap();
 
-    pub static ref STORE_INSPECT_DURTION_HISTOGRAM: HistogramVec =
+    pub static ref STORE_INSPECT_DURATION_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_inspect_duration_seconds",
             "Bucketed histogram of inspect duration.",
@@ -781,7 +782,7 @@ lazy_static! {
     register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
 
     pub static ref STORE_SLOW_TREND_GAUGE: Gauge =
-    register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate").unwrap();
+    register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate.").unwrap();
 
     pub static ref STORE_SLOW_TREND_L0_GAUGE: Gauge =
     register_gauge!("tikv_raftstore_slow_trend_l0", "Slow trend L0 window avg value.").unwrap();
@@ -811,7 +812,7 @@ lazy_static! {
     register_int_gauge_vec!(
         "tikv_raftstore_slow_trend_misc",
         "Slow trend uncatelogued gauge(s)",
-        &["type"]
+        &["window"]
     ).unwrap();
 
     pub static ref STORE_SLOW_TREND_RESULT_VALUE_GAUGE: Gauge =
@@ -875,4 +876,9 @@ lazy_static! {
         &["store"]
     )
     .unwrap();
+
+    pub static ref PEER_IN_FLASHBACK_STATE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_peer_in_flashback_state",
+        "Total number of peers in the flashback state"
+    ).unwrap();
 }

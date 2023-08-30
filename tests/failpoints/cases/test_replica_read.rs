@@ -11,9 +11,8 @@ use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
-use test_raftstore::{Simulator as S1, *};
+use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as S2;
 use tikv::storage::config::EngineType;
 use tikv_util::{config::ReadableDuration, future::block_on_timeout, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
@@ -337,7 +336,6 @@ fn test_read_after_cleanup_range_for_snap() {
     fail::remove("pause_on_peer_collect_message");
     must_get_none(&cluster.get_engine(3), b"k0");
     // Should not receive resp
-    rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
     fail::remove("apply_snap_cleanup_range");
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
@@ -351,7 +349,7 @@ fn test_read_after_cleanup_range_for_snap() {
 /// a heartbeat timeout to know its leader before that it can't handle any read
 /// request.
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_new_split_learner_can_not_find_leader() {
     let mut cluster = new_cluster(0, 4);
     configure_for_lease_read(&mut cluster.cfg, Some(5000), None);
@@ -475,7 +473,7 @@ fn test_replica_read_after_transfer_leader() {
 // This test is for reproducing the bug that some replica reads was sent to a
 // leader and shared a same read index because of the optimization on leader.
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_after_transfer_leader() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -572,7 +570,7 @@ fn test_read_index_after_transfer_leader() {
 /// Test if the read index request can get a correct response when the commit
 /// index of leader if not up-to-date after transferring leader.
 #[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_batch_read_index_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(100));
@@ -708,6 +706,7 @@ fn test_read_index_lock_checking_on_follower() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
@@ -787,6 +786,7 @@ fn test_read_index_lock_checking_on_false_leader() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));

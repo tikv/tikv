@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use derive_more::Deref;
 use kvproto::encryptionpb::MasterKeyKms;
+use tikv_util::box_err;
 
 use crate::error::{Error, KmsError, Result};
 
@@ -12,10 +13,33 @@ pub struct Location {
     pub endpoint: String,
 }
 
+/// Configurations for Azure KMS.
+#[derive(Debug, Default, Clone)]
+pub struct SubConfigAzure {
+    pub tenant_id: String,
+    pub client_id: String,
+
+    /// Url to access KeyVault
+    pub keyvault_url: String,
+    /// Key name in the HSM
+    pub hsm_name: String,
+    /// Url to access HSM
+    pub hsm_url: String,
+    /// Authorized certificate
+    pub client_certificate: Option<String>,
+    /// Path of local authorized certificate
+    pub client_certificate_path: Option<String>,
+    /// Password for the certificate
+    pub client_certificate_password: String,
+    /// Secret of the client.
+    pub client_secret: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub key_id: KeyId,
     pub location: Location,
+    pub azure: Option<SubConfigAzure>,
     pub vendor: String,
 }
 
@@ -27,8 +51,15 @@ impl Config {
                 region: mk.region,
                 endpoint: mk.endpoint,
             },
+            azure: None,
             vendor: mk.vendor,
         })
+    }
+
+    pub fn from_azure_kms_config(mk: MasterKeyKms, azure_kms_cfg: SubConfigAzure) -> Result<Self> {
+        let mut cfg = Config::from_proto(mk)?;
+        cfg.azure = Some(azure_kms_cfg);
+        Ok(cfg)
     }
 }
 
@@ -47,6 +78,10 @@ impl KeyId {
             Ok(KeyId(id))
         }
     }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
 }
 
 // EncryptedKey is a newtype used to mark data as an encrypted key
@@ -64,17 +99,61 @@ impl EncryptedKey {
             Ok(Self(key))
         }
     }
+
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum CryptographyType {
+    Plain = 0,
+    AesGcm256,
+    // ..
+}
+
+impl CryptographyType {
+    #[inline]
+    pub fn target_key_size(&self) -> usize {
+        match self {
+            CryptographyType::Plain => 0, // Plain text has no limitation
+            CryptographyType::AesGcm256 => 32,
+        }
+    }
 }
 
 // PlainKey is a newtype used to mark a vector a plaintext key.
 // It requires the vec to be a valid AesGcmCrypter key.
-#[derive(Deref)]
-pub struct PlainKey(Vec<u8>);
+pub struct PlainKey {
+    tag: CryptographyType,
+    key: Vec<u8>,
+}
 
 impl PlainKey {
-    pub fn new(key: Vec<u8>) -> Result<Self> {
-        // TODO: crypter.rs in encryption performs additional validation
-        Ok(Self(key))
+    pub fn new(key: Vec<u8>, t: CryptographyType) -> Result<Self> {
+        let limitation = t.target_key_size();
+        if limitation > 0 && key.len() != limitation {
+            Err(Error::KmsError(KmsError::Other(box_err!(
+                "encryption method and key length mismatch, expect {} get
+                    {}",
+                limitation,
+                key.len()
+            ))))
+        } else {
+            Ok(Self { key, tag: t })
+        }
+    }
+
+    pub fn key_tag(&self) -> CryptographyType {
+        self.tag
+    }
+}
+
+impl core::ops::Deref for PlainKey {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Self::Target {
+        &self.key
     }
 }
 
@@ -93,6 +172,8 @@ pub struct DataKeyPair {
     pub plaintext: PlainKey,
 }
 
+/// `Key Management Service Provider`, serving for managing master key on
+/// different cloud.
 #[async_trait]
 pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
     async fn generate_data_key(&self) -> Result<DataKeyPair>;

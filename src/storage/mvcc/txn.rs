@@ -523,7 +523,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
+    fn test_mvcc_txn_pessimistic_prewrite_check_not_exist() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
         try_pessimistic_prewrite_check_not_exists(&mut engine, k, k, 3).unwrap_err();

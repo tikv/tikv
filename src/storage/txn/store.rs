@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, KvPair, Lock, OldValue, TimeStamp, TsSet, Value, WriteRef};
+use txn_types::{Key, KvPair, LastChange, Lock, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 use super::{Error, ErrorInner, Result};
 use crate::storage::{
@@ -167,14 +167,13 @@ impl TxnEntry {
                 lock: (_, value), ..
             } => {
                 let l = Lock::parse(value).unwrap();
-                *value = l.set_last_change(TimeStamp::zero(), 0).to_bytes();
+                *value = l.set_last_change(LastChange::Unknown).to_bytes();
             }
             TxnEntry::Commit {
                 write: (_, value), ..
             } => {
                 let mut w = WriteRef::parse(value).unwrap();
-                w.last_change_ts = TimeStamp::zero();
-                w.versions_to_last_change = 0;
+                w.last_change = LastChange::Unknown;
                 *value = w.to_bytes();
             }
         }

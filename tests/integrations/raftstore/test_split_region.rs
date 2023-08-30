@@ -20,11 +20,14 @@ use raftstore::{
     store::{Bucket, BucketRange, Callback, WriteResponse},
     Result,
 };
+use raftstore_v2::router::QueryResult;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::config::*;
-use txn_types::{Key, PessimisticLock};
+use tikv_util::{config::*, future::block_on_timeout};
+use txn_types::{Key, LastChange, PessimisticLock};
+
+use crate::tikv_util::HandyRwLock;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -914,8 +917,8 @@ fn test_split_with_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -923,8 +926,8 @@ fn test_split_with_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
@@ -1264,9 +1267,9 @@ fn test_catch_up_peers_after_split() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_split_region_keep_records() {
-    let mut cluster = test_raftstore_v2::new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -1298,4 +1301,196 @@ fn test_split_region_keep_records() {
         "{:?}",
         region_state
     );
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_slow_split_does_not_cause_snapshot() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+
+    // isolate node 3 for region 1.
+    cluster.add_recv_filter_on_node(3, Box::new(RegionPacketFilter::new(1, 3)));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Leader must not send snapshot to new peer on node 3.
+    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap_err();
+    cluster.must_put(b"k0", b"v0");
+    // ... even after node 3 applied split.
+    cluster.clear_recv_filter_on_node(3);
+
+    let new_region = pd_client.get_region(b"").unwrap();
+    let new_peer3 = find_peer(&new_region, 3).unwrap();
+    cluster.must_transfer_leader(new_region.get_id(), new_peer3.clone());
+
+    notify_rx.try_recv().unwrap_err();
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_slow_split_does_not_prevent_snapshot() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::secs(2);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+
+    // isolate node 3 for region 1.
+    cluster.add_recv_filter_on_node(3, Box::new(RegionPacketFilter::new(1, 3)));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Leader must not send snapshot to new peer on node 3.
+    notify_rx
+        .recv_timeout(cluster.cfg.raft_store.snap_wait_split_duration.0 / 2)
+        .unwrap_err();
+
+    // A follower can receive a snapshot from leader if split is really slow.
+    thread::sleep(2 * cluster.cfg.raft_store.snap_wait_split_duration.0);
+    let new_region = pd_client.get_region(b"").unwrap();
+    let new_peer3 = find_peer(&new_region, 3).unwrap();
+    cluster.must_transfer_leader(new_region.get_id(), new_peer3.clone());
+
+    notify_rx.try_recv().unwrap();
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_slow_split_does_not_prevent_leader_election() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Do not let node 2 and 3 split.
+    cluster.add_recv_filter_on_node(2, Box::new(EraseHeartbeatCommit));
+    cluster.add_recv_filter_on_node(3, Box::new(EraseHeartbeatCommit));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_recv_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgRequestVoteResponse,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Node 1 must receive request vote response twice.
+    notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    cluster.must_put(b"k0", b"v0");
+}
+
+// A filter that disable read index by heartbeat.
+#[derive(Clone)]
+struct EraseHeartbeatContext;
+
+impl Filter for EraseHeartbeatContext {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
+                msg.mut_message().clear_context();
+            }
+        }
+        Ok(())
+    }
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_split_during_read_index() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    let region = cluster.get_region(b"");
+
+    // Delay read index.
+    cluster.add_recv_filter_on_node(2, Box::new(EraseHeartbeatContext));
+    cluster.add_recv_filter_on_node(3, Box::new(EraseHeartbeatContext));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (msg, sub) = raftstore_v2::router::PeerMsg::raft_query(request);
+    cluster
+        .sim
+        .rl()
+        .async_peer_msg_on_node(1, region.get_id(), msg)
+        .unwrap();
+
+    cluster.must_split(&region, b"a");
+
+    // Enable read index
+    cluster.clear_recv_filter_on_node(2);
+    cluster.clear_recv_filter_on_node(3);
+
+    match block_on_timeout(sub.result(), Duration::from_secs(5)) {
+        Ok(Some(QueryResult::Response(resp))) if resp.get_header().has_error() => {}
+        other => {
+            panic!("{:?}", other);
+        }
+    }
 }

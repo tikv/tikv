@@ -16,6 +16,10 @@ pub fn data_cf_offset(cf: &str) -> usize {
     DATA_CFS.iter().position(|c| *c == cf).expect(cf)
 }
 
+pub fn offset_to_cf(off: usize) -> &'static str {
+    DATA_CFS[off]
+}
+
 pub fn name_to_cf(name: &str) -> Option<CfName> {
     if name.is_empty() {
         return Some(CF_DEFAULT);

@@ -282,7 +282,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
             }
             debug!(
                 "cannot find corresponding read from pending reads";
-                "uuid" => ?uuid, "read-index" => index,
+                "uuid" => ?uuid, "read_index" => index,
             );
         }
 

@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-
 use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 

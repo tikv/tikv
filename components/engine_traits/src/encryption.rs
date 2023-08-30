@@ -8,7 +8,12 @@ use std::{
 pub trait EncryptionKeyManager: Sync + Send {
     fn get_file(&self, fname: &str) -> Result<FileEncryptionInfo>;
     fn new_file(&self, fname: &str) -> Result<FileEncryptionInfo>;
-    fn delete_file(&self, fname: &str) -> Result<()>;
+    /// Can be used with both file and directory.
+    ///
+    /// `physical_fname` is a hint when `fname` was renamed physically.
+    /// Depending on the implementation, providing false negative or false
+    /// positive value may result in leaking encryption keys.
+    fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> Result<()>;
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()>;
 }
 

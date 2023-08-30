@@ -598,7 +598,7 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
-        assert_ne!(lock.lock_type, LockType::Pessimistic);
+        assert!(!lock.is_pessimistic_lock());
         lock
     }
 
@@ -612,7 +612,7 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
-        assert_ne!(lock.lock_type, LockType::Pessimistic);
+        assert!(!lock.is_pessimistic_lock());
         assert_eq!(lock.ttl, ttl);
     }
 
@@ -631,9 +631,9 @@ pub mod tests {
         assert_eq!(lock.ttl, ttl);
         assert_eq!(lock.min_commit_ts, min_commit_ts.into());
         if is_pessimistic {
-            assert_eq!(lock.lock_type, LockType::Pessimistic);
+            assert!(lock.is_pessimistic_lock())
         } else {
-            assert_ne!(lock.lock_type, LockType::Pessimistic);
+            assert!(!lock.is_pessimistic_lock());
         }
     }
 

@@ -103,29 +103,37 @@ impl<S: Snapshot> DuplicateDetector<S> {
 
         while let Some(current_write) = self.skip_lock_and_rollback(&start_key)? {
             let (current_key, commit_ts) = Key::split_on_ts_for(self.iter.key())?;
-            if current_write.write_type == WriteType::Put {
-                if commit_ts <= self.min_commit_ts
-                    && !current_write
-                        .as_ref()
-                        .check_gc_fence_as_latest_version(self.min_commit_ts)
-                {
+            match current_write.write_type {
+                WriteType::Put => {
+                    if commit_ts <= self.min_commit_ts
+                        && !current_write
+                            .as_ref()
+                            .check_gc_fence_as_latest_version(self.min_commit_ts)
+                    {
+                        self.skip_all_version(&start_key)?;
+                        return Ok(());
+                    }
+
+                    let write_value = if self.key_only {
+                        None
+                    } else {
+                        Some(current_write)
+                    };
+                    if write_info.is_some() {
+                        duplicate_pairs.push(self.make_kv_pair(
+                            &start_key,
+                            write_info.take(),
+                            end_commit_ts,
+                        )?);
+                    }
+                    duplicate_pairs.push(self.make_kv_pair(current_key, write_value, commit_ts)?);
+                }
+                // ignore the KV that is deleted.
+                WriteType::Delete => {
                     self.skip_all_version(&start_key)?;
                     return Ok(());
                 }
-
-                let write_value = if self.key_only {
-                    None
-                } else {
-                    Some(current_write)
-                };
-                if write_info.is_some() {
-                    duplicate_pairs.push(self.make_kv_pair(
-                        &start_key,
-                        write_info.take(),
-                        end_commit_ts,
-                    )?);
-                }
-                duplicate_pairs.push(self.make_kv_pair(current_key, write_value, commit_ts)?);
+                _ => {}
             }
             if commit_ts <= self.min_commit_ts {
                 self.skip_all_version(&start_key)?;
@@ -490,6 +498,11 @@ mod tests {
         ];
         let snapshot = storage.get_snapshot();
         let detector = DuplicateDetector::new(snapshot, b"0".to_vec(), None, 13, false).unwrap();
+        check_duplicate_data(detector, expected_kvs.clone());
+
+        // in fact lightning will not set min_commit_ts
+        let snapshot = storage.get_snapshot();
+        let detector = DuplicateDetector::new(snapshot, b"0".to_vec(), None, 0, false).unwrap();
         check_duplicate_data(detector, expected_kvs);
     }
 }

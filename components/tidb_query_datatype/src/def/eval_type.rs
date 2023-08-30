@@ -90,8 +90,6 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
 
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
-
     use super::*;
     use crate::{FieldTypeAccessor, FieldTypeTp::*};
 

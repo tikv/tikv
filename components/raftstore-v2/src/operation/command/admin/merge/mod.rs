@@ -24,7 +24,7 @@ pub const MERGE_SOURCE_PREFIX: &str = "merge-source";
 
 // `index` is the commit index of `PrepareMergeRequest`, `commit` field of
 // `CommitMergeRequest`.
-fn merge_source_path<EK>(
+pub fn merge_source_path<EK>(
     registry: &TabletRegistry<EK>,
     source_region_id: u64,
     index: u64,
@@ -37,7 +37,6 @@ fn merge_source_path<EK>(
 #[derive(Default)]
 pub struct MergeContext {
     prepare_status: Option<PrepareStatus>,
-    catch_up_logs: Option<CatchUpLogs>,
 }
 
 impl MergeContext {
@@ -76,13 +75,22 @@ impl MergeContext {
             None
         }
     }
+
+    #[inline]
+    pub fn prepare_merge_index(&self) -> Option<u64> {
+        if let Some(PrepareStatus::Applied(state)) = self.prepare_status.as_ref() {
+            Some(state.get_commit())
+        } else {
+            None
+        }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn update_merge_progress_on_became_follower(&mut self) {
-        if let Some(ctx) = self.merge_context()
-            && matches!(ctx.prepare_status, Some(PrepareStatus::WaitForFence { .. }))
+        if let Some(MergeContext { prepare_status: Some(status) }) = self.merge_context()
+            && matches!(status, PrepareStatus::WaitForTrimStatus { .. } | PrepareStatus::WaitForFence { .. })
         {
             self.take_merge_context();
             self.proposal_control_mut().set_pending_prepare_merge(false);

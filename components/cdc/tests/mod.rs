@@ -6,13 +6,14 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, MemoryQuota, Task, Validate};
+use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use grpcio::{
-    ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver, Environment,
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver,
+    Environment, MetadataBuilder,
 };
 use kvproto::{
     cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
@@ -25,6 +26,7 @@ use test_raftstore::*;
 use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID, storage::kv::LocalTablets};
 use tikv_util::{
     config::ReadableDuration,
+    memory::MemoryQuota,
     worker::{LazyWorker, Runnable},
     HandyRwLock,
 };
@@ -48,7 +50,6 @@ impl ClientReceiver {
         std::mem::replace(&mut *self.receiver.lock().unwrap(), rx)
     }
 }
-
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
@@ -57,7 +58,37 @@ pub fn new_event_feed(
     ClientReceiver,
     Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
 ) {
-    let (req_tx, resp_rx) = client.event_feed().unwrap();
+    create_event_feed(client, false)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn new_event_feed_v2(
+    client: &ChangeDataClient,
+) -> (
+    ClientDuplexSender<ChangeDataRequest>,
+    ClientReceiver,
+    Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
+) {
+    create_event_feed(client, true)
+}
+
+#[allow(clippy::type_complexity)]
+fn create_event_feed(
+    client: &ChangeDataClient,
+    stream_multiplexing: bool,
+) -> (
+    ClientDuplexSender<ChangeDataRequest>,
+    ClientReceiver,
+    Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
+) {
+    let (req_tx, resp_rx) = if stream_multiplexing {
+        let mut metadata = MetadataBuilder::with_capacity(1);
+        metadata.add_str("features", "stream-multiplexing").unwrap();
+        let opt = CallOption::default().headers(metadata.build());
+        client.event_feed_v2_opt(opt).unwrap()
+    } else {
+        client.event_feed().unwrap()
+    };
     let event_feed_wrap = Arc::new(Mutex::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
 
@@ -153,7 +184,7 @@ impl TestSuiteBuilder {
                 .push(Box::new(move || {
                     create_change_data(cdc::Service::new(
                         scheduler.clone(),
-                        MemoryQuota::new(memory_quota),
+                        Arc::new(MemoryQuota::new(memory_quota)),
                     ))
                 }));
             sim.txn_extra_schedulers.insert(
@@ -193,7 +224,7 @@ impl TestSuiteBuilder {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
-                MemoryQuota::new(usize::MAX),
+                Arc::new(MemoryQuota::new(usize::MAX)),
                 sim.get_causal_ts_provider(*id),
             );
             let mut updated_cfg = cfg.clone();

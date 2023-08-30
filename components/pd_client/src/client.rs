@@ -27,6 +27,7 @@ use kvproto::{
     metapb,
     pdpb::{self, Member},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
+    resource_manager::TokenBucketsRequest,
 };
 use security::SecurityManager;
 use tikv_util::{
@@ -46,6 +47,7 @@ use super::{
 
 pub const CQ_COUNT: usize = 1;
 pub const CLIENT_PREFIX: &str = "pd";
+const DEFAULT_REGION_PER_BATCH: i32 = 128;
 
 #[derive(Clone)]
 pub struct RpcClient {
@@ -102,6 +104,7 @@ impl RpcClient {
                             target,
                             tso.unwrap(),
                             cfg.enable_forwarding,
+                            cfg.retry_interval.0,
                         )),
                         monitor: monitor.clone(),
                     };
@@ -215,6 +218,9 @@ impl RpcClient {
             };
 
             Box::pin(async move {
+                // Migrated to 2021 migration. This let statement is probably not needed, see
+                //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+                let _ = &req;
                 let mut resp = handler.await?;
                 check_resp_header(resp.get_header())?;
                 let region = if resp.has_region() {
@@ -320,6 +326,8 @@ impl fmt::Debug for RpcClient {
 }
 
 const LEADER_CHANGE_RETRY: usize = 10;
+// periodic request like store_heartbeat, we don't need to retry.
+const NO_RETRY: usize = 1;
 
 impl PdClient for RpcClient {
     fn store_global_config(
@@ -408,6 +416,53 @@ impl PdClient for RpcClient {
         sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, _| {
             client.watch_global_config(&req)
         })
+    }
+
+    fn scan_regions(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC.scan_regions.start_coarse_timer();
+
+        let mut req = pdpb::ScanRegionsRequest::default();
+        req.set_header(self.header());
+        req.set_start_key(start_key.to_vec());
+        req.set_end_key(end_key.to_vec());
+        req.set_limit(limit);
+
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.scan_regions_opt(&req, option)
+        })?;
+        check_resp_header(resp.get_header())?;
+        Ok(resp.take_regions().into())
+    }
+
+    fn batch_load_regions(
+        &self,
+        mut start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> Vec<Vec<pdpb::Region>> {
+        let mut res = Vec::new();
+
+        loop {
+            let regions = self
+                .scan_regions(&start_key, &end_key, DEFAULT_REGION_PER_BATCH)
+                .unwrap();
+            if regions.is_empty() {
+                break;
+            }
+            res.push(regions.clone());
+
+            let end_region = regions.last().unwrap().get_region();
+            if end_region.get_end_key().is_empty() {
+                break;
+            }
+            start_key = end_region.get_end_key().to_vec();
+        }
+
+        res
     }
 
     fn get_cluster_id(&self) -> Result<u64> {
@@ -818,10 +873,14 @@ impl PdClient for RpcClient {
                     })
             };
             Box::pin(async move {
-                let resp = handler.await?;
-                PD_REQUEST_HISTOGRAM_VEC
-                    .store_heartbeat
-                    .observe(timer.saturating_elapsed_secs());
+                let resp = handler
+                    .map(|res| {
+                        PD_REQUEST_HISTOGRAM_VEC
+                            .store_heartbeat
+                            .observe(timer.saturating_elapsed_secs());
+                        res
+                    })
+                    .await?;
                 check_resp_header(resp.get_header())?;
                 match feature_gate.set_version(resp.get_cluster_version()) {
                     Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
@@ -832,9 +891,7 @@ impl PdClient for RpcClient {
             }) as PdFuture<_>
         };
 
-        self.pd_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
-            .execute()
+        self.pd_client.request(req, executor, NO_RETRY).execute()
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
@@ -1122,6 +1179,50 @@ impl PdClient for RpcClient {
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
+
+    fn report_ru_metrics(&self, req: TokenBucketsRequest) -> PdFuture<()> {
+        let executor = |client: &Client, req: TokenBucketsRequest| {
+            let mut inner = client.inner.wl();
+            if let Either::Left(ref mut left) = inner.rg_sender {
+                let sender = left.take().expect("expect report_ru_metrics sink");
+                let (tx, rx) = mpsc::unbounded();
+                inner.rg_sender = Either::Right(tx);
+                let resp = inner.rg_resp.take().unwrap();
+                // Note that for now we don't care about the result of the response stream.
+                inner.client_stub.spawn(async {
+                    resp.for_each(|_| future::ready(())).await;
+                    debug!("report_ru_metrics stream exited");
+                });
+                inner.client_stub.spawn(async move {
+                    let mut sender = sender.sink_map_err(Error::Grpc);
+                    let result = sender
+                        .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            sender.get_mut().cancel();
+                            info!("cancel report_ru_metrics sender");
+                        }
+                        Err(e) => {
+                            error!(?e; "failed to report_ru_metrics buckets");
+                        }
+                    };
+                });
+            }
+
+            let sender = inner
+                .rg_sender
+                .as_mut()
+                .right()
+                .expect("expect report_ru_metrics sender");
+            let ret = sender
+                .unbounded_send(req)
+                .map_err(|e| Error::StreamDisconnect(e.into_send_error()));
+            Box::pin(future::ready(ret)) as PdFuture<_>
+        };
+
+        self.pd_client.request(req, executor, NO_RETRY).execute()
+    }
 }
 
 impl RpcClient {
@@ -1143,6 +1244,9 @@ impl MetaStorageClient for RpcClient {
                 futures::future::ready(r).err_into().try_flatten()
             };
             Box::pin(async move {
+                // Migrated to 2021 migration. This let statement is probably not needed, see
+                //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+                let _ = &req;
                 fail::fail_point!("meta_storage_get", req.key.ends_with(b"rejectme"), |_| {
                     Err(super::Error::Grpc(grpcio::Error::RemoteStopped))
                 });

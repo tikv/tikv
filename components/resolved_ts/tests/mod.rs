@@ -62,6 +62,9 @@ impl TestSuite {
             obs.insert(id, rts_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<_>| {
+                    // Migrated to 2021 migration. This let statement is probably not needed, see
+                    //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+                    let _ = &rts_ob;
                     rts_ob.register_to(host);
                 },
             ));
@@ -119,8 +122,21 @@ impl TestSuite {
             );
             c
         };
+        self.must_schedule_task(store_id, Task::ChangeConfig { change });
+    }
+
+    pub fn must_change_memory_quota(&self, store_id: u64, bytes: u64) {
+        let change = {
+            let mut c = std::collections::HashMap::default();
+            c.insert("memory_quota".to_owned(), ConfigValue::Size(bytes));
+            c
+        };
+        self.must_schedule_task(store_id, Task::ChangeConfig { change });
+    }
+
+    pub fn must_schedule_task(&self, store_id: u64, task: Task) {
         let scheduler = self.endpoints.get(&store_id).unwrap().scheduler();
-        scheduler.schedule(Task::ChangeConfig { change }).unwrap();
+        scheduler.schedule(task).unwrap();
     }
 
     pub fn must_kv_prewrite(

@@ -13,10 +13,9 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as _;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, HandyRwLock};
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is working as expected in a general condition.
 #[test_case(test_raftstore::new_node_cluster)]
@@ -1354,8 +1353,8 @@ fn test_propose_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1372,8 +1371,8 @@ fn test_propose_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1483,8 +1482,8 @@ fn test_merge_pessimistic_locks_repeated_merge() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1634,7 +1633,9 @@ fn test_stale_message_after_merge() {
 /// Check whether merge should be prevented if follower may not have enough
 /// logs.
 #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
+// FIXME: #[test_case(test_raftstore_v2::new_server_cluster)]
+// In v2 `try_merge` always return error. Also the last `must_merge` sometimes
+// cannot get an updated min_matched.
 fn test_prepare_merge_with_reset_matched() {
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);

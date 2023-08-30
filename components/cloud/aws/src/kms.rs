@@ -5,7 +5,7 @@ use std::ops::Deref;
 use async_trait::async_trait;
 use cloud::{
     error::{Error, KmsError, Result},
-    kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
+    kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
 use rusoto_core::{request::DispatchSignedRequest, RusotoError};
 use rusoto_credential::ProvideAwsCredentials;
@@ -119,7 +119,7 @@ impl KmsProvider for AwsKms {
                 let plaintext_key = response.plaintext.unwrap().as_ref().to_vec();
                 Ok(DataKeyPair {
                     encrypted: EncryptedKey::new(ciphertext_key)?,
-                    plaintext: PlainKey::new(plaintext_key)?,
+                    plaintext: PlainKey::new(plaintext_key, CryptographyType::AesGcm256)?,
                 })
             })
     }
@@ -218,6 +218,7 @@ mod tests {
                 region: "ap-southeast-2".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
         };
 
         let dispatcher =
@@ -261,6 +262,7 @@ mod tests {
                 region: "ap-southeast-2".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
         };
 
         // IncorrectKeyException

@@ -496,11 +496,11 @@ pub enum Cmd {
     /// Show range properties
     RangeProperties {
         #[structopt(long, default_value = "")]
-        /// hex start key
+        /// hex start key (not starts with "z")
         start: String,
 
         #[structopt(long, default_value = "")]
-        /// hex end key
+        /// hex end key (not starts with "z")
         end: String,
     },
     /// Split the region
@@ -565,6 +565,86 @@ pub enum Cmd {
     },
     #[structopt(external_subcommand)]
     External(Vec<String>),
+    /// Usage: tikv-ctl show-cluster-id --config <config-path>
+    ShowClusterId {
+        /// Data directory path of the given TiKV instance.
+        #[structopt(long)]
+        data_dir: String,
+    },
+    /// Usage: tikv-ctl fork-readonly-tikv
+    ///
+    /// fork-readonly-tikv is for creating a tikv-server agent based on a
+    /// read-only TiKV remains. The agent can be used for recovery because
+    /// all committed transactions can be accessed correctly, without any
+    /// modifications on the remained TiKV.
+    ///
+    /// NOTE: The remained TiKV can't run concurrently with the agent.
+    ReuseReadonlyRemains {
+        /// Data directory path of the remained TiKV.
+        #[structopt(long)]
+        data_dir: String,
+
+        /// Data directory to create the agent.
+        #[structopt(long)]
+        agent_dir: String,
+
+        /// Reuse snapshot files of the remained TiKV: symlink or copy.
+        #[structopt(long, default_value = "symlink")]
+        snaps: String,
+
+        /// Reuse rocksdb files of the remained TiKV: symlink or copy.
+        ///
+        /// NOTE: the last one WAL file will still be copied even if `symlink`
+        /// is specified, because the last one WAL file isn't read-only when
+        /// opening a RocksDB instance.
+        #[structopt(long, default_value = "symlink")]
+        rocksdb_files: String,
+    },
+    /// flashback data in cluster to a certain version
+    ///
+    /// NOTE: Should use `./pd-ctl config set halt-scheduling true` to halt PD
+    /// scheduling before flashback.
+    Flashback {
+        #[structopt(short = "v")]
+        /// the version to flashback
+        version: u64,
+
+        #[structopt(
+            short = "r",
+            aliases = &["region"],
+            use_delimiter = true,
+            require_delimiter = true,
+            value_delimiter = ","
+        )]
+        /// specific regions to flashback
+        regions: Option<Vec<u64>>,
+
+        #[structopt(long, default_value = "")]
+        /// hex start key
+        start: String,
+
+        #[structopt(long, default_value = "")]
+        /// hex end key
+        end: String,
+    },
+    /// Get the state of a region's RegionReadProgress.
+    GetRegionReadProgress {
+        #[structopt(short = "r", long)]
+        /// The target region id
+        region: u64,
+
+        #[structopt(long)]
+        /// When specified, prints the locks associated with the transaction
+        /// that has the smallest 'start_ts' in the resolver, which is
+        /// preventing the 'resolved_ts' from advancing.
+        log: bool,
+
+        #[structopt(long, requires = "log")]
+        /// The smallest start_ts of the target transaction. Namely, only the
+        /// transaction whose start_ts is greater than or equal to this value
+        /// can be recorded in TiKV logs.
+        min_start_ts: Option<u64>,
+    },
 }
 
 #[derive(StructOpt)]

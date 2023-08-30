@@ -19,6 +19,8 @@ use grpcio::{
 use kvproto::{
     meta_storagepb_grpc::{create_meta_storage, MetaStorage},
     pdpb::*,
+    resource_manager,
+    resource_manager_grpc::create_resource_manager,
 };
 use pd_client::Error as PdError;
 use security::*;
@@ -75,6 +77,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
         let pd = create_pd(self.mocker.clone());
         let meta_store = create_meta_storage(self.mocker.clone());
+        let resource_manager = create_resource_manager(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
@@ -83,7 +86,8 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         );
         let mut sb = ServerBuilder::new(env)
             .register_service(pd)
-            .register_service(meta_store);
+            .register_service(meta_store)
+            .register_service(resource_manager);
         for (host, port) in eps {
             sb = mgr.bind(sb, &host, port);
         }
@@ -258,6 +262,9 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         let cli = self.etcd_client.clone();
         let future = async move {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &req;
             let mut watcher = match cli
                 .lock()
                 .await
@@ -618,5 +625,33 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _: UnarySink<kvproto::pdpb::GetDcLocationInfoResponse>,
     ) {
         unimplemented!()
+    }
+}
+
+impl<C: PdMocker + Send + Sync + 'static> resource_manager::ResourceManager for PdMock<C> {
+    fn acquire_token_buckets(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        stream: grpcio::RequestStream<resource_manager::TokenBucketsRequest>,
+        sink: grpcio::DuplexSink<resource_manager::TokenBucketsResponse>,
+    ) {
+        let mock = self.clone();
+        ctx.spawn(async move {
+            let mut stream = stream.map_err(PdError::from).try_filter_map(move |req| {
+                let resp = mock
+                    .case
+                    .as_ref()
+                    .and_then(|case| case.report_ru_metrics(&req))
+                    .or_else(|| mock.default_handler.report_ru_metrics(&req));
+                match resp {
+                    None => future::ok(None),
+                    Some(Ok(resp)) => future::ok(Some((resp, WriteFlags::default()))),
+                    Some(Err(e)) => future::err(box_err!("{:?}", e)),
+                }
+            });
+            let mut sink = sink.sink_map_err(PdError::from);
+            let _ = sink.send_all(&mut stream).await;
+            let _ = sink.close().await;
+        });
     }
 }

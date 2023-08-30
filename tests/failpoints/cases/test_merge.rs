@@ -22,7 +22,7 @@ use raftstore::store::*;
 use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, time::Instant, HandyRwLock};
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is rollback as expected.
 #[test]
@@ -1346,8 +1346,8 @@ fn test_merge_with_concurrent_pessimistic_locking() {
                 ttl: 3000,
                 for_update_ts: 20.into(),
                 min_commit_ts: 30.into(),
-                last_change_ts: 15.into(),
-                versions_to_last_change: 3,
+                last_change: LastChange::make_exist(15.into(), 3),
+                is_locked_with_conflict: false,
             },
         )])
         .unwrap();
@@ -1435,8 +1435,8 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 15.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(15.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1516,8 +1516,8 @@ fn test_retry_pending_prepare_merge_fail() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 15.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(15.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -1592,8 +1592,8 @@ fn test_merge_pessimistic_locks_propose_fail() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 15.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(15.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks

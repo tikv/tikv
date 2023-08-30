@@ -31,6 +31,12 @@ pub struct WrappedEncryptionKeyManager<T: EncryptionKeyManager> {
     manager: Arc<T>,
 }
 
+impl<T: EncryptionKeyManager> WrappedEncryptionKeyManager<T> {
+    pub fn new(manager: Arc<T>) -> Self {
+        Self { manager }
+    }
+}
+
 impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyManager<T> {
     fn get_file(&self, fname: &str) -> Result<DBFileEncryptionInfo> {
         self.manager
@@ -42,8 +48,8 @@ impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyMan
             .new_file(fname)
             .map(convert_file_encryption_info)
     }
-    fn delete_file(&self, fname: &str) -> Result<()> {
-        self.manager.delete_file(fname)
+    fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> Result<()> {
+        self.manager.delete_file(fname, physical_fname)
     }
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
         self.manager.link_file(src_fname, dst_fname)

@@ -193,7 +193,7 @@ mod tests {
 
     #[bench]
     fn bench_channel(b: &mut Bencher) {
-        let (tx, rx) = unbounded(Some(Arc::new(ResourceController::new(
+        let (tx, rx) = unbounded(Some(Arc::new(ResourceController::new_for_test(
             "test".to_owned(),
             false,
         ))));
