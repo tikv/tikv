@@ -81,6 +81,8 @@ impl Drop for ResolverStatus {
             warn!("drop huge ResolverStatus";
                 "bytes" => bytes,
                 "num_locks" => num_locks,
+                "memory_quota_in_use" => memory_quota.in_use(),
+                "memory_quota_capacity" => memory_quota.capacity(),
             );
         }
         memory_quota.free(bytes);

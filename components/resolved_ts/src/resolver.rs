@@ -72,6 +72,8 @@ impl Drop for Resolver {
                 "region_id" => self.region_id,
                 "bytes" => bytes,
                 "num_locks" => num_locks,
+                "memory_quota_in_use" => self.memory_quota.in_use(),
+                "memory_quota_capacity" => self.memory_quota.capacity(),
             );
         }
         self.memory_quota.free(bytes);
