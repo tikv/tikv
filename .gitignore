@@ -43,3 +43,7 @@ core.*
 
 # Ignore all logs
 *.log
+
+# Ignore python cache
+__pycache__
+
