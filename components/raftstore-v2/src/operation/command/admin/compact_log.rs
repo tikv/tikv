@@ -63,14 +63,14 @@ pub struct CompactLogContext {
 }
 
 impl CompactLogContext {
-    pub fn new(last_applying_index: u64) -> CompactLogContext {
+    pub fn new(last_applying_index: u64, persisted_applied: u64) -> CompactLogContext {
         CompactLogContext {
             skipped_ticks: 0,
             approximate_log_size: 0,
             last_applying_index,
             last_compacted_idx: 0,
             tombstone_tablets_wait_index: vec![],
-            persisted_tablet_index: AtomicU64::new(0).into(),
+            persisted_tablet_index: AtomicU64::new(persisted_applied).into(),
         }
     }
 

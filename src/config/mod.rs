@@ -110,6 +110,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: u64 = ReadableSize::mb(32).0;
 
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
@@ -311,6 +312,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: Option<ReadableSize>,
+            pub write_buffer_limit: Option<ReadableSize>,
             pub max_write_buffer_number: i32,
             #[online_config(skip)]
             pub min_write_buffer_number_to_merge: i32,
@@ -668,6 +670,7 @@ macro_rules! build_cf_opt {
 pub struct CfResources {
     pub cache: Cache,
     pub compaction_thread_limiters: HashMap<&'static str, ConcurrentTaskLimiter>,
+    pub write_buffer_managers: HashMap<&'static str, Arc<WriteBufferManager>>,
 }
 
 cf_config!(DefaultCfConfig);
@@ -734,6 +737,7 @@ impl Default for DefaultCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
+            write_buffer_limit: None,
         }
     }
 }
@@ -832,6 +836,9 @@ impl DefaultCfConfig {
             }
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_DEFAULT) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -906,6 +913,7 @@ impl Default for WriteCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -962,6 +970,9 @@ impl WriteCfConfig {
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_WRITE) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -1028,6 +1039,7 @@ impl Default for LockCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -1062,6 +1074,9 @@ impl LockCfConfig {
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_LOCK) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -1127,6 +1142,7 @@ impl Default for RaftCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -1385,9 +1401,12 @@ impl DbConfig {
                 // strategy is consistent with single RocksDB.
                 self.defaultcf.max_compactions.get_or_insert(1);
                 self.writecf.max_compactions.get_or_insert(1);
-                if self.lockcf.write_buffer_size.is_none() {
-                    self.lockcf.write_buffer_size = Some(ReadableSize::mb(4));
-                }
+                self.lockcf
+                    .write_buffer_size
+                    .get_or_insert(ReadableSize::mb(4));
+                self.lockcf
+                    .write_buffer_limit
+                    .get_or_insert(ReadableSize::mb(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT));
             }
         }
     }
@@ -1510,9 +1529,29 @@ impl DbConfig {
                 ConcurrentTaskLimiter::new(CF_RAFT, n),
             );
         }
+        let mut write_buffer_managers = HashMap::default();
+        self.lockcf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_LOCK,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
+        self.defaultcf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_DEFAULT,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
+        self.writecf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_WRITE,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
         CfResources {
             cache,
             compaction_thread_limiters,
+            write_buffer_managers,
         }
     }
 
@@ -1556,6 +1595,9 @@ impl DbConfig {
         self.writecf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
+        if self.raftcf.write_buffer_limit.is_some() {
+            return Err("raftcf does not support cf based write buffer manager".into());
+        }
         if self.enable_unordered_write {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
@@ -1660,6 +1702,7 @@ impl Default for RaftDefaultCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
+            write_buffer_limit: None,
         }
     }
 }
