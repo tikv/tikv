@@ -397,7 +397,6 @@ impl RaftLogGcSkippedMetrics {
 }
 
 /// The buffered metrics counters for raft.
-#[derive(Clone)]
 pub struct RaftMetrics {
     pub store_time: LocalHistogram,
     pub ready: RaftReadyMetrics,
@@ -405,6 +404,8 @@ pub struct RaftMetrics {
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
+    pub event_time: RaftEventDurationVec,
+    pub peer_msg_len: LocalHistogram,
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
@@ -429,6 +430,8 @@ impl RaftMetrics {
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
                 .local(),
+            event_time: RaftEventDurationVec::from(&RAFT_EVENT_DURATION_VEC),
+            peer_msg_len: PEER_MSG_LEN.local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
@@ -450,6 +453,8 @@ impl RaftMetrics {
         self.send_message.flush();
         self.propose.flush();
         self.process_ready.flush();
+        self.event_time.flush();
+        self.peer_msg_len.flush();
         self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();

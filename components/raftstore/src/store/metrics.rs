@@ -137,15 +137,6 @@ make_auto_flush_static_metric! {
         region_not_initialized,
         is_applying_snapshot,
     }
-    pub label_enum RaftEventDurationType {
-        compact_check,
-        pd_store_heartbeat,
-        snap_gc,
-        compact_lock_cf,
-        consistency_check,
-        cleanup_import_sst,
-        raft_engine_purge,
-    }
 
     pub label_enum CompactionGuardAction {
         init,
@@ -165,9 +156,6 @@ make_auto_flush_static_metric! {
         threshold_limit,
     }
 
-    pub struct RaftEventDuration : LocalHistogram {
-        "type" => RaftEventDurationType
-    }
     pub struct RaftInvalidProposalCount : LocalIntCounter {
         "type" => RaftInvalidProposal
     }
@@ -228,11 +216,27 @@ make_auto_flush_static_metric! {
 }
 
 make_static_metric! {
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+        raft_engine_purge,
+        peer_msg,
+        store_msg,
+    }
+
     pub struct HibernatedPeerStateGauge: IntGauge {
         "state" => {
             awaken,
             hibernated,
         },
+    }
+
+    pub struct RaftEventDurationVec : LocalHistogram {
+        "type" => RaftEventDurationType
     }
 }
 
@@ -597,8 +601,13 @@ lazy_static! {
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
-    pub static ref RAFT_EVENT_DURATION: RaftEventDuration =
-        auto_flush_from!(RAFT_EVENT_DURATION_VEC, RaftEventDuration);
+
+    pub static ref PEER_MSG_LEN: Histogram =
+        register_histogram!(
+            "tikv_raftstore_peer_msg_len",
+            "Length of peer msg.",
+            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1000s
+        ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(
