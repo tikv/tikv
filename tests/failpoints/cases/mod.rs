@@ -10,6 +10,7 @@ mod test_coprocessor;
 mod test_disk_full;
 mod test_early_apply;
 mod test_encryption;
+mod test_engine;
 mod test_gc_metrics;
 mod test_gc_worker;
 mod test_hibernate;

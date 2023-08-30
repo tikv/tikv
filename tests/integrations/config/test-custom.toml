@@ -435,6 +435,7 @@ compression-per-level = [
     "lz4",
 ]
 write-buffer-size = "1MB"
+write-buffer-limit = "16MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
 max-bytes-for-level-base = "12KB"
@@ -705,6 +706,7 @@ sink-memory-quota = "7MB"
 enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
+memory-quota = "1MB"
 
 [split]
 detect-times = 10
