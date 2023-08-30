@@ -1263,7 +1263,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
-    pub fn async_request_future(
+    pub fn async_request(
         &mut self,
         mut req: RaftCmdRequest,
     ) -> BoxFuture<'static, RaftCmdResponse> {
@@ -1275,7 +1275,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             .async_command_on_node(leader.get_store_id(), req)
     }
 
-    pub fn async_put_future(
+    pub fn async_put(
         &mut self,
         key: &[u8],
         value: &[u8],
@@ -1283,7 +1283,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         let mut region = self.get_region(key);
         let reqs = vec![new_put_cmd(key, value)];
         let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
-        Ok(self.async_request_future(put))
+        Ok(self.async_request(put))
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {

@@ -1530,7 +1530,7 @@ fn test_retry_pending_prepare_merge_fail() {
     let (propose_tx, propose_rx) = mpsc::sync_channel(10);
     fail::cfg_callback("after_propose", move || propose_tx.send(()).unwrap()).unwrap();
 
-    let mut rx = cluster.async_put_future(b"k1", b"v11").unwrap();
+    let mut rx = cluster.async_put(b"k1", b"v11").unwrap();
     propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     block_on_timeout(rx.as_mut(), Duration::from_millis(200)).unwrap_err();
 

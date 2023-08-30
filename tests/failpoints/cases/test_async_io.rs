@@ -12,31 +12,6 @@ use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv_util::HandyRwLock;
 
-#[test]
-fn test_temp() {
-    use test_raftstore_v2::*;
-
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.run();
-
-    let a = cluster.get_engine(1);
-    let rocksdb = a.get_tablet_by_id(1).unwrap();
-    let r2 = rocksdb.clone();
-    fail::cfg("on_flush_completed", "pause").unwrap();
-    rocksdb.put(b"key", b"val").unwrap();
-    let a = std::thread::spawn(move || {
-        rocksdb.flush_cf("default", true).unwrap();
-        println!("flush done");
-    });
-
-    std::thread::sleep(Duration::from_secs(1));
-
-    r2.flush_cf("default", true).unwrap();
-    println!("flush done 2");
-
-    a.join().unwrap();
-}
-
 // Test if the entries can be committed and applied on followers even when
 // leader's io is paused.
 #[test_case(test_raftstore::new_node_cluster)]
@@ -61,7 +36,7 @@ fn test_async_io_commit_without_leader_persist() {
 
     for i in 2..10 {
         cluster
-            .async_put_future(format!("k{}", i).as_bytes(), b"v1")
+            .async_put(format!("k{}", i).as_bytes(), b"v1")
             .unwrap();
     }
 
@@ -106,7 +81,7 @@ fn test_async_io_delay_destroy_after_conf_change() {
 
     for i in 2..10 {
         cluster
-            .async_put_future(format!("k{}", i).as_bytes(), b"v")
+            .async_put(format!("k{}", i).as_bytes(), b"v")
             .unwrap();
     }
 
