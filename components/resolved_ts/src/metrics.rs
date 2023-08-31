@@ -84,8 +84,8 @@ lazy_static! {
         "The gap between now() and the minimal (non-zero) safe ts for followers"
     )
     .unwrap();
-    pub static ref RTS_MIN_LEADER_DUATION_TO_UPDATE_SAFE_TS: IntGauge = register_int_gauge!(
-        "tikv_resolved_ts_leader_min_resolved_ts_duration_to_update_safe_ts",
+    pub static ref RTS_MIN_LEADER_DUATION_TO_LAST_UPDATE_SAFE_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_leader_min_resolved_ts_duration_to_last_update_safe_ts",
         "The duration since last update_safe_ts() called by resolved-ts routine in the leader with min resolved ts. -1 denotes None."
     )
     .unwrap();

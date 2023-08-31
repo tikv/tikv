@@ -450,7 +450,7 @@ where
             .set(now.saturating_sub(
                 TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
             ) as i64);
-        RTS_MIN_LEADER_DUATION_TO_UPDATE_SAFE_TS.set(
+        RTS_MIN_LEADER_DUATION_TO_LAST_UPDATE_SAFE_TS.set(
             stats
                 .min_leader_resolved_ts
                 .duration_to_last_update_ms
@@ -509,6 +509,7 @@ where
                 "region_id" => stats.min_leader_resolved_ts.region_id,
                 "gap" => format!("{}ms", min_leader_resolved_ts_gap),
                 "read_state" => ?stats.min_leader_resolved_ts.read_state,
+                "applied_index" => stats.min_leader_resolved_ts.applied_index,
                 "min_lock" => ?stats.min_leader_resolved_ts.min_lock,
                 "lock_num" => stats.min_leader_resolved_ts.lock_num,
                 "txn_num" => stats.min_leader_resolved_ts.txn_num,
