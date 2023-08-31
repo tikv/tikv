@@ -38,7 +38,7 @@ lazy_static! {
     .unwrap();
     pub static ref RTS_MIN_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_resolved_ts_gap_millis",
-        "The minimal (non-zero) resolved ts gap for observe regions"
+        "The minimal (non-zero) resolved ts gap for observed regions"
     )
     .unwrap();
     pub static ref RTS_RESOLVED_FAIL_ADVANCE_VEC: IntCounterVec = register_int_counter_vec!(
@@ -66,22 +66,37 @@ lazy_static! {
     .unwrap();
     pub static ref RTS_MIN_RESOLVED_TS: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_resolved_ts",
-        "The minimal (non-zero) resolved ts for observe regions"
+        "The minimal (non-zero) resolved ts for observed regions"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_SAFE_TS_REGION: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_safe_ts_region",
+        "The region which has minimal safe ts"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_SAFE_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_safe_ts",
+        "The minimal (non-zero) safe ts for observed regions"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_SAFE_TS_GAP: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_safe_ts_gap_millis",
+        "The minimal (non-zero) safe ts gap for observed regions"
     )
     .unwrap();
     pub static ref RTS_ZERO_RESOLVED_TS: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_zero_resolved_ts",
-        "The number of zero resolved ts for observe regions"
+        "The number of zero resolved ts for observed regions"
     )
     .unwrap();
     pub static ref RTS_LOCK_HEAP_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_lock_heap_bytes",
-        "Total bytes in memory of resolved-ts observe regions's lock heap"
+        "Total bytes in memory of resolved-ts observed regions's lock heap"
     )
     .unwrap();
     pub static ref RTS_REGION_RESOLVE_STATUS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resolved_ts_region_resolve_status",
-        "The status of resolved-ts observe regions",
+        "The status of resolved-ts observed regions",
         &["type"]
     )
     .unwrap();
