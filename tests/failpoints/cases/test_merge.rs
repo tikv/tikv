@@ -21,7 +21,7 @@ use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::{config::*, time::Instant, HandyRwLock, future::block_on_timeout};
+use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is rollback as expected.
