@@ -1028,7 +1028,7 @@ impl SstImporter {
             largest_key = largest_key
                 .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
         }
-        if total_key != not_in_range {
+        if not_in_range != 0 || ts_not_expected != 0 {
             info!("build download request file done";
                 "total_keys" => %total_key,
                 "ts_filtered_keys" => %ts_not_expected,
