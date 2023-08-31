@@ -58,7 +58,7 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
         split_keys: Vec<Vec<u8>>,
         source: Cow<'static, str>,
     ) {
-        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string(), false);
+        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string(), true);
         let res = self.send(region_id, msg);
         if let Err(e) = res {
             warn!(
