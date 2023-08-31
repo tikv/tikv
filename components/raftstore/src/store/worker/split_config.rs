@@ -156,15 +156,29 @@ impl SplitConfig {
 
     pub fn optimize_for(&mut self, region_size: ReadableSize) {
         const LARGE_REGION_SIZE_IN_MB: u64 = 4096;
-        if region_size.as_mb() >= LARGE_REGION_SIZE_IN_MB && self.qps_threshold.is_none() {
-            self.qps_threshold = Some(DEFAULT_BIG_REGION_QPS_THRESHOLD);
-            self.region_cpu_overload_threshold_ratio =
-                Some(BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO);
-            self.byte_threshold = Some(DEFAULT_BIG_REGION_BYTE_THRESHOLD);
-        } else {
-            self.qps_threshold = Some(DEFAULT_QPS_THRESHOLD);
-            self.region_cpu_overload_threshold_ratio = Some(REGION_CPU_OVERLOAD_THRESHOLD_RATIO);
-            self.byte_threshold = Some(DEFAULT_BYTE_THRESHOLD);
+        let big_size = region_size.as_mb() >= LARGE_REGION_SIZE_IN_MB;
+        if self.qps_threshold.is_none() {
+            self.qps_threshold = Some(if big_size {
+                DEFAULT_BIG_REGION_QPS_THRESHOLD
+            } else {
+                DEFAULT_QPS_THRESHOLD
+            });
+        }
+
+        if self.byte_threshold.is_none() {
+            self.byte_threshold = Some(if big_size {
+                DEFAULT_BIG_REGION_BYTE_THRESHOLD
+            } else {
+                DEFAULT_BYTE_THRESHOLD
+            });
+        }
+
+        if self.region_cpu_overload_threshold_ratio.is_none() {
+            self.region_cpu_overload_threshold_ratio = Some(if big_size {
+                BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+            } else {
+                REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+            });
         }
     }
 }

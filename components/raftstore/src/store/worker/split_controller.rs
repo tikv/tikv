@@ -949,7 +949,6 @@ mod tests {
     use super::*;
     use crate::store::worker::split_config::{
         BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_SAMPLE_NUM,
-        REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
     };
 
     enum Position {
@@ -1649,7 +1648,7 @@ mod tests {
         dispatch_split_cfg_change(
             &mut split_cfg_manager,
             "region_cpu_overload_threshold_ratio",
-            ConfigValue::F64(REGION_CPU_OVERLOAD_THRESHOLD_RATIO),
+            ConfigValue::F64(0.1),
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
@@ -1659,7 +1658,7 @@ mod tests {
             auto_split_controller
                 .cfg
                 .region_cpu_overload_threshold_ratio(),
-            REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+            0.1
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
