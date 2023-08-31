@@ -16,7 +16,7 @@ const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
 pub struct Resolver {
     region_id: u64,
     // key -> start_ts
-    locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
+    pub(crate) locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
