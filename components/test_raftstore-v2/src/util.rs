@@ -13,7 +13,6 @@ use kvproto::{
     kvrpcpb::Context,
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
-    raft_serverpb::RaftMessage,
 };
 use raftstore::{store::ReadResponse, Result};
 use rand::{prelude::SliceRandom, RngCore};
