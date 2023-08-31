@@ -511,10 +511,11 @@ where
         if regions.is_empty() {
             return;
         }
+        let now = tikv_util::time::Instant::now_coarse();
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region.resolver.resolve(ts);
+                    let _ = observe_region.resolver.resolve(ts, Some(now));
                 }
             }
         }
@@ -600,6 +601,29 @@ where
             self.store_id
         })
     }
+
+    fn handle_get_diagnosis_info(
+        &self,
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
+    ) {
+        if let Some(r) = self.regions.get(&region_id) {
+            if log_locks {
+                r.resolver.log_locks(min_start_ts);
+            }
+            callback(Some((
+                r.resolver.stopped(),
+                r.resolver.resolved_ts().into_inner(),
+                r.resolver.tracked_index(),
+                r.resolver.num_locks(),
+                r.resolver.num_transactions(),
+            )));
+        } else {
+            callback(None);
+        }
+    }
 }
 
 pub enum Task {
@@ -634,6 +658,12 @@ pub enum Task {
     },
     ChangeConfig {
         change: ConfigChange,
+    },
+    GetDiagnosisInfo {
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
     },
 }
 
@@ -692,6 +722,11 @@ impl fmt::Debug for Task {
                 .field("name", &"change_config")
                 .field("change", &change)
                 .finish(),
+            Task::GetDiagnosisInfo { region_id, .. } => de
+                .field("name", &"get_diagnosis_info")
+                .field("region_id", &region_id)
+                .field("callback", &"callback")
+                .finish(),
         }
     }
 }
@@ -736,6 +771,12 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::ChangeConfig { change } => self.handle_change_config(change),
+            Task::GetDiagnosisInfo {
+                region_id,
+                log_locks,
+                min_start_ts,
+                callback,
+            } => self.handle_get_diagnosis_info(region_id, log_locks, min_start_ts, callback),
         }
     }
 }
@@ -769,6 +810,8 @@ where
         let store_id = self.get_or_init_store_id();
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
         let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
+        let mut oldest_duration_to_last_update_ms = 0;
+        let mut oldest_duration_to_last_consume_leader_ms = 0;
         let (mut oldest_safe_ts, mut oldest_safe_ts_region) = (u64::MAX, 0);
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
@@ -789,6 +832,17 @@ where
                 if ts < oldest_ts {
                     oldest_ts = ts;
                     oldest_region = *region_id;
+                    // use -1 to denote none.
+                    oldest_duration_to_last_update_ms = read_progress
+                        .get_core()
+                        .last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as i64)
+                        .unwrap_or(-1);
+                    oldest_duration_to_last_consume_leader_ms = read_progress
+                        .get_core()
+                        .last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as i64)
+                        .unwrap_or(-1);
                 }
 
                 if let (Some(store_id), Some(leader_store_id)) = (store_id, leader_store_id) {
@@ -818,6 +872,9 @@ where
                 }
             }
         }
+        RTS_MIN_SAFE_TS_DUATION_TO_UPDATE_SAFE_TS.set(oldest_duration_to_last_update_ms);
+        RTS_MIN_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER
+            .set(oldest_duration_to_last_consume_leader_ms);
         // approximate a TSO from PD. It is better than local timestamp when clock skew
         // exists.
         let now: u64 = self
