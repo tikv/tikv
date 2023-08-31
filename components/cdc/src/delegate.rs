@@ -259,6 +259,9 @@ impl Pending {
     }
 
     fn on_region_ready(&mut self, resolver: &mut Resolver) -> Result<()> {
+        fail::fail_point!("cdc_pending_on_region_ready", |_| Err(
+            Error::MemoryQuotaExceeded
+        ));
         // Must replace with an empty vec, otherwise it may double free memory quota.
         for lock in mem::replace(&mut self.locks, vec![]) {
             self.memory_quota.free(lock.heap_size());
@@ -482,14 +485,17 @@ impl Delegate {
         }
 
         // Mark the delegate as initialized.
-        let mut pending = self.pending.take().unwrap();
-        self.region = Some(region);
         info!("cdc region is ready"; "region_id" => self.region_id);
+        // Downstreams in pending must be moved to resolved_downstreams
+        // immediately and must not return in the middle, otherwise the delegate
+        // loses downstreams.
+        let mut pending = self.pending.take().unwrap();
+        self.resolved_downstreams = mem::take(&mut pending.downstreams);
 
         pending.on_region_ready(&mut resolver)?;
         self.resolver = Some(resolver);
+        self.region = Some(region);
 
-        self.resolved_downstreams = mem::take(&mut pending.downstreams);
         let mut failed_downstreams = Vec::new();
         for downstream in self.downstreams() {
             if let Err(e) = self.check_epoch_on_ready(downstream) {
@@ -1015,7 +1021,7 @@ impl Delegate {
     }
 
     fn stop_observing(&self) {
-        info!("stop observing"; "region_id" => self.region_id, "failed" => self.failed);
+        info!("cdc stop observing"; "region_id" => self.region_id, "failed" => self.failed);
         // Stop observe further events.
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
