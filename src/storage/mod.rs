@@ -746,7 +746,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ids: Vec<u64>,
         trackers: Vec<TrackerToken>,
         consumer: P,
-        begin_instant: tikv_util::time::Instant,
+        begin_instant: Instant,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
