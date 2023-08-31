@@ -448,7 +448,3 @@ pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
         peers, count, peer
     );
 }
-
-pub fn raft_message(msg: RaftMessage) -> Box<RaftMessage> {
-    Box::new(msg)
-}

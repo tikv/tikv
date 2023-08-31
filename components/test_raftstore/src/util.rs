@@ -1576,7 +1576,3 @@ pub fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Opt
         peers, count, peer
     );
 }
-
-pub fn raft_message(msg: RaftMessage) -> RaftMessage {
-    msg
-}

@@ -166,7 +166,7 @@ fn test_async_io_cannot_destroy_when_persist_snapshot() {
     let router = cluster.sim.wl().get_router(1).unwrap();
     for raft_msg in dropped_msgs.lock().unwrap().drain(..).rev() {
         if raft_msg.get_to_peer().get_store_id() == 1 {
-            router.send_raft_message(raft_message(raft_msg)).unwrap();
+            router.send_raft_message(raft_msg).unwrap();
             break;
         }
     }
