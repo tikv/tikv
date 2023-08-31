@@ -31,8 +31,7 @@ use kvproto::{
         RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType, StatusRequest,
     },
     raft_serverpb::{
-        PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
-        RegionLocalState,
+        PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
     },
     tikvpb::TikvClient,
 };
