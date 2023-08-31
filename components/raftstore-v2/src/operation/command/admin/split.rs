@@ -704,8 +704,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut amortize_size = None;
         let mut amortize_keys = None;
         if amortize_source_region_size {
-            amortize_size =  control.approximate_size.map(|v| v / new_region_count);
-            amortize_keys =  control.approximate_keys.map(|v| v / new_region_count);
+            amortize_size = control.approximate_size.map(|v| v / new_region_count);
+            amortize_keys = control.approximate_keys.map(|v| v / new_region_count);
         }
 
         self.post_split();

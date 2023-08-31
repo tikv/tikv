@@ -22,7 +22,8 @@ fn new_batch_split_region_request(
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::BatchSplit);
     req.mut_splits().set_right_derive(right_derive);
-    req.mut_splits().set_amortize_source_region_size(amortize_source_region_size);
+    req.mut_splits()
+        .set_amortize_source_region_size(amortize_source_region_size);
     let mut requests = Vec::with_capacity(ids.len());
     for (mut id, key) in ids.into_iter().zip(split_keys) {
         let mut split = SplitRequest::default();

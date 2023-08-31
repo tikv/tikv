@@ -4034,8 +4034,8 @@ where
         fail_point!("on_split_invalidate_locks");
 
         // Roughly estimate the size and keys for new regions.
-        // if amortize_source_region_size is true, it means the new region don't contains any data
-        // from the origin region
+        // if amortize_source_region_size is true, it means the new region don't
+        // contains any data from the origin region
         let new_region_count = regions.len() as u64;
         let mut amortize_size = None;
         let mut amortize_keys = None;
@@ -5020,9 +5020,12 @@ where
                     regions,
                     new_split_regions,
                     amortize_source_region_size,
-                } => {
-                    self.on_ready_split_region(derived, regions, new_split_regions, amortize_source_region_size)
-                }
+                } => self.on_ready_split_region(
+                    derived,
+                    regions,
+                    new_split_regions,
+                    amortize_source_region_size,
+                ),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
