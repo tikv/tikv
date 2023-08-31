@@ -27,7 +27,7 @@ use tikv::{
     },
 };
 use tikv_util::{
-    config::ReadableDuration, escape, future::block_on_timeout, worker::LazyWorker, HandyRwLock,
+    config::{ReadableDuration, ReadableSize}, escape, future::block_on_timeout, worker::LazyWorker, HandyRwLock,
 };
 use txn_types::Key;
 
@@ -137,6 +137,13 @@ pub fn configure_for_encryption(config: &mut Config) {
     cfg.data_encryption_method = EncryptionMethod::Aes128Ctr;
     cfg.data_key_rotation_period = ReadableDuration(Duration::from_millis(100));
     cfg.master_key = test_util::new_test_file_master_key(manifest_dir);
+}
+
+pub fn configure_for_request_snapshot(config: &mut Config) {
+    // We don't want to generate snapshots due to compact log.
+    config.raft_store.raft_log_gc_threshold = 1000;
+    config.raft_store.raft_log_gc_count_limit = Some(1000);
+    config.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
