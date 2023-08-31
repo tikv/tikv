@@ -772,7 +772,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(requests.len() as f64);
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
                 let read_id = Some(ThreadReadId::new());
                 let mut statistics = Statistics::default();
                 let mut req_snaps = vec![];
@@ -968,7 +968,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     keys.iter().map(Key::as_encoded),
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
@@ -1162,7 +1162,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 if reverse_scan {
                     std::mem::swap(&mut start_key, &mut end_key);
                 }
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
@@ -1327,7 +1327,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 // which resolves locks on regions, and boundary of regions will be out of range
                 // of TiDB keys.
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
 
                 concurrency_manager.update_max_ts(max_ts);
                 let begin_instant = Instant::now();
@@ -1600,7 +1600,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -1701,7 +1701,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .map_err(Error::from)?;
                 }
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
                 let read_id = Some(ThreadReadId::new());
                 let mut snaps = vec![];
                 for (mut req, id) in gets.into_iter().zip(ids) {
@@ -1817,7 +1817,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -1952,7 +1952,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
-            let command_duration = tikv_util::time::Instant::now();
+            let command_duration = Instant::now();
 
             if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
                 return callback(Err(e));
@@ -2062,7 +2062,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
-            let command_duration = tikv_util::time::Instant::now();
+            let command_duration = Instant::now();
 
             if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
                 return callback(Err(e));
@@ -2125,7 +2125,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
-            let command_duration = tikv_util::time::Instant::now();
+            let command_duration = Instant::now();
 
             if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
                 return callback(Err(e));
@@ -2184,7 +2184,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
-            let command_duration = tikv_util::time::Instant::now();
+            let command_duration = Instant::now();
             let start_key = F::encode_raw_key_owned(start_key, None);
             let end_key = F::encode_raw_key_owned(end_key, None);
 
@@ -2230,7 +2230,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
-            let command_duration = tikv_util::time::Instant::now();
+            let command_duration = Instant::now();
 
             if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
                 return callback(Err(e));
@@ -2307,7 +2307,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     [(Some(&start_key), end_key.as_ref())],
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2446,7 +2446,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2591,7 +2591,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2781,7 +2781,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     range.set_end_key(end_key.into_encoded());
                 }
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2792,7 +2792,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf("", api_version)?;
 
-                let begin_instant = tikv_util::time::Instant::now();
+                let begin_instant = Instant::now();
                 let mut stats = Vec::with_capacity(ranges.len());
                 let ret = store
                     .raw_checksum_ranges(cf, &ranges, &mut stats)
@@ -3516,7 +3516,7 @@ pub mod test_util {
             &self,
             id: u64,
             res: Result<(Option<Vec<u8>>, Statistics)>,
-            _: tikv_util::time::Instant,
+            _: Instant,
             _source: String,
         ) {
             self.data.lock().unwrap().push(GetResult {
@@ -3527,13 +3527,7 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(
-            &self,
-            id: u64,
-            res: Result<Option<Vec<u8>>>,
-            _: tikv_util::time::Instant,
-            _source: String,
-        ) {
+        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: Instant, _source: String) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
