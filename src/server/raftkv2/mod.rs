@@ -128,6 +128,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
     pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
         self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
+
+    // for test only
+    pub fn router(&self) -> &RaftRouter<EK, ER> {
+        &self.router
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
