@@ -10,7 +10,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use test_raftstore::*;
-use tikv_util::{mpsc::future, HandyRwLock};
+use tikv_util::{future::block_on_timeout, mpsc::future, HandyRwLock};
 
 struct CbReceivers {
     proposed: mpsc::Receiver<()>,
@@ -399,9 +399,7 @@ fn test_accept_proposal_during_conf_change() {
     let conf_change_fp = "apply_on_conf_change_all_1";
     fail::cfg(conf_change_fp, "pause").unwrap();
     let mut add_peer_rx = cluster.async_add_peer(r, new_peer(2, 2)).unwrap();
-    add_peer_rx
-        .recv_timeout(Duration::from_millis(100))
-        .unwrap_err();
+    block_on_timeout(add_peer_rx.as_mut(), Duration::from_millis(100)).unwrap_err();
 
     // Conf change doesn't affect proposals.
     let write_req = make_write_req(&mut cluster, b"k");
@@ -419,8 +417,7 @@ fn test_accept_proposal_during_conf_change() {
 
     fail::remove(conf_change_fp);
     assert!(
-        !add_peer_rx
-            .recv_timeout(Duration::from_secs(1))
+        !block_on_timeout(add_peer_rx, Duration::from_secs(1))
             .unwrap()
             .get_header()
             .has_error()

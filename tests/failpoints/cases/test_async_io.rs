@@ -8,13 +8,15 @@ use std::{
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::HandyRwLock;
 
 // Test if the entries can be committed and applied on followers even when
 // leader's io is paused.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_async_io_commit_without_leader_persist() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
     cluster.cfg.raft_store.store_io_pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -49,9 +51,10 @@ fn test_async_io_commit_without_leader_persist() {
 
 /// Test if the leader delays its destroy after applying conf change to
 /// remove itself.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_async_io_delay_destroy_after_conf_change() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.store_io_pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -93,6 +96,9 @@ fn test_async_io_delay_destroy_after_conf_change() {
 
 /// Test if the peer can be destroyed when it receives a tombstone msg and
 /// its snapshot is persisting.
+///
+/// Note: snapshot flow is changed, so partitioend-raft-kv does not support this
+/// test.
 #[test]
 fn test_async_io_cannot_destroy_when_persist_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
@@ -176,6 +182,9 @@ fn test_async_io_cannot_destroy_when_persist_snapshot() {
 }
 
 /// Test if the peer can handle ready when its snapshot is persisting.
+///
+/// Note: snapshot flow is changed, so partitioend-raft-kv does not support this
+/// test.
 #[test]
 fn test_async_io_cannot_handle_ready_when_persist_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
