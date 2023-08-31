@@ -864,10 +864,14 @@ fn test_serde_custom_tikv_config() {
         renew_batch_max_size: 8192,
         alloc_ahead_buffer: ReadableDuration::millis(3000),
     };
+    value
+        .split
+        .optimize_for(value.coprocessor.region_max_size());
     value.resource_control = ResourceControlConfig { enabled: false };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
-    let load = toml::from_str(&custom).unwrap();
+    let mut load: TikvConfig = toml::from_str(&custom).unwrap();
+    load.split.optimize_for(load.coprocessor.region_max_size());
     assert_eq_debug(&value, &load);
 
     let dump = toml::to_string_pretty(&load).unwrap();
