@@ -388,6 +388,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: Some(ReadableDuration::days(10)),
             periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+            write_buffer_limit: None,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -461,6 +462,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: Some(ReadableDuration::days(10)),
             periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+            write_buffer_limit: None,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -534,6 +536,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: Some(ReadableDuration::days(10)),
             periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+            write_buffer_limit: Some(ReadableSize::mb(16)),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -607,6 +610,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: Some(ReadableDuration::days(10)),
             periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+            write_buffer_limit: None,
         },
         titan: titan_db_config.clone(),
     };
@@ -695,6 +699,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: None,
             periodic_compaction_seconds: None,
+            write_buffer_limit: None,
         },
         titan: titan_db_config,
     };
@@ -851,6 +856,7 @@ fn test_serde_custom_tikv_config() {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+        memory_quota: ReadableSize::mb(1),
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),

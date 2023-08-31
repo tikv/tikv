@@ -239,6 +239,7 @@ impl LockStatus {
 }
 
 /// A single mutation to be prewritten.
+#[derive(Debug)]
 struct PrewriteMutation<'a> {
     key: Key,
     value: Option<Value>,
@@ -677,6 +678,12 @@ impl<'a> PrewriteMutation<'a> {
             if self.skip_constraint_check() {
                 self.check_for_newer_version(reader)?;
             }
+            let (write, commit_ts) = write
+                .as_ref()
+                .map(|(w, ts)| (Some(w), Some(ts)))
+                .unwrap_or((None, None));
+            error!("assertion failure"; "assertion" => ?self.assertion, "write" => ?write,
+            "commit_ts" => commit_ts, "mutation" => ?self);
             assertion_err?;
         }
 
