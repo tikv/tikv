@@ -2906,12 +2906,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         buckets.as_ref(),
                     );
                 });
+                let now = Instant::now();
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
-                    .observe(begin_instant.saturating_elapsed().as_secs_f64());
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.saturating_elapsed().as_secs_f64());
+                    .observe(duration_to_sec(
+                        now.saturating_duration_since(begin_instant),
+                    ));
+                SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                    now.saturating_duration_since(command_duration),
+                ));
 
                 ret
             }
