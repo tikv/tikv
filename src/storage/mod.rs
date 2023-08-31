@@ -93,7 +93,7 @@ use tikv_util::{
     deadline::Deadline,
     future::try_poll,
     quota_limiter::QuotaLimiter,
-    time::{duration_to_ms, Instant, ThreadReadId},
+    time::{duration_to_ms, duration_to_sec, Instant, ThreadReadId},
 };
 use tracker::{
     clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
@@ -622,7 +622,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
-                let command_duration = tikv_util::time::Instant::now();
+                let command_duration = Instant::now();
 
                 // The bypass_locks and access_locks set will be checked at most once.
                 // `TsSet::vec` is more efficient here.
@@ -673,12 +673,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         &statistics,
                         buckets.as_ref(),
                     );
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
 
                     let read_bytes = key.len()
                         + result
@@ -1031,12 +1034,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         (result, stats)
                     });
                     metrics::tls_collect_scan_details(CMD, &stats);
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
 
                     let read_bytes = stats.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
                         + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
@@ -1235,12 +1241,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         &statistics,
                         buckets.as_ref(),
                     );
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
 
                     res.map_err(Error::from).map(|results| {
                         KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -1390,12 +1399,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         &statistics,
                         buckets.as_ref(),
                     );
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
 
                     Ok(locks)
                 })
@@ -1623,12 +1635,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         &stats,
                         buckets.as_ref(),
                     );
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
                     r
                 }
             }
@@ -1755,12 +1770,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     }
                 }
 
+                let now = Instant::now();
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
-                    .observe(begin_instant.saturating_elapsed_secs());
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.saturating_elapsed_secs());
+                    .observe(duration_to_sec(
+                        now.saturating_duration_since(begin_instant),
+                    ));
+                SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                    now.saturating_duration_since(command_duration),
+                ));
                 Ok(())
             }
             .in_resource_metering_tag(resource_tag),
@@ -1850,12 +1868,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(stats.data.flow_stats.read_keys as f64);
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
                     Ok(result)
                 }
             }
@@ -2363,12 +2384,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .get(CMD)
                         .observe(statistics.data.flow_stats.read_keys as f64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
 
                     result
                 }
@@ -2520,12 +2544,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .get(CMD)
                         .observe(statistics.data.flow_stats.read_keys as f64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
                     Ok(result)
                 }
             }
@@ -2599,12 +2626,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         &stats,
                         buckets.as_ref(),
                     );
+                    let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
                     r
                 }
             }
