@@ -262,8 +262,8 @@ impl Pending {
         fail::fail_point!("cdc_pending_on_region_ready", |_| Err(
             Error::MemoryQuotaExceeded
         ));
-        // Must replace with an empty vec, otherwise it may double free memory quota.
-        for lock in mem::replace(&mut self.locks, vec![]) {
+        // Must take locks, otherwise it may double free memory quota on drop.
+        for lock in mem::take(&mut self.locks) {
             self.memory_quota.free(lock.heap_size());
             match lock {
                 PendingLock::Track { key, start_ts } => {
