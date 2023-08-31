@@ -175,10 +175,9 @@ impl Resolver {
         {
             self.locks_by_key.shrink_to_fit();
         }
-        if let Some(ts) = timestamp && let Some(lock_set) = self.lock_ts_heap.get_mut(&ts) {
-            if lock_set.capacity() > lock_set.len() * cmp::max(MIN_SHRINK_RATIO, ratio) {
-                lock_set.shrink_to_fit();
-            }
+        if let Some(ts) = timestamp && let Some(lock_set) = self.lock_ts_heap.get_mut(&ts)
+            && lock_set.capacity() > lock_set.len() * cmp::max(MIN_SHRINK_RATIO, ratio) {
+            lock_set.shrink_to_fit();
         }
     }
 
