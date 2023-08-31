@@ -18,7 +18,7 @@ const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
 #[derive(Clone)]
 pub enum TsSource {
     // A lock in LOCK CF
-    Lock(Key),
+    Lock(Arc<[u8]>),
     // A memory lock in concurrency manager
     MemoryLock(Key),
     PdTso,
@@ -39,10 +39,10 @@ impl TsSource {
         }
     }
 
-    pub fn key(&self) -> Option<&Key> {
+    pub fn key(&self) -> Option<Key> {
         match self {
-            TsSource::Lock(k) => Some(k),
-            TsSource::MemoryLock(k) => Some(k),
+            TsSource::Lock(k) => Some(Key::from_encoded_slice(k)),
+            TsSource::MemoryLock(k) => Some(k.clone()),
             _ => None,
         }
     }
@@ -72,13 +72,31 @@ pub struct Resolver {
     pub(crate) last_attempt: Option<LastAttempt>,
 }
 
-#[derive(Clone, Debug)]
-#[allow(unused)]
+#[derive(Clone)]
 pub(crate) struct LastAttempt {
     success: bool,
     ts: TimeStamp,
-    reason: String,
-    lock: Option<Key>,
+    reason: TsSource,
+}
+
+impl slog::Value for LastAttempt {
+    fn serialize(
+        &self,
+        _record: &slog::Record<'_>,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_arguments(
+            key,
+            &format_args!(
+                "{{ success={}, ts={}, reason={}, key={:?} }}",
+                self.success,
+                self.ts,
+                self.reason.label(),
+                self.reason.key(),
+            ),
+        )
+    }
 }
 
 impl std::fmt::Debug for Resolver {
@@ -275,13 +293,7 @@ impl Resolver {
         // Find the min start ts.
         let (min_lock, min_lock_key) = match self.lock_ts_heap.iter().next() {
             None => (None, None),
-            Some((ts, locks)) => (
-                Some(*ts),
-                locks
-                    .iter()
-                    .next()
-                    .map(|k| Key::from_encoded_slice(k.as_ref())),
-            ),
+            Some((ts, locks)) => (Some(*ts), locks.iter().next()),
         };
         let has_lock = min_lock.is_some();
         let min_start_ts = min_lock.unwrap_or(min_ts);
@@ -290,7 +302,7 @@ impl Resolver {
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
         // reason is the min source of the new resolved ts.
         let reason = match (min_lock, min_ts) {
-            (Some(lock), min_ts) if lock < min_ts => TsSource::Lock(min_lock_key.unwrap()),
+            (Some(lock), min_ts) if lock < min_ts => TsSource::Lock(min_lock_key.unwrap().clone()),
             (Some(_), _) => source,
             (None, _) => source,
         };
@@ -302,15 +314,13 @@ impl Resolver {
             self.last_attempt = Some(LastAttempt {
                 success: false,
                 ts: new_resolved_ts,
-                reason: reason.label().to_owned(),
-                lock: reason.key().cloned(),
+                reason,
             });
         } else {
             self.last_attempt = Some(LastAttempt {
                 success: true,
                 ts: new_resolved_ts,
-                reason: reason.label().to_owned(),
-                lock: reason.key().cloned(),
+                reason,
             })
         }
 

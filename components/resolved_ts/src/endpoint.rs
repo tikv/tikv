@@ -518,7 +518,7 @@ where
                     Some(d) => format!("{}ms", d),
                     None => "none".to_owned(),
                 },
-                "last_resolve_attempt" => ?stats.min_leader_resolved_ts.last_resolve_attempt,
+                "last_resolve_attempt" => &stats.min_leader_resolved_ts.last_resolve_attempt,
             );
         }
 
