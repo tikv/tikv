@@ -199,7 +199,7 @@ impl Client {
                 pending_heartbeat: Arc::default(),
                 pending_buckets: Arc::default(),
                 last_try_reconnect: Instant::now(),
-                bo: ExponentialBackoff::new(retry_interval),
+                bo: ExponentialBackoff::new(GLOBAL_RECONNECT_INTERVAL),
                 tso,
             }),
             feature_gate: FeatureGate::default(),
@@ -330,12 +330,7 @@ impl Client {
 
         let future = {
             let inner = self.inner.rl();
-<<<<<<< HEAD
-            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
-            {
-=======
             if start.saturating_duration_since(inner.last_try_reconnect) < inner.bo.get_interval() {
->>>>>>> 4b3e33e6c2 (pd_client: add backoff for the reconnect retries (#15429))
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
                 PD_RECONNECT_COUNTER_VEC.cancel.inc();
@@ -359,12 +354,7 @@ impl Client {
 
         {
             let mut inner = self.inner.wl();
-<<<<<<< HEAD
-            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
-            {
-=======
             if start.saturating_duration_since(inner.last_try_reconnect) < inner.bo.get_interval() {
->>>>>>> 4b3e33e6c2 (pd_client: add backoff for the reconnect retries (#15429))
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
                 PD_RECONNECT_COUNTER_VEC.cancel.inc();
