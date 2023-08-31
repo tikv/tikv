@@ -5,7 +5,7 @@ use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use tikv_util::{
-    memory::{HeapSize, MemoryQuota},
+    memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
 };
 use txn_types::TimeStamp;
@@ -184,7 +184,12 @@ impl Resolver {
     }
 
     #[must_use]
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) -> bool {
+    pub fn track_lock(
+        &mut self,
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        index: Option<u64>,
+    ) -> Result<(), MemoryQuotaExceeded> {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
@@ -198,13 +203,11 @@ impl Resolver {
             "memory_capacity" => self.memory_quota.capacity(),
             "key_heap_size" => bytes,
         );
-        if !self.memory_quota.alloc(bytes) {
-            return false;
-        }
+        self.memory_quota.alloc(bytes)?;
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         self.locks_by_key.insert(key.clone(), start_ts);
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
-        true
+        Ok(())
     }
 
     pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
@@ -410,11 +413,9 @@ mod tests {
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        assert!(resolver.track_lock(
-                            start_ts.into(),
-                            key.into_raw().unwrap(),
-                            None
-                        ));
+                        resolver
+                            .track_lock(start_ts.into(), key.into_raw().unwrap(), None)
+                            .unwrap();
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
@@ -437,7 +438,7 @@ mod tests {
         let mut key = vec![0; 77];
         let lock_size = resolver.lock_heap_size(&key);
         let mut ts = TimeStamp::default();
-        while resolver.track_lock(ts, key.clone(), None) {
+        while resolver.track_lock(ts, key.clone(), None).is_ok() {
             ts.incr();
             key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
         }
