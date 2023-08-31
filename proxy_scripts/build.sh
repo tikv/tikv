@@ -55,7 +55,7 @@ fi
 echo "INFO: CARGO_EXTRA_ARGS=${CARGO_EXTRA_ARGS}"
 echo "INFO: PROXY_ENABLE_FEATURES=${PROXY_ENABLE_FEATURES}"
 
-cargo build --no-default-features --features "${PROXY_ENABLE_FEATURES}" ${CARGO_EXTRA_ARGS}
+ENABLE_FEATURES=${PROXY_ENABLE_FEATURES} cargo build --no-default-features --features "${PROXY_ENABLE_FEATURES}" ${CARGO_EXTRA_ARGS}
 
 # The generated file is libraftstore_proxy.so
 # Let's rename it according to the engine label.
