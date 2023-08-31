@@ -4034,11 +4034,11 @@ where
         fail_point!("on_split_invalidate_locks");
 
         // Roughly estimate the size and keys for new regions.
-        // if amortize_source_region_size is true, it means the new region don't
-        // contains any data from the origin region
         let new_region_count = regions.len() as u64;
         let mut amortize_size = None;
         let mut amortize_keys = None;
+        // if amortize_source_region_size is true, it means the new region contains any
+        // data from the origin region
         if amortize_source_region_size {
             amortize_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
             amortize_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);

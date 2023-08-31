@@ -701,6 +701,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let new_region_count = res.regions.len() as u64;
         let control = self.split_flow_control_mut();
+        // if amortize_source_region_size is true, it means the new region contains any
+        // data from the origin region.
         let mut amortize_size = None;
         let mut amortize_keys = None;
         if amortize_source_region_size {
