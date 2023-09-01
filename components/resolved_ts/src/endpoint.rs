@@ -35,12 +35,15 @@ use tokio::sync::Notify;
 use txn_types::{Key, TimeStamp};
 
 use crate::{
-    advance::{AdvanceTsWorker, LeadershipResolver},
+    advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
     resolver::Resolver,
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
 };
+
+/// grace period for logging safe-ts and resolved-ts gap in slow log
+const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
 
 enum ResolverStatus {
     Pending {
@@ -508,10 +511,11 @@ where
         if regions.is_empty() {
             return;
         }
+        let now = tikv_util::time::Instant::now_coarse();
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region.resolver.resolve(ts);
+                    let _ = observe_region.resolver.resolve(ts, Some(now));
                 }
             }
         }
@@ -597,6 +601,29 @@ where
             self.store_id
         })
     }
+
+    fn handle_get_diagnosis_info(
+        &self,
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
+    ) {
+        if let Some(r) = self.regions.get(&region_id) {
+            if log_locks {
+                r.resolver.log_locks(min_start_ts);
+            }
+            callback(Some((
+                r.resolver.stopped(),
+                r.resolver.resolved_ts().into_inner(),
+                r.resolver.tracked_index(),
+                r.resolver.num_locks(),
+                r.resolver.num_transactions(),
+            )));
+        } else {
+            callback(None);
+        }
+    }
 }
 
 pub enum Task {
@@ -631,6 +658,12 @@ pub enum Task {
     },
     ChangeConfig {
         change: ConfigChange,
+    },
+    GetDiagnosisInfo {
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
     },
 }
 
@@ -689,6 +722,11 @@ impl fmt::Debug for Task {
                 .field("name", &"change_config")
                 .field("change", &change)
                 .finish(),
+            Task::GetDiagnosisInfo { region_id, .. } => de
+                .field("name", &"get_diagnosis_info")
+                .field("region_id", &region_id)
+                .field("callback", &"callback")
+                .finish(),
         }
     }
 }
@@ -733,6 +771,12 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::ChangeConfig { change } => self.handle_change_config(change),
+            Task::GetDiagnosisInfo {
+                region_id,
+                log_locks,
+                min_start_ts,
+                callback,
+            } => self.handle_get_diagnosis_info(region_id, log_locks, min_start_ts, callback),
         }
     }
 }
@@ -766,9 +810,20 @@ where
         let store_id = self.get_or_init_store_id();
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
         let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
+        let mut oldest_duration_to_last_update_ms = 0;
+        let mut oldest_duration_to_last_consume_leader_ms = 0;
+        let (mut oldest_safe_ts, mut oldest_safe_ts_region) = (u64::MAX, 0);
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
+                let safe_ts = read_progress.safe_ts();
+                if safe_ts > 0 && safe_ts < oldest_safe_ts {
+                    oldest_safe_ts = safe_ts;
+                    oldest_safe_ts_region = *region_id;
+                }
+
                 let (leader_info, leader_store_id) = read_progress.dump_leader_info();
+                // this is maximum resolved-ts pushed to region_read_progress, namely candidates
+                // of safe_ts. It may not be the safe_ts yet
                 let ts = leader_info.get_read_state().get_safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;
@@ -777,6 +832,17 @@ where
                 if ts < oldest_ts {
                     oldest_ts = ts;
                     oldest_region = *region_id;
+                    // use -1 to denote none.
+                    oldest_duration_to_last_update_ms = read_progress
+                        .get_core()
+                        .last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as i64)
+                        .unwrap_or(-1);
+                    oldest_duration_to_last_consume_leader_ms = read_progress
+                        .get_core()
+                        .last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as i64)
+                        .unwrap_or(-1);
                 }
 
                 if let (Some(store_id), Some(leader_store_id)) = (store_id, leader_store_id) {
@@ -806,19 +872,65 @@ where
                 }
             }
         }
+        RTS_MIN_SAFE_TS_DUATION_TO_UPDATE_SAFE_TS.set(oldest_duration_to_last_update_ms);
+        RTS_MIN_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER
+            .set(oldest_duration_to_last_consume_leader_ms);
+        // approximate a TSO from PD. It is better than local timestamp when clock skew
+        // exists.
+        let now: u64 = self
+            .advance_worker
+            .last_pd_tso
+            .try_lock()
+            .map(|opt| {
+                opt.map(|(pd_ts, instant)| {
+                    pd_ts.physical() + instant.saturating_elapsed().as_millis() as u64
+                })
+                .unwrap_or_else(|| TimeStamp::physical_now())
+            })
+            .unwrap_or_else(|_| TimeStamp::physical_now());
+
+        RTS_MIN_SAFE_TS.set(oldest_safe_ts as i64);
+        RTS_MIN_SAFE_TS_REGION.set(oldest_safe_ts_region as i64);
+        let safe_ts_gap = now.saturating_sub(TimeStamp::from(oldest_safe_ts).physical());
+        if safe_ts_gap
+            > self.cfg.advance_ts_interval.as_millis()
+                + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64
+                + SLOW_LOG_GRACE_PERIOD_MS
+        {
+            let mut lock_num = None;
+            let mut min_start_ts = None;
+            if let Some(ob) = self.regions.get(&oldest_safe_ts_region) {
+                min_start_ts = ob
+                    .resolver
+                    .locks()
+                    .keys()
+                    .next()
+                    .cloned()
+                    .map(TimeStamp::into_inner);
+                lock_num = Some(ob.resolver.locks_by_key.len());
+            }
+            info!(
+                "the max gap of safe-ts is large";
+                "gap" => safe_ts_gap,
+                "oldest safe-ts" => ?oldest_safe_ts,
+                "region id" => oldest_safe_ts_region,
+                "advance-ts-interval" => ?self.cfg.advance_ts_interval,
+                "lock num" => lock_num,
+                "min start ts" => min_start_ts,
+            );
+        }
+        RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);
+
         RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
         RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
-        RTS_MIN_RESOLVED_TS_GAP.set(
-            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64,
-        );
+        RTS_MIN_RESOLVED_TS_GAP
+            .set(now.saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64);
 
         RTS_MIN_LEADER_RESOLVED_TS_REGION.set(oldest_leader_region as i64);
         RTS_MIN_LEADER_RESOLVED_TS.set(oldest_leader_ts as i64);
-        RTS_MIN_LEADER_RESOLVED_TS_GAP.set(
-            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_leader_ts).physical())
-                as i64,
-        );
+        RTS_MIN_LEADER_RESOLVED_TS_GAP
+            .set(now.saturating_sub(TimeStamp::from(oldest_leader_ts).physical()) as i64);
 
         RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC

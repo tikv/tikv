@@ -2797,7 +2797,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#0af0becd87ae89dfd48ef313a4fca7e04688b2b2"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#37c54a91447dc99d883873d6e2459e3435443ef8"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2926,7 +2926,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2945,7 +2945,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4873,7 +4873,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#062638a741adcd9074659eb28cbe7f6a676938d5"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -5337,6 +5337,7 @@ dependencies = [
  "engine_rocks_helper",
  "engine_traits",
  "error_code",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -5361,6 +5362,7 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "service",
  "signal-hook",
  "slog",
  "slog-global",
@@ -5373,6 +5375,15 @@ dependencies = [
  "toml",
  "txn_types",
  "yatp",
+]
+
+[[package]]
+name = "service"
+version = "0.0.1"
+dependencies = [
+ "atomic",
+ "crossbeam",
+ "tikv_util",
 ]
 
 [[package]]
@@ -6193,6 +6204,8 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "server",
+ "service",
  "slog",
  "slog-global",
  "sst_importer",
@@ -6520,6 +6533,7 @@ dependencies = [
  "serde_derive",
  "serde_ignored",
  "serde_json",
+ "service",
  "slog",
  "slog-global",
  "smallvec",
@@ -6647,6 +6661,7 @@ dependencies = [
  "serde_json",
  "server",
  "tikv",
+ "tikv_util",
  "time",
  "toml",
 ]
