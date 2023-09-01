@@ -27,7 +27,11 @@ use tikv::{
     },
 };
 use tikv_util::{
-    config::{ReadableDuration, ReadableSize}, escape, future::block_on_timeout, worker::LazyWorker, HandyRwLock,
+    config::{ReadableDuration, ReadableSize},
+    escape,
+    future::block_on_timeout,
+    worker::LazyWorker,
+    HandyRwLock,
 };
 use txn_types::Key;
 

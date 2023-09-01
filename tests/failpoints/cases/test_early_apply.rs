@@ -71,9 +71,11 @@ fn test_multi_early_apply() {
             })),
     ));
     cluster.async_put(b"k4", b"v4").unwrap();
-    // Sleep a while so that follower will send append response.
+    // Sleep a while so that follower will send append response.c
     sleep_ms(100);
     cluster.async_put(b"k11", b"v22").unwrap();
+    // Sleep a while so that follower will send append response.
+    sleep_ms(100);
     // Now the store thread of store 1 pauses on `store_1_fp`.
     // Set `store_1_fp` again to make this store thread does not pause on it.
     // Then leader 1 will receive the append response and commit the log.
@@ -95,10 +97,12 @@ fn test_multi_early_apply() {
 /// the peer to fix this issue.
 /// For simplicity, this test uses region merge to ensure that the apply state
 /// will be written to kv db before crash.
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+///
+/// Note: partitioned-raft-kv does not need this due to change in disk
+/// persistence logic
+#[test]
 fn test_early_apply_yield_followed_with_many_entries() {
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
 
     configure_for_merge(&mut cluster.cfg);
