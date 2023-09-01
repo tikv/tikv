@@ -329,18 +329,19 @@ impl Resolver {
         }
 
         // Find the min start ts.
-        let (min_lock, min_lock_key) = match self.lock_ts_heap.iter().next() {
-            None => (None, None),
-            Some((ts, locks)) => (Some(*ts), locks.iter().next()),
-        };
+        let min_lock = self
+            .lock_ts_heap
+            .iter()
+            .next()
+            .and_then(|(ts, locks)| locks.iter().next().map(|lock| (*ts, lock)));
         let has_lock = min_lock.is_some();
-        let min_start_ts = min_lock.unwrap_or(min_ts);
+        let min_start_ts = min_lock.map(|(ts, _)| ts).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
         // reason is the min source of the new resolved ts.
         let reason = match (min_lock, min_ts) {
-            (Some(lock), min_ts) if lock < min_ts => TsSource::Lock(min_lock_key.unwrap().clone()),
+            (Some(lock), min_ts) if lock.0 < min_ts => TsSource::Lock(lock.1.clone()),
             (Some(_), _) => source,
             (None, _) => source,
         };
