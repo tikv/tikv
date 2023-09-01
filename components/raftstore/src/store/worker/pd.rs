@@ -658,7 +658,7 @@ where
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
-                    .region_cpu_overload_threshold_ratio
+                    .region_cpu_overload_threshold_ratio()
                     > 0.0
                 {
                     region_cpu_records_collector =
