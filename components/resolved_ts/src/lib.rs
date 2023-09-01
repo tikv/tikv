@@ -11,6 +11,7 @@
 
 #![feature(box_patterns)]
 #![feature(result_flattening)]
+#![feature(let_chains)]
 
 #[macro_use]
 extern crate tikv_util;
