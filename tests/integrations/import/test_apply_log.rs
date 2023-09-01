@@ -7,7 +7,7 @@ use crate::import::util;
 
 #[test]
 fn test_basic_apply() {
-    let (cluster, ctx, tikv, import) = util::new_cluster_and_tikv_import_client();
+    let (_cluster, ctx, tikv, import) = util::new_cluster_and_tikv_import_client();
     let tmp = TempDir::new().unwrap();
     let storage = LocalStorage::new(tmp.path()).unwrap();
     let default = [
@@ -26,12 +26,11 @@ fn test_basic_apply() {
     req.set_storage_backend(util::local_storage(&tmp));
     import.apply(&req).unwrap();
     util::check_applied_kvs_cf(&tikv, &ctx, CF_DEFAULT, default_rewritten.into_iter());
-    drop(cluster);
 }
 
 #[test]
 fn test_apply_twice() {
-    let (cluster, ctx, tikv, import) = util::new_cluster_and_tikv_import_client();
+    let (_cluster, ctx, tikv, import) = util::new_cluster_and_tikv_import_client();
     let tmp = TempDir::new().unwrap();
     let storage = LocalStorage::new(tmp.path()).unwrap();
     let default = [(

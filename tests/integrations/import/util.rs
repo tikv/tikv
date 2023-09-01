@@ -9,7 +9,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{ALL_CFS, CF_DEFAULT};
+use engine_traits::CF_DEFAULT;
 use external_storage_export::{ExternalStorage, UnpinReader};
 use futures::{executor::block_on, io::Cursor as AsyncCursor, stream, SinkExt};
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
@@ -342,7 +342,6 @@ where
         }
     }
     file.flush().unwrap();
-    drop(file);
     let len = buf.len() as u64;
     block_on_external_io(storage.write(name, UnpinReader(Box::new(AsyncCursor::new(buf))), len))
         .unwrap();
@@ -372,8 +371,8 @@ pub fn rewrite_for(meta: &mut KvMeta, old_prefix: &[u8], new_prefix: &[u8]) -> R
 }
 
 pub fn register_range_for(meta: &mut KvMeta, start: &[u8], end: &[u8]) {
-    let start = Key::from_raw(start).to_owned();
-    let end = Key::from_raw(end).to_owned();
+    let start = Key::from_raw(start);
+    let end = Key::from_raw(end);
     meta.set_start_key(start.into_encoded());
     meta.set_end_key(end.into_encoded());
 }

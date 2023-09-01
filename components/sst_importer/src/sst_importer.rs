@@ -985,7 +985,11 @@ impl SstImporter {
         rewrite_rule: &RewriteRule,
         mut build_fn: impl FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        let mut event_iter = EventIterator::new(file_buff.as_ref());
+        let mut event_iter = EventIterator::with_rewriting(
+            file_buff.as_ref(),
+            rewrite_rule.get_old_key_prefix(),
+            rewrite_rule.get_new_key_prefix(),
+        );
         let mut smallest_key = None;
         let mut largest_key = None;
         let mut total_key = 0;
@@ -2050,7 +2054,6 @@ mod tests {
         };
 
         // test do_read_kv_file()
-        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let output = block_on_external_io(importer.do_read_kv_file(
             &kv_meta,
             ext_storage,
@@ -2162,7 +2165,6 @@ mod tests {
         };
         let importer =
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1, false).unwrap();
-        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
             importer.wrap_kms(
                 importer.external_storage_or_cache(&backend, "").unwrap(),
