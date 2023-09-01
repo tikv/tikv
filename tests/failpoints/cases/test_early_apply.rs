@@ -71,7 +71,7 @@ fn test_multi_early_apply() {
             })),
     ));
     cluster.async_put(b"k4", b"v4").unwrap();
-    // Sleep a while so that follower will send append response.c
+    // Sleep a while so that follower will send append response
     sleep_ms(100);
     cluster.async_put(b"k11", b"v22").unwrap();
     // Sleep a while so that follower will send append response.
