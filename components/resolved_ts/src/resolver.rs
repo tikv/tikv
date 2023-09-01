@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, collections::BTreeMap, sync::Arc};
+use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
@@ -23,6 +23,8 @@ pub struct Resolver {
     locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
+    // The last shrink time.
+    last_aggressive_shrink_time: Instant,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
     // The highest index `Resolver` had been tracked
@@ -93,6 +95,7 @@ impl Resolver {
             resolved_ts: TimeStamp::zero(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
+            last_aggressive_shrink_time: Instant::now_coarse(),
             read_progress,
             tracked_index: 0,
             min_ts: TimeStamp::zero(),
@@ -161,6 +164,23 @@ impl Resolver {
         key.heap_size() + std::mem::size_of::<TimeStamp>()
     }
 
+    fn shrink_ratio(&mut self, ratio: usize, timestamp: Option<TimeStamp>) {
+        // HashMap load factor is 87% approximately, leave some margin to avoid
+        // frequent rehash.
+        //
+        // See https://github.com/rust-lang/hashbrown/blob/v0.14.0/src/raw/mod.rs#L208-L220
+        const MIN_SHRINK_RATIO: usize = 2;
+        if self.locks_by_key.capacity()
+            > self.locks_by_key.len() * cmp::max(MIN_SHRINK_RATIO, ratio)
+        {
+            self.locks_by_key.shrink_to_fit();
+        }
+        if let Some(ts) = timestamp && let Some(lock_set) = self.lock_ts_heap.get_mut(&ts)
+            && lock_set.capacity() > lock_set.len() * cmp::max(MIN_SHRINK_RATIO, ratio) {
+            lock_set.shrink_to_fit();
+        }
+    }
+
     #[must_use]
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) -> bool {
         if let Some(index) = index {
@@ -201,13 +221,22 @@ impl Resolver {
             self.region_id,
         );
 
-        let entry = self.lock_ts_heap.get_mut(&start_ts);
-        if let Some(locked_keys) = entry {
+        let mut shrink_ts = None;
+        if let Some(locked_keys) = self.lock_ts_heap.get_mut(&start_ts) {
+            // Only shrink large set, because committing a small transaction is
+            // fast and shrink adds unnecessary overhead.
+            const SHRINK_SET_CAPACITY: usize = 256;
+            if locked_keys.capacity() > SHRINK_SET_CAPACITY {
+                shrink_ts = Some(start_ts);
+            }
             locked_keys.remove(key);
             if locked_keys.is_empty() {
                 self.lock_ts_heap.remove(&start_ts);
             }
         }
+        // Use a large ratio to amortize the cost of rehash.
+        let shrink_ratio = 8;
+        self.shrink_ratio(shrink_ratio, shrink_ts);
     }
 
     /// Try to advance resolved ts.
@@ -215,11 +244,20 @@ impl Resolver {
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
     pub fn resolve(&mut self, min_ts: TimeStamp, now: Option<Instant>) -> TimeStamp {
+        // Use a small ratio to shrink the memory usage aggressively.
+        const AGGRESSIVE_SHRINK_RATIO: usize = 2;
+        const AGGRESSIVE_SHRINK_INTERVAL: Duration = Duration::from_secs(10);
+        if self.last_aggressive_shrink_time.saturating_elapsed() > AGGRESSIVE_SHRINK_INTERVAL {
+            self.shrink_ratio(AGGRESSIVE_SHRINK_RATIO, None);
+            self.last_aggressive_shrink_time = Instant::now_coarse();
+        }
+
         // The `Resolver` is stopped, not need to advance, just return the current
         // `resolved_ts`
         if self.stopped {
             return self.resolved_ts;
         }
+
         // Find the min start ts.
         let min_lock = self.lock_ts_heap.keys().next().cloned();
         let has_lock = min_lock.is_some();
@@ -406,5 +444,90 @@ mod tests {
         assert_eq!(memory_quota.in_use(), 1024 - 5 * lock_size - remain);
         drop(resolver);
         assert_eq!(memory_quota.in_use(), 0);
+    }
+
+    #[test]
+    fn test_untrack_lock_shrink_ratio() {
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let mut resolver = Resolver::new(1, memory_quota);
+        let mut key = vec![0; 16];
+        let mut ts = TimeStamp::default();
+        for _ in 0..1000 {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+            let _ = resolver.track_lock(ts, key.clone(), None);
+        }
+        assert!(
+            resolver.locks_by_key.capacity() >= 1000,
+            "{}",
+            resolver.locks_by_key.capacity()
+        );
+
+        let mut ts = TimeStamp::default();
+        for _ in 0..901 {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+            resolver.untrack_lock(&key, None);
+        }
+        // shrink_to_fit may reserve some space in accordance with the resize
+        // policy, but it is expected to be less than 500.
+        assert!(
+            resolver.locks_by_key.capacity() < 500,
+            "{}, {}",
+            resolver.locks_by_key.capacity(),
+            resolver.locks_by_key.len(),
+        );
+
+        for _ in 0..99 {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+            resolver.untrack_lock(&key, None);
+        }
+        assert!(
+            resolver.locks_by_key.capacity() < 100,
+            "{}, {}",
+            resolver.locks_by_key.capacity(),
+            resolver.locks_by_key.len(),
+        );
+
+        // Trigger aggressive shrink.
+        resolver.last_aggressive_shrink_time = Instant::now_coarse() - Duration::from_secs(600);
+        resolver.resolve(TimeStamp::new(0), None);
+        assert!(
+            resolver.locks_by_key.capacity() == 0,
+            "{}, {}",
+            resolver.locks_by_key.capacity(),
+            resolver.locks_by_key.len(),
+        );
+    }
+
+    #[test]
+    fn test_untrack_lock_set_shrink_ratio() {
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let mut resolver = Resolver::new(1, memory_quota);
+        let mut key = vec![0; 16];
+        let ts = TimeStamp::new(1);
+        for i in 0..1000usize {
+            key[0..8].copy_from_slice(&i.to_be_bytes());
+            let _ = resolver.track_lock(ts, key.clone(), None);
+        }
+        assert!(
+            resolver.lock_ts_heap[&ts].capacity() >= 1000,
+            "{}",
+            resolver.lock_ts_heap[&ts].capacity()
+        );
+
+        for i in 0..990usize {
+            key[0..8].copy_from_slice(&i.to_be_bytes());
+            resolver.untrack_lock(&key, None);
+        }
+        // shrink_to_fit may reserve some space in accordance with the resize
+        // policy, but it is expected to be less than 100.
+        assert!(
+            resolver.lock_ts_heap[&ts].capacity() < 500,
+            "{}, {}",
+            resolver.lock_ts_heap[&ts].capacity(),
+            resolver.lock_ts_heap[&ts].len(),
+        );
     }
 }
