@@ -567,7 +567,6 @@ impl<E: Engine> ImportSstService<E> {
             let buff = importer
                 .read_from_kv_file(
                     meta,
-                    rule,
                     ext_storage.clone(),
                     req.get_storage_backend(),
                     &limiter,
@@ -579,6 +578,7 @@ impl<E: Engine> ImportSstService<E> {
                 meta.get_start_ts(),
                 meta.get_restore_ts(),
                 buff,
+                rule,
                 |k, v| collector.accept_kv(meta.get_cf(), meta.get_is_delete(), k, v),
             )? {
                 if let Some(range) = range.as_mut() {
