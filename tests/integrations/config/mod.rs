@@ -388,6 +388,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: Some(ReadableDuration::days(10)),
             periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+            write_buffer_limit: None,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -461,6 +462,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: Some(ReadableDuration::days(10)),
             periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+            write_buffer_limit: None,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -534,6 +536,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: Some(ReadableDuration::days(10)),
             periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+            write_buffer_limit: Some(ReadableSize::mb(16)),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -607,6 +610,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: Some(ReadableDuration::days(10)),
             periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+            write_buffer_limit: None,
         },
         titan: titan_db_config.clone(),
     };
@@ -695,6 +699,7 @@ fn test_serde_custom_tikv_config() {
             max_compactions: Some(3),
             ttl: None,
             periodic_compaction_seconds: None,
+            write_buffer_limit: None,
         },
         titan: titan_db_config,
     };
@@ -859,10 +864,14 @@ fn test_serde_custom_tikv_config() {
         renew_batch_max_size: 8192,
         alloc_ahead_buffer: ReadableDuration::millis(3000),
     };
+    value
+        .split
+        .optimize_for(value.coprocessor.region_max_size());
     value.resource_control = ResourceControlConfig { enabled: false };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
-    let load = toml::from_str(&custom).unwrap();
+    let mut load: TikvConfig = toml::from_str(&custom).unwrap();
+    load.split.optimize_for(load.coprocessor.region_max_size());
     assert_eq_debug(&value, &load);
 
     let dump = toml::to_string_pretty(&load).unwrap();
