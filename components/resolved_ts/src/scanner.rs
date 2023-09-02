@@ -1,54 +1,91 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    marker::PhantomData,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region};
+use futures_timer::Delay;
+use kvproto::metapb::Region;
 use raftstore::{
-    coprocessor::{ObserveHandle, ObserveId},
+    coprocessor::ObserveHandle,
     router::CdcHandle,
     store::{fsm::ChangeObserver, msg::Callback, RegionSnapshot},
 };
 use tikv::storage::{
     kv::{ScanMode as MvccScanMode, Snapshot},
-    mvcc::{DeltaScanner, MvccReader, ScannerBuilder},
-    txn::{TxnEntry, TxnEntryScanner},
+    mvcc::MvccReader,
+    txn::TxnEntry,
 };
-use tikv_util::{sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler,
+};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{
     errors::{Error, Result},
     metrics::*,
+    Task,
 };
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
 const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(100);
 
-pub type BeforeStartCallback = Box<dyn Fn() + Send>;
-pub type OnErrorCallback = Box<dyn Fn(ObserveId, Region, Error) + Send>;
-pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>, u64) + Send>;
-pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
-
-pub enum ScanMode {
-    LockOnly,
-    All,
-    AllWithOldValue,
-}
-
 pub struct ScanTask {
     pub handle: ObserveHandle,
-    pub tag: String,
-    pub mode: ScanMode,
     pub region: Region,
     pub checkpoint_ts: TimeStamp,
     pub backoff: Option<Duration>,
-    pub is_cancelled: IsCancelledCallback,
-    pub send_entries: OnEntriesCallback,
-    pub on_error: Option<OnErrorCallback>,
+    pub cancelled: Arc<AtomicBool>,
+    pub scheduler: Scheduler<Task>,
+}
+
+impl ScanTask {
+    async fn send_entries(&self, entries: Vec<ScanEntry>, apply_index: u64) {
+        loop {
+            if self.scheduler.pending_tasks() < 128 {
+                break;
+            }
+            let f = Delay::new(Duration::from_millis(10));
+            f.await;
+        }
+        let task = Task::ScanLocks {
+            region_id: self.region.get_id(),
+            observe_id: self.handle.id,
+            entries,
+            apply_index,
+        };
+        if let Err(e) = self.scheduler.schedule(task) {
+            warn!("resolved_ts scheduler send entries failed"; "err" => ?e);
+        }
+        RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    fn on_error(&self, err: Error) {
+        if let Err(e) = self.scheduler.schedule(Task::ReRegisterRegion {
+            region_id: self.region.get_id(),
+            observe_id: self.handle.id,
+            cause: err,
+        }) {
+            warn!("schedule re-register task failed";
+                "region_id" => self.region.get_id(),
+                "observe_id" => ?self.handle.id,
+                "error" => ?e);
+        }
+        RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
+    }
 }
 
 #[derive(Debug)]
@@ -94,7 +131,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                 {
                     error!("failed to backoff"; "err" => ?e);
                 }
-                if (task.is_cancelled)() {
+                if task.is_cancelled() {
                     return;
                 }
             }
@@ -102,89 +139,35 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                 Ok(snap) => snap,
                 Err(e) => {
                     warn!("resolved_ts scan get snapshot failed"; "err" => ?e);
-                    let ScanTask {
-                        on_error,
-                        region,
-                        handle,
-                        ..
-                    } = task;
-                    if let Some(on_error) = on_error {
-                        on_error(handle.id, region, e);
-                    }
+                    task.on_error(e);
                     return;
                 }
             };
             fail::fail_point!("resolved_ts_after_scanner_get_snapshot");
             let start = Instant::now();
             let apply_index = snap.get_apply_index().unwrap();
-            let mut entries = vec![];
-            match task.mode {
-                ScanMode::All | ScanMode::AllWithOldValue => {
-                    let txn_extra_op = if let ScanMode::AllWithOldValue = task.mode {
-                        TxnExtraOp::ReadOldValue
-                    } else {
-                        TxnExtraOp::Noop
-                    };
-                    let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
-                        .range(None, None)
-                        .build_delta_scanner(task.checkpoint_ts, txn_extra_op)
-                        .unwrap();
-                    let mut done = false;
-                    while !done && !(task.is_cancelled)() {
-                        let (es, has_remaining) = match Self::scan_delta(&mut scanner) {
-                            Ok(rs) => rs,
-                            Err(e) => {
-                                warn!("resolved_ts scan delta failed"; "err" => ?e);
-                                let ScanTask {
-                                    on_error,
-                                    region,
-                                    handle,
-                                    ..
-                                } = task;
-                                if let Some(on_error) = on_error {
-                                    on_error(handle.id, region, e);
-                                }
-                                return;
-                            }
-                        };
-                        done = !has_remaining;
-                        entries.push(ScanEntry::TxnEntry(es));
-                    }
-                }
-                ScanMode::LockOnly => {
-                    let mut reader = MvccReader::new(snap, Some(MvccScanMode::Forward), false);
-                    let mut done = false;
-                    let mut start = None;
-                    while !done && !(task.is_cancelled)() {
-                        let (locks, has_remaining) =
-                            match Self::scan_locks(&mut reader, start.as_ref(), task.checkpoint_ts)
-                            {
-                                Ok(rs) => rs,
-                                Err(e) => {
-                                    warn!("resolved_ts scan lock failed"; "err" => ?e);
-                                    let ScanTask {
-                                        on_error,
-                                        region,
-                                        handle,
-                                        ..
-                                    } = task;
-                                    if let Some(on_error) = on_error {
-                                        on_error(handle.id, region, e);
-                                    }
-                                    return;
-                                }
-                            };
-                        done = !has_remaining;
-                        if has_remaining {
-                            start = Some(locks.last().unwrap().0.clone())
+            let mut reader = MvccReader::new(snap, Some(MvccScanMode::Forward), false);
+            let mut done = false;
+            let mut start_key = None;
+            while !done && !task.is_cancelled() {
+                let (locks, has_remaining) =
+                    match Self::scan_locks(&mut reader, start_key.as_ref(), task.checkpoint_ts) {
+                        Ok(rs) => rs,
+                        Err(e) => {
+                            warn!("resolved_ts scan lock failed"; "err" => ?e);
+                            task.on_error(e);
+                            return;
                         }
-                        entries.push(ScanEntry::Lock(locks));
-                    }
+                    };
+                done = !has_remaining;
+                if has_remaining {
+                    start_key = Some(locks.last().unwrap().0.clone())
                 }
+                task.send_entries(vec![ScanEntry::Lock(locks)], apply_index)
+                    .await;
             }
-            entries.push(ScanEntry::None);
             RTS_SCAN_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
-            (task.send_entries)(entries, apply_index);
+            task.send_entries(vec![ScanEntry::None], apply_index).await;
         };
         self.workers.spawn(fut);
     }
@@ -207,7 +190,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                 {
                     error!("failed to backoff"; "err" => ?e);
                 }
-                if (task.is_cancelled)() {
+                if task.is_cancelled() {
                     return Err(box_err!("scan task cancelled"));
                 }
             }
@@ -255,25 +238,5 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
             )
             .map_err(|e| Error::Other(box_err!("{:?}", e)))?;
         Ok((locks, has_remaining))
-    }
-
-    fn scan_delta<S: Snapshot>(scanner: &mut DeltaScanner<S>) -> Result<(Vec<TxnEntry>, bool)> {
-        let mut entries = Vec::with_capacity(DEFAULT_SCAN_BATCH_SIZE);
-        let mut has_remaining = true;
-        while entries.len() < entries.capacity() {
-            match scanner
-                .next_entry()
-                .map_err(|e| Error::Other(box_err!("{:?}", e)))?
-            {
-                Some(entry) => {
-                    entries.push(entry);
-                }
-                None => {
-                    has_remaining = false;
-                    break;
-                }
-            }
-        }
-        Ok((entries, has_remaining))
     }
 }

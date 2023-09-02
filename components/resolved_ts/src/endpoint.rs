@@ -40,7 +40,7 @@ use crate::{
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
     resolver::Resolver,
-    scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
+    scanner::{ScanEntry, ScanTask, ScannerPool},
     Error, Result, ON_DROP_WARN_HEAP_SIZE,
 };
 
@@ -480,41 +480,13 @@ where
         backoff: Option<Duration>,
     ) -> ScanTask {
         let scheduler = self.scheduler.clone();
-        let scheduler_error = self.scheduler.clone();
-        let region_id = region.id;
-        let observe_id = observe_handle.id;
         ScanTask {
             handle: observe_handle,
-            tag: String::new(),
-            mode: ScanMode::LockOnly,
             region,
             checkpoint_ts: TimeStamp::zero(),
             backoff,
-            is_cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
-            send_entries: Box::new(move |entries, apply_index| {
-                scheduler
-                    .schedule(Task::ScanLocks {
-                        region_id,
-                        observe_id,
-                        entries,
-                        apply_index,
-                    })
-                    .unwrap_or_else(|e| warn!("schedule resolved ts task failed"; "err" => ?e));
-                RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
-            }),
-            on_error: Some(Box::new(move |observe_id, _region, e| {
-                if let Err(e) = scheduler_error.schedule(Task::ReRegisterRegion {
-                    region_id,
-                    observe_id,
-                    cause: e,
-                }) {
-                    warn!("schedule re-register task failed";
-                        "region_id" => region_id,
-                        "observe_id" => ?observe_id,
-                        "error" => ?e);
-                }
-                RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
-            })),
+            cancelled,
+            scheduler,
         }
     }
 
