@@ -35,7 +35,7 @@ use crate::{
     Task,
 };
 
-const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
+const DEFAULT_SCAN_BATCH_SIZE: usize = 128;
 const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
 const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(100);
 
@@ -51,7 +51,7 @@ pub struct ScanTask {
 impl ScanTask {
     async fn send_entries(&self, entries: Vec<ScanEntry>, apply_index: u64) {
         loop {
-            if self.scheduler.pending_tasks() < 128 {
+            if self.scheduler.pending_tasks() < 8 {
                 break;
             }
             let f = Delay::new(Duration::from_millis(10));
