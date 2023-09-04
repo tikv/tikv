@@ -272,7 +272,7 @@ pub enum ExecResult<S> {
         regions: Vec<Region>,
         derived: Region,
         new_split_regions: HashMap<u64, NewSplitPeer>,
-        amortize_source_region_size: bool,
+        share_source_region_size: bool,
     },
     PrepareMerge {
         region: Region,
@@ -2519,7 +2519,7 @@ where
             .set_right_derive(split.get_right_derive());
         admin_req
             .mut_split()
-            .set_amortize_source_region_size(split.get_amortize_source_region_size());
+            .set_share_source_region_size(split.get_share_source_region_size());
         admin_req.mut_splits().mut_requests().push(split);
         // This method is executed only when there are unapplied entries after being
         // restarted. So there will be no callback, it's OK to return a response
@@ -2564,7 +2564,7 @@ where
         derived.mut_region_epoch().set_version(new_version);
 
         let right_derive = split_reqs.get_right_derive();
-        let amortize_source_region_size = split_reqs.get_amortize_source_region_size();
+        let share_source_region_size = split_reqs.get_share_source_region_size();
         let mut regions = Vec::with_capacity(new_region_cnt + 1);
         // Note that the split requests only contain ids for new regions, so we need
         // to handle new regions and old region separately.
@@ -2729,7 +2729,7 @@ where
                 regions,
                 derived,
                 new_split_regions,
-                amortize_source_region_size,
+                share_source_region_size,
             }),
         ))
     }
@@ -7094,7 +7094,7 @@ mod tests {
             regions,
             derived: _,
             new_split_regions: _,
-            amortize_source_region_size: _,
+            share_source_region_size: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();

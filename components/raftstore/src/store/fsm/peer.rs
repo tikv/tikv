@@ -1049,14 +1049,14 @@ where
                 split_keys,
                 callback,
                 source,
-                amortize_source_region_size,
+                share_source_region_size,
             } => {
                 self.on_prepare_split_region(
                     region_epoch,
                     split_keys,
                     callback,
                     &source,
-                    amortize_source_region_size,
+                    share_source_region_size,
                 );
             }
             CasualMessage::ComputeHashResult {
@@ -4049,7 +4049,7 @@ where
         derived: metapb::Region,
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
-        amortize_source_region_size: bool,
+        share_source_region_size: bool,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
@@ -4073,9 +4073,9 @@ where
         let new_region_count = regions.len() as u64;
         let mut amortize_size = None;
         let mut amortize_keys = None;
-        // if amortize_source_region_size is true, it means the new region contains any
+        // if share_source_region_size is true, it means the new region contains any
         // data from the origin region
-        if amortize_source_region_size {
+        if share_source_region_size {
             amortize_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
             amortize_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
         }
@@ -4094,7 +4094,7 @@ where
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
-            if amortize_source_region_size {
+            if share_source_region_size {
                 self.fsm.peer.approximate_size = amortize_size;
                 self.fsm.peer.approximate_keys = amortize_keys;
             }
@@ -5060,12 +5060,12 @@ where
                     derived,
                     regions,
                     new_split_regions,
-                    amortize_source_region_size,
+                    share_source_region_size,
                 } => self.on_ready_split_region(
                     derived,
                     regions,
                     new_split_regions,
-                    amortize_source_region_size,
+                    share_source_region_size,
                 ),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
@@ -5851,7 +5851,7 @@ where
         split_keys: Vec<Vec<u8>>,
         cb: Callback<EK::Snapshot>,
         source: &str,
-        amortize_source_region_size: bool,
+        share_source_region_size: bool,
     ) {
         info!(
             "on split";
@@ -5897,7 +5897,7 @@ where
             split_keys,
             peer: self.fsm.peer.peer.clone(),
             right_derive: self.ctx.cfg.right_derive_when_split,
-            amortize_source_region_size,
+            share_source_region_size,
             callback: cb,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {

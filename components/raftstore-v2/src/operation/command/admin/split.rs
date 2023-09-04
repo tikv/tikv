@@ -75,9 +75,9 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
-    // new regions will amortize the region size if it's true.
+    // new regions will share the region size if it's true.
     // otherwise, the new region's size will be 0.
-    pub amortize_source_region_size: bool,
+    pub share_source_region_size: bool,
     // Hack: in common case we should use generic, but split is an infrequent
     // event that performance is not critical. And using `Any` can avoid polluting
     // all existing code.
@@ -151,9 +151,9 @@ pub struct RequestSplit {
     pub epoch: RegionEpoch,
     pub split_keys: Vec<Vec<u8>>,
     pub source: Cow<'static, str>,
-    // new regions will amortize the region size if it's true.
+    // new regions will share the region size if it's true.
     // otherwise, the new region's size will be 0.
-    pub amortize_source_region_size: bool,
+    pub share_source_region_size: bool,
 }
 
 #[derive(Debug)]
@@ -343,7 +343,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.set_result(cmd_resp::new_error(e));
             return;
         }
-        self.ask_batch_split_pd(ctx, rs.split_keys, rs.amortize_source_region_size, ch);
+        self.ask_batch_split_pd(ctx, rs.split_keys, rs.share_source_region_size, ch);
     }
 
     pub fn on_request_half_split<T>(
@@ -486,7 +486,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let derived_req = &[derived_req];
 
         let right_derive = split_reqs.get_right_derive();
-        let amortize_source_region_size = split_reqs.get_amortize_source_region_size();
+        let share_source_region_size = split_reqs.get_share_source_region_size();
         let reqs = if right_derive {
             split_reqs.get_requests().iter().chain(derived_req)
         } else {
@@ -623,7 +623,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 derived_index,
                 tablet_index: log_index,
                 tablet: Box::new(tablet),
-                amortize_source_region_size,
+                share_source_region_size,
             }),
         ))
     }
@@ -674,7 +674,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
 
         let derived = &res.regions[res.derived_index];
-        let amortize_source_region_size = res.amortize_source_region_size;
+        let share_source_region_size = res.share_source_region_size;
         let region_id = derived.get_id();
 
         let region_locks = self.txn_context().split(&res.regions, derived);
@@ -705,11 +705,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let new_region_count = res.regions.len() as u64;
         let control = self.split_flow_control_mut();
-        // if amortize_source_region_size is true, it means the new region contains any
+        // if share_source_region_size is true, it means the new region contains any
         // data from the origin region.
         let mut amortize_size = None;
         let mut amortize_keys = None;
-        if amortize_source_region_size {
+        if share_source_region_size {
             amortize_size = control.approximate_size.map(|v| v / new_region_count);
             amortize_keys = control.approximate_keys.map(|v| v / new_region_count);
         }
@@ -730,7 +730,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // After split, the peer may need to update its metrics.
             let control = self.split_flow_control_mut();
             control.may_skip_split_check = false;
-            if amortize_source_region_size {
+            if share_source_region_size {
                 control.approximate_size = amortize_size;
                 control.approximate_keys = amortize_keys;
             }
