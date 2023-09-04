@@ -33,6 +33,7 @@ use crate::{
     errors::{ContextualResultExt, Error, Result},
     metrics,
     router::{ApplyEvent, ApplyEvents, Router},
+    subscription_manager::{maybe_with_tls_cdc_handle, with_tls_cdc_handle},
     subscription_track::{Ref, RefMut, SubscriptionTracer, TwoPhaseResolver},
     try_send,
     utils::{self, RegionPager},
@@ -175,11 +176,10 @@ impl<S: Snapshot> EventLoader<S> {
 }
 
 /// The context for loading incremental data between range.
-/// Like [`cdc::Initializer`], but supports initialize over range.
+/// Like [`cdc::Initializer`].
 /// Note: maybe we can merge those two structures?
-/// Note': maybe extract more fields to trait so it would be easier to test.
 #[derive(Clone)]
-pub struct InitialDataLoader<E, R, RT> {
+pub struct InitialDataLoader<E, R> {
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
@@ -187,8 +187,6 @@ pub struct InitialDataLoader<E, R, RT> {
     pub(crate) scheduler: Scheduler<Task>,
     // Note: this is only for `init_range`, maybe make it an argument?
     pub(crate) regions: R,
-    // Note: Maybe move those fields about initial scanning into some trait?
-    pub(crate) router: RT,
     pub(crate) quota: PendingMemoryQuota,
     pub(crate) limit: Limiter,
 
@@ -196,14 +194,12 @@ pub struct InitialDataLoader<E, R, RT> {
     _engine: PhantomData<E>,
 }
 
-impl<E, R, RT> InitialDataLoader<E, R, RT>
+impl<E, R> InitialDataLoader<E, R>
 where
     E: KvEngine,
     R: RegionInfoProvider + Clone + 'static,
-    RT: CdcHandle<E>,
 {
     pub fn new(
-        router: RT,
         regions: R,
         sink: Router,
         tracing: SubscriptionTracer,
@@ -213,7 +209,6 @@ where
         limiter: Limiter,
     ) -> Self {
         Self {
-            router,
             regions,
             sink,
             tracing,
@@ -225,7 +220,7 @@ where
         }
     }
 
-    pub fn observe_over_with_retry(
+    pub async fn observe_over_with_retry(
         &self,
         region: &Region,
         mut cmd: impl FnMut() -> ChangeObserver,
@@ -233,7 +228,7 @@ where
         let mut last_err = None;
         for _ in 0..MAX_GET_SNAPSHOT_RETRY {
             let c = cmd();
-            let r = self.observe_over(region, c);
+            let r = self.observe_over(region, c).await;
             match r {
                 Ok(s) => {
                     return Ok(s);
@@ -276,7 +271,7 @@ where
     /// Start observe over some region.
     /// This will register the region to the raftstore as observing,
     /// and return the current snapshot of that region.
-    fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
+    async fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
         // There are 2 ways for getting the initial snapshot of a region:
         // - the BR method: use the interface in the RaftKv interface, read the
         //   key-values directly.
@@ -289,8 +284,8 @@ where
         let (callback, fut) =
             tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
 
-        self.router
-            .capture_change(
+        with_tls_cdc_handle(|h| {
+            h.capture_change(
                 region.get_id(),
                 region.get_region_epoch().clone(),
                 cmd,
@@ -313,9 +308,11 @@ where
             .context(format_args!(
                 "failed to register the observer to region {}",
                 region.get_id()
-            ))?;
+            ))
+        })?;
 
-        let snap = block_on(fut)
+        let snap = fut
+            .await
             .map_err(|err| {
                 annotate!(
                     err,
