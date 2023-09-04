@@ -2797,7 +2797,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#37c54a91447dc99d883873d6e2459e3435443ef8"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#ecdbf1f8c130089392a9bb5f86f7577deddfbed5"
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
 dependencies = [
  "futures 0.3.15",
  "grpcio",

@@ -282,6 +282,7 @@ impl PeerMsg {
         epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
         source: String,
+        share_source_region_size: bool,
     ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
@@ -290,12 +291,38 @@ impl PeerMsg {
                     epoch,
                     split_keys,
                     source: source.into(),
+                    share_source_region_size,
                 },
                 ch,
             },
             sub,
         )
     }
+<<<<<<< HEAD
+=======
+
+    #[cfg(feature = "testexport")]
+    pub fn request_split_with_callback(
+        epoch: metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: String,
+        f: Box<dyn FnOnce(&mut kvproto::raft_cmdpb::RaftCmdResponse) + Send>,
+    ) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::with_callback(f);
+        (
+            PeerMsg::RequestSplit {
+                request: RequestSplit {
+                    epoch,
+                    split_keys,
+                    source: source.into(),
+                    share_source_region_size: false,
+                },
+                ch,
+            },
+            sub,
+        )
+    }
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
 }
 
 #[derive(Debug)]
