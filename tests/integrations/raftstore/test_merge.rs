@@ -14,7 +14,7 @@ use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::{config::*, HandyRwLock};
+use tikv_util::{config::*, future::block_on_timeout, HandyRwLock};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is working as expected in a general condition.
@@ -1444,10 +1444,10 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 
     // The gap is too large, so the previous merge should fail. And this new put
     // request should be allowed.
-    let mut res = cluster.async_put(b"k1", b"new_val").unwrap();
+    let res = cluster.async_put(b"k1", b"new_val").unwrap();
 
     cluster.clear_send_filters();
-    res.recv_timeout(Duration::from_secs(5)).unwrap();
+    block_on_timeout(res, Duration::from_secs(5)).unwrap();
 
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
 }
