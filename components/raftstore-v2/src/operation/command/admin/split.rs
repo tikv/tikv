@@ -75,6 +75,8 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
+    // new regions will amortize the region size if it's true.
+    // otherwise, the new region's size will be 0.
     pub amortize_source_region_size: bool,
     // Hack: in common case we should use generic, but split is an infrequent
     // event that performance is not critical. And using `Any` can avoid polluting
@@ -149,6 +151,8 @@ pub struct RequestSplit {
     pub epoch: RegionEpoch,
     pub split_keys: Vec<Vec<u8>>,
     pub source: Cow<'static, str>,
+    // new regions will amortize the region size if it's true.
+    // otherwise, the new region's size will be 0.
     pub amortize_source_region_size: bool,
 }
 
