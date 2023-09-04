@@ -98,17 +98,13 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // The election is fully controlled by the restore procedure of BR.
     config.raft_store.allow_unsafe_vote_after_start = true;
 
-    // disable auto compactions during the restore
-    config.rocksdb.defaultcf.disable_auto_compactions = true;
-    config.rocksdb.writecf.disable_auto_compactions = true;
-    config.rocksdb.lockcf.disable_auto_compactions = true;
-    config.rocksdb.raftcf.disable_auto_compactions = true;
-
     // for cpu = 1, take a reasonable value min[32, maxValue].
     let limit = (SysQuota::cpu_cores_quota() * 10.0) as i32;
     config.rocksdb.max_background_jobs = cmp::min(32, limit);
     // disable resolve ts during the recovery
     config.resolved_ts.enable = false;
+    // disable GC during restoring.
+    config.gc.ratio_threshold = -1f64;
 
     // ebs volume has very poor performance during restore, it easy to cause the
     // raft client timeout, at the same time clean up all message included
