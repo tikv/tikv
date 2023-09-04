@@ -19,6 +19,9 @@ pub trait DbOptions {
     fn get_rate_bytes_per_sec(&self) -> Option<i64>;
     fn set_rate_bytes_per_sec(&mut self, rate_bytes_per_sec: i64) -> Result<()>;
     fn get_rate_limiter_auto_tuned(&self) -> Option<bool>;
+    fn get_flush_size(&self) -> Result<u64> {
+        unimplemented!()
+    }
     fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()>;
     fn set_flush_size(&mut self, f: usize) -> Result<()>;
     fn set_flush_oldest_first(&mut self, f: bool) -> Result<()>;
