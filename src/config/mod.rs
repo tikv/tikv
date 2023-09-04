@@ -110,7 +110,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
-const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: u64 = ReadableSize::mb(32).0;
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(32);
 
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
@@ -1406,7 +1406,7 @@ impl DbConfig {
                     .get_or_insert(ReadableSize::mb(4));
                 self.lockcf
                     .write_buffer_limit
-                    .get_or_insert(ReadableSize::mb(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT));
+                    .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
             }
         }
     }
@@ -2061,7 +2061,8 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .drain_filter(|(name, _)| name == "write_buffer_limit")
             .next()
         {
-            self.db.set_flush_size(size.1.into())?;
+            let size: ReadableSize = size.1.into();
+            self.db.set_flush_size(size.0 as usize)?;
         }
 
         if let Some(f) = change
@@ -5200,6 +5201,12 @@ mod tests {
             ReadableSize::mb(128).0 as i64
         );
 
+        cfg_controller
+            .update_config("rocksdb.write-buffer-limit", "10MB")
+            .unwrap();
+        let flush_size = db.get_db_options().get_flush_size().unwrap();
+        assert_eq!(flush_size, ReadableSize::mb(10).0);
+
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
@@ -6139,12 +6146,12 @@ mod tests {
         assert_eq!(default_cfg.coprocessor.region_split_size(), SPLIT_SIZE);
         assert!(!default_cfg.coprocessor.enable_region_bucket());
 
-        assert_eq!(default_cfg.split.qps_threshold, DEFAULT_QPS_THRESHOLD);
+        assert_eq!(default_cfg.split.qps_threshold(), DEFAULT_QPS_THRESHOLD);
         assert_eq!(
-            default_cfg.split.region_cpu_overload_threshold_ratio,
+            default_cfg.split.region_cpu_overload_threshold_ratio(),
             REGION_CPU_OVERLOAD_THRESHOLD_RATIO
         );
-        assert_eq!(default_cfg.split.byte_threshold, DEFAULT_BYTE_THRESHOLD);
+        assert_eq!(default_cfg.split.byte_threshold(), DEFAULT_BYTE_THRESHOLD);
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.storage.engine = EngineType::RaftKv2;
@@ -6154,15 +6161,15 @@ mod tests {
             RAFTSTORE_V2_SPLIT_SIZE
         );
         assert_eq!(
-            default_cfg.split.qps_threshold,
+            default_cfg.split.qps_threshold(),
             DEFAULT_BIG_REGION_QPS_THRESHOLD
         );
         assert_eq!(
-            default_cfg.split.region_cpu_overload_threshold_ratio,
+            default_cfg.split.region_cpu_overload_threshold_ratio(),
             BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO
         );
         assert_eq!(
-            default_cfg.split.byte_threshold,
+            default_cfg.split.byte_threshold(),
             DEFAULT_BIG_REGION_BYTE_THRESHOLD
         );
         assert!(default_cfg.coprocessor.enable_region_bucket());
