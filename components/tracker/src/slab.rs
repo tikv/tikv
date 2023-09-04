@@ -145,7 +145,7 @@ struct SlabEntry {
 pub const INVALID_TRACKER_TOKEN: TrackerToken = TrackerToken(u64::MAX);
 
 #[derive(Clone, Copy, PartialEq)]
-pub struct TrackerToken(u64);
+pub struct TrackerToken(pub u64);
 
 impl TrackerToken {
     fn new(shard_id: u32, seq: u32, key: usize) -> TrackerToken {

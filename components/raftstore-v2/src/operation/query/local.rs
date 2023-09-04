@@ -580,6 +580,10 @@ impl<'r> SnapRequestInspector<'r> {
             ));
         }
 
+        fail::fail_point!("perform_read_index", |_| Ok(ReadRequestPolicy::ReadIndex));
+
+        fail::fail_point!("perform_read_local", |_| Ok(ReadRequestPolicy::ReadLocal));
+
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(ReadRequestPolicy::StaleRead);
