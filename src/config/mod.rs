@@ -110,7 +110,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
-const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: u64 = ReadableSize::mb(32).0;
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(32);
 
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
