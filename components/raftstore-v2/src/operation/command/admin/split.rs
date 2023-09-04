@@ -707,11 +707,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let control = self.split_flow_control_mut();
         // if share_source_region_size is true, it means the new region contains any
         // data from the origin region.
-        let mut amortize_size = None;
-        let mut amortize_keys = None;
+        let mut share_size = None;
+        let mut share_keys = None;
         if share_source_region_size {
-            amortize_size = control.approximate_size.map(|v| v / new_region_count);
-            amortize_keys = control.approximate_keys.map(|v| v / new_region_count);
+            share_size = control.approximate_size.map(|v| v / new_region_count);
+            share_keys = control.approximate_keys.map(|v| v / new_region_count);
         }
 
         self.post_split();
@@ -731,8 +731,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let control = self.split_flow_control_mut();
             control.may_skip_split_check = false;
             if share_source_region_size {
-                control.approximate_size = amortize_size;
-                control.approximate_keys = amortize_keys;
+                control.approximate_size = share_size;
+                control.approximate_keys = share_keys;
             }
 
             self.add_pending_tick(PeerTick::SplitRegionCheck);
@@ -779,8 +779,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 derived_region_id: region_id,
                 check_split: last_region_id == new_region_id,
                 scheduled: false,
-                approximate_size: amortize_size,
-                approximate_keys: amortize_keys,
+                approximate_size: share_size,
+                approximate_keys: share_keys,
                 locks,
             }));
 

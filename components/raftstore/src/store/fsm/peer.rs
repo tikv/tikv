@@ -4071,13 +4071,13 @@ where
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-        let mut amortize_size = None;
-        let mut amortize_keys = None;
+        let mut share_size = None;
+        let mut share_keys = None;
         // if share_source_region_size is true, it means the new region contains any
         // data from the origin region
         if share_source_region_size {
-            amortize_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
-            amortize_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+            share_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
+            share_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -4095,8 +4095,8 @@ where
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
             if share_source_region_size {
-                self.fsm.peer.approximate_size = amortize_size;
-                self.fsm.peer.approximate_keys = amortize_keys;
+                self.fsm.peer.approximate_size = share_size;
+                self.fsm.peer.approximate_keys = share_keys;
             }
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
@@ -4232,8 +4232,8 @@ where
             new_peer.has_ready |= campaigned;
 
             if is_leader {
-                new_peer.peer.approximate_size = amortize_size;
-                new_peer.peer.approximate_keys = amortize_keys;
+                new_peer.peer.approximate_size = share_size;
+                new_peer.peer.approximate_keys = share_keys;
                 *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to
                 // reduce client query miss.
