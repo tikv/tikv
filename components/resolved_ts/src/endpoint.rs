@@ -13,6 +13,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
+use futures::channel::oneshot::{Receiver, Sender};
 use grpcio::Environment;
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
@@ -52,7 +53,7 @@ enum ResolverStatus {
     Pending {
         tracked_index: u64,
         locks: Vec<PendingLock>,
-        cancelled: Arc<AtomicBool>,
+        cancelled: Option<Sender<()>>,
         memory_quota: Arc<MemoryQuota>,
     },
     Ready,
@@ -185,18 +186,26 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-    fn new(meta: Region, rrp: Arc<RegionReadProgress>, memory_quota: Arc<MemoryQuota>) -> Self {
-        ObserveRegion {
-            resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota.clone()),
-            meta,
-            handle: ObserveHandle::new(),
-            resolver_status: ResolverStatus::Pending {
-                tracked_index: 0,
-                locks: vec![],
-                cancelled: Arc::new(AtomicBool::new(false)),
-                memory_quota,
+    fn new(
+        meta: Region,
+        rrp: Arc<RegionReadProgress>,
+        memory_quota: Arc<MemoryQuota>,
+    ) -> (Self, Receiver<()>) {
+        let (cancelled, cancel_notify) = futures::channel::oneshot::channel();
+        (
+            ObserveRegion {
+                resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota.clone()),
+                meta,
+                handle: ObserveHandle::new(),
+                resolver_status: ResolverStatus::Pending {
+                    tracked_index: 0,
+                    locks: vec![],
+                    cancelled: Some(cancelled),
+                    memory_quota,
+                },
             },
-        }
+            cancel_notify,
+        )
     }
 
     fn read_progress(&self) -> &Arc<RegionReadProgress> {
@@ -445,7 +454,7 @@ where
     fn register_region(&mut self, region: Region, backoff: Option<Duration>) {
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
-        let observe_region = {
+        let (observe_region, cancelled) = {
             if let Some(read_progress) = self.region_read_progress.get(&region_id) {
                 info!(
                     "register observe region";
@@ -461,10 +470,6 @@ where
             }
         };
         let observe_handle = observe_region.handle.clone();
-        let cancelled = match observe_region.resolver_status {
-            ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
-            ResolverStatus::Ready => panic!("resolved ts illeagal created observe region"),
-        };
         observe_region
             .read_progress()
             .update_advance_resolved_ts_notify(self.advance_notify.clone());
@@ -481,7 +486,7 @@ where
         &self,
         region: Region,
         observe_handle: ObserveHandle,
-        cancelled: Arc<AtomicBool>,
+        cancelled: Receiver<()>,
         backoff: Option<Duration>,
     ) -> ScanTask {
         let scheduler = self.scheduler.clone();
@@ -499,7 +504,7 @@ where
         if let Some(observe_region) = self.regions.remove(&region_id) {
             let ObserveRegion {
                 handle,
-                resolver_status,
+                mut resolver_status,
                 ..
             } = observe_region;
 
@@ -512,8 +517,11 @@ where
             // Stop observing data
             handle.stop_observing();
             // Stop scanning data
-            if let ResolverStatus::Pending { ref cancelled, .. } = resolver_status {
-                cancelled.store(true, Ordering::Release);
+            if let ResolverStatus::Pending {
+                ref mut cancelled, ..
+            } = resolver_status
+            {
+                let _ = cancelled.take();
             }
         } else {
             debug!("deregister unregister region"; "region_id" => region_id);

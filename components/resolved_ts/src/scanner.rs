@@ -10,7 +10,7 @@ use std::{
 };
 
 use engine_traits::KvEngine;
-use futures::compat::Future01CompatExt;
+use futures::{channel::oneshot::Receiver, compat::Future01CompatExt, FutureExt};
 use futures_timer::Delay;
 use kvproto::metapb::Region;
 use raftstore::{
@@ -47,19 +47,19 @@ pub struct ScanTask {
     pub region: Region,
     pub checkpoint_ts: TimeStamp,
     pub backoff: Option<Duration>,
-    pub cancelled: Arc<AtomicBool>,
+    pub cancelled: Receiver<()>,
     pub scheduler: Scheduler<Task>,
 }
 
 impl ScanTask {
     async fn send_entries(&self, entries: Vec<ScanEntry>, apply_index: u64) {
-        loop {
-            if self.scheduler.pending_tasks() < 8 {
-                break;
-            }
-            let f = Delay::new(Duration::from_millis(10));
-            f.await;
-        }
+        // loop {
+        //     if self.scheduler.pending_tasks() < 8 {
+        //         break;
+        //     }
+        //     let f = Delay::new(Duration::from_millis(10));
+        //     f.await;
+        // }
         let task = Task::ScanLocks {
             region_id: self.region.get_id(),
             observe_id: self.handle.id,
@@ -72,8 +72,8 @@ impl ScanTask {
         RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
     }
 
-    fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+    fn is_cancelled(&mut self) -> bool {
+        matches!(self.cancelled.try_recv(), Err(_) | Ok(Some(_)))
     }
 
     fn on_error(&self, err: Error) {
@@ -127,12 +127,15 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         let fut = async move {
             if let Some(backoff) = task.backoff {
                 RTS_INITIAL_SCAN_BACKOFF_DURATION_HISTOGRAM.observe(backoff.as_secs_f64());
-                if let Err(e) = GLOBAL_TIMER_HANDLE
+                let mut backoff = GLOBAL_TIMER_HANDLE
                     .delay(std::time::Instant::now() + backoff)
                     .compat()
-                    .await
-                {
-                    error!("failed to backoff"; "err" => ?e);
+                    .fuse();
+                futures::select! {
+                    res = backoff => if let Err(e) = res {
+                        error!("failed to backoff"; "err" => ?e);
+                    },
+                    _ = &mut task.cancelled => {}
                 }
                 if task.is_cancelled() {
                     return;
