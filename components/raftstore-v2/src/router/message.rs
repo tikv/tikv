@@ -315,6 +315,7 @@ impl PeerMsg {
         epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
         source: String,
+        share_source_region_size: bool,
     ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
@@ -323,6 +324,7 @@ impl PeerMsg {
                     epoch,
                     split_keys,
                     source: source.into(),
+                    share_source_region_size,
                 },
                 ch,
             },
@@ -344,6 +346,7 @@ impl PeerMsg {
                     epoch,
                     split_keys,
                     source: source.into(),
+                    share_source_region_size: false,
                 },
                 ch,
             },

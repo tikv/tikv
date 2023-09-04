@@ -668,11 +668,11 @@ pub fn create_test_engine(
     )
 }
 
-pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_request_snapshot(config: &mut Config) {
     // We don't want to generate snapshots due to compact log.
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
+    config.raft_store.raft_log_gc_threshold = 1000;
+    config.raft_store.raft_log_gc_count_limit = Some(1000);
+    config.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
 pub fn configure_for_hibernate(config: &mut Config) {
