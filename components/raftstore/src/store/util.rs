@@ -35,7 +35,7 @@ use tikv_util::{
     codec::number::{decode_u64, NumberEncoder},
     debug, info,
     store::{find_peer_by_id, region},
-    time::monotonic_raw_now,
+    time::{monotonic_raw_now, Instant},
     Either,
 };
 use time::{Duration, Timespec};
@@ -1200,10 +1200,11 @@ impl RegionReadProgressRegistry {
     ) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
+        let now = Some(Instant::now_coarse());
         for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor) {
+                if rp.consume_leader_info(leader_info, coprocessor, now) {
                     regions.push(region_id);
                 }
             }
@@ -1309,7 +1310,7 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+    pub fn update_safe_ts_with_time(&self, apply_index: u64, ts: u64, now: Option<Instant>) {
         if apply_index == 0 || ts == 0 {
             return;
         }
@@ -1317,11 +1318,15 @@ impl RegionReadProgress {
         if core.discard {
             return;
         }
-        if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+        if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
             }
         }
+    }
+
+    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+        self.update_safe_ts_with_time(apply_index, ts, None)
     }
 
     pub fn merge_safe_ts<E: KvEngine>(
@@ -1347,15 +1352,21 @@ impl RegionReadProgress {
         &self,
         leader_info: &LeaderInfo,
         coprocessor: &CoprocessorHost<E>,
+        now: Option<Instant>,
     ) -> bool {
         let mut core = self.core.lock().unwrap();
+        if matches!((core.last_instant_of_consume_leader, now), (None, Some(_)))
+            || matches!((core.last_instant_of_consume_leader, now), (Some(l), Some(r)) if l < r)
+        {
+            core.last_instant_of_consume_leader = now;
+        }
         if leader_info.has_read_state() {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
             // `read_state` is guaranteed to be valid when it is published by the leader
             let rs = leader_info.get_read_state();
             let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
             if apply_index != 0 && ts != 0 && !core.discard {
-                if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+                if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
                     if !core.pause {
                         self.safe_ts.store(ts, AtomicOrdering::Release);
                     }
@@ -1457,6 +1468,11 @@ pub struct RegionReadProgressCore {
     discard: bool,
     // A notify to trigger advancing resolved ts immediately.
     advance_notify: Option<Arc<Notify>>,
+    // The approximate last instant of calling update_safe_ts(), used for diagnosis.
+    // Only the update from advance of resolved-ts is counted. Other sources like CDC or
+    // backup-stream are ignored.
+    last_instant_of_update_safe_ts: Option<Instant>,
+    last_instant_of_consume_leader: Option<Instant>,
 }
 
 // A helpful wrapper of `(apply_index, safe_ts)` item
@@ -1529,6 +1545,8 @@ impl RegionReadProgressCore {
             pause: is_witness,
             discard: is_witness,
             advance_notify: None,
+            last_instant_of_update_safe_ts: None,
+            last_instant_of_consume_leader: None,
         }
     }
 
@@ -1582,9 +1600,14 @@ impl RegionReadProgressCore {
     }
 
     // Return the `safe_ts` if it is updated
-    fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
+    fn update_safe_ts(&mut self, idx: u64, ts: u64, now: Option<Instant>) -> Option<u64> {
         // Discard stale item with `apply_index` before `last_merge_index`
         // in order to prevent the stale item makes the `safe_ts` larger again
+        if matches!((self.last_instant_of_update_safe_ts, now), (None, Some(_)))
+            || matches!((self.last_instant_of_update_safe_ts, now), (Some(l), Some(r)) if l < r)
+        {
+            self.last_instant_of_update_safe_ts = now;
+        }
         if idx < self.last_merge_index {
             return None;
         }
@@ -1673,6 +1696,14 @@ impl RegionReadProgressCore {
 
     pub fn discarding(&self) -> bool {
         self.discard
+    }
+
+    pub fn last_instant_of_update_ts(&self) -> &Option<Instant> {
+        &self.last_instant_of_update_safe_ts
+    }
+
+    pub fn last_instant_of_consume_leader(&self) -> &Option<Instant> {
+        &self.last_instant_of_consume_leader
     }
 }
 

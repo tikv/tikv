@@ -552,7 +552,7 @@ impl SstImporter {
         if self.mem_limit.load(Ordering::SeqCst) != memory_limit {
             self.mem_limit.store(memory_limit, Ordering::SeqCst);
             info!("update importer config";
-                "memory-use-ratio" => mem_ratio,
+                "memory_use_ratio" => mem_ratio,
                 "size" => memory_limit,
             )
         }
@@ -598,7 +598,7 @@ impl SstImporter {
         if self.import_support_download() {
             let shrink_file_count = shrink_files.len();
             if shrink_file_count > 0 || retain_file_count > 0 {
-                info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
+                info!("shrink space by tick"; "shrink_files_count" => shrink_file_count, "retain_files_count" => retain_file_count);
             }
 
             for f in shrink_files {
@@ -609,7 +609,7 @@ impl SstImporter {
             shrink_file_count
         } else {
             if shrink_buff_size > 0 || retain_buff_size > 0 {
-                info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+                info!("shrink cache by tick"; "shrink_size" => shrink_buff_size, "retain_size" => retain_buff_size);
             }
             shrink_buff_size
         }
@@ -1029,9 +1029,10 @@ impl SstImporter {
                 .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
         }
         if total_key != not_in_range {
-            info!("build download request file done"; "total keys" => %total_key,
-            "ts filtered keys" => %ts_not_expected,
-            "range filtered keys" => %not_in_range);
+            info!("build download request file done";
+                "total_keys" => %total_key,
+                "ts_filtered_keys" => %ts_not_expected,
+                "range_filtered_keys" => %not_in_range);
         }
 
         IMPORTER_APPLY_DURATION

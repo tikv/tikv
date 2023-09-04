@@ -404,7 +404,7 @@ impl TikvServerCore {
                             debug!(
                                 "cpu_time_limiter tuned for backend request";
                                 "cpu_util" => ?cpu_util,
-                                "new quota" => ?target_quota);
+                                "new_quota" => ?target_quota);
                             INSTANCE_BACKEND_CPU_QUOTA.set(target_quota as i64);
                         }
                     }
@@ -762,7 +762,11 @@ impl ConfiguredRaftEngine for RocksEngine {
     fn register_config(&self, cfg_controller: &mut ConfigController) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(self.clone(), DbType::Raft)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                self.clone(),
+                DbType::Raft,
+            )),
         );
     }
 }

@@ -343,10 +343,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.schedule_apply_fsm(ctx);
             if self.remove_tombstone_tablets(snapshot_index) {
+                let counter = self.remember_persisted_tablet_index();
                 let _ = ctx
                     .schedulers
                     .tablet
                     .schedule(tablet::Task::destroy(region_id, snapshot_index));
+                counter.store(snapshot_index, Ordering::Relaxed);
             }
             if let Some(msg) = self.split_pending_append_mut().take_append_message() {
                 let _ = ctx.router.send_raft_message(msg);
@@ -606,8 +608,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 warn!(
                     self.logger(),
                     "snapshot is staled, skip";
-                    "snap index" => snapshot.get_metadata().get_index(),
-                    "required index" => index.load(Ordering::SeqCst),
+                    "snap_index" => snapshot.get_metadata().get_index(),
+                    "required_index" => index.load(Ordering::SeqCst),
                     "to_peer_id" => to_peer_id,
                 );
                 return false;

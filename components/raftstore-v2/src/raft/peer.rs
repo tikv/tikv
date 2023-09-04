@@ -158,6 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
         let merge_context = MergeContext::from_region_state(&logger, storage.region_state());
+        let persisted_applied = storage.apply_trace().persisted_apply_index();
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
@@ -184,7 +185,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
-            compact_log_context: CompactLogContext::new(applied_index),
+            compact_log_context: CompactLogContext::new(applied_index, persisted_applied),
             merge_context: merge_context.map(|c| Box::new(c)),
             last_sent_snapshot_index: 0,
             raw_write_encoder: None,
@@ -603,7 +604,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 continue;
             }
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                let elapsed = instant.saturating_duration_since(now);
+                let elapsed = now.saturating_duration_since(*instant);
                 if elapsed >= max_duration {
                     let mut stats = pdpb::PeerStats::default();
                     stats.set_peer(p.clone());

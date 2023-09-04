@@ -476,12 +476,21 @@ make_auto_flush_static_metric! {
         err_disk_full,
         err_recovery_in_progress,
         err_flashback_in_progress,
+        err_buckets_version_not_match,
         err_undetermind,
     }
 
     pub label_enum RequestTypeKind {
         write,
         snapshot,
+        // exclude those handled by raftstore
+        snapshot_local_read,
+        // If async snapshot is involved with read index request(due to lease
+        // expire or explicitly specified), the async snapshot duration will
+        // includes the duration before raft leader propsoe it (snapshot_read_index_propose_wait)
+        // and the time used for checking quorum (snapshot_read_index_confirm).
+        snapshot_read_index_propose_wait,
+        snapshot_read_index_confirm,
     }
 
     pub struct AsyncRequestsCounterVec: LocalIntCounter {
@@ -512,6 +521,9 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::DiskFull => RequestStatusKind::err_disk_full,
             ErrorHeaderKind::RecoveryInProgress => RequestStatusKind::err_recovery_in_progress,
             ErrorHeaderKind::FlashbackInProgress => RequestStatusKind::err_flashback_in_progress,
+            ErrorHeaderKind::BucketsVersionNotMatch => {
+                RequestStatusKind::err_buckets_version_not_match
+            }
             ErrorHeaderKind::Other => RequestStatusKind::err_other,
         }
     }

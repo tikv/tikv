@@ -10,6 +10,7 @@
 use std::time::Instant;
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+use fail::fail_point;
 use kvproto::{
     metapb::{self, PeerRole},
     raft_cmdpb::{AdminRequest, AdminResponse, ChangePeerRequest, RaftCmdRequest},
@@ -286,7 +287,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                         error!(self.logger, "failed to apply conf change";
                         "changes" => ?changes,
                         "legacy" => legacy,
-                        "original region" => ?region, "err" => ?e);
+                        "original_region" => ?region, "err" => ?e);
                         return Err(e);
                     }
                 }
@@ -300,8 +301,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             "conf change successfully";
             "changes" => ?changes,
             "legacy" => legacy,
-            "original region" => ?region,
-            "current region" => ?new_region,
+            "original_region" => ?region,
+            "current_region" => ?new_region,
         );
         let my_id = self.peer().get_id();
         let state = self.region_state_mut();
@@ -392,6 +393,14 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
         match change_type {
             ConfChangeType::AddNode => {
+                let add_node_fp = || {
+                    fail_point!(
+                        "apply_on_add_node_1_2",
+                        self.peer_id() == 2 && self.region_id() == 1,
+                        |_| {}
+                    )
+                };
+                add_node_fp();
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "all"])
                     .inc();

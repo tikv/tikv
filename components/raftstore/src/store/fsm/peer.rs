@@ -128,6 +128,7 @@ enum DelayReason {
 /// in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
 
@@ -321,6 +322,7 @@ where
             "replicate peer";
             "region_id" => region_id,
             "peer_id" => peer.get_id(),
+            "store_id" => store_id,
         );
 
         let mut region = metapb::Region::default();
@@ -771,11 +773,12 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, demote failed voters has already been initiated";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -872,11 +875,12 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't destroy, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -890,11 +894,12 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't wait apply, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -921,11 +926,12 @@ where
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
     fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
-        if self.fsm.peer.snapshot_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -2462,6 +2468,7 @@ where
             }
         });
 
+        let is_initialized_peer = self.fsm.peer.is_initialized();
         debug!(
             "handle raft message";
             "region_id" => self.region_id(),
@@ -2469,6 +2476,7 @@ where
             "message_type" => %util::MsgType(&msg),
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
+            "is_initialized_peer" => is_initialized_peer,
         );
 
         if self.fsm.peer.pending_remove || self.fsm.stopped {
@@ -2954,6 +2962,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "target_peer" => ?target,
+                            "job.initialized" => job.initialized,
                         );
                         if self.handle_destroy_peer(job) {
                             // It's not frequent, so use 0 as `heap_size` is ok.
@@ -3664,13 +3673,8 @@ where
             return false;
         }
 
-        info!(
-            "starts destroy";
-            "region_id" => self.fsm.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-            "merged_by_target" => merged_by_target,
-        );
         let region_id = self.region_id();
+        let is_peer_initialized = self.fsm.peer.is_initialized();
         // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
 
@@ -3687,7 +3691,39 @@ where
                 .snapshot_recovery_maybe_finish_wait_apply(/* force= */ true);
         }
 
+        (|| {
+            fail_point!(
+                "before_destroy_peer_on_peer_1003",
+                self.fsm.peer.peer_id() == 1003,
+                |_| {}
+            );
+        })();
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        let is_latest_initialized = {
+            if let Some(latest_region_info) = meta.regions.get(&region_id) {
+                util::is_region_initialized(latest_region_info)
+            } else {
+                false
+            }
+        };
+
+        if !is_peer_initialized && is_latest_initialized {
+            info!("skip destroy uninitialized peer as it's already initialized in meta";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "merged_by_target" => merged_by_target,
+            );
+            return false;
+        }
+
+        info!(
+            "starts destroy";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "merged_by_target" => merged_by_target,
+            "is_peer_initialized" => is_peer_initialized,
+            "is_latest_initialized" => is_latest_initialized,
+        );
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -3725,7 +3761,6 @@ where
                 "err" => %e,
             );
         }
-        let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
             &mut self.ctx.raft_perf_context,
@@ -3745,7 +3780,7 @@ where
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
-        if is_initialized
+        if is_peer_initialized
             && !merged_by_target
             && meta
                 .region_ranges
@@ -3754,6 +3789,7 @@ where
         {
             panic!("{} meta corruption detected", self.fsm.peer.tag);
         }
+
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
@@ -4129,11 +4165,8 @@ where
             }
 
             // Insert new regions and validation
-            info!(
-                "insert new region";
-                "region_id" => new_region_id,
-                "region" => ?new_region,
-            );
+            let mut is_uninitialized_peer_exist = false;
+            let self_store_id = self.ctx.store.get_id();
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
@@ -4147,8 +4180,16 @@ where
                         new_region_id, r, new_region
                     );
                 }
+                is_uninitialized_peer_exist = true;
                 self.ctx.router.close(new_region_id);
             }
+            info!(
+                "insert new region";
+                "region_id" => new_region_id,
+                "region" => ?new_region,
+                "is_uninitialized_peer_exist" => is_uninitialized_peer_exist,
+                "store_id" => self_store_id,
+            );
 
             let (sender, mut new_peer) = match PeerFsm::create(
                 self.ctx.store_id(),
@@ -6049,6 +6090,7 @@ where
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.fsm.peer.get_role(),
         );
+        let keys = region_buckets.meta.keys.clone();
         let old_region_buckets: Option<BucketStat> =
             self.fsm.peer.region_buckets.replace(region_buckets);
         self.fsm.peer.last_region_buckets = old_region_buckets;
@@ -6071,6 +6113,7 @@ where
                 extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
                 let mut refresh_buckets = RefreshBuckets::new();
                 refresh_buckets.set_version(version);
+                refresh_buckets.set_keys(keys.clone().into());
                 extra_msg.set_refresh_buckets(refresh_buckets);
                 self.fsm
                     .peer
@@ -6081,8 +6124,8 @@ where
         debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
-            "buckets count" => buckets_count,
-            "buckets size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
+            "buckets_count" => buckets_count,
+            "buckets_size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
         );
         // test purpose
         #[cfg(any(test, feature = "testexport"))]
@@ -6098,13 +6141,14 @@ where
             return;
         }
         let version = msg.get_extra_msg().get_refresh_buckets().get_version();
+        let keys = msg.get_extra_msg().get_refresh_buckets().get_keys();
         let region_epoch = msg.get_region_epoch().clone();
 
         let meta = BucketMeta {
             region_id: self.region_id(),
             version,
             region_epoch,
-            keys: vec![],
+            keys: keys.to_vec(),
             sizes: vec![],
         };
 
@@ -6319,13 +6363,22 @@ where
         if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
             // Clean up the force leader state after a timeout, since the PD recovery
             // process may have been aborted for some reasons.
-            if time.saturating_elapsed()
-                > cmp::max(
-                    self.ctx.cfg.peer_stale_state_check_interval.0,
-                    Duration::from_secs(60),
-                )
-            {
+            if time.saturating_elapsed() > UNSAFE_RECOVERY_STATE_TIMEOUT {
                 self.on_exit_force_leader();
+            }
+        }
+        if let Some(state) = &mut self.fsm.peer.unsafe_recovery_state {
+            let unsafe_recovery_state_timeout_failpoint = || -> bool {
+                fail_point!("unsafe_recovery_state_timeout", |_| true);
+                false
+            };
+            // Clean up the unsafe recovery state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if unsafe_recovery_state_timeout_failpoint()
+                || state.check_timeout(UNSAFE_RECOVERY_STATE_TIMEOUT)
+            {
+                info!("timeout, abort unsafe recovery"; "state" => ?state);
+                state.abort();
             }
         }
 

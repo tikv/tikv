@@ -2,7 +2,7 @@
 
 use std::{
     borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, result, str, string::ToString, sync::Arc,
-    time::Duration, u64,
+    time::Duration,
 };
 
 use api_version::{ApiV1, KvFormat};
@@ -1008,15 +1008,20 @@ impl DebugExecutor for DebugClient {
             ),
             ("paused", resp.get_region_read_progress_paused().to_string()),
             ("discarding", resp.get_discard().to_string()),
-            // TODO: figure out the performance impact here before implementing it.
-            // (
-            //     "duration to last update_safe_ts",
-            //     format!("{} ms", resp.get_duration_to_last_update_safe_ts_ms()),
-            // ),
-            // (
-            //     "duration to last consume_leader_info",
-            //     format!("{} ms", resp.get_duration_to_last_consume_leader_ms()),
-            // ),
+            (
+                "duration since resolved-ts last called update_safe_ts()",
+                match resp.get_duration_to_last_update_safe_ts_ms() {
+                    u64::MAX => "none".to_owned(),
+                    x => format!("{} ms", x),
+                },
+            ),
+            (
+                "duration to last consume_leader_info()",
+                match resp.get_duration_to_last_consume_leader_ms() {
+                    u64::MAX => "none".to_owned(),
+                    x => format!("{} ms", x),
+                },
+            ),
             ("Resolver:", "".to_owned()),
             ("exist", resp.get_resolver_exist().to_string()),
             ("resolved_ts", resp.get_resolved_ts().to_string()),

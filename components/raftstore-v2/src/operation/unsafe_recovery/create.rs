@@ -110,9 +110,10 @@ impl Store {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_unsafe_recovery_wait_initialized(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if self.unsafe_recovery_state().is_some() {
+        if let Some(state) = self.unsafe_recovery_state() && !state.is_abort() {
             warn!(self.logger,
                 "Unsafe recovery, can't wait initialize, another plan is executing in progress";
+                "state" => ?state,
             );
             syncer.abort();
             return;

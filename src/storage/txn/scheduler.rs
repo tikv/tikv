@@ -1665,10 +1665,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // it may break correctness.
         // However, not release latch will cause deadlock which may ultimately block all
         // following txns, so we panic here.
-        panic!(
-            "response channel is unexpectedly dropped, tag {:?}, cid {}",
-            tag, cid
-        );
+        //
+        // todo(spadea): Now, we only panic if it's not shutting down, although even in
+        // close, this behavior is not acceptable.
+        if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+            panic!(
+                "response channel is unexpectedly dropped, tag {:?}, cid {}",
+                tag, cid
+            );
+        }
     }
 
     /// Returns whether it succeeds to write pessimistic locks to the in-memory
