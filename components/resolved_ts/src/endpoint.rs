@@ -32,7 +32,7 @@ use tikv_util::{
     warn,
     worker::{Runnable, RunnableWithTimer, Scheduler},
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use txn_types::{Key, TimeStamp};
 
 use crate::{
@@ -381,6 +381,7 @@ pub struct Endpoint<T, E: KvEngine, S> {
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
+    scan_concurrency_semaphore: Arc<Semaphore>,
     scheduler: Scheduler<Task>,
     advance_worker: AdvanceTsWorker,
     _phantom: PhantomData<(T, E)>,
@@ -422,6 +423,7 @@ where
             region_read_progress.clone(),
             store_resolver_gc_interval,
         );
+        let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
         let ep = Self {
             store_id: Some(store_id),
             cfg: cfg.clone(),
@@ -432,6 +434,7 @@ where
             region_read_progress,
             advance_worker,
             scanner_pool,
+            scan_concurrency_semaphore,
             regions: HashMap::default(),
             _phantom: PhantomData::default(),
         };
@@ -468,7 +471,9 @@ where
         self.regions.insert(region_id, observe_region);
 
         let scan_task = self.build_scan_task(region, observe_handle, cancelled, backoff);
-        self.scanner_pool.spawn_task(scan_task);
+        let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        self.scanner_pool
+            .spawn_task(scan_task, concurrency_semaphore);
         RTS_SCAN_TASKS.with_label_values(&["total"]).inc();
     }
 

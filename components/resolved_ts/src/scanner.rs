@@ -26,7 +26,10 @@ use tikv::storage::{
 use tikv_util::{
     sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler,
 };
-use tokio::runtime::{Builder, Runtime};
+use tokio::{
+    runtime::{Builder, Runtime},
+    sync::Semaphore,
+};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{
@@ -119,7 +122,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         }
     }
 
-    pub fn spawn_task(&self, mut task: ScanTask) {
+    pub fn spawn_task(&self, mut task: ScanTask, concurrency_semaphore: Arc<Semaphore>) {
         let cdc_handle = self.cdc_handle.clone();
         let fut = async move {
             if let Some(backoff) = task.backoff {
@@ -135,6 +138,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             }
+            let _permit = concurrency_semaphore.acquire().await;
+            if task.is_cancelled() {
+                return;
+            }
+            fail::fail_point!("resolved_ts_before_scanner_get_snapshot");
             let snap = match Self::get_snapshot(&mut task, cdc_handle).await {
                 Ok(snap) => snap,
                 Err(e) => {
