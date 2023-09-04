@@ -109,10 +109,18 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 /// Tentative value.
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.25;
 
+<<<<<<< HEAD
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
 const RAFT_MIN_MEM: usize = 256 * MIB as usize;
 const RAFT_MAX_MEM: usize = 2 * GIB as usize;
+=======
+const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
+// Too large will increase Raft Engine memory usage.
+const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(32);
+
+>>>>>>> a56fe6abdc (raftstore-v2: fix panic of dynamic changing write-buffer-limit (#15504))
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
@@ -1342,6 +1350,19 @@ impl DbConfig {
                 self.writecf.disable_write_stall = true;
                 self.lockcf.disable_write_stall = true;
                 self.raftcf.disable_write_stall = true;
+<<<<<<< HEAD
+=======
+                // Initially only allow one compaction. Pace up when pending bytes is high. This
+                // strategy is consistent with single RocksDB.
+                self.defaultcf.max_compactions.get_or_insert(1);
+                self.writecf.max_compactions.get_or_insert(1);
+                self.lockcf
+                    .write_buffer_size
+                    .get_or_insert(ReadableSize::mb(4));
+                self.lockcf
+                    .write_buffer_limit
+                    .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
+>>>>>>> a56fe6abdc (raftstore-v2: fix panic of dynamic changing write-buffer-limit (#15504))
             }
         }
     }
@@ -1957,6 +1978,24 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
                 .set_rate_limiter_auto_tuned(rate_limiter_auto_tuned)?;
         }
 
+<<<<<<< HEAD
+=======
+        if let Some(size) = change
+            .drain_filter(|(name, _)| name == "write_buffer_limit")
+            .next()
+        {
+            let size: ReadableSize = size.1.into();
+            self.db.set_flush_size(size.0 as usize)?;
+        }
+
+        if let Some(f) = change
+            .drain_filter(|(name, _)| name == "write_buffer_flush_oldest_first")
+            .next()
+        {
+            self.db.set_flush_oldest_first(f.1.into())?;
+        }
+
+>>>>>>> a56fe6abdc (raftstore-v2: fix panic of dynamic changing write-buffer-limit (#15504))
         if let Some(background_jobs_config) = change
             .drain_filter(|(name, _)| name == "max_background_jobs")
             .next()
@@ -4987,6 +5026,12 @@ mod tests {
             db.get_db_options().get_rate_bytes_per_sec().unwrap(),
             ReadableSize::mb(128).0 as i64
         );
+
+        cfg_controller
+            .update_config("rocksdb.write-buffer-limit", "10MB")
+            .unwrap();
+        let flush_size = db.get_db_options().get_flush_size().unwrap();
+        assert_eq!(flush_size, ReadableSize::mb(10).0);
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();

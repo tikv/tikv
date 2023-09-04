@@ -91,6 +91,35 @@ impl DbOptions for RocksDbOptions {
         Ok(())
     }
 
+<<<<<<< HEAD
+=======
+    fn set_flush_size(&mut self, f: usize) -> Result<()> {
+        if let Some(m) = self.0.get_write_buffer_manager() {
+            m.set_flush_size(f);
+        } else {
+            return Err(box_err!("write buffer manager not found"));
+        }
+        Ok(())
+    }
+
+    fn get_flush_size(&self) -> Result<u64> {
+        if let Some(m) = self.0.get_write_buffer_manager() {
+            return Ok(m.flush_size() as u64);
+        }
+
+        Err(box_err!("write buffer manager not found"))
+    }
+
+    fn set_flush_oldest_first(&mut self, f: bool) -> Result<()> {
+        if let Some(m) = self.0.get_write_buffer_manager() {
+            m.set_flush_oldest_first(f);
+        } else {
+            return Err(box_err!("write buffer manager not found"));
+        }
+        Ok(())
+    }
+
+>>>>>>> a56fe6abdc (raftstore-v2: fix panic of dynamic changing write-buffer-limit (#15504))
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         self.0.set_titandb_options(opts.as_raw())
     }
