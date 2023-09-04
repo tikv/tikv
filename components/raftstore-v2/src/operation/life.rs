@@ -797,11 +797,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.has_pending_tombstone_tablets() {
             let applied_index = self.entry_storage().applied_index();
             let last_index = self.entry_storage().last_index();
+            let persisted = self
+                .remember_persisted_tablet_index()
+                .load(std::sync::atomic::Ordering::Relaxed);
             info!(
                 self.logger,
                 "postpone destroy because there're pending tombstone tablets";
                 "applied_index" => applied_index,
                 "last_index" => last_index,
+                "persisted_applied" => persisted,
             );
             return true;
         }
