@@ -304,6 +304,13 @@ impl Service {
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
+    // ### Command types:
+    // * Register registers a region. 1) both `request_id` and `region_id` must be
+    //   specified; 2) `request_id` can be 0 but `region_id` can not.
+    // * Deregister deregisters some regions in one same `request_id` or just one
+    //   region. 1) if both `request_id` and `region_id` are specified, just
+    //   deregister the region; 2) if only `request_id` is specified, all region
+    //   subscriptions with the same `request_id` will be deregistered.
     fn handle_request(
         scheduler: &Scheduler<Task>,
         peer: &str,
@@ -361,10 +368,18 @@ impl Service {
         request: ChangeDataRequest,
         conn_id: ConnId,
     ) -> Result<(), String> {
-        let task = Task::Deregister(Deregister::Request {
-            conn_id,
-            request_id: request.request_id,
-        });
+        let task = if request.region_id != 0 {
+            Task::Deregister(Deregister::Region {
+                conn_id,
+                request_id: request.request_id,
+                region_id: request.region_id,
+            })
+        } else {
+            Task::Deregister(Deregister::Request {
+                conn_id,
+                request_id: request.request_id,
+            })
+        };
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
