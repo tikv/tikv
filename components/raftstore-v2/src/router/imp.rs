@@ -25,6 +25,72 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
     }
 }
 
+<<<<<<< HEAD
+=======
+impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for StoreRouter<EK, ER> {
+    fn update_approximate_size(&self, region_id: u64, size: u64) {
+        let _ = self.send(region_id, PeerMsg::UpdateRegionSize { size });
+    }
+
+    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
+        let _ = self.send(region_id, PeerMsg::UpdateRegionKeys { keys });
+    }
+
+    fn ask_split(
+        &self,
+        region_id: u64,
+        region_epoch: kvproto::metapb::RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: Cow<'static, str>,
+    ) {
+        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string(), true);
+        let res = self.send(region_id, msg);
+        if let Err(e) = res {
+            warn!(
+                self.logger(),
+                "failed to send ask split";
+                "region_id" => region_id,
+                "err" => %e,
+            );
+        }
+    }
+
+    fn refresh_region_buckets(
+        &self,
+        region_id: u64,
+        region_epoch: kvproto::metapb::RegionEpoch,
+        buckets: Vec<raftstore::store::Bucket>,
+        bucket_ranges: Option<Vec<raftstore::store::BucketRange>>,
+    ) {
+        let res = self.send(
+            region_id,
+            PeerMsg::RefreshRegionBuckets {
+                region_epoch,
+                buckets,
+                bucket_ranges,
+            },
+        );
+        if let Err(e) = res {
+            warn!(
+                self.logger(),
+                "failed to refresh region buckets";
+                "err" => %e,
+            );
+        }
+    }
+
+    fn update_compute_hash_result(
+        &self,
+        _region_id: u64,
+        _index: u64,
+        _context: Vec<u8>,
+        _hash: Vec<u8>,
+    ) {
+        // TODO
+    }
+}
+
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
 /// A router that routes messages to the raftstore
 pub struct RaftRouter<EK, ER>
 where

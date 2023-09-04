@@ -14,10 +14,13 @@ fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
     ids: Vec<pdpb::SplitId>,
     right_derive: bool,
+    share_source_region_size: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::BatchSplit);
     req.mut_splits().set_right_derive(right_derive);
+    req.mut_splits()
+        .set_share_source_region_size(share_source_region_size);
     let mut requests = Vec::with_capacity(ids.len());
     for (mut id, key) in ids.into_iter().zip(split_keys) {
         let mut split = SplitRequest::default();
@@ -38,10 +41,44 @@ where
 {
     pub fn handle_ask_batch_split(
         &mut self,
+<<<<<<< HEAD
+=======
+        region: metapb::Region,
+        split_keys: Vec<Vec<u8>>,
+        peer: metapb::Peer,
+        right_derive: bool,
+        share_source_region_size: bool,
+        ch: CmdResChannel,
+    ) {
+        Self::ask_batch_split_imp(
+            &self.pd_client,
+            &self.logger,
+            &self.router,
+            &self.remote,
+            region,
+            split_keys,
+            peer,
+            right_derive,
+            share_source_region_size,
+            Some(ch),
+        );
+    }
+
+    fn ask_batch_split_imp(
+        pd_client: &T,
+        logger: &Logger,
+        router: &StoreRouter<EK, ER>,
+        remote: &Remote<TaskCell>,
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
         mut region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+<<<<<<< HEAD
+=======
+        share_source_region_size: bool,
+        ch: Option<CmdResChannel>,
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
     ) {
         if split_keys.is_empty() {
             info!(self.logger, "empty split key, skip ask batch split";
@@ -68,6 +105,7 @@ where
                         split_keys,
                         resp.take_ids().into(),
                         right_derive,
+                        share_source_region_size,
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
@@ -96,4 +134,41 @@ where
         };
         self.remote.spawn(f);
     }
+<<<<<<< HEAD
+=======
+
+    pub fn handle_auto_split(&mut self, split_infos: Vec<SplitInfo>) {
+        let pd_client = self.pd_client.clone();
+        let logger = self.logger.clone();
+        let router = self.router.clone();
+        let remote = self.remote.clone();
+
+        let f = async move {
+            for split_info in split_infos {
+                let Ok(Some(region)) =
+                    pd_client.get_region_by_id(split_info.region_id).await else { continue };
+                // Try to split the region with the given split key.
+                if let Some(split_key) = split_info.split_key {
+                    Self::ask_batch_split_imp(
+                        &pd_client,
+                        &logger,
+                        &router,
+                        &remote,
+                        region,
+                        vec![split_key],
+                        split_info.peer,
+                        true,
+                        false,
+                        None,
+                    );
+                // Try to split the region on half within the given key
+                // range if there is no `split_key` been given.
+                } else if split_info.start_key.is_some() && split_info.end_key.is_some() {
+                    // TODO: implement half split
+                }
+            }
+        };
+        self.remote.spawn(f);
+    }
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
 }

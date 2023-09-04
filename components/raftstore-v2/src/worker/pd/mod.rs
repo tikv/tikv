@@ -42,6 +42,11 @@ pub enum Task {
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+<<<<<<< HEAD
+=======
+        share_source_region_size: bool,
+        ch: CmdResChannel,
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -177,7 +182,20 @@ where
                 split_keys,
                 peer,
                 right_derive,
+<<<<<<< HEAD
             } => self.handle_ask_batch_split(region, split_keys, peer, right_derive),
+=======
+                ch,
+                share_source_region_size,
+            } => self.handle_ask_batch_split(
+                region,
+                split_keys,
+                peer,
+                right_derive,
+                share_source_region_size,
+                ch,
+            ),
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::UpdateMaxTimestamp {
                 region_id,

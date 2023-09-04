@@ -136,6 +136,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
     },
     AskBatchSplit {
@@ -144,6 +145,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
     },
     AutoSplit {
@@ -996,6 +998,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
     ) {
@@ -1017,6 +1020,7 @@ where
                         resp.get_new_region_id(),
                         resp.take_new_peer_ids(),
                         right_derive,
+                        share_source_region_size,
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
@@ -1066,6 +1070,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
         remote: Remote<yatp::task::future::TaskCell>,
@@ -1091,6 +1096,7 @@ where
                         split_keys,
                         resp.take_ids().into(),
                         right_derive,
+                        share_source_region_size,
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
@@ -1119,6 +1125,7 @@ where
                         split_key: split_keys.pop().unwrap(),
                         peer,
                         right_derive,
+                        share_source_region_size,
                         callback,
                     };
                     if let Err(ScheduleError::Stopped(t)) = scheduler.schedule(task) {
@@ -1540,6 +1547,7 @@ where
                             split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
                             source: "pd".into(),
+                            share_source_region_size: false,
                         }
                     } else {
                         CasualMessage::HalfSplitRegion {
@@ -1919,12 +1927,14 @@ where
                 split_key,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
             } => self.handle_ask_split(
                 region,
                 split_key,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
                 String::from("ask_split"),
             ),
@@ -1933,6 +1943,7 @@ where
                 split_keys,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
             } => Self::handle_ask_batch_split(
                 self.router.clone(),
@@ -1942,6 +1953,7 @@ where
                 split_keys,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
                 String::from("batch_split"),
                 self.remote.clone(),
@@ -1954,6 +1966,7 @@ where
 
                 let f = async move {
                     for split_info in split_infos {
+<<<<<<< HEAD
                         if let Ok(Some(region)) =
                             pd_client.get_region_by_id(split_info.region_id).await
                         {
@@ -1970,6 +1983,45 @@ where
                                     Callback::None,
                                     String::from("auto_split"),
                                     remote.clone(),
+=======
+                        let Ok(Some(region)) =
+                            pd_client.get_region_by_id(split_info.region_id).await else { continue };
+                        // Try to split the region with the given split key.
+                        if let Some(split_key) = split_info.split_key {
+                            Self::handle_ask_batch_split(
+                                router.clone(),
+                                scheduler.clone(),
+                                pd_client.clone(),
+                                region,
+                                vec![split_key],
+                                split_info.peer,
+                                true,
+                                false,
+                                Callback::None,
+                                String::from("auto_split"),
+                                remote.clone(),
+                            );
+                        // Try to split the region on half within the given key
+                        // range if there is no `split_key` been given.
+                        } else if split_info.start_key.is_some() && split_info.end_key.is_some() {
+                            let start_key = split_info.start_key.unwrap();
+                            let end_key = split_info.end_key.unwrap();
+                            let region_id = region.get_id();
+                            let msg = CasualMessage::HalfSplitRegion {
+                                region_epoch: region.get_region_epoch().clone(),
+                                start_key: Some(start_key.clone()),
+                                end_key: Some(end_key.clone()),
+                                policy: pdpb::CheckPolicy::Scan,
+                                source: "auto_split",
+                                cb: Callback::None,
+                            };
+                            if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                                error!("send auto half split request failed";
+                                    "region_id" => region_id,
+                                    "start_key" => log_wrappers::Value::key(&start_key),
+                                    "end_key" => log_wrappers::Value::key(&end_key),
+                                    "err" => ?e,
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
                                 );
                                 return;
                             }
@@ -2252,6 +2304,7 @@ fn new_split_region_request(
     new_region_id: u64,
     peer_ids: Vec<u64>,
     right_derive: bool,
+    share_source_region_size: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::Split);
@@ -2259,6 +2312,8 @@ fn new_split_region_request(
     req.mut_split().set_new_region_id(new_region_id);
     req.mut_split().set_new_peer_ids(peer_ids);
     req.mut_split().set_right_derive(right_derive);
+    req.mut_split()
+        .set_share_source_region_size(share_source_region_size);
     req
 }
 
@@ -2266,10 +2321,13 @@ fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
     ids: Vec<pdpb::SplitId>,
     right_derive: bool,
+    share_source_region_size: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::BatchSplit);
     req.mut_splits().set_right_derive(right_derive);
+    req.mut_splits()
+        .set_share_source_region_size(share_source_region_size);
     let mut requests = Vec::with_capacity(ids.len());
     for (mut id, key) in ids.into_iter().zip(split_keys) {
         let mut split = SplitRequest::default();

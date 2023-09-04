@@ -178,12 +178,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+<<<<<<< HEAD
     pub fn ask_batch_split_pd<T>(&self, ctx: &StoreContext<EK, ER, T>, split_keys: Vec<Vec<u8>>) {
         let task = PdTask::AskBatchSplit {
+=======
+    pub fn ask_batch_split_pd<T>(
+        &self,
+        ctx: &StoreContext<EK, ER, T>,
+        split_keys: Vec<Vec<u8>>,
+        share_source_region_size: bool,
+        ch: CmdResChannel,
+    ) {
+        let task = pd::Task::AskBatchSplit {
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
             region: self.region().clone(),
             split_keys,
             peer: self.peer().clone(),
             right_derive: ctx.cfg.right_derive_when_split,
+<<<<<<< HEAD
+=======
+            share_source_region_size,
+            ch,
+>>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
         };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
