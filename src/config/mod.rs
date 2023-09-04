@@ -1406,7 +1406,7 @@ impl DbConfig {
                     .get_or_insert(ReadableSize::mb(4));
                 self.lockcf
                     .write_buffer_limit
-                    .get_or_insert(ReadableSize::mb(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT));
+                    .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
             }
         }
     }
