@@ -967,12 +967,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                 }
             }
-            self.adjust_peers_max_inflight_msgs(&inflight_peers, 1);
             debug!(
                 self.logger,
                 "refill disk full peer max inflight to 1 in potential quorum set: region id {}",
                 self.region_id(),
             );
+            self.adjust_peers_max_inflight_msgs(&inflight_peers, 1);
         }
     }
 
