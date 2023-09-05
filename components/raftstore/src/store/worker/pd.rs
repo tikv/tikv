@@ -1966,7 +1966,6 @@ where
 
                 let f = async move {
                     for split_info in split_infos {
-<<<<<<< HEAD
                         if let Ok(Some(region)) =
                             pd_client.get_region_by_id(split_info.region_id).await
                         {
@@ -1980,48 +1979,10 @@ where
                                     vec![split_key],
                                     split_info.peer,
                                     true,
+                                    false,
                                     Callback::None,
                                     String::from("auto_split"),
                                     remote.clone(),
-=======
-                        let Ok(Some(region)) =
-                            pd_client.get_region_by_id(split_info.region_id).await else { continue };
-                        // Try to split the region with the given split key.
-                        if let Some(split_key) = split_info.split_key {
-                            Self::handle_ask_batch_split(
-                                router.clone(),
-                                scheduler.clone(),
-                                pd_client.clone(),
-                                region,
-                                vec![split_key],
-                                split_info.peer,
-                                true,
-                                false,
-                                Callback::None,
-                                String::from("auto_split"),
-                                remote.clone(),
-                            );
-                        // Try to split the region on half within the given key
-                        // range if there is no `split_key` been given.
-                        } else if split_info.start_key.is_some() && split_info.end_key.is_some() {
-                            let start_key = split_info.start_key.unwrap();
-                            let end_key = split_info.end_key.unwrap();
-                            let region_id = region.get_id();
-                            let msg = CasualMessage::HalfSplitRegion {
-                                region_epoch: region.get_region_epoch().clone(),
-                                start_key: Some(start_key.clone()),
-                                end_key: Some(end_key.clone()),
-                                policy: pdpb::CheckPolicy::Scan,
-                                source: "auto_split",
-                                cb: Callback::None,
-                            };
-                            if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                                error!("send auto half split request failed";
-                                    "region_id" => region_id,
-                                    "start_key" => log_wrappers::Value::key(&start_key),
-                                    "end_key" => log_wrappers::Value::key(&end_key),
-                                    "err" => ?e,
->>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
                                 );
                                 return;
                             }

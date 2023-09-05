@@ -18,12 +18,8 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
-<<<<<<< HEAD
-    raft_serverpb::RaftMessage,
-=======
     pdpb::CheckPolicy,
-    raft_serverpb::{PeerState, RaftMessage},
->>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
+    raft_serverpb::RaftMessage,
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
@@ -33,7 +29,6 @@ use raftstore::{
     Result,
 };
 use test_raftstore::*;
-use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -268,10 +263,9 @@ impl Filter for PrevoteRangeFilter {
     }
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_region_size_after_split() {
-    let mut cluster = new_cluster(0, 1);
+    let mut cluster = new_node_cluster(0, 1);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
@@ -279,7 +273,7 @@ fn test_region_size_after_split() {
     let region_max_size = 1440;
     let region_split_size = 960;
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
-    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let _r = cluster.run_conf_change();

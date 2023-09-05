@@ -41,44 +41,10 @@ where
 {
     pub fn handle_ask_batch_split(
         &mut self,
-<<<<<<< HEAD
-=======
-        region: metapb::Region,
-        split_keys: Vec<Vec<u8>>,
-        peer: metapb::Peer,
-        right_derive: bool,
-        share_source_region_size: bool,
-        ch: CmdResChannel,
-    ) {
-        Self::ask_batch_split_imp(
-            &self.pd_client,
-            &self.logger,
-            &self.router,
-            &self.remote,
-            region,
-            split_keys,
-            peer,
-            right_derive,
-            share_source_region_size,
-            Some(ch),
-        );
-    }
-
-    fn ask_batch_split_imp(
-        pd_client: &T,
-        logger: &Logger,
-        router: &StoreRouter<EK, ER>,
-        remote: &Remote<TaskCell>,
->>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
         mut region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-<<<<<<< HEAD
-=======
-        share_source_region_size: bool,
-        ch: Option<CmdResChannel>,
->>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
     ) {
         if split_keys.is_empty() {
             info!(self.logger, "empty split key, skip ask batch split";
@@ -134,8 +100,6 @@ where
         };
         self.remote.spawn(f);
     }
-<<<<<<< HEAD
-=======
 
     pub fn handle_auto_split(&mut self, split_infos: Vec<SplitInfo>) {
         let pd_client = self.pd_client.clone();
@@ -170,5 +134,4 @@ where
         };
         self.remote.spawn(f);
     }
->>>>>>> 640143a2da (raftstore: region initial size depends on the split resource . (#15456))
 }
