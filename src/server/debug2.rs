@@ -690,8 +690,9 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             Ok(Some(region_state)) => {
                 if region_state.get_state() != PeerState::Normal {
                     return Err(Error::NotFound(format!(
-                        "region {:?} has been deleted",
-                        region_id
+                        "peer state of region {:?} is {:?}",
+                        region_id,
+                        region_state.get_state()
                     )));
                 }
                 let region = region_state.get_region();
@@ -786,12 +787,21 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
 
     fn get_all_regions_in_store(&self) -> Result<Vec<u64>> {
         let mut region_ids = vec![];
+        let raft_engine = &self.raft_engine;
         self.raft_engine
             .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+                let region_state = raft_engine
+                    .get_region_state(region_id, u64::MAX)
+                    .unwrap()
+                    .unwrap();
+                if region_state.state != PeerState::Normal {
+                    return Ok(());
+                }
                 region_ids.push(region_id);
                 Ok(())
             })
             .unwrap();
+        region_ids.sort_unstable();
         Ok(region_ids)
     }
 
@@ -1930,9 +1940,9 @@ mod tests {
         assert_eq!(region_info_2, region_info_2_before);
     }
 
-    #[test]
     // It tests that the latest apply state cannot be read as it is invisible
     // on persisted_applied
+    #[test]
     fn test_drop_unapplied_raftlog_2() {
         let dir = test_util::temp_dir("test-debugger", false);
         let debugger = new_debugger(dir.path());
@@ -1967,5 +1977,35 @@ mod tests {
                 .commit_index,
             80
         );
+    }
+
+    #[test]
+    fn test_get_all_regions_in_store() {
+        let dir = test_util::temp_dir("test-debugger", false);
+        let debugger = new_debugger(dir.path());
+        let raft_engine = &debugger.raft_engine;
+
+        init_region_state(raft_engine, 1, &[100, 101], 1);
+        init_region_state(raft_engine, 3, &[100, 101], 1);
+        init_region_state(raft_engine, 4, &[100, 101], 1);
+
+        let mut lb = raft_engine.log_batch(3);
+
+        let mut put_tombsotne_region = |region_id: u64| {
+            let mut region = metapb::Region::default();
+            region.set_id(region_id);
+            let mut region_state = RegionLocalState::default();
+            region_state.set_state(PeerState::Tombstone);
+            region_state.set_region(region.clone());
+            lb.put_region_state(region_id, INITIAL_APPLY_INDEX, &region_state)
+                .unwrap();
+            raft_engine.consume(&mut lb, true).unwrap();
+        };
+
+        put_tombsotne_region(2);
+        put_tombsotne_region(5);
+
+        let regions = debugger.get_all_regions_in_store().unwrap();
+        assert_eq!(regions, vec![1, 3, 4]);
     }
 }
