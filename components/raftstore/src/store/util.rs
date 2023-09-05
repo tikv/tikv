@@ -1354,7 +1354,6 @@ impl RegionReadProgress {
         self.safe_ts()
     }
 
-    // Dump the `LeaderInfo` and the peer list
     pub fn get_core(&self) -> MutexGuard<'_, RegionReadProgressCore> {
         self.core.lock().unwrap()
     }

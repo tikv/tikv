@@ -28,7 +28,11 @@ use raftstore::{
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
+<<<<<<< HEAD
 use resolved_ts::Resolver;
+=======
+use resolved_ts::{Resolver, TsSource, ON_DROP_WARN_HEAP_SIZE};
+>>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
@@ -428,7 +432,7 @@ impl Delegate {
         }
         debug!("cdc try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
-        let resolved_ts = resolver.resolve(min_ts, None);
+        let resolved_ts = resolver.resolve(min_ts, None, TsSource::Cdc);
         debug!("cdc resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         Some(resolved_ts)
