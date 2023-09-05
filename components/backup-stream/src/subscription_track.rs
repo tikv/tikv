@@ -8,13 +8,8 @@ use dashmap::{
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
-<<<<<<< HEAD
-use resolved_ts::Resolver;
-use tikv_util::{info, warn};
-=======
 use resolved_ts::{Resolver, TsSource};
-use tikv_util::{info, memory::MemoryQuota, warn};
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
+use tikv_util::{info, warn};
 use txn_types::TimeStamp;
 
 use crate::{debug, metrics::TRACK_REGION, utils};

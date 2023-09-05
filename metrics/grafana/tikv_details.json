@@ -37414,7 +37414,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The gap between now() and the minimal (non-zero) safe ts for followers",
+          "description": "The gap between safe ts and current time",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -37465,7 +37465,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(tikv_resolved_ts_min_follower_safe_ts_gap_millis{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
+              "expr": "sum(tikv_resolved_ts_min_safe_ts_gap_millis{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -37478,11 +37478,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-<<<<<<< HEAD
           "title": "Max gap of safe ts",
-=======
-          "title": "Max gap of follower safe-ts",
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -37642,7 +37638,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The region id of the follower that has minimal safe ts",
+          "description": "The region that has minimal safe ts",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -37698,7 +37694,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(tikv_resolved_ts_min_follower_safe_ts_region{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}) by (instance)",
+              "expr": "sum(tikv_resolved_ts_min_safe_ts_region{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -37712,7 +37708,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Min Safe TS Follower Region",
+          "title": "Min Safe TS Region",
           "tooltip": {
             "msResolution": false,
             "shared": true,
