@@ -234,7 +234,7 @@ impl PersistenceListener {
     ///
     /// `largest_seqno` should be the largest seqno of the generated file.
     pub fn on_flush_completed(&self, cf: &str, largest_seqno: u64, file_no: u64) {
-        fail_point!("on_flush_completed");
+        fail_point!("on_flush_completed", |_| {});
         // Maybe we should hook the compaction to avoid the file is compacted before
         // being recorded.
         let offset = data_cf_offset(cf);
