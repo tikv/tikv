@@ -13,7 +13,7 @@ use txn_types::{Key, TimeStamp};
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
-const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
+pub(crate) const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 #[derive(Clone)]
 pub enum TsSource {
@@ -136,6 +136,8 @@ impl Drop for Resolver {
                 "region_id" => self.region_id,
                 "bytes" => bytes,
                 "num_locks" => num_locks,
+                "memory_quota_in_use" => self.memory_quota.in_use(),
+                "memory_quota_capacity" => self.memory_quota.capacity(),
             );
         }
         self.memory_quota.free(bytes);
