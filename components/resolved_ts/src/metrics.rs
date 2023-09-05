@@ -138,4 +138,10 @@ lazy_static! {
         "The minimal (non-zero) resolved ts gap for observe leader peers"
     )
     .unwrap();
+    pub static ref RTS_INITIAL_SCAN_BACKOFF_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_resolved_ts_initial_scan_backoff_duration_seconds",
+        "Bucketed histogram of resolved-ts initial scan backoff duration",
+        exponential_buckets(0.1, 2.0, 16).unwrap(),
+    )
+    .unwrap();
 }

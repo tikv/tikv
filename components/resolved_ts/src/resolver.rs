@@ -10,6 +10,10 @@ use txn_types::TimeStamp;
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+<<<<<<< HEAD
+=======
+pub(crate) const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
+>>>>>>> 1c21d07f2b (resolved_ts: track pending lock memory usage (#15452))
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -52,6 +56,30 @@ impl std::fmt::Debug for Resolver {
     }
 }
 
+<<<<<<< HEAD
+=======
+impl Drop for Resolver {
+    fn drop(&mut self) {
+        // Free memory quota used by locks_by_key.
+        let mut bytes = 0;
+        let num_locks = self.num_locks();
+        for key in self.locks_by_key.keys() {
+            bytes += self.lock_heap_size(key);
+        }
+        if bytes > ON_DROP_WARN_HEAP_SIZE {
+            warn!("drop huge resolver";
+                "region_id" => self.region_id,
+                "bytes" => bytes,
+                "num_locks" => num_locks,
+                "memory_quota_in_use" => self.memory_quota.in_use(),
+                "memory_quota_capacity" => self.memory_quota.capacity(),
+            );
+        }
+        self.memory_quota.free(bytes);
+    }
+}
+
+>>>>>>> 1c21d07f2b (resolved_ts: track pending lock memory usage (#15452))
 impl Resolver {
     pub fn new(region_id: u64) -> Resolver {
         Resolver::with_read_progress(region_id, None)
