@@ -44,8 +44,7 @@ use raftstore::store::{
         Proposal,
     },
     metrics::RAFT_PEER_PENDING_DURATION,
-    util::{self, ChangePeerI},
-    DiskFullPeers, Transport, WriteTask,
+    util, DiskFullPeers, Transport, WriteTask,
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{
@@ -794,11 +793,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.maybe_schedule_gc_peer_tick();
     }
 
-    pub fn adjust_peers_max_inflight_msgs(
-        &mut self,
-        peers: &Vec<u64>,
-        raft_max_inflight_msgs: usize,
-    ) {
+    pub fn adjust_peers_max_inflight_msgs(&mut self, peers: &[u64], raft_max_inflight_msgs: usize) {
         peers.iter().for_each(|id| {
             self.raft_group_mut()
                 .raft
