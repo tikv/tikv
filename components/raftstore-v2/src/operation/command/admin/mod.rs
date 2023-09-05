@@ -168,7 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "adjust max inflight msgs";
                 "cmd_type" => ?cmd_type,
                 "raft_max_inflight_msgs" => ctx.cfg.raft_max_inflight_msgs,
-                "to region" => self.region_id()
+                "region" => self.region_id()
             );
             self.adjust_peers_max_inflight_msgs(&peers, ctx.cfg.raft_max_inflight_msgs);
         }
