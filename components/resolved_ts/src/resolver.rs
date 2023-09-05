@@ -10,6 +10,10 @@ use txn_types::TimeStamp;
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+<<<<<<< HEAD
+=======
+pub const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
+>>>>>>> 6b91e4a228 (cdc: deregister delegate if memory quota exceeded (#15486))
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -119,12 +123,28 @@ impl Resolver {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
+<<<<<<< HEAD
         debug!(
             "track lock {}@{}, region {}",
             &log_wrappers::Value::key(&key),
             start_ts,
             self.region_id
         );
+=======
+        let bytes = self.lock_heap_size(&key);
+        debug!(
+            "track lock {}@{}",
+            &log_wrappers::Value::key(&key),
+            start_ts;
+            "region_id" => self.region_id,
+            "memory_in_use" => self.memory_quota.in_use(),
+            "memory_capacity" => self.memory_quota.capacity(),
+            "key_heap_size" => bytes,
+        );
+        if !self.memory_quota.alloc(bytes) {
+            return false;
+        }
+>>>>>>> 6b91e4a228 (cdc: deregister delegate if memory quota exceeded (#15486))
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         self.locks_by_key.insert(key.clone(), start_ts);
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
@@ -137,14 +157,18 @@ impl Resolver {
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
             start_ts
         } else {
-            debug!("untrack a lock that was not tracked before"; "key" => &log_wrappers::Value::key(key));
+            debug!("untrack a lock that was not tracked before";
+                "key" => &log_wrappers::Value::key(key),
+                "region_id" => self.region_id,
+            );
             return;
         };
         debug!(
-            "untrack lock {}@{}, region {}",
+            "untrack lock {}@{}",
             &log_wrappers::Value::key(key),
-            start_ts,
-            self.region_id,
+            start_ts;
+            "region_id" => self.region_id,
+            "memory_in_use" => self.memory_quota.in_use(),
         );
 
         let entry = self.lock_ts_heap.get_mut(&start_ts);
