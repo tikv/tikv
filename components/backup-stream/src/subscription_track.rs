@@ -8,8 +8,13 @@ use dashmap::{
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
+<<<<<<< HEAD
 use resolved_ts::Resolver;
 use tikv_util::{info, warn};
+=======
+use resolved_ts::{Resolver, TsSource};
+use tikv_util::{info, memory::MemoryQuota, warn};
+>>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
 use txn_types::TimeStamp;
 
 use crate::{debug, metrics::TRACK_REGION, utils};
@@ -511,7 +516,7 @@ impl TwoPhaseResolver {
             return min_ts.min(stable_ts);
         }
 
-        self.resolver.resolve(min_ts, None)
+        self.resolver.resolve(min_ts, None, TsSource::BackupStream)
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
@@ -541,7 +546,7 @@ impl TwoPhaseResolver {
                 // advance the internal resolver.
                 // the start ts of initial scanning would be a safe ts for min ts
                 // -- because is used to be a resolved ts.
-                self.resolver.resolve(ts, None);
+                self.resolver.resolve(ts, None, TsSource::BackupStream);
             }
             None => {
                 warn!("BUG: a two-phase resolver is executing phase_one_done when not in phase one"; "resolver" => ?self)
