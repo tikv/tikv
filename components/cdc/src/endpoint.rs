@@ -80,6 +80,11 @@ pub enum Deregister {
         conn_id: ConnId,
         request_id: u64,
     },
+    Region {
+        conn_id: ConnId,
+        request_id: u64,
+        region_id: u64,
+    },
     Downstream {
         conn_id: ConnId,
         request_id: u64,
@@ -111,6 +116,16 @@ impl fmt::Debug for Deregister {
                 .field("deregister", &"request")
                 .field("conn_id", conn_id)
                 .field("request_id", request_id)
+                .finish(),
+            Deregister::Region {
+                ref conn_id,
+                ref request_id,
+                ref region_id,
+            } => de
+                .field("deregister", &"region")
+                .field("conn_id", conn_id)
+                .field("request_id", request_id)
+                .field("region_id", region_id)
                 .finish(),
             Deregister::Downstream {
                 ref conn_id,
@@ -583,8 +598,20 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 request_id,
             } => {
                 let conn = self.connections.get_mut(&conn_id).unwrap();
-                for (region, downstream) in conn.unsubscribe_request(request_id) {
-                    self.deregister_downstream(region, downstream, None);
+                for (region_id, downstream) in conn.unsubscribe_request(request_id) {
+                    let err = Some(Error::Other("region not found".into()));
+                    self.deregister_downstream(region_id, downstream, err);
+                }
+            }
+            Deregister::Region {
+                conn_id,
+                request_id,
+                region_id,
+            } => {
+                let conn = self.connections.get_mut(&conn_id).unwrap();
+                if let Some(downstream) = conn.unsubscribe(request_id, region_id) {
+                    let err = Some(Error::Other("region not found".into()));
+                    self.deregister_downstream(region_id, downstream, err);
                 }
             }
             Deregister::Downstream {
@@ -1261,13 +1288,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
     for Endpoint<T, E, S>
 {
     fn on_timeout(&mut self) {
-        CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
-
         // Reclaim resolved_region_heap memory.
         self.resolved_region_heap
             .borrow_mut()
             .reset_and_shrink_to(self.capture_regions.len());
 
+        CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
             .with_label_values(&["unresolved"])
@@ -1275,6 +1301,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
             .with_label_values(&["resolved"])
             .set(self.resolved_region_count as _);
+
         if self.min_resolved_ts != TimeStamp::max() {
             CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
             CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
@@ -2855,5 +2882,67 @@ mod tests {
         }));
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
         assert_eq!(suite.capture_regions.len(), 0);
+        for _ in 0..2 {
+            let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
+            let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+                matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                    err.has_region_not_found()
+                })
+            });
+            assert!(check);
+        }
+
+        // Resubscribe the region.
+        suite.add_region(2, 100);
+        for i in 1..=2 {
+            req.set_request_id(1);
+            req.set_region_id(i);
+            let downstream = Downstream::new(
+                "".to_string(),
+                region_epoch.clone(),
+                1,
+                conn_id,
+                ChangeDataRequestKvApi::TiDb,
+                false,
+                ObservedRange::default(),
+            );
+            suite.run(Task::Register {
+                request: req.clone(),
+                downstream,
+                conn_id,
+            });
+            assert_eq!(suite.connections[&conn_id].downstreams_count(), i as usize);
+        }
+
+        // Deregister regions one by one in the request.
+        suite.run(Task::Deregister(Deregister::Region {
+            conn_id,
+            request_id: 1,
+            region_id: 1,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
+
+        suite.run(Task::Deregister(Deregister::Region {
+            conn_id,
+            request_id: 1,
+            region_id: 2,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        assert_eq!(suite.capture_regions.len(), 0);
+
+        for _ in 0..2 {
+            let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
+            let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+                matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                    err.has_region_not_found()
+                })
+            });
+            assert!(check);
+        }
     }
 }

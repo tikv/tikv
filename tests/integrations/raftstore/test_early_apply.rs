@@ -109,7 +109,7 @@ fn test_early_apply(mode: DataLost) {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     cluster.run();
     if mode == DataLost::LeaderCommit || mode == DataLost::AllLost {
         cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -175,7 +175,7 @@ fn test_update_internal_apply_index() {
     let mut cluster = new_node_cluster(0, 4);
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(3, 3));
     cluster.must_put(b"k1", b"v1");
