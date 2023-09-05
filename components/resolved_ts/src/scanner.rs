@@ -25,7 +25,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{
     errors::{Error, Result},
-    metrics::RTS_SCAN_DURATION_HISTOGRAM,
+    metrics::*,
 };
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
@@ -87,7 +87,24 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     pub fn spawn_task(&self, mut task: ScanTask) {
         let raft_router = self.raft_router.clone();
         let fut = async move {
+<<<<<<< HEAD
             let snap = match Self::get_snapshot(&mut task, raft_router).await {
+=======
+            if let Some(backoff) = task.backoff {
+                RTS_INITIAL_SCAN_BACKOFF_DURATION_HISTOGRAM.observe(backoff.as_secs_f64());
+                if let Err(e) = GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + backoff)
+                    .compat()
+                    .await
+                {
+                    error!("failed to backoff"; "err" => ?e);
+                }
+                if (task.is_cancelled)() {
+                    return;
+                }
+            }
+            let snap = match Self::get_snapshot(&mut task, cdc_handle).await {
+>>>>>>> 1c21d07f2b (resolved_ts: track pending lock memory usage (#15452))
                 Ok(snap) => snap,
                 Err(e) => {
                     warn!("resolved_ts scan get snapshot failed"; "err" => ?e);
@@ -103,6 +120,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             };
+            fail::fail_point!("resolved_ts_after_scanner_get_snapshot");
             let start = Instant::now();
             let apply_index = snap.get_apply_index().unwrap();
             let mut entries = vec![];
