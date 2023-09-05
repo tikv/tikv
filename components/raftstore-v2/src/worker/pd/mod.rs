@@ -42,7 +42,6 @@ pub enum Task {
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        share_source_region_size: bool,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,

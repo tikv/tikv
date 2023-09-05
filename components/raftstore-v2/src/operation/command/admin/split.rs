@@ -68,9 +68,6 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
-    // new regions will share the region size if it's true.
-    // otherwise, the new region's size will be 0.
-    pub share_source_region_size: bool,
 }
 pub struct SplitInit {
     /// Split region
@@ -152,7 +149,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let derived_req = &[derived_req];
 
         let right_derive = split_reqs.get_right_derive();
-        let share_source_region_size = split_reqs.get_share_source_region_size();
         let reqs = if right_derive {
             split_reqs.get_requests().iter().chain(derived_req)
         } else {
