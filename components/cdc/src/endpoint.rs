@@ -697,7 +697,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             HashMapEntry::Occupied(e) => e.into_mut(),
             HashMapEntry::Vacant(e) => {
                 is_new_delegate = true;
-                e.insert(Delegate::new(region_id, txn_extra_op))
+                e.insert(Delegate::new(
+                    region_id,
+                    txn_extra_op,
+                    self.sink_memory_quota.clone(),
+                ))
             }
         };
 
@@ -763,10 +767,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
         let raft_router = self.raft_router.clone();
         let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        let memory_quota = self.sink_memory_quota.clone();
         self.workers.spawn(async move {
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
             match init
-                .initialize(change_cmd, raft_router, concurrency_semaphore)
+                .initialize(change_cmd, raft_router, concurrency_semaphore, memory_quota)
                 .await
             {
                 Ok(()) => {
@@ -816,17 +821,25 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
-        let mut failed_downstreams = Vec::new();
+        let mut deregisters = Vec::new();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
-                let region_id = delegate.region_id;
-                for (downstream, e) in delegate.on_region_ready(resolver, region) {
-                    failed_downstreams.push(Deregister::Downstream {
+                match delegate.on_region_ready(resolver, region) {
+                    Ok(fails) => {
+                        for (downstream, e) in fails {
+                            deregisters.push(Deregister::Downstream {
+                                conn_id: downstream.get_conn_id(),
+                                region_id,
+                                downstream_id: downstream.get_id(),
+                                err: Some(e),
+                            });
+                        }
+                    }
+                    Err(e) => deregisters.push(Deregister::Delegate {
                         region_id,
-                        downstream_id: downstream.get_id(),
-                        conn_id: downstream.get_conn_id(),
-                        err: Some(e),
-                    });
+                        observe_id,
+                        err: e,
+                    }),
                 }
             } else {
                 debug!("cdc stale region ready";
@@ -840,7 +853,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         }
 
         // Deregister downstreams if there is any downstream fails to subscribe.
-        for deregister in failed_downstreams {
+        for deregister in deregisters {
             self.on_deregister(deregister);
         }
     }
@@ -2581,7 +2594,8 @@ mod tests {
                 .capture_regions
                 .get_mut(&id)
                 .unwrap()
-                .on_region_ready(resolver, region);
+                .on_region_ready(resolver, region)
+                .unwrap();
             assert!(failed.is_empty());
         }
         suite
