@@ -122,6 +122,7 @@ make_auto_flush_static_metric! {
         get,
         raw_batch_get_command,
         scan,
+        scan_txn_entry,
         batch_get,
         batch_get_command,
         prewrite,

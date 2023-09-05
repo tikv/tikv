@@ -103,6 +103,7 @@ pub trait TxnEntryStore: Send {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        omit_value: bool,
         after_ts: TimeStamp,
         output_delete: bool,
     ) -> Result<Self::Scanner>;
@@ -179,9 +180,7 @@ impl TxnEntry {
         }
         e
     }
-}
 
-impl TxnEntry {
     /// This method will return a kv pair whose
     /// content and encode are same as a kv pair
     /// reture by ```StoreScanner::next```
@@ -206,14 +205,17 @@ impl TxnEntry {
             _ => unreachable!(),
         }
     }
+
     /// This method will generate this kv pair's key
-    pub fn to_key(&self) -> Result<Key> {
+    pub fn to_key(&self) -> Key {
+        Key::from_encoded_slice(self.as_key())
+    }
+
+    /// This method will generate this kv pair's key
+    pub fn as_key(&self) -> &[u8] {
         match self {
-            TxnEntry::Commit { write, .. } => Ok(Key::from_encoded_slice(
-                Key::truncate_ts_for(&write.0).unwrap(),
-            )),
-            // Prewrite are not support
-            _ => unreachable!(),
+            TxnEntry::Commit { write, .. } => Key::truncate_ts_for(&write.0).unwrap(),
+            TxnEntry::Prewrite { default, .. } => Key::truncate_ts_for(&default.0).unwrap(),
         }
     }
 
@@ -277,6 +279,10 @@ impl EntryBatch {
 
     pub fn drain(&mut self) -> std::vec::Drain<'_, TxnEntry> {
         self.entries.drain(..)
+    }
+
+    pub fn into_vec(self) -> Vec<TxnEntry> {
+        return self.entries;
     }
 }
 
@@ -397,6 +403,7 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        omit_value: bool,
         after_ts: TimeStamp,
         output_delete: bool,
     ) -> Result<EntryScanner<S>> {
@@ -411,7 +418,7 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
         };
         let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
             .range(lower_bound, upper_bound)
-            .omit_value(false)
+            .omit_value(omit_value)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())

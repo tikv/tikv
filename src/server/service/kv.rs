@@ -37,7 +37,7 @@ use tikv_util::{
     worker::Scheduler,
 };
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
-use txn_types::{self, Key};
+use txn_types::{self, Key, Lock, LockType, TimeStamp, WriteRef};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::{
@@ -55,6 +55,7 @@ use crate::{
         },
         kv::Engine,
         lock_manager::LockManager,
+        txn::TxnEntry as StorageTxnEntry,
         SecondaryLocksStatus, Storage, TxnStatus,
     },
 };
@@ -247,6 +248,12 @@ macro_rules! set_total_time {
 impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
+    handle_request!(
+        kv_scan_txn_entry,
+        future_scan_txn_entry,
+        ScanTxnEntryRequest,
+        ScanTxnEntryResponse
+    );
     handle_request!(
         kv_prewrite,
         future_prewrite,
@@ -1247,6 +1254,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
 
     handle_cmd! {
         Scan, future_scan(storage), kv_scan;
+        ScanTxnEntry, future_scan_txn_entry(storage), kv_scan_txn_entry;
         Prewrite, future_prewrite(storage), kv_prewrite;
         Commit, future_commit(storage), kv_commit;
         Cleanup, future_cleanup(storage), kv_cleanup;
@@ -1442,10 +1450,48 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
                 Err(e) => {
                     let key_error = extract_key_error(&e);
                     resp.set_error(key_error.clone());
-                    // Set key_error in the first kv_pair for backward compatibility.
-                    let mut pair = KvPair::default();
-                    pair.set_error(key_error);
-                    resp.mut_pairs().push(pair);
+                }
+            }
+        }
+        GLOBAL_TRACKERS.remove(tracker);
+        Ok(resp)
+    }
+}
+
+fn future_scan_txn_entry<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    mut req: ScanTxnEntryRequest,
+) -> impl Future<Output = ServerResult<ScanTxnEntryResponse>> {
+    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+        req.get_context(),
+        RequestType::KvScanTxnEntry,
+        0,
+    )));
+    set_tls_tracker_token(tracker);
+
+    let v = storage.scan_txn_entry(
+        req.take_context(),
+        TimeStamp::from(req.get_max_version()),
+        Key::from_raw(req.get_start_key()),
+        Key::from_raw(req.get_end_key()),
+        req.get_limit() as _,
+        req.get_key_only(),
+    );
+
+    async move {
+        let mut resp = ScanTxnEntryResponse::default();
+        match v.await {
+            Ok(entries) => {
+                for entry in entries {
+                    resp.mut_entries().push(convert_txn_entry(entry));
+                }
+            }
+            Err(e) => {
+                if let Some(e) = extract_region_error_from_error(&e) {
+                    resp.set_region_error(e);
+                } else {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
                 }
             }
         }
@@ -2307,6 +2353,40 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
         }
     }
     false
+}
+
+fn convert_txn_entry(input: StorageTxnEntry) -> TxnEntry {
+    let mut output = TxnEntry::default();
+    match input {
+        StorageTxnEntry::Prewrite { default, lock, .. } => {
+            let ls = Lock::parse(&lock.1).unwrap();
+            let pb_prewrite = output.mut_prewrite();
+            pb_prewrite.set_key(Key::from_encoded(lock.0).into_raw().unwrap());
+            pb_prewrite.set_start_ts(ls.ts.into_inner());
+            pb_prewrite.set_primary_key(ls.primary);
+            if ls.lock_type == LockType::Put || ls.lock_type == LockType::Delete {
+                if let Some(value) = ls.short_value {
+                    pb_prewrite.set_value(value);
+                } else {
+                    pb_prewrite.set_value(default.1);
+                }
+            }
+        }
+        StorageTxnEntry::Commit { default, write, .. } => {
+            let wr = WriteRef::parse(&write.1).unwrap();
+            let pb_commit = output.mut_commit();
+            let (key, commit_ts) = Key::split_on_ts_for(&write.0).unwrap();
+            pb_commit.set_key(key.to_owned());
+            pb_commit.set_start_ts(wr.start_ts.into_inner());
+            pb_commit.set_commit_ts(commit_ts.into_inner());
+            if let Some(value) = wr.short_value {
+                pb_commit.set_value(value.to_owned());
+            } else {
+                pb_commit.set_value(default.1);
+            }
+        }
+    }
+    output
 }
 
 #[cfg(test)]

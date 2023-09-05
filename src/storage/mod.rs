@@ -112,7 +112,10 @@ pub use self::{
     },
     raw::RawStore,
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
+    txn::{
+        EntryBatch, Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store,
+        TxnEntry, TxnEntryScanner, TxnEntryStore,
+    },
     types::{
         PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus,
         StorageCallback, TxnStatus,
@@ -1321,6 +1324,128 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .map(|x| x.map_err(Error::from))
                             .collect()
                     })
+                })
+            }
+            .in_resource_metering_tag(resource_tag),
+            priority,
+            thread_rng().next_u64(),
+            metadata,
+            resource_limiter,
+        )
+    }
+
+    /// Scan transaction entries in [`start_key`, `end_key`) up to `limit`.
+    pub fn scan_txn_entry(
+        &self,
+        ctx: Context,
+        max_version: TimeStamp,
+        start_key: Key,
+        end_key: Key,
+        limit: usize,
+        key_only: bool,
+    ) -> impl Future<Output = Result<Vec<TxnEntry>>> {
+        const CMD: CommandKind = CommandKind::scan_txn_entry;
+        let priority = ctx.get_priority();
+        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                ctx.get_resource_control_context().get_resource_group_name(),
+                ctx.get_request_source(),
+            )
+        });
+        let priority_tag = get_priority_tag(priority);
+        let range = (
+            start_key.as_encoded().to_vec(),
+            end_key.as_encoded().to_vec(),
+        );
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, vec![range]);
+        let api_version = self.api_version;
+        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
+
+        self.read_pool_spawn_with_busy_check(
+            busy_threshold,
+            async move {
+                tls_collect_query(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    start_key.as_encoded(),
+                    end_key.as_encoded(),
+                    false,
+                    QueryKind::Scan,
+                );
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
+                Self::check_api_version_ranges(
+                    api_version,
+                    ctx.api_version,
+                    CMD,
+                    [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
+                )?;
+
+                let command_duration = Instant::now();
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    start_ts: None,
+                    ..Default::default()
+                };
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                Self::with_perf_context(CMD, || {
+                    let begin_instant = Instant::now();
+                    let buckets = snapshot.ext().get_buckets();
+
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        max_version,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                        TsSet::Empty,
+                        TsSet::Empty,
+                        false,
+                    );
+
+                    let mut scanner = snap_store.entry_scanner(
+                        Some(start_key.clone()),
+                        Some(end_key.clone()),
+                        key_only,
+                        TimeStamp::zero(),
+                        false,
+                    )?;
+                    let mut entries = Vec::<TxnEntry>::with_capacity(128);
+                    while entries.len() < limit {
+                        if let Some(entry) = scanner.next_entry()? {
+                            entries.push(entry);
+                        }
+                    }
+
+                    let statistics = scanner.take_statistics();
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(start_key.as_encoded().as_slice()),
+                        Some(end_key.as_encoded().as_slice()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
+                    let now = Instant::now();
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
+
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(entries.len() as f64);
+                    Ok::<_, Error>(entries)
                 })
             }
             .in_resource_metering_tag(resource_tag),

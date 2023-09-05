@@ -20,6 +20,7 @@ make_auto_flush_static_metric! {
         invalid,
         kv_get,
         kv_scan,
+        kv_scan_txn_entry,
         kv_prewrite,
         kv_pessimistic_lock,
         kv_pessimistic_rollback,
