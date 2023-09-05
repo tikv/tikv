@@ -1,15 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cell::RefCell,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
 
 use crossbeam::channel::{Receiver as SyncReceiver, Sender as SyncSender};
-use crossbeam_channel::SendError;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
@@ -19,19 +19,20 @@ use raft::StateRole;
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
-    store::fsm::ChangeObserver,
+    store::{fsm::ChangeObserver, RegionSnapshot},
 };
 use tikv::storage::Statistics;
-use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tikv_util::{
+    box_err, debug, info, sys::thread::ThreadBuildWrapper, time::Instant, warn, worker::Scheduler,
+};
+use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
 use txn_types::TimeStamp;
-use yatp::task::callback::Handle as YatpHandle;
 
 use crate::{
     annotate,
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, Result},
-    event_loader::InitialDataLoader,
+    event_loader::{CaptureChange, InitialDataLoader, SubscribeByTlsHandle},
     future,
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
     metrics,
@@ -43,7 +44,35 @@ use crate::{
     Task,
 };
 
-type ScanPool = yatp::ThreadPool<yatp::task::callback::TaskCell>;
+type ScanPool = tokio::runtime::Runtime;
+
+thread_local! {
+    static THREAD_LOCAL_CDC_HANDLE: RefCell<Option<Box<dyn std::any::Any>>> = RefCell::default();
+}
+
+pub fn maybe_with_tls_cdc_handle<T: CdcHandle<EK> + 'static, EK: KvEngine, R>(
+    f: impl FnOnce(Option<&mut T>) -> R,
+) -> R {
+    THREAD_LOCAL_CDC_HANDLE.with(|hnd| {
+        f(hnd
+            .borrow_mut()
+            .as_mut()
+            .and_then(move |h| h.downcast_mut::<T>()))
+    })
+}
+
+#[track_caller]
+pub fn with_tls_cdc_handle<T: CdcHandle<EK> + 'static, EK: KvEngine, R>(
+    f: impl FnOnce(&mut T) -> R,
+) -> R {
+    maybe_with_tls_cdc_handle(|v| {
+        f(v.expect("there isn't a cdc handle bind to this thread or the type isn't match, call `set_tls_cdc_handle` firstly and make sure the type matches."))
+    })
+}
+
+pub fn set_tls_cdc_handle<EK: KvEngine>(item: impl CdcHandle<EK> + 'static) {
+    THREAD_LOCAL_CDC_HANDLE.with(|hnd| *hnd.borrow_mut() = Some(Box::new(item)))
+}
 
 const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
 
@@ -128,8 +157,9 @@ fn should_retry(err: &Error) -> bool {
 }
 
 /// the abstraction over a "DB" which provides the initial scanning.
-trait InitialScan: Clone {
-    fn do_initial_scan(
+#[async_trait::async_trait]
+trait InitialScan: Clone + Sync + Send + 'static {
+    async fn do_initial_scan(
         &self,
         region: &Region,
         start_ts: TimeStamp,
@@ -139,13 +169,14 @@ trait InitialScan: Clone {
     fn handle_fatal_error(&self, region: &Region, err: Error);
 }
 
+#[async_trait::async_trait]
 impl<E, R, RT> InitialScan for InitialDataLoader<E, R, RT>
 where
     E: KvEngine,
     R: RegionInfoProvider + Clone + 'static,
-    RT: CdcHandle<E>,
+    RT: CaptureChange<RegionSnapshot<<E as KvEngine>::Snapshot>> + 'static,
 {
-    fn do_initial_scan(
+    async fn do_initial_scan(
         &self,
         region: &Region,
         start_ts: TimeStamp,
@@ -155,12 +186,14 @@ where
         let h = handle.clone();
         // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep
         // retrying here?
-        let snap = self.observe_over_with_retry(region, move || {
-            ChangeObserver::from_pitr(region_id, handle.clone())
-        })?;
+        let snap = self
+            .observe_over_with_retry(region, move || {
+                ChangeObserver::from_pitr(region_id, handle.clone())
+            })
+            .await?;
         #[cfg(feature = "failpoints")]
         fail::fail_point!("scan_after_get_snapshot");
-        let stat = self.do_initial_scan(region, h, start_ts, snap)?;
+        let stat = self.do_initial_scan(region, h, start_ts, snap).await?;
         Ok(stat)
     }
 
@@ -180,7 +213,7 @@ where
 
 impl ScanCmd {
     /// execute the initial scanning via the specificated [`InitialDataLoader`].
-    fn exec_by(&self, initial_scan: impl InitialScan) -> Result<()> {
+    async fn exec_by(&self, initial_scan: impl InitialScan) -> Result<()> {
         let Self {
             region,
             handle,
@@ -188,7 +221,9 @@ impl ScanCmd {
             ..
         } = self;
         let begin = Instant::now_coarse();
-        let stat = initial_scan.do_initial_scan(region, *last_checkpoint, handle.clone())?;
+        let stat = initial_scan
+            .do_initial_scan(region, *last_checkpoint, handle.clone())
+            .await?;
         info!("initial scanning finished!"; "takes" => ?begin.saturating_elapsed(), "from_ts" => %last_checkpoint, utils::slog_region(region));
         utils::record_cf_stat("lock", &stat.lock);
         utils::record_cf_stat("write", &stat.write);
@@ -197,17 +232,12 @@ impl ScanCmd {
     }
 
     /// execute the command, when meeting error, retrying.
-    fn exec_by_with_retry(self, init: impl InitialScan, cancel: &AtomicBool) {
+    async fn exec_by_with_retry(self, init: impl InitialScan) {
         let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
         loop {
-            if cancel.load(Ordering::SeqCst) {
-                return;
-            }
-            match self.exec_by(init.clone()) {
+            match self.exec_by(init.clone()).await {
                 Err(err) if should_retry(&err) && retry_time > 0 => {
-                    // NOTE: blocking this thread may stick the process.
-                    // Maybe spawn a task to tokio and reschedule the task then?
-                    std::thread::sleep(Duration::from_millis(500));
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                     warn!("meet retryable error"; "err" => %err, "retry_time" => retry_time);
                     retry_time -= 1;
                     continue;
@@ -223,28 +253,24 @@ impl ScanCmd {
     }
 }
 
-fn scan_executor_loop(
-    init: impl InitialScan,
-    cmds: SyncReceiver<ScanCmd>,
-    canceled: Arc<AtomicBool>,
-) {
-    while let Ok(cmd) = cmds.recv() {
+async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>) {
+    while let Some(cmd) = cmds.recv().await {
         fail::fail_point!("execute_scan_command");
         debug!("handling initial scan request"; "region_id" => %cmd.region.get_id());
         metrics::PENDING_INITIAL_SCAN_LEN
             .with_label_values(&["queuing"])
             .dec();
-        if canceled.load(Ordering::Acquire) {
-            return;
-        }
 
-        metrics::PENDING_INITIAL_SCAN_LEN
-            .with_label_values(&["executing"])
-            .inc();
-        cmd.exec_by_with_retry(init.clone(), &canceled);
-        metrics::PENDING_INITIAL_SCAN_LEN
-            .with_label_values(&["executing"])
-            .dec();
+        let init = init.clone();
+        tokio::task::spawn(async move {
+            metrics::PENDING_INITIAL_SCAN_LEN
+                .with_label_values(&["executing"])
+                .inc();
+            cmd.exec_by_with_retry(init).await;
+            metrics::PENDING_INITIAL_SCAN_LEN
+                .with_label_values(&["executing"])
+                .dec();
+        });
     }
 }
 
@@ -254,51 +280,35 @@ fn scan_executor_loop(
 /// carefully or rustc (along with tokio) would complain that we made a `!Send`
 /// future. so we have moved the data loader to the synchronous context so its
 /// reference won't be shared between threads any more.
-fn spawn_executors(init: impl InitialScan + Send + 'static, number: usize) -> ScanPoolHandle {
-    let (tx, rx) = crossbeam::channel::bounded(MESSAGE_BUFFER_SIZE);
-    let pool = create_scan_pool(number);
-    let stopped = Arc::new(AtomicBool::new(false));
-    for _ in 0..number {
-        let init = init.clone();
-        let rx = rx.clone();
-        let stopped = stopped.clone();
-        pool.spawn(move |_: &mut YatpHandle<'_>| {
-            let _io_guard = file_system::WithIoType::new(file_system::IoType::Replication);
-            scan_executor_loop(init, rx, stopped);
-        })
-    }
-    ScanPoolHandle {
-        tx,
-        _pool: pool,
-        stopped,
-    }
+fn spawn_executors<E: KvEngine>(
+    init: impl InitialScan + Send + 'static,
+    number: usize,
+    router: impl CdcHandle<E> + 'static,
+) -> ScanPoolHandle {
+    let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
+    let pool = create_scan_pool(router, number);
+    let init = init.clone();
+    pool.spawn(async move {
+        scan_executor_loop(init, rx).await;
+    });
+    ScanPoolHandle { tx, _pool: pool }
 }
 
 struct ScanPoolHandle {
-    tx: SyncSender<ScanCmd>,
-    stopped: Arc<AtomicBool>,
+    // Theoretically, we can get rid of the sender, and spawn a new task via initial loader in each
+    // thread. But that will make `SubscribeManager` holds a reference to the implementation of
+    // `InitialScan`, which will get the type information a mass.
+    tx: Sender<ScanCmd>,
 
-    // in fact, we won't use the pool any more.
-    // but we should hold the reference to the pool so it won't try to join the threads running.
     _pool: ScanPool,
 }
 
-impl Drop for ScanPoolHandle {
-    fn drop(&mut self) {
-        self.stopped.store(true, Ordering::Release);
-    }
-}
-
 impl ScanPoolHandle {
-    fn request(&self, cmd: ScanCmd) -> std::result::Result<(), SendError<ScanCmd>> {
-        if self.stopped.load(Ordering::Acquire) {
-            warn!("scan pool is stopped, ignore the scan command"; "region" => %cmd.region.get_id());
-            return Ok(());
-        }
+    async fn request(&self, cmd: ScanCmd) -> std::result::Result<(), SendError<ScanCmd>> {
         metrics::PENDING_INITIAL_SCAN_LEN
             .with_label_values(&["queuing"])
             .inc();
-        self.tx.send(cmd)
+        self.tx.send(cmd).await
     }
 }
 
@@ -349,10 +359,23 @@ where
 }
 
 /// Create a yatp pool for doing initial scanning.
-fn create_scan_pool(num_threads: usize) -> ScanPool {
-    yatp::Builder::new("log-backup-scan")
-        .max_thread_count(num_threads)
-        .build_callback_pool()
+fn create_scan_pool<EK: KvEngine>(
+    cdc_handle: impl CdcHandle<EK> + 'static,
+    num_threads: usize,
+) -> ScanPool {
+    let handle = Mutex::new(cdc_handle);
+    tokio::runtime::Builder::new_multi_thread()
+        .with_sys_and_custom_hooks(
+            move || {
+                set_tls_cdc_handle(handle.lock().unwrap().clone());
+                file_system::set_io_type(file_system::IoType::Replication);
+            },
+            || {},
+        )
+        .thread_name("log-backup-scan")
+        .worker_threads(num_threads)
+        .build()
+        .unwrap()
 }
 
 impl<S, R, PDC> RegionSubscriptionManager<S, R, PDC>
@@ -368,7 +391,8 @@ where
     /// a two-tuple, the first is the handle to the manager, the second is the
     /// operator loop future.
     pub fn start<E, RT>(
-        initial_loader: InitialDataLoader<E, R, RT>,
+        initial_loader: InitialDataLoader<E, R, SubscribeByTlsHandle<E, RT>>,
+        router: &RT,
         observer: BackupStreamObserver,
         meta_cli: MetadataClient<S>,
         pd_client: Arc<PDC>,
@@ -380,7 +404,8 @@ where
         RT: CdcHandle<E> + 'static,
     {
         let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
-        let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);
+        let scan_pool_handle =
+            spawn_executors(initial_loader.clone(), scan_pool_size, router.clone());
         let op = Self {
             regions: initial_loader.regions.clone(),
             meta_cli,
@@ -522,7 +547,8 @@ where
                             region,
                             self.get_last_checkpoint_of(&for_task, region).await?,
                             handle.clone(),
-                        );
+                        )
+                        .await;
                         Result::Ok(())
                     }
                     .await;
@@ -567,7 +593,8 @@ where
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
                 let tso = self.get_last_checkpoint_of(&for_task, region).await?;
-                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone());
+                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone())
+                    .await;
             }
         }
         Ok(())
@@ -702,13 +729,13 @@ where
         Ok(cp.ts)
     }
 
-    fn spawn_scan(&self, cmd: ScanCmd) {
+    async fn spawn_scan(&self, cmd: ScanCmd) {
         // we should not spawn initial scanning tasks to the tokio blocking pool
         // because it is also used for converting sync File I/O to async. (for now!)
         // In that condition, if we blocking for some resources(for example, the
         // `MemoryQuota`) at the block threads, we may meet some ghosty
         // deadlock.
-        let s = self.scan_pool_handle.request(cmd);
+        let s = self.scan_pool_handle.request(cmd).await;
         if let Err(err) = s {
             let region_id = err.0.region.get_id();
             annotate!(err, "BUG: scan_pool closed")
@@ -716,7 +743,7 @@ where
         }
     }
 
-    fn observe_over_with_initial_data_from_checkpoint(
+    async fn observe_over_with_initial_data_from_checkpoint(
         &self,
         region: &Region,
         last_checkpoint: TimeStamp,
@@ -730,6 +757,7 @@ where
             last_checkpoint,
             _work: self.scans.clone().work(),
         })
+        .await
     }
 
     fn find_task_by_region(&self, r: &Region) -> Option<String> {
@@ -748,8 +776,9 @@ mod test {
     #[derive(Clone, Copy)]
     struct NoopInitialScan;
 
+    #[async_trait::async_trait]
     impl InitialScan for NoopInitialScan {
-        fn do_initial_scan(
+        async fn do_initial_scan(
             &self,
             _region: &Region,
             _start_ts: txn_types::TimeStamp,

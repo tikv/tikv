@@ -43,7 +43,7 @@ use crate::{
         GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
     errors::{Error, Result},
-    event_loader::{InitialDataLoader, PendingMemoryQuota},
+    event_loader::{InitialDataLoader, PendingMemoryQuota, SubscribeByTlsHandle},
     future,
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
@@ -60,7 +60,7 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
-pub struct Endpoint<S, R, E, RT, PDC> {
+pub struct Endpoint<S, R, E: KvEngine, RT, PDC> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
     // context type.
@@ -147,15 +147,15 @@ where
 
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
-                router.clone(),
                 accessor.clone(),
                 range_router.clone(),
                 subs.clone(),
                 scheduler.clone(),
                 initial_scan_memory_quota.clone(),
-                pool.handle().clone(),
                 initial_scan_throughput_quota.clone(),
+                SubscribeByTlsHandle::<E, RT>::default(),
             ),
+            &router,
             observer.clone(),
             meta_client.clone(),
             pd_client.clone(),
@@ -495,16 +495,15 @@ where
     }
 
     /// Make an initial data loader using the resource of the endpoint.
-    pub fn make_initial_loader(&self) -> InitialDataLoader<E, R, RT> {
+    pub fn make_initial_loader(&self) -> InitialDataLoader<E, R, SubscribeByTlsHandle<E, RT>> {
         InitialDataLoader::new(
-            self.router.clone(),
             self.regions.clone(),
             self.range_router.clone(),
             self.subs.clone(),
             self.scheduler.clone(),
             self.initial_scan_memory_quota.clone(),
-            self.pool.handle().clone(),
             self.initial_scan_throughput_quota.clone(),
+            SubscribeByTlsHandle::<E, RT>::default(),
         )
     }
 
@@ -525,9 +524,9 @@ where
         }
     }
 
-    async fn observe_and_scan_region(
+    async fn observe_regions_in_range(
         &self,
-        init: InitialDataLoader<E, R, RT>,
+        init: InitialDataLoader<E, R, SubscribeByTlsHandle<E, RT>>,
         task: &StreamTask,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
@@ -623,7 +622,7 @@ where
                 for (start_key, end_key) in ranges {
                     let init = init.clone();
 
-                    self.observe_and_scan_region(init, &task, start_key, end_key)
+                    self.observe_regions_in_range(init, &task, start_key, end_key)
                         .await?
                 }
                 info!(

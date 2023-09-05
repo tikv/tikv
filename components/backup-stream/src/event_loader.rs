@@ -8,7 +8,7 @@ use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
-    store::{fsm::ChangeObserver, Callback},
+    store::{fsm::ChangeObserver, Callback, RegionSnapshot},
 };
 use tikv::storage::{
     kv::StatisticsSummary,
@@ -33,7 +33,7 @@ use crate::{
     errors::{ContextualResultExt, Error, Result},
     metrics,
     router::{ApplyEvent, ApplyEvents, Router},
-    subscription_manager::{maybe_with_tls_cdc_handle, with_tls_cdc_handle},
+    subscription_manager::with_tls_cdc_handle,
     subscription_track::{Ref, RefMut, SubscriptionTracer, TwoPhaseResolver},
     try_send,
     utils::{self, RegionPager},
@@ -61,10 +61,12 @@ impl PendingMemoryQuota {
         Self(Arc::new(Semaphore::new(quota)))
     }
 
-    pub fn pending(&self, size: usize) -> PendingMemory {
+    pub async fn pending(&self, size: usize) -> PendingMemory {
         PendingMemory(
-            Handle::current()
-                .block_on(self.0.clone().acquire_many_owned(size as _))
+            self.0
+                .clone()
+                .acquire_many_owned(size as _)
+                .await
                 .expect("BUG: the semaphore is closed unexpectedly."),
         )
     }
@@ -78,6 +80,83 @@ pub struct EventLoader<S: Snapshot> {
 }
 
 const ENTRY_BATCH_SIZE: usize = 1024;
+
+#[async_trait::async_trait]
+pub trait CaptureChange<Snap>: Clone + Send + Sync {
+    async fn capture_change(&self, region: &Region, handle: ChangeObserver) -> Result<Snap>;
+}
+
+#[derive(Clone)]
+pub struct SubscribeByTlsHandle<E, H>(PhantomData<E>, PhantomData<H>);
+
+impl<E, H> Default for SubscribeByTlsHandle<E, H> {
+    fn default() -> Self {
+        Self(PhantomData, PhantomData)
+    }
+}
+
+// SAFETY: they are just phantom data.
+unsafe impl<E: KvEngine, H: CdcHandle<E>> Sync for SubscribeByTlsHandle<E, H> {}
+
+#[async_trait::async_trait]
+impl<E, H> CaptureChange<RegionSnapshot<<E as KvEngine>::Snapshot>> for SubscribeByTlsHandle<E, H>
+where
+    E: KvEngine,
+    H: CdcHandle<E> + 'static,
+{
+    async fn capture_change(
+        &self,
+        region: &Region,
+        cmd: ChangeObserver,
+    ) -> Result<RegionSnapshot<<E as KvEngine>::Snapshot>> {
+        let (callback, fut) =
+            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
+
+        with_tls_cdc_handle::<H, _, _>(|h| {
+            h.capture_change(
+                region.get_id(),
+                region.get_region_epoch().clone(),
+                cmd,
+                Callback::read(Box::new(|snapshot| {
+                    if snapshot.response.get_header().has_error() {
+                        callback(Err(Error::RaftRequest(
+                            snapshot.response.get_header().get_error().clone(),
+                        )));
+                        return;
+                    }
+                    if let Some(snap) = snapshot.snapshot {
+                        callback(Ok(snap));
+                        return;
+                    }
+                    callback(Err(Error::Other(box_err!(
+                        "PROBABLY BUG: the response contains neither error nor snapshot"
+                    ))))
+                })),
+            )
+            .context(format_args!(
+                "failed to register the observer to region {}",
+                region.get_id()
+            ))
+        })?;
+
+        let snap = fut
+            .await
+            .map_err(|err| {
+                annotate!(
+                    err,
+                    "message 'CaptureChange' dropped for region {}",
+                    region.id
+                )
+            })
+            .flatten()
+            .context(format_args!(
+                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
+                region.get_id(),
+            ))?;
+        // Note: maybe warp the snapshot via `RegionSnapshot`?
+        Ok(snap)
+    }
+}
 
 impl<S: Snapshot> EventLoader<S> {
     pub fn load_from(
@@ -179,7 +258,7 @@ impl<S: Snapshot> EventLoader<S> {
 /// Like [`cdc::Initializer`].
 /// Note: maybe we can merge those two structures?
 #[derive(Clone)]
-pub struct InitialDataLoader<E, R> {
+pub struct InitialDataLoader<E: KvEngine, R, S> {
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
@@ -190,14 +269,16 @@ pub struct InitialDataLoader<E, R> {
     pub(crate) quota: PendingMemoryQuota,
     pub(crate) limit: Limiter,
 
-    pub(crate) handle: Handle,
+    subscribe: S,
+
     _engine: PhantomData<E>,
 }
 
-impl<E, R> InitialDataLoader<E, R>
+impl<E, R, S> InitialDataLoader<E, R, S>
 where
     E: KvEngine,
     R: RegionInfoProvider + Clone + 'static,
+    S: CaptureChange<RegionSnapshot<<E as KvEngine>::Snapshot>>,
 {
     pub fn new(
         regions: R,
@@ -205,8 +286,8 @@ where
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
         quota: PendingMemoryQuota,
-        handle: Handle,
         limiter: Limiter,
+        subscribe: S,
     ) -> Self {
         Self {
             regions,
@@ -215,7 +296,7 @@ where
             scheduler: sched,
             _engine: PhantomData,
             quota,
-            handle,
+            subscribe,
             limit: limiter,
         }
     }
@@ -228,7 +309,7 @@ where
         let mut last_err = None;
         for _ in 0..MAX_GET_SNAPSHOT_RETRY {
             let c = cmd();
-            let r = self.observe_over(region, c).await;
+            let r = self.subscribe.capture_change(region, c).await;
             match r {
                 Ok(s) => {
                     return Ok(s);
@@ -260,73 +341,12 @@ where
                     if !can_retry {
                         break;
                     }
-                    std::thread::sleep(Duration::from_secs(1));
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
             }
         }
         Err(last_err.expect("BUG: max retry time exceed but no error"))
-    }
-
-    /// Start observe over some region.
-    /// This will register the region to the raftstore as observing,
-    /// and return the current snapshot of that region.
-    async fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
-        // There are 2 ways for getting the initial snapshot of a region:
-        // - the BR method: use the interface in the RaftKv interface, read the
-        //   key-values directly.
-        // - the CDC method: use the raftstore message `SignificantMsg::CaptureChange`
-        //   to register the region to CDC observer and get a snapshot at the same time.
-        // Registering the observer to the raftstore is necessary because we should only
-        // listen events from leader. In CDC, the change observer is
-        // per-delegate(i.e. per-region), we can create the command per-region here too.
-
-        let (callback, fut) =
-            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
-
-        with_tls_cdc_handle(|h| {
-            h.capture_change(
-                region.get_id(),
-                region.get_region_epoch().clone(),
-                cmd,
-                Callback::read(Box::new(|snapshot| {
-                    if snapshot.response.get_header().has_error() {
-                        callback(Err(Error::RaftRequest(
-                            snapshot.response.get_header().get_error().clone(),
-                        )));
-                        return;
-                    }
-                    if let Some(snap) = snapshot.snapshot {
-                        callback(Ok(snap));
-                        return;
-                    }
-                    callback(Err(Error::Other(box_err!(
-                        "PROBABLY BUG: the response contains neither error nor snapshot"
-                    ))))
-                })),
-            )
-            .context(format_args!(
-                "failed to register the observer to region {}",
-                region.get_id()
-            ))
-        })?;
-
-        let snap = fut
-            .await
-            .map_err(|err| {
-                annotate!(
-                    err,
-                    "message 'CaptureChange' dropped for region {}",
-                    region.id
-                )
-            })
-            .flatten()
-            .context(format_args!(
-                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
-                region.get_id(),
-            ))?;
-        // Note: maybe warp the snapshot via `RegionSnapshot`?
-        Ok(snap)
     }
 
     fn with_resolver<T: 'static>(
@@ -378,7 +398,7 @@ where
         f(v.value_mut().resolver())
     }
 
-    fn scan_and_async_send(
+    async fn scan_and_async_send(
         &self,
         region: &Region,
         handle: &ObserveHandle,
@@ -416,8 +436,8 @@ where
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = self.quota.pending(event_size);
-            self.limit.blocking_consume(disk_read as _);
+            let permit = self.quota.pending(event_size).await;
+            self.limit.consume(disk_read as _).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
@@ -431,7 +451,7 @@ where
         }
     }
 
-    pub fn do_initial_scan(
+    pub async fn do_initial_scan(
         &self,
         region: &Region,
         // We are using this handle for checking whether the initial scan is stale.
@@ -439,7 +459,6 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
-        let _guard = self.handle.enter();
         let tr = self.tracing.clone();
         let region_id = region.get_id();
 
@@ -447,10 +466,12 @@ where
 
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
-        let stats = self.scan_and_async_send(region, &handle, event_loader, &mut join_handles)?;
+        let stats = self
+            .scan_and_async_send(region, &handle, event_loader, &mut join_handles)
+            .await?;
 
-        Handle::current()
-            .block_on(futures::future::try_join_all(join_handles))
+        futures::future::try_join_all(join_handles)
+            .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 
         Self::with_resolver_by(&tr, region, &handle, |r| {
@@ -476,11 +497,6 @@ where
                 break;
             }
             for r in regions {
-                // Note: Even we did the initial scanning, and blocking resolved ts from
-                // advancing, if the next_backup_ts was updated in some extreme condition, there
-                // is still little chance to lost data: For example, if a region cannot elect
-                // the leader for long time. (say, net work partition) At that time, we have
-                // nowhere to record the lock status of this region.
                 try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::Start { region: r.region })
