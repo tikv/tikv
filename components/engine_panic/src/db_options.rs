@@ -40,6 +40,10 @@ impl DbOptions for PanicDbOptions {
         panic!()
     }
 
+    fn get_flush_size(&self) -> Result<u64> {
+        panic!()
+    }
+
     fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()> {
         panic!()
     }
