@@ -811,7 +811,7 @@ mod tests {
         initializer
             .downstream_state
             .store(DownstreamState::Initializing);
-        block_on(initializer.on_change_cmd_response(resp, memory_quota.clone())).unwrap_err();
+        block_on(initializer.on_change_cmd_response(resp, memory_quota)).unwrap_err();
 
         worker.stop();
     }
