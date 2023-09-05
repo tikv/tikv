@@ -13,7 +13,7 @@ use txn_types::{Key, TimeStamp};
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
-pub(crate) const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
+pub const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 #[derive(Clone)]
 pub enum TsSource {
@@ -251,13 +251,16 @@ impl Resolver {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
-        debug!(
-            "track lock {}@{}, region {}",
-            &log_wrappers::Value::key(&key),
-            start_ts,
-            self.region_id
-        );
         let bytes = self.lock_heap_size(&key);
+        debug!(
+            "track lock {}@{}",
+            &log_wrappers::Value::key(&key),
+            start_ts;
+            "region_id" => self.region_id,
+            "memory_in_use" => self.memory_quota.in_use(),
+            "memory_capacity" => self.memory_quota.capacity(),
+            "key_heap_size" => bytes,
+        );
         if !self.memory_quota.alloc(bytes) {
             return false;
         }
@@ -276,14 +279,18 @@ impl Resolver {
             self.memory_quota.free(bytes);
             start_ts
         } else {
-            debug!("untrack a lock that was not tracked before"; "key" => &log_wrappers::Value::key(key));
+            debug!("untrack a lock that was not tracked before";
+                "key" => &log_wrappers::Value::key(key),
+                "region_id" => self.region_id,
+            );
             return;
         };
         debug!(
-            "untrack lock {}@{}, region {}",
+            "untrack lock {}@{}",
             &log_wrappers::Value::key(key),
-            start_ts,
-            self.region_id,
+            start_ts;
+            "region_id" => self.region_id,
+            "memory_in_use" => self.memory_quota.in_use(),
         );
 
         let mut shrink_ts = None;

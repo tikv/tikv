@@ -28,9 +28,13 @@ use raftstore::{
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
-use resolved_ts::{Resolver, TsSource};
+use resolved_ts::{Resolver, TsSource, ON_DROP_WARN_HEAP_SIZE};
 use tikv::storage::{txn::TxnEntry, Statistics};
-use tikv_util::{debug, info, warn};
+use tikv_util::{
+    debug, info,
+    memory::{HeapSize, MemoryQuota},
+    warn,
+};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
@@ -223,22 +227,91 @@ impl Downstream {
     }
 }
 
-#[derive(Default)]
 struct Pending {
-    pub downstreams: Vec<Downstream>,
-    pub locks: Vec<PendingLock>,
-    pub pending_bytes: usize,
+    downstreams: Vec<Downstream>,
+    locks: Vec<PendingLock>,
+    pending_bytes: usize,
+    memory_quota: Arc<MemoryQuota>,
+}
+
+impl Pending {
+    fn new(memory_quota: Arc<MemoryQuota>) -> Pending {
+        Pending {
+            downstreams: vec![],
+            locks: vec![],
+            pending_bytes: 0,
+            memory_quota,
+        }
+    }
+
+    fn push_pending_lock(&mut self, lock: PendingLock) -> Result<()> {
+        let bytes = lock.heap_size();
+        if !self.memory_quota.alloc(bytes) {
+            return Err(Error::MemoryQuotaExceeded);
+        }
+        self.locks.push(lock);
+        self.pending_bytes += bytes;
+        CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
+        Ok(())
+    }
+
+    fn on_region_ready(&mut self, resolver: &mut Resolver) -> Result<()> {
+        fail::fail_point!("cdc_pending_on_region_ready", |_| Err(
+            Error::MemoryQuotaExceeded
+        ));
+        // Must take locks, otherwise it may double free memory quota on drop.
+        for lock in mem::take(&mut self.locks) {
+            self.memory_quota.free(lock.heap_size());
+            match lock {
+                PendingLock::Track { key, start_ts } => {
+                    if !resolver.track_lock(start_ts, key, None) {
+                        return Err(Error::MemoryQuotaExceeded);
+                    }
+                }
+                PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Pending {
     fn drop(&mut self) {
         CDC_PENDING_BYTES_GAUGE.sub(self.pending_bytes as i64);
+        let locks = mem::take(&mut self.locks);
+        if locks.is_empty() {
+            return;
+        }
+
+        // Free memory quota used by pending locks and unlocks.
+        let mut bytes = 0;
+        let num_locks = locks.len();
+        for lock in locks {
+            bytes += lock.heap_size();
+        }
+        if bytes > ON_DROP_WARN_HEAP_SIZE {
+            warn!("cdc drop huge Pending";
+                "bytes" => bytes,
+                "num_locks" => num_locks,
+                "memory_quota_in_use" => self.memory_quota.in_use(),
+                "memory_quota_capacity" => self.memory_quota.capacity(),
+            );
+        }
+        self.memory_quota.free(bytes);
     }
 }
 
 enum PendingLock {
     Track { key: Vec<u8>, start_ts: TimeStamp },
     Untrack { key: Vec<u8> },
+}
+
+impl HeapSize for PendingLock {
+    fn heap_size(&self) -> usize {
+        match self {
+            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => key.heap_size(),
+        }
+    }
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -262,14 +335,18 @@ pub struct Delegate {
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(region_id: u64, txn_extra_op: Arc<AtomicCell<TxnExtraOp>>) -> Delegate {
+    pub fn new(
+        region_id: u64,
+        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+        memory_quota: Arc<MemoryQuota>,
+    ) -> Delegate {
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
             resolver: None,
             region: None,
             resolved_downstreams: Vec::new(),
-            pending: Some(Pending::default()),
+            pending: Some(Pending::new(memory_quota)),
             txn_extra_op,
             failed: false,
         }
@@ -397,7 +474,7 @@ impl Delegate {
         &mut self,
         mut resolver: Resolver,
         region: Region,
-    ) -> Vec<(&Downstream, Error)> {
+    ) -> Result<Vec<(&Downstream, Error)>> {
         assert!(
             self.resolver.is_none(),
             "region {} resolver should not be ready",
@@ -410,29 +487,24 @@ impl Delegate {
         }
 
         // Mark the delegate as initialized.
-        let mut pending = self.pending.take().unwrap();
-        self.region = Some(region);
         info!("cdc region is ready"; "region_id" => self.region_id);
-
-        for lock in mem::take(&mut pending.locks) {
-            match lock {
-                PendingLock::Track { key, start_ts } => {
-                    // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-                    assert!(resolver.track_lock(start_ts, key, None));
-                }
-                PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
-            }
-        }
-        self.resolver = Some(resolver);
-
+        // Downstreams in pending must be moved to resolved_downstreams
+        // immediately and must not return in the middle, otherwise the delegate
+        // loses downstreams.
+        let mut pending = self.pending.take().unwrap();
         self.resolved_downstreams = mem::take(&mut pending.downstreams);
+
+        pending.on_region_ready(&mut resolver)?;
+        self.resolver = Some(resolver);
+        self.region = Some(region);
+
         let mut failed_downstreams = Vec::new();
         for downstream in self.downstreams() {
             if let Err(e) = self.check_epoch_on_ready(downstream) {
                 failed_downstreams.push((downstream, e));
             }
         }
-        failed_downstreams
+        Ok(failed_downstreams)
     }
 
     /// Try advance and broadcast resolved ts.
@@ -613,16 +685,14 @@ impl Delegate {
         let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool)> = HashMap::default();
         let mut raw_rows: Vec<EventRow> = Vec::new();
         for mut req in requests {
-            match req.get_cmd_type() {
-                CmdType::Put => {
-                    self.sink_put(
-                        req.take_put(),
-                        is_one_pc,
-                        &mut txn_rows,
-                        &mut raw_rows,
-                        &mut read_old_value,
-                    )?;
-                }
+            let res = match req.get_cmd_type() {
+                CmdType::Put => self.sink_put(
+                    req.take_put(),
+                    is_one_pc,
+                    &mut txn_rows,
+                    &mut raw_rows,
+                    &mut read_old_value,
+                ),
                 CmdType::Delete => self.sink_delete(req.take_delete()),
                 _ => {
                     debug!(
@@ -630,7 +700,12 @@ impl Delegate {
                         "region_id" => self.region_id,
                         "command" => ?req,
                     );
+                    Ok(())
                 }
+            };
+            if res.is_err() {
+                self.mark_failed();
+                return res;
             }
         }
 
@@ -826,18 +901,17 @@ impl Delegate {
                 // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
-                        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-                        assert!(resolver.track_lock(row.start_ts.into(), row.key.clone(), None));
+                        if !resolver.track_lock(row.start_ts.into(), row.key.clone(), None) {
+                            return Err(Error::MemoryQuotaExceeded);
+                        }
                     }
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
                         let pending = self.pending.as_mut().unwrap();
-                        pending.locks.push(PendingLock::Track {
+                        pending.push_pending_lock(PendingLock::Track {
                             key: row.key.clone(),
                             start_ts: row.start_ts.into(),
-                        });
-                        pending.pending_bytes += row.key.len();
-                        CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
+                        })?;
                     }
                 }
 
@@ -859,7 +933,7 @@ impl Delegate {
         Ok(())
     }
 
-    fn sink_delete(&mut self, mut delete: DeleteRequest) {
+    fn sink_delete(&mut self, mut delete: DeleteRequest) -> Result<()> {
         match delete.cf.as_str() {
             "lock" => {
                 let raw_key = Key::from_encoded(delete.take_key()).into_raw().unwrap();
@@ -867,11 +941,8 @@ impl Delegate {
                     Some(ref mut resolver) => resolver.untrack_lock(&raw_key, None),
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
-                        let key_len = raw_key.len();
                         let pending = self.pending.as_mut().unwrap();
-                        pending.locks.push(PendingLock::Untrack { key: raw_key });
-                        pending.pending_bytes += key_len;
-                        CDC_PENDING_BYTES_GAUGE.add(key_len as i64);
+                        pending.push_pending_lock(PendingLock::Untrack { key: raw_key })?;
                     }
                 }
             }
@@ -880,6 +951,7 @@ impl Delegate {
                 panic!("invalid cf {}", other);
             }
         }
+        Ok(())
     }
 
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
@@ -950,7 +1022,7 @@ impl Delegate {
     }
 
     fn stop_observing(&self) {
-        info!("stop observing"; "region_id" => self.region_id, "failed" => self.failed);
+        info!("cdc stop observing"; "region_id" => self.region_id, "failed" => self.failed);
         // Stop observe further events.
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
@@ -1185,12 +1257,18 @@ mod tests {
             ObservedRange::default(),
         );
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id, Default::default());
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let mut delegate = Delegate::new(region_id, Default::default(), memory_quota);
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         let resolver = Resolver::new(region_id, memory_quota);
-        assert!(delegate.on_region_ready(resolver, region).is_empty());
+        assert!(
+            delegate
+                .on_region_ready(resolver, region)
+                .unwrap()
+                .is_empty()
+        );
         assert!(delegate.downstreams()[0].observed_range.all_key_covered);
 
         let rx_wrap = Cell::new(Some(rx));
@@ -1314,8 +1392,9 @@ mod tests {
         };
 
         // Create a new delegate.
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, txn_extra_op.clone());
+        let mut delegate = Delegate::new(1, txn_extra_op.clone(), memory_quota);
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 
@@ -1341,7 +1420,9 @@ mod tests {
         region.mut_region_epoch().set_version(1);
         {
             let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-            let failures = delegate.on_region_ready(Resolver::new(1, memory_quota), region);
+            let failures = delegate
+                .on_region_ready(Resolver::new(1, memory_quota), region)
+                .unwrap();
             assert_eq!(failures.len(), 1);
             let id = failures[0].0.id;
             delegate.unsubscribe(id, None);
@@ -1432,8 +1513,9 @@ mod tests {
             Key::from_raw(b"d").into_encoded(),
         )
         .unwrap();
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, txn_extra_op);
+        let mut delegate = Delegate::new(1, txn_extra_op, memory_quota);
         assert!(delegate.handle.is_observing());
 
         let mut map = HashMap::default();
@@ -1500,8 +1582,9 @@ mod tests {
             Key::from_raw(b"f").into_encoded(),
         )
         .unwrap();
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, txn_extra_op);
+        let mut delegate = Delegate::new(1, txn_extra_op, memory_quota);
         assert!(delegate.handle.is_observing());
 
         let mut map = HashMap::default();
