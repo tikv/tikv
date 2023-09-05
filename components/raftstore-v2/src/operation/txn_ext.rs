@@ -9,7 +9,11 @@ use std::sync::{atomic::Ordering, Arc};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
-use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::RaftRequestHeader};
+use kvproto::{
+    kvrpcpb::{DiskFullOpt, ExtraOp},
+    metapb::Region,
+    raft_cmdpb::RaftRequestHeader,
+};
 use parking_lot::RwLockWriteGuard;
 use raft::eraftpb;
 use raftstore::store::{
@@ -267,7 +271,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "propose {} locks before transferring leader", lock_count;
         );
         let PeerMsg::SimpleWrite(write) = PeerMsg::simple_write(header, encoder.encode()).0 else {unreachable!()};
-        self.on_simple_write(ctx, write.header, write.data, write.ch);
+        self.on_simple_write(
+            ctx,
+            write.header,
+            write.data,
+            write.ch,
+            Some(DiskFullOpt::AllowedOnAlmostFull),
+        );
         true
     }
 }

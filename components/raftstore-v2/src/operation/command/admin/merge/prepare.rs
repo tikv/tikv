@@ -219,22 +219,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if r.is_ok() {
             self.proposal_control_mut().set_pending_prepare_merge(false);
         } else {
-            // Match v1::post_propose_fail.
-            // If we just failed to propose PrepareMerge, the pessimistic locks status
-            // may become MergingRegion incorrectly. So, we have to revert it here.
-            // Note: The `is_merging` check from v1 is removed because proposed
-            // `PrepareMerge` rejects all writes (in `ProposalControl::check_conflict`).
-            assert!(
-                !self.proposal_control().is_merging(),
-                "{}",
-                SlogFormat(&self.logger)
-            );
-            self.take_merge_context();
-            self.proposal_control_mut().set_pending_prepare_merge(false);
-            let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
-            if pessimistic_locks.status == LocksStatus::MergingRegion {
-                pessimistic_locks.status = LocksStatus::Normal;
-            }
+            self.post_prepare_merge_fail();
         }
         r
     }
@@ -706,6 +691,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         self.propose(store_ctx, cmd.write_to_bytes().unwrap())?;
         Ok(())
+    }
+
+    pub fn post_prepare_merge_fail(&mut self) {
+        // Match v1::post_propose_fail.
+        // If we just failed to propose PrepareMerge, the pessimistic locks status
+        // may become MergingRegion incorrectly. So, we have to revert it here.
+        // Note: The `is_merging` check from v1 is removed because proposed
+        // `PrepareMerge` rejects all writes (in `ProposalControl::check_conflict`).
+        assert!(
+            !self.proposal_control().is_merging(),
+            "{}",
+            SlogFormat(&self.logger)
+        );
+        self.take_merge_context();
+        self.proposal_control_mut().set_pending_prepare_merge(false);
+        let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
+        if pessimistic_locks.status == LocksStatus::MergingRegion {
+            pessimistic_locks.status = LocksStatus::Normal;
+        }
     }
 }
 

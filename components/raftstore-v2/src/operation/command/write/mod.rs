@@ -5,7 +5,7 @@ use engine_traits::{
 };
 use fail::fail_point;
 use futures::channel::oneshot;
-use kvproto::raft_cmdpb::RaftRequestHeader;
+use kvproto::{kvrpcpb::DiskFullOpt, raft_cmdpb::RaftRequestHeader};
 use raftstore::{
     store::{
         cmd_resp,
@@ -42,6 +42,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
         ch: CmdResChannel,
+        disk_full_opt: Option<DiskFullOpt>,
     ) {
         if !self.serving() {
             apply::notify_req_region_removed(self.region_id(), ch);
@@ -55,6 +56,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         if let Err(e) = self.validate_command(&header, None, &mut ctx.raft_metrics) {
+            let resp = cmd_resp::new_error(e);
+            ch.report_error(resp);
+            return;
+        }
+        // Check whether the write request can be proposed with the given disk full
+        // option.
+        if let Some(opt) = disk_full_opt && let Err(e) = self.validate_with_disk_full_opt(ctx, opt) {
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             return;

@@ -54,6 +54,7 @@ use tikv_util::{
     log::SlogFormat,
     slog_panic,
     store::find_peer,
+    sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Duration},
 };
 
@@ -280,6 +281,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
         }
+
+        self.handle_reported_disk_usage(ctx, &msg);
+
         if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
             return;
@@ -1049,6 +1053,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
 
+                    if !ctx.store_disk_usages.is_empty() {
+                        self.refill_disk_full_peers(ctx);
+                        debug!(
+                            self.logger,
+                            "become leader refills disk full peers to {:?}",
+                            self.abnormal_peer_context().disk_full_peers();
+                            "region_id" => self.region_id(),
+                        );
+                    }
+
                     self.region_heartbeat_pd(ctx);
                     self.add_pending_tick(PeerTick::CompactLog);
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
@@ -1186,6 +1200,52 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "progress" => ?buffer,
                 "cache_first_index" => ?self.entry_storage().entry_cache_first_index(),
                 "next_turn_threshold" => ?self.long_uncommitted_threshold(),
+            );
+        }
+    }
+
+    fn handle_reported_disk_usage<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: &RaftMessage,
+    ) {
+        let store_id = msg.get_from_peer().get_store_id();
+        let peer_id = msg.get_from_peer().get_id();
+        let disk_full_peers = self.abnormal_peer_context().disk_full_peers();
+        let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
+            ctx.store_disk_usages.remove(&store_id);
+            if !self.is_leader() {
+                return;
+            }
+            disk_full_peers.has(peer_id)
+        } else {
+            ctx.store_disk_usages.insert(store_id, msg.disk_usage);
+            if !self.is_leader() {
+                return;
+            }
+
+            disk_full_peers.is_empty()
+                || disk_full_peers
+                    .get(peer_id)
+                    .map_or(true, |x| x != msg.disk_usage)
+        };
+
+        if refill_disk_usages || self.has_region_merge_proposal {
+            let prev = disk_full_peers.get(peer_id);
+            if Some(msg.disk_usage) != prev {
+                info!(
+                    self.logger,
+                    "reported disk usage changes {:?} -> {:?}", prev, msg.disk_usage;
+                    "region_id" => self.region_id(),
+                    "peer_id" => peer_id,
+                );
+            }
+            self.refill_disk_full_peers(ctx);
+            debug!(
+                self.logger,
+                "raft message refills disk full peers to {:?}",
+                self.abnormal_peer_context().disk_full_peers();
+                "region_id" => self.region_id(),
             );
         }
     }

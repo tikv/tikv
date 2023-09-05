@@ -12,6 +12,7 @@ use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
+    kvrpcpb::DiskFullOpt,
     metapb::{PeerRole, Region},
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
@@ -33,13 +34,13 @@ use raftstore::{
     },
     Error,
 };
-use slog::{error, info};
+use slog::{debug, error, info};
 use split::SplitResult;
 pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
     SplitInit, SplitPendingAppend, SPLIT_PREFIX,
 };
-use tikv_util::{box_err, log::SlogFormat, slog_panic};
+use tikv_util::{box_err, log::SlogFormat, slog_panic, sys::disk::DiskUsage};
 use txn_types::WriteBatchFlags;
 
 use self::flashback::FlashbackResult;
@@ -98,6 +99,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
+        // Check whether the admin request can be proposed when disk full.
+        if let Err(e) = self.validate_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull) {
+            let resp = cmd_resp::new_error(e);
+            ch.report_error(resp);
+            self.post_propose_fail(cmd_type);
+            return;
+        }
 
         let is_transfer_leader = cmd_type == AdminCmdType::TransferLeader;
         let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
@@ -133,6 +141,36 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let resp = cmd_resp::new_error(Error::ProposalInMergingMode(self.region_id()));
             ch.report_error(resp);
             return;
+        }
+        // Prepare Merge need to be broadcast to as many as followers when disk full.
+        let is_merge_cmd =
+            cmd_type == AdminCmdType::PrepareMerge || cmd_type == AdminCmdType::RollbackMerge;
+        let has_disk_full_peers = self.abnormal_peer_context().disk_full_peers().is_empty();
+        let proposal_index = self.next_proposal_index();
+        if is_merge_cmd
+            && (!matches!(ctx.self_disk_usage, DiskUsage::Normal) || !has_disk_full_peers)
+        {
+            self.has_region_merge_proposal = true;
+            self.region_merge_proposal_index = proposal_index;
+            let mut peers = vec![];
+            self.abnormal_peer_context_mut()
+                .disk_full_peers_mut()
+                .peers_mut()
+                .iter_mut()
+                .for_each(|(k, v)| {
+                    if !matches!(v.0, DiskUsage::AlreadyFull) {
+                        v.1 = true;
+                        peers.push(*k);
+                    }
+                });
+            debug!(
+                self.logger,
+                "adjust max inflight msgs";
+                "cmd_type" => ?cmd_type,
+                "raft_max_inflight_msgs" => ctx.cfg.raft_max_inflight_msgs,
+                "to region" => self.region_id()
+            );
+            self.adjust_peers_max_inflight_msgs(&peers, ctx.cfg.raft_max_inflight_msgs);
         }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);
