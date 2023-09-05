@@ -1,17 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    marker::PhantomData,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::KvEngine;
 use futures::{channel::oneshot::Receiver, compat::Future01CompatExt, FutureExt};
-use futures_timer::Delay;
 use kvproto::metapb::Region;
 use raftstore::{
     coprocessor::ObserveHandle,
@@ -21,7 +13,6 @@ use raftstore::{
 use tikv::storage::{
     kv::{ScanMode as MvccScanMode, Snapshot},
     mvcc::MvccReader,
-    txn::TxnEntry,
 };
 use tikv_util::{
     sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler,
@@ -52,14 +43,7 @@ pub struct ScanTask {
 }
 
 impl ScanTask {
-    async fn send_entries(&self, entries: Vec<ScanEntry>, apply_index: u64) {
-        // loop {
-        //     if self.scheduler.pending_tasks() < 8 {
-        //         break;
-        //     }
-        //     let f = Delay::new(Duration::from_millis(10));
-        //     f.await;
-        // }
+    async fn send_entries(&self, entries: ScanEntries, apply_index: u64) {
         let task = Task::ScanLocks {
             region_id: self.region.get_id(),
             observe_id: self.handle.id,
@@ -92,8 +76,7 @@ impl ScanTask {
 }
 
 #[derive(Debug)]
-pub enum ScanEntry {
-    TxnEntry(Vec<TxnEntry>),
+pub enum ScanEntries {
     Lock(Vec<(Key, Lock)>),
     None,
 }
@@ -174,11 +157,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                 if has_remaining {
                     start_key = Some(locks.last().unwrap().0.clone())
                 }
-                task.send_entries(vec![ScanEntry::Lock(locks)], apply_index)
+                task.send_entries(ScanEntries::Lock(locks), apply_index)
                     .await;
             }
             RTS_SCAN_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
-            task.send_entries(vec![ScanEntry::None], apply_index).await;
+            task.send_entries(ScanEntries::None, apply_index).await;
         };
         self.workers.spawn(fut);
     }

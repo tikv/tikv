@@ -4,16 +4,13 @@ use std::{
     collections::HashMap,
     fmt,
     marker::PhantomData,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
-use futures::channel::oneshot::{Receiver, Sender};
+use futures::channel::oneshot::{channel, Receiver, Sender};
 use grpcio::Environment;
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
@@ -41,7 +38,7 @@ use crate::{
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
     resolver::Resolver,
-    scanner::{ScanEntry, ScanTask, ScannerPool},
+    scanner::{ScanEntries, ScanTask, ScannerPool},
     Error, Result, ON_DROP_WARN_HEAP_SIZE,
 };
 
@@ -190,22 +187,19 @@ impl ObserveRegion {
         meta: Region,
         rrp: Arc<RegionReadProgress>,
         memory_quota: Arc<MemoryQuota>,
-    ) -> (Self, Receiver<()>) {
-        let (cancelled, cancel_notify) = futures::channel::oneshot::channel();
-        (
-            ObserveRegion {
-                resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota.clone()),
-                meta,
-                handle: ObserveHandle::new(),
-                resolver_status: ResolverStatus::Pending {
-                    tracked_index: 0,
-                    locks: vec![],
-                    cancelled: Some(cancelled),
-                    memory_quota,
-                },
+        cancelled: Sender<()>,
+    ) -> Self {
+        ObserveRegion {
+            resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota.clone()),
+            meta,
+            handle: ObserveHandle::new(),
+            resolver_status: ResolverStatus::Pending {
+                tracked_index: 0,
+                locks: vec![],
+                cancelled: Some(cancelled),
+                memory_quota,
             },
-            cancel_notify,
-        )
+        }
     }
 
     fn read_progress(&self) -> &Arc<RegionReadProgress> {
@@ -326,55 +320,51 @@ impl ObserveRegion {
     }
 
     /// Track locks in incoming scan entries.
-    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) -> Result<()> {
-        for es in entries {
-            match es {
-                ScanEntry::Lock(locks) => {
-                    if let ResolverStatus::Ready = self.resolver_status {
-                        panic!("region {:?} resolver has ready", self.meta.id)
-                    }
-                    for (key, lock) in locks {
-                        if !self.resolver.track_lock(
-                            lock.ts,
-                            key.to_raw().unwrap(),
-                            Some(apply_index),
-                        ) {
-                            return Err(Error::MemoryQuotaExceeded);
-                        }
+    fn track_scan_locks(&mut self, entries: ScanEntries, apply_index: u64) -> Result<()> {
+        match entries {
+            ScanEntries::Lock(locks) => {
+                if let ResolverStatus::Ready = self.resolver_status {
+                    panic!("region {:?} resolver has ready", self.meta.id)
+                }
+                for (key, lock) in locks {
+                    if !self
+                        .resolver
+                        .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index))
+                    {
+                        return Err(Error::MemoryQuotaExceeded);
                     }
                 }
-                ScanEntry::None => {
-                    // Update the `tracked_index` to the snapshot's `apply_index`
-                    self.resolver.update_tracked_index(apply_index);
-                    let mut resolver_status =
-                        std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
-                    let (pending_tracked_index, pending_locks) =
-                        resolver_status.drain_pending_locks(self.meta.id);
-                    for lock in pending_locks {
-                        match lock {
-                            PendingLock::Track { key, start_ts } => {
-                                if !self.resolver.track_lock(
-                                    start_ts,
-                                    key.to_raw().unwrap(),
-                                    Some(pending_tracked_index),
-                                ) {
-                                    return Err(Error::MemoryQuotaExceeded);
-                                }
+            }
+            ScanEntries::None => {
+                // Update the `tracked_index` to the snapshot's `apply_index`
+                self.resolver.update_tracked_index(apply_index);
+                let mut resolver_status =
+                    std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
+                let (pending_tracked_index, pending_locks) =
+                    resolver_status.drain_pending_locks(self.meta.id);
+                for lock in pending_locks {
+                    match lock {
+                        PendingLock::Track { key, start_ts } => {
+                            if !self.resolver.track_lock(
+                                start_ts,
+                                key.to_raw().unwrap(),
+                                Some(pending_tracked_index),
+                            ) {
+                                return Err(Error::MemoryQuotaExceeded);
                             }
-                            PendingLock::Untrack { key, .. } => self
-                                .resolver
-                                .untrack_lock(&key.to_raw().unwrap(), Some(pending_tracked_index)),
                         }
+                        PendingLock::Untrack { key, .. } => self
+                            .resolver
+                            .untrack_lock(&key.to_raw().unwrap(), Some(pending_tracked_index)),
                     }
-                    info!(
-                        "Resolver initialized";
-                        "region" => self.meta.id,
-                        "observe_id" => ?self.handle.id,
-                        "snapshot_index" => apply_index,
-                        "pending_data_index" => pending_tracked_index,
-                    );
                 }
-                ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
+                info!(
+                    "Resolver initialized";
+                    "region" => self.meta.id,
+                    "observe_id" => ?self.handle.id,
+                    "snapshot_index" => apply_index,
+                    "pending_data_index" => pending_tracked_index,
+                );
             }
         }
         Ok(())
@@ -454,28 +444,25 @@ where
     fn register_region(&mut self, region: Region, backoff: Option<Duration>) {
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
-        let (observe_region, cancelled) = {
-            if let Some(read_progress) = self.region_read_progress.get(&region_id) {
-                info!(
-                    "register observe region";
-                    "region" => ?region
-                );
-                ObserveRegion::new(region.clone(), read_progress, self.memory_quota.clone())
-            } else {
-                warn!(
-                    "try register unexit region";
-                    "region" => ?region,
-                );
-                return;
-            }
+        let Some(read_progress) = self.region_read_progress.get(&region_id) else {
+            warn!("try register unexit region"; "region" => ?region);
+            return;
         };
+        info!("register observe region"; "region" => ?region);
+        let (cancelled_tx, cancelled_rx) = channel();
+        let observe_region = ObserveRegion::new(
+            region.clone(),
+            read_progress,
+            self.memory_quota.clone(),
+            cancelled_tx,
+        );
         let observe_handle = observe_region.handle.clone();
         observe_region
             .read_progress()
             .update_advance_resolved_ts_notify(self.advance_notify.clone());
         self.regions.insert(region_id, observe_region);
 
-        let scan_task = self.build_scan_task(region, observe_handle, cancelled, backoff);
+        let scan_task = self.build_scan_task(region, observe_handle, cancelled_rx, backoff);
         let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
         self.scanner_pool
             .spawn_task(scan_task, concurrency_semaphore);
@@ -660,7 +647,7 @@ where
         &mut self,
         region_id: u64,
         observe_id: ObserveId,
-        entries: Vec<ScanEntry>,
+        entries: ScanEntries,
         apply_index: u64,
     ) {
         let mut is_memory_quota_exceeded = false;
@@ -768,7 +755,7 @@ pub enum Task {
     ScanLocks {
         region_id: u64,
         observe_id: ObserveId,
-        entries: Vec<ScanEntry>,
+        entries: ScanEntries,
         apply_index: u64,
     },
     ChangeConfig {
