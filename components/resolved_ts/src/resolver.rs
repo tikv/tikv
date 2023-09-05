@@ -68,7 +68,7 @@ impl Drop for Resolver {
             bytes += self.lock_heap_size(key);
         }
         if bytes > ON_DROP_WARN_HEAP_SIZE {
-            warn!("drop huge Resolver";
+            warn!("drop huge resolver";
                 "region_id" => self.region_id,
                 "bytes" => bytes,
                 "num_locks" => num_locks,
