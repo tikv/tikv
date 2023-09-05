@@ -11,6 +11,7 @@ use kvproto::{
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, future::block_on_timeout, time::Instant};
 
 fn assert_disk_full(resp: &RaftCmdResponse) {
@@ -121,7 +122,8 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
     fail::remove(get_fp(usage, 1));
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_disk_full_for_region_leader() {
     test_disk_full_leader_behaviors(DiskUsage::AlmostFull);
     test_disk_full_leader_behaviors(DiskUsage::AlreadyFull);
@@ -168,7 +170,8 @@ fn test_disk_full_follower_behaviors(usage: DiskUsage) {
     fail::remove(get_fp(usage, 2));
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_disk_full_for_region_follower() {
     test_disk_full_follower_behaviors(DiskUsage::AlmostFull);
     test_disk_full_follower_behaviors(DiskUsage::AlreadyFull);
@@ -269,12 +272,14 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     fail::remove(get_fp(usage, 1));
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_disk_full_for_txn_operations() {
     test_disk_full_txn_behaviors(DiskUsage::AlmostFull);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_majority_disk_full() {
     let mut cluster = new_node_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
@@ -364,7 +369,8 @@ fn test_majority_disk_full() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_disk_full_followers_with_hibernate_regions() {
     let mut cluster = new_node_cluster(0, 2);
     // To ensure the thread has full store disk usage infomation.
@@ -413,7 +419,8 @@ fn assert_region_merged<T: Simulator>(
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_merge_on_majority_disk_full() {
     let mut cluster = new_server_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
@@ -462,7 +469,8 @@ fn test_merge_on_majority_disk_full() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_almost_and_already_full_behavior() {
     let mut cluster = new_server_cluster(0, 5);
     // To ensure the thread has full store disk usage infomation.
@@ -541,7 +549,8 @@ fn wait_down_peers_reported<T: Simulator>(
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_down_node_when_disk_full() {
     let mut cluster = new_server_cluster(0, 5);
     // To ensure the thread has full store disk usage infomation.
