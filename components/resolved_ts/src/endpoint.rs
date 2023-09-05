@@ -328,7 +328,7 @@ where
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
                 let (leader_info, leader_store_id) = read_progress.dump_leader_info();
-                let core = read_progress.core.lock().unwrap();
+                let core = read_progress.get_core();
                 let resolved_ts = leader_info.get_read_state().get_safe_ts();
                 let safe_ts = core.read_state().ts;
 
@@ -1184,7 +1184,7 @@ impl LeaderStats {
                 .map(|i| i.saturating_elapsed().as_millis() as u64),
             last_resolve_attempt: resolver.and_then(|r| r.last_attempt.clone()),
             min_lock: resolver.and_then(|r| {
-                r.lock_ts_heap.iter().next().map(|(ts, keys)| {
+                r.oldest_transaction().map(|(ts, keys)| {
                     (
                         *ts,
                         keys.iter()

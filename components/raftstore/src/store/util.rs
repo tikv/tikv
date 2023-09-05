@@ -1255,7 +1255,7 @@ impl Default for RegionReadProgressRegistry {
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
     // not be accessed outside to avoid dead lock
-    pub core: Mutex<RegionReadProgressCore>,
+    core: Mutex<RegionReadProgressCore>,
     // The fast path to read `safe_ts` without acquiring the mutex
     // on `core`
     safe_ts: AtomicU64,
@@ -1439,7 +1439,6 @@ impl RegionReadProgress {
         self.safe_ts()
     }
 
-    // Dump the `LeaderInfo` and the peer list
     pub fn get_core(&self) -> MutexGuard<'_, RegionReadProgressCore> {
         self.core.lock().unwrap()
     }

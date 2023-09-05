@@ -103,7 +103,7 @@ impl slog::Value for LastAttempt {
 
 impl std::fmt::Debug for Resolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let far_lock = self.lock_ts_heap.iter().next();
+        let far_lock = self.oldest_transaction();
         let mut dt = f.debug_tuple("Resolver");
         dt.field(&format_args!("region={}", self.region_id));
 
@@ -302,9 +302,6 @@ impl Resolver {
     }
 
     /// Try to advance resolved ts.
-    /// `memory_lock`: If the source is from a memory lock in concurrency
-    /// manger, pass the key for diagnosis
-    ///
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
@@ -330,9 +327,7 @@ impl Resolver {
 
         // Find the min start ts.
         let min_lock = self
-            .lock_ts_heap
-            .iter()
-            .next()
+            .oldest_transaction()
             .and_then(|(ts, locks)| locks.iter().next().map(|lock| (*ts, lock)));
         let has_lock = min_lock.is_some();
         let min_start_ts = min_lock.map(|(ts, _)| ts).unwrap_or(min_ts);
@@ -416,6 +411,10 @@ impl Resolver {
 
     pub(crate) fn read_progress(&self) -> Option<&Arc<RegionReadProgress>> {
         self.read_progress.as_ref()
+    }
+
+    pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &HashSet<Arc<[u8]>>)> {
+        self.lock_ts_heap.iter().next()
     }
 }
 
