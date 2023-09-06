@@ -91,15 +91,22 @@ pub fn maybe_use_backup_addr(u: &str, backup: impl Fn() -> String) -> Option<Str
     res
 }
 
+enum RequestResult {
+    OK,
+    Retry,
+    Failed,
+}
+
 impl RaftStoreProxy {
     pub fn cluster_raftstore_version(&self) -> RaftstoreVer {
         *self.cluster_raftstore_ver.read().unwrap()
     }
 
-    /// Issue requests to all stores which is not marked as TiFlash.
-    /// Use the result of the first store which is not a Uncertain.
-    /// Or set the result to Uncertain if timeout.
-    pub fn refresh_cluster_raftstore_version(&mut self, timeout_ms: i64) -> bool {
+    fn request_for_raftstore_version(
+        &self,
+        to_try_addrs: &Vec<String>,
+        timeout_ms: i64,
+    ) -> RequestResult {
         let generate_request_with_timeout = |timeout_ms: i64| -> Option<reqwest::Client> {
             let headers = reqwest::header::HeaderMap::new();
             let mut builder = reqwest::Client::builder().default_headers(headers);
@@ -115,30 +122,82 @@ impl RaftStoreProxy {
             }
         };
 
-        let parse_response =
-            |rt: &Runtime, resp: Result<reqwest::Response, reqwest::Error>| -> RaftstoreVer {
-                match resp {
-                    Ok(resp) => {
-                        if resp.status() == 404 {
-                            // If the port is not implemented.
-                            return RaftstoreVer::V1;
-                        } else if resp.status() != 200 {
-                            return RaftstoreVer::Uncertain;
-                        }
-                        let resp = rt.block_on(async { resp.text().await }).unwrap();
-                        if resp.contains("partitioned") {
-                            RaftstoreVer::V2
-                        } else {
-                            RaftstoreVer::V1
-                        }
+        let parse_response = |rt: &Runtime,
+                              resp: Result<reqwest::Response, reqwest::Error>|
+         -> (RaftstoreVer, bool) {
+            match resp {
+                Ok(resp) => {
+                    if resp.status() == 404 {
+                        // If the port is not implemented.
+                        return (RaftstoreVer::V1, false);
+                    } else if resp.status() != 200 {
+                        return (RaftstoreVer::Uncertain, false);
                     }
-                    Err(e) => {
-                        error!("get_engine_type respond error {:?}", e);
-                        RaftstoreVer::Uncertain
+                    let resp = rt.block_on(async { resp.text().await }).unwrap();
+                    if resp.contains("partitioned") {
+                        (RaftstoreVer::V2, false)
+                    } else {
+                        (RaftstoreVer::V1, false)
                     }
                 }
-            };
+                Err(e) => {
+                    error!("get_engine_type respond error {:?}", e);
+                    if e.is_connect() {
+                        // Maybe some dns error in TiOperator.
+                        (RaftstoreVer::Uncertain, true)
+                    } else {
+                        (RaftstoreVer::Uncertain, false)
+                    }
+                }
+            }
+        };
 
+        let rt = Runtime::new().unwrap();
+
+        let mut pending = vec![];
+        for addr in to_try_addrs {
+            if let Some(c) = generate_request_with_timeout(timeout_ms) {
+                let _g = rt.enter();
+                let f = c.get(addr).send();
+                pending.push(rt.spawn(f));
+            }
+        }
+
+        if pending.is_empty() {
+            tikv_util::error!("no valid tikv stores with status server");
+        }
+
+        let mut has_need_retry = false;
+        loop {
+            if pending.is_empty() {
+                break;
+            }
+            let sel = futures::future::select_all(pending);
+            let (resp, _completed_idx, remaining) = rt.block_on(async { sel.await });
+
+            let (res, need_retry) = parse_response(&rt, resp.unwrap());
+            has_need_retry |= need_retry;
+
+            if res != RaftstoreVer::Uncertain {
+                *self.cluster_raftstore_ver.write().unwrap() = res;
+                rt.shutdown_timeout(std::time::Duration::from_millis(1));
+                return RequestResult::OK;
+            }
+
+            pending = remaining;
+        }
+        rt.shutdown_timeout(std::time::Duration::from_millis(1));
+        if has_need_retry {
+            RequestResult::Retry
+        } else {
+            RequestResult::Failed
+        }
+    }
+
+    /// Issue requests to all stores which is not marked as TiFlash.
+    /// Use the result of the first store which is not a Uncertain.
+    /// Or set the result to Uncertain if timeout.
+    pub fn refresh_cluster_raftstore_version(&mut self, timeout_ms: i64) -> bool {
         // We don't use information stored in `GlobalReplicationState` to decouple.
         *self.cluster_raftstore_ver.write().unwrap() = RaftstoreVer::Uncertain;
         let mut retry_count: u64 = 0;
@@ -179,69 +238,70 @@ impl RaftStoreProxy {
             }
         };
 
-        let to_try_addrs = stores.iter().filter_map(|store| {
-            // There are some other labels such like tiflash_compute.
-            let shall_filter = store
-                .get_labels()
-                .iter()
-                .any(|label| label.get_key() == "engine" && label.get_value().contains("tiflash"));
-            if !shall_filter {
-                // TiKV's status server don't support https.
-                let mut u = format!("http://{}/{}", store.get_status_address(), "engine_type");
-                if let Some(nu) = maybe_use_backup_addr(&u, || store.get_address().to_string()) {
-                    tikv_util::info!("switch from {} to {}", u, nu);
-                    u = nu;
-                }
-                // A invalid url may lead to 404, which will enforce a V1 inference, which is
-                // error.
-                if let Ok(stuff) = url::Url::parse(&u) {
-                    if stuff.path() == "/engine_type" {
-                        Some(u)
+        let to_try_addrs: Vec<String> = stores
+            .iter()
+            .filter_map(|store| {
+                // There are some other labels such like tiflash_compute.
+                let shall_filter = store.get_labels().iter().any(|label| {
+                    label.get_key() == "engine" && label.get_value().contains("tiflash")
+                });
+                if !shall_filter {
+                    // TiKV's status server don't support https.
+                    let mut u = format!("http://{}/{}", store.get_status_address(), "engine_type");
+                    if let Some(nu) = maybe_use_backup_addr(&u, || store.get_address().to_string())
+                    {
+                        tikv_util::info!("switch from {} to {}", u, nu);
+                        u = nu;
+                    }
+                    // A invalid url may lead to 404, which will enforce a V1 inference, which is
+                    // error.
+                    if let Ok(stuff) = url::Url::parse(&u) {
+                        if stuff.path() == "/engine_type" {
+                            Some(u)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        });
+            })
+            .collect();
 
-        let rt = Runtime::new().unwrap();
+        let mut status_server_retry = 0;
+        #[cfg(any(test, feature = "testexport"))]
+        #[allow(clippy::redundant_closure_call)]
+        let status_server_retry_limit = (|| {
+            fail::fail_point!("proxy_fetch_cluster_version_retry", |t| {
+                let t = t.unwrap().parse::<u64>().unwrap();
+                t
+            });
+            0
+        })();
 
-        let mut pending = vec![];
-        for addr in to_try_addrs {
-            if let Some(c) = generate_request_with_timeout(timeout_ms) {
-                let _g = rt.enter();
-                let f = c.get(&addr).send();
-                pending.push(rt.spawn(f));
-            }
-        }
-
-        if pending.is_empty() {
-            tikv_util::error!("no valid tikv stores with status server");
-        }
-
+        #[cfg(not(any(test, feature = "testexport")))]
+        const status_server_retry_limit: u64 = 5;
         loop {
-            if pending.is_empty() {
-                break;
+            match self.request_for_raftstore_version(&to_try_addrs, timeout_ms) {
+                RequestResult::OK => return true,
+                RequestResult::Failed => return false,
+                RequestResult::Retry => {
+                    if status_server_retry < status_server_retry_limit {
+                        status_server_retry += 1;
+                        tikv_util::info!(
+                            "retry due to status server network error from {}/{}",
+                            status_server_retry,
+                            status_server_retry_limit
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(1000));
+                        continue;
+                    }
+                    return false;
+                }
             }
-            let sel = futures::future::select_all(pending);
-            let (resp, _completed_idx, remaining) = rt.block_on(async { sel.await });
-
-            let res = parse_response(&rt, resp.unwrap());
-
-            if res != RaftstoreVer::Uncertain {
-                *self.cluster_raftstore_ver.write().unwrap() = res;
-                rt.shutdown_timeout(std::time::Duration::from_millis(1));
-                return true;
-            }
-
-            pending = remaining;
         }
-        rt.shutdown_timeout(std::time::Duration::from_millis(1));
-        false
     }
 
     pub fn raftstore_version(&self) -> RaftstoreVer {

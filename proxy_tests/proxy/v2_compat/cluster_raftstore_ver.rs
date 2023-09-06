@@ -185,6 +185,17 @@ fn test_with_error_status_addr() {
                 RaftstoreVer::Uncertain
             );
         });
+    fail::cfg("proxy_fetch_cluster_version_retry", "return(5)").unwrap();
+    cluster_v1
+        .cluster_ext
+        .iter_ffi_helpers(None, &mut |_, ffi: &mut FFIHelperSet| {
+            ffi.proxy.refresh_cluster_raftstore_version(-1);
+            assert_eq!(
+                ffi.proxy.cluster_raftstore_version(),
+                RaftstoreVer::Uncertain
+            );
+        });
+    fail::remove("proxy_fetch_cluster_version_retry");
     cluster_v1.shutdown();
 }
 

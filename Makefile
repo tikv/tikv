@@ -122,6 +122,9 @@ ENABLE_FEATURES += cloud-gcp
 ENABLE_FEATURES += cloud-azure
 endif
 
+# ENABLE_FEATURES += mem-profiling
+ENABLE_FEATURES += jemalloc
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
