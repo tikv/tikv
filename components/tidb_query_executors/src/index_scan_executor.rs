@@ -3445,4 +3445,58 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn test_multi_value_compound_index() {
+        use tidb_query_datatype::builder::FieldTypeBuilder;
+
+        // create table t (pk varchar(4) primary key clustered, j json, str
+        // varchar(255), value int, key idx((cast(j as char(100) array)), str));
+        // insert into t values ("1", '["a"]', 'b', 1);
+        // select * from t use index(idx) where "a" member of (j);
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .array(true)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+            ],
+            columns_id_without_handle: vec![2],
+            columns_id_for_common_handle: vec![1],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
+            index_version: -1,
+        };
+        let mut columns = idx_exe.build_column_vec(1);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x6D, 0x5F, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xF8,
+                    0x1, 0x62, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xF8, 0x1, 0x31, 0x0, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0xF8,
+                ],
+                &[
+                    0x0, 0x7D, 0x1, 0x80, 0x0, 0x2, 0x0, 0x0, 0x0, 0x1, 0x3, 0x1, 0x0, 0x2, 0x0,
+                    0x0, 0x0,
+                ],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
+            Datum::Bytes("b".as_bytes().to_vec())
+        );
+    }
 }

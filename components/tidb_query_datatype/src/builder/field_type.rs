@@ -49,6 +49,12 @@ impl FieldTypeBuilder {
         self
     }
 
+    #[must_use]
+    pub fn array(mut self, v: bool) -> Self {
+        self.0.set_array(v);
+        self
+    }
+
     pub fn build(self) -> FieldType {
         self.0
     }

@@ -223,6 +223,10 @@ pub trait FieldTypeAccessor {
 
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor;
 
+    fn array(&self) -> bool;
+
+    fn set_array(&mut self, array: bool) -> &mut dyn FieldTypeAccessor;
+
     /// Convert reference to `FieldTypeAccessor` interface. Useful when an
     /// implementer provides inherent methods with the same name as the accessor
     /// trait methods.
@@ -331,6 +335,7 @@ pub trait FieldTypeAccessor {
     #[inline]
     fn need_restored_data(&self) -> bool {
         self.is_non_binary_string_like()
+            && !self.array()
             && (!self
                 .collation()
                 .map(|col| col.is_bin_collation())
@@ -398,6 +403,17 @@ impl FieldTypeAccessor for FieldType {
         FieldType::set_collate(self, collation as i32);
         self as &mut dyn FieldTypeAccessor
     }
+
+    #[inline]
+    fn array(&self) -> bool {
+        self.get_array()
+    }
+
+    #[inline]
+    fn set_array(&mut self, array: bool) -> &mut dyn FieldTypeAccessor {
+        FieldType::set_array(self, array);
+        self as &mut dyn FieldTypeAccessor
+    }
 }
 
 impl FieldTypeAccessor for ColumnInfo {
@@ -453,6 +469,17 @@ impl FieldTypeAccessor for ColumnInfo {
     #[inline]
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_collation(self, collation as i32);
+        self as &mut dyn FieldTypeAccessor
+    }
+
+    #[inline]
+    fn array(&self) -> bool {
+        self.get_array()
+    }
+
+    #[inline]
+    fn set_array(&mut self, array: bool) -> &mut dyn FieldTypeAccessor {
+        ColumnInfo::set_array(self, array);
         self as &mut dyn FieldTypeAccessor
     }
 }
