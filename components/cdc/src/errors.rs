@@ -35,6 +35,8 @@ pub enum Error {
     EngineTraits(#[from] EngineTraitsError),
     #[error("Sink send error {0:?}")]
     Sink(#[from] SendError),
+    #[error("Memory quota exceeded")]
+    MemoryQuotaExceeded,
 }
 
 macro_rules! impl_from {

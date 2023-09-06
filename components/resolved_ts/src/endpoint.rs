@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::min,
     collections::HashMap,
     fmt,
     marker::PhantomData,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
     time::Duration,
 };
@@ -14,7 +15,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use grpcio::Environment;
-use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
+use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
 use raftstore::{
@@ -22,13 +23,15 @@ use raftstore::{
     router::CdcHandle,
     store::{
         fsm::store::StoreRegionMeta,
-        util::{self, RegionReadProgress, RegionReadProgressRegistry},
+        util::{
+            self, ReadState, RegionReadProgress, RegionReadProgressCore, RegionReadProgressRegistry,
+        },
     },
 };
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
 use tikv_util::{
-    memory::MemoryQuota,
+    memory::{HeapSize, MemoryQuota},
     warn,
     worker::{Runnable, RunnableWithTimer, Scheduler},
 };
@@ -39,12 +42,12 @@ use crate::{
     advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
-    resolver::Resolver,
+    resolver::{LastAttempt, Resolver},
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
-    Error, Result,
+    Error, Result, TsSource, ON_DROP_WARN_HEAP_SIZE,
 };
 
-/// grace period for logging safe-ts and resolved-ts gap in slow log
+/// grace period for identifying identifying slow resolved-ts and safe-ts.
 const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
 const MEMORY_QUOTA_EXCEEDED_BACKOFF: Duration = Duration::from_secs(30);
 
@@ -53,8 +56,100 @@ enum ResolverStatus {
         tracked_index: u64,
         locks: Vec<PendingLock>,
         cancelled: Arc<AtomicBool>,
+        memory_quota: Arc<MemoryQuota>,
     },
     Ready,
+}
+
+impl Drop for ResolverStatus {
+    fn drop(&mut self) {
+        let ResolverStatus::Pending {
+            locks,
+            memory_quota,
+            ..
+        } = self else {
+            return;
+        };
+        if locks.is_empty() {
+            return;
+        }
+
+        // Free memory quota used by pending locks and unlocks.
+        let mut bytes = 0;
+        let num_locks = locks.len();
+        for lock in locks {
+            bytes += lock.heap_size();
+        }
+        if bytes > ON_DROP_WARN_HEAP_SIZE {
+            warn!("drop huge ResolverStatus";
+                "bytes" => bytes,
+                "num_locks" => num_locks,
+                "memory_quota_in_use" => memory_quota.in_use(),
+                "memory_quota_capacity" => memory_quota.capacity(),
+            );
+        }
+        memory_quota.free(bytes);
+    }
+}
+
+impl ResolverStatus {
+    fn push_pending_lock(&mut self, lock: PendingLock, region_id: u64) -> Result<()> {
+        let ResolverStatus::Pending {
+            locks,
+            memory_quota,
+            ..
+        } = self else {
+            panic!("region {:?} resolver has ready", region_id)
+        };
+        // Check if adding a new lock or unlock will exceed the memory
+        // quota.
+        if !memory_quota.alloc(lock.heap_size()) {
+            fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
+            return Err(Error::MemoryQuotaExceeded);
+        }
+        locks.push(lock);
+        Ok(())
+    }
+
+    fn update_tracked_index(&mut self, index: u64, region_id: u64) {
+        let ResolverStatus::Pending {
+            tracked_index,
+            ..
+        } = self else {
+            panic!("region {:?} resolver has ready", region_id)
+        };
+        assert!(
+            *tracked_index < index,
+            "region {}, tracked_index: {}, incoming index: {}",
+            region_id,
+            *tracked_index,
+            index
+        );
+        *tracked_index = index;
+    }
+
+    fn drain_pending_locks(
+        &mut self,
+        region_id: u64,
+    ) -> (u64, impl Iterator<Item = PendingLock> + '_) {
+        let ResolverStatus::Pending {
+            locks,
+            memory_quota,
+            tracked_index,
+            ..
+        } = self else {
+            panic!("region {:?} resolver has ready", region_id)
+        };
+        // Must take locks, otherwise it may double free memory quota on drop.
+        let locks = std::mem::take(locks);
+        (
+            *tracked_index,
+            locks.into_iter().map(|lock| {
+                memory_quota.free(lock.heap_size());
+                lock
+            }),
+        )
+    }
 }
 
 #[allow(dead_code)]
@@ -68,6 +163,16 @@ enum PendingLock {
         start_ts: Option<TimeStamp>,
         commit_ts: Option<TimeStamp>,
     },
+}
+
+impl HeapSize for PendingLock {
+    fn heap_size(&self) -> usize {
+        match self {
+            PendingLock::Track { key, .. } | PendingLock::Untrack { key, .. } => {
+                key.as_encoded().heap_size()
+            }
+        }
+    }
 }
 
 // Records information related to observed region.
@@ -85,13 +190,14 @@ struct ObserveRegion {
 impl ObserveRegion {
     fn new(meta: Region, rrp: Arc<RegionReadProgress>, memory_quota: Arc<MemoryQuota>) -> Self {
         ObserveRegion {
-            resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota),
+            resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota.clone()),
             meta,
             handle: ObserveHandle::new(),
             resolver_status: ResolverStatus::Pending {
                 tracked_index: 0,
                 locks: vec![],
                 cancelled: Arc::new(AtomicBool::new(false)),
+                memory_quota,
             },
         }
     }
@@ -101,121 +207,108 @@ impl ObserveRegion {
     }
 
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> Result<()> {
-        match &mut self.resolver_status {
-            ResolverStatus::Pending {
-                locks,
-                tracked_index,
-                ..
-            } => {
-                for log in change_logs {
-                    match log {
-                        ChangeLog::Error(e) => {
-                            debug!(
-                                "skip change log error";
-                                "region" => self.meta.id,
-                                "error" => ?e,
-                            );
-                            continue;
-                        }
-                        ChangeLog::Admin(req_type) => {
-                            // TODO: for admin cmd that won't change the region meta like peer list
-                            // and key range (i.e. `CompactLog`, `ComputeHash`) we may not need to
-                            // return error
-                            return Err(box_err!(
-                                "region met admin command {:?} while initializing resolver",
-                                req_type
-                            ));
-                        }
-                        ChangeLog::Rows { rows, index } => {
-                            rows.iter().for_each(|row| match row {
-                                ChangeRow::Prewrite { key, start_ts, .. } => {
-                                    locks.push(PendingLock::Track {
-                                        key: key.clone(),
-                                        start_ts: *start_ts,
-                                    })
-                                }
+        if matches!(self.resolver_status, ResolverStatus::Pending { .. }) {
+            for log in change_logs {
+                match log {
+                    ChangeLog::Error(e) => {
+                        debug!(
+                            "skip change log error";
+                            "region" => self.meta.id,
+                            "error" => ?e,
+                        );
+                        continue;
+                    }
+                    ChangeLog::Admin(req_type) => {
+                        // TODO: for admin cmd that won't change the region meta like peer list
+                        // and key range (i.e. `CompactLog`, `ComputeHash`) we may not need to
+                        // return error
+                        return Err(box_err!(
+                            "region met admin command {:?} while initializing resolver",
+                            req_type
+                        ));
+                    }
+                    ChangeLog::Rows { rows, index } => {
+                        for row in rows {
+                            let lock = match row {
+                                ChangeRow::Prewrite { key, start_ts, .. } => PendingLock::Track {
+                                    key: key.clone(),
+                                    start_ts: *start_ts,
+                                },
                                 ChangeRow::Commit {
                                     key,
                                     start_ts,
                                     commit_ts,
                                     ..
-                                } => locks.push(PendingLock::Untrack {
+                                } => PendingLock::Untrack {
                                     key: key.clone(),
                                     start_ts: *start_ts,
                                     commit_ts: *commit_ts,
-                                }),
+                                },
                                 // One pc command do not contains any lock, so just skip it
-                                ChangeRow::OnePc { .. } => {}
-                                ChangeRow::IngestSsT => {}
-                            });
-                            assert!(
-                                *tracked_index < *index,
-                                "region {}, tracked_index: {}, incoming index: {}",
-                                self.meta.id,
-                                *tracked_index,
-                                *index
-                            );
-                            *tracked_index = *index;
+                                ChangeRow::OnePc { .. } | ChangeRow::IngestSsT => continue,
+                            };
+                            self.resolver_status.push_pending_lock(lock, self.meta.id)?;
                         }
+                        self.resolver_status
+                            .update_tracked_index(*index, self.meta.id);
                     }
                 }
             }
-            ResolverStatus::Ready => {
-                for log in change_logs {
-                    match log {
-                        ChangeLog::Error(e) => {
-                            debug!(
-                                "skip change log error";
-                                "region" => self.meta.id,
-                                "error" => ?e,
+        } else {
+            for log in change_logs {
+                match log {
+                    ChangeLog::Error(e) => {
+                        debug!(
+                            "skip change log error";
+                            "region" => self.meta.id,
+                            "error" => ?e,
+                        );
+                        continue;
+                    }
+                    ChangeLog::Admin(req_type) => match req_type {
+                        AdminCmdType::Split
+                        | AdminCmdType::BatchSplit
+                        | AdminCmdType::PrepareMerge
+                        | AdminCmdType::RollbackMerge
+                        | AdminCmdType::CommitMerge => {
+                            info!(
+                                "region met split/merge command, stop tracking since key range changed, wait for re-register";
+                                "req_type" => ?req_type,
                             );
-                            continue;
+                            // Stop tracking so that `tracked_index` larger than the split/merge
+                            // command index won't be published until `RegionUpdate` event
+                            // trigger the region re-register and re-scan the new key range
+                            self.resolver.stop_tracking();
                         }
-                        ChangeLog::Admin(req_type) => match req_type {
-                            AdminCmdType::Split
-                            | AdminCmdType::BatchSplit
-                            | AdminCmdType::PrepareMerge
-                            | AdminCmdType::RollbackMerge
-                            | AdminCmdType::CommitMerge => {
-                                info!(
-                                    "region met split/merge command, stop tracking since key range changed, wait for re-register";
-                                    "req_type" => ?req_type,
-                                );
-                                // Stop tracking so that `tracked_index` larger than the split/merge
-                                // command index won't be published until `RegionUpdate` event
-                                // trigger the region re-register and re-scan the new key range
-                                self.resolver.stop_tracking();
-                            }
-                            _ => {
-                                debug!(
-                                    "skip change log admin";
-                                    "region" => self.meta.id,
-                                    "req_type" => ?req_type,
-                                );
-                            }
-                        },
-                        ChangeLog::Rows { rows, index } => {
-                            for row in rows {
-                                match row {
-                                    ChangeRow::Prewrite { key, start_ts, .. } => {
-                                        if !self.resolver.track_lock(
-                                            *start_ts,
-                                            key.to_raw().unwrap(),
-                                            Some(*index),
-                                        ) {
-                                            return Err(Error::MemoryQuotaExceeded);
-                                        }
+                        _ => {
+                            debug!(
+                                "skip change log admin";
+                                "region" => self.meta.id,
+                                "req_type" => ?req_type,
+                            );
+                        }
+                    },
+                    ChangeLog::Rows { rows, index } => {
+                        for row in rows {
+                            match row {
+                                ChangeRow::Prewrite { key, start_ts, .. } => {
+                                    if !self.resolver.track_lock(
+                                        *start_ts,
+                                        key.to_raw().unwrap(),
+                                        Some(*index),
+                                    ) {
+                                        return Err(Error::MemoryQuotaExceeded);
                                     }
-                                    ChangeRow::Commit { key, .. } => self
-                                        .resolver
-                                        .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
-                                    // One pc command do not contains any lock, so just skip it
-                                    ChangeRow::OnePc { .. } => {
-                                        self.resolver.update_tracked_index(*index);
-                                    }
-                                    ChangeRow::IngestSsT => {
-                                        self.resolver.update_tracked_index(*index);
-                                    }
+                                }
+                                ChangeRow::Commit { key, .. } => self
+                                    .resolver
+                                    .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
+                                // One pc command do not contains any lock, so just skip it
+                                ChangeRow::OnePc { .. } => {
+                                    self.resolver.update_tracked_index(*index);
+                                }
+                                ChangeRow::IngestSsT => {
+                                    self.resolver.update_tracked_index(*index);
                                 }
                             }
                         }
@@ -247,38 +340,26 @@ impl ObserveRegion {
                 ScanEntry::None => {
                     // Update the `tracked_index` to the snapshot's `apply_index`
                     self.resolver.update_tracked_index(apply_index);
-                    let pending_tracked_index =
-                        match std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready) {
-                            ResolverStatus::Pending {
-                                locks,
-                                tracked_index,
-                                ..
-                            } => {
-                                for lock in locks {
-                                    match lock {
-                                        PendingLock::Track { key, start_ts } => {
-                                            if !self.resolver.track_lock(
-                                                start_ts,
-                                                key.to_raw().unwrap(),
-                                                Some(tracked_index),
-                                            ) {
-                                                return Err(Error::MemoryQuotaExceeded);
-                                            }
-                                        }
-                                        PendingLock::Untrack { key, .. } => {
-                                            self.resolver.untrack_lock(
-                                                &key.to_raw().unwrap(),
-                                                Some(tracked_index),
-                                            )
-                                        }
-                                    }
+                    let mut resolver_status =
+                        std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
+                    let (pending_tracked_index, pending_locks) =
+                        resolver_status.drain_pending_locks(self.meta.id);
+                    for lock in pending_locks {
+                        match lock {
+                            PendingLock::Track { key, start_ts } => {
+                                if !self.resolver.track_lock(
+                                    start_ts,
+                                    key.to_raw().unwrap(),
+                                    Some(pending_tracked_index),
+                                ) {
+                                    return Err(Error::MemoryQuotaExceeded);
                                 }
-                                tracked_index
                             }
-                            ResolverStatus::Ready => {
-                                panic!("region {:?} resolver has ready", self.meta.id)
-                            }
-                        };
+                            PendingLock::Untrack { key, .. } => self
+                                .resolver
+                                .untrack_lock(&key.to_raw().unwrap(), Some(pending_tracked_index)),
+                        }
+                    }
                     info!(
                         "Resolver initialized";
                         "region" => self.meta.id,
@@ -306,6 +387,265 @@ pub struct Endpoint<T, E: KvEngine, S> {
     scheduler: Scheduler<Task>,
     advance_worker: AdvanceTsWorker,
     _phantom: PhantomData<(T, E)>,
+}
+
+// methods that are used for metrics and logging
+impl<T, E, S> Endpoint<T, E, S>
+where
+    T: 'static + CdcHandle<E>,
+    E: KvEngine,
+    S: StoreRegionMeta,
+{
+    fn is_leader(&self, store_id: Option<u64>, leader_store_id: Option<u64>) -> bool {
+        store_id.is_some() && store_id == leader_store_id
+    }
+
+    fn collect_stats(&mut self) -> Stats {
+        let store_id = self.get_or_init_store_id();
+        let mut stats = Stats::default();
+        self.region_read_progress.with(|registry| {
+            for (region_id, read_progress) in registry {
+                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
+                let core = read_progress.get_core();
+                let resolved_ts = leader_info.get_read_state().get_safe_ts();
+                let safe_ts = core.read_state().ts;
+
+                if resolved_ts == 0 {
+                    stats.zero_ts_count += 1;
+                    continue;
+                }
+
+                if self.is_leader(store_id, leader_store_id) {
+                    // leader resolved-ts
+                    if resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
+                        let resolver = self.regions.get(region_id).map(|x| &x.resolver);
+                        stats
+                            .min_leader_resolved_ts
+                            .set(*region_id, resolver, &core, &leader_info);
+                    }
+                } else {
+                    // follower safe-ts
+                    if safe_ts > 0 && safe_ts < stats.min_follower_safe_ts.safe_ts {
+                        stats.min_follower_safe_ts.set(*region_id, &core);
+                    }
+
+                    // follower resolved-ts
+                    if resolved_ts < stats.min_follower_resolved_ts.resolved_ts {
+                        stats.min_follower_resolved_ts.set(*region_id, &core);
+                    }
+                }
+            }
+        });
+
+        stats.resolver = self.collect_resolver_stats();
+        stats.cm_min_lock = self.advance_worker.concurrency_manager.global_min_lock();
+        stats
+    }
+
+    fn collect_resolver_stats(&mut self) -> ResolverStats {
+        let mut stats = ResolverStats::default();
+        for observed_region in self.regions.values() {
+            match &observed_region.resolver_status {
+                ResolverStatus::Pending { locks, .. } => {
+                    for l in locks {
+                        match l {
+                            PendingLock::Track { key, .. } => stats.heap_size += key.len() as i64,
+                            PendingLock::Untrack { key, .. } => stats.heap_size += key.len() as i64,
+                        }
+                    }
+                    stats.unresolved_count += 1;
+                }
+                ResolverStatus::Ready { .. } => {
+                    stats.heap_size += observed_region.resolver.approximate_heap_bytes() as i64;
+                    stats.resolved_count += 1;
+                }
+            }
+        }
+        stats
+    }
+
+    fn update_metrics(&self, stats: &Stats) {
+        let now = self.approximate_now_tso();
+        // general
+        if stats.min_follower_resolved_ts.resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
+            RTS_MIN_RESOLVED_TS.set(stats.min_follower_resolved_ts.resolved_ts as i64);
+            RTS_MIN_RESOLVED_TS_GAP.set(now.saturating_sub(
+                TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+            RTS_MIN_RESOLVED_TS_REGION.set(stats.min_follower_resolved_ts.region_id as i64);
+        } else {
+            RTS_MIN_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
+            RTS_MIN_RESOLVED_TS_GAP.set(now.saturating_sub(
+                TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+            RTS_MIN_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
+        }
+        RTS_ZERO_RESOLVED_TS.set(stats.zero_ts_count);
+
+        RTS_LOCK_HEAP_BYTES_GAUGE.set(stats.resolver.heap_size);
+        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["resolved"])
+            .set(stats.resolver.resolved_count);
+        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["unresolved"])
+            .set(stats.resolver.unresolved_count);
+
+        CONCURRENCY_MANAGER_MIN_LOCK_TS.set(
+            stats
+                .cm_min_lock
+                .clone()
+                .map(|(ts, _)| ts.into_inner())
+                .unwrap_or_default() as i64,
+        );
+
+        // min follower safe ts
+        RTS_MIN_FOLLOWER_SAFE_TS_REGION.set(stats.min_follower_safe_ts.region_id as i64);
+        RTS_MIN_FOLLOWER_SAFE_TS.set(stats.min_follower_safe_ts.safe_ts as i64);
+        RTS_MIN_FOLLOWER_SAFE_TS_GAP.set(
+            now.saturating_sub(TimeStamp::from(stats.min_follower_safe_ts.safe_ts).physical())
+                as i64,
+        );
+        RTS_MIN_FOLLOWER_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER.set(
+            stats
+                .min_follower_safe_ts
+                .duration_to_last_consume_leader
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+
+        // min leader resolved ts
+        RTS_MIN_LEADER_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
+        RTS_MIN_LEADER_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
+        RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS.set(
+            stats
+                .min_leader_resolved_ts
+                .min_lock
+                .as_ref()
+                .map(|(ts, _)| (*ts).into_inner() as i64)
+                .unwrap_or(-1),
+        );
+        RTS_MIN_LEADER_RESOLVED_TS_GAP
+            .set(now.saturating_sub(
+                TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+        RTS_MIN_LEADER_DUATION_TO_LAST_UPDATE_SAFE_TS.set(
+            stats
+                .min_leader_resolved_ts
+                .duration_to_last_update_ms
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+
+        // min follower resolved ts
+        RTS_MIN_FOLLOWER_RESOLVED_TS.set(stats.min_follower_resolved_ts.resolved_ts as i64);
+        RTS_MIN_FOLLOWER_RESOLVED_TS_REGION.set(stats.min_follower_resolved_ts.region_id as i64);
+        RTS_MIN_FOLLOWER_RESOLVED_TS_GAP.set(
+            now.saturating_sub(
+                TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
+            ) as i64,
+        );
+        RTS_MIN_FOLLOWER_RESOLVED_TS_DURATION_TO_LAST_CONSUME_LEADER.set(
+            stats
+                .min_follower_resolved_ts
+                .duration_to_last_consume_leader
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+    }
+
+    // Approximate a TSO from PD. It is better than local timestamp when clock skew
+    // exists.
+    // Returns the physical part.
+    fn approximate_now_tso(&self) -> u64 {
+        self.advance_worker
+            .last_pd_tso
+            .try_lock()
+            .map(|opt| {
+                opt.map(|(pd_ts, instant)| {
+                    pd_ts.physical() + instant.saturating_elapsed().as_millis() as u64
+                })
+                .unwrap_or_else(|| TimeStamp::physical_now())
+            })
+            .unwrap_or_else(|_| TimeStamp::physical_now())
+    }
+
+    fn log_slow_regions(&self, stats: &Stats) {
+        let expected_interval = min(
+            self.cfg.advance_ts_interval.as_millis(),
+            DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64,
+        ) + self.cfg.advance_ts_interval.as_millis();
+        let leader_threshold = expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
+        let follower_threshold = 2 * expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
+        let now = self.approximate_now_tso();
+
+        // min leader resolved ts
+        let min_leader_resolved_ts_gap = now
+            .saturating_sub(TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical());
+        if min_leader_resolved_ts_gap > leader_threshold {
+            info!(
+                "the max gap of leader resolved-ts is large";
+                "region_id" => stats.min_leader_resolved_ts.region_id,
+                "gap" => format!("{}ms", min_leader_resolved_ts_gap),
+                "read_state" => ?stats.min_leader_resolved_ts.read_state,
+                "applied_index" => stats.min_leader_resolved_ts.applied_index,
+                "min_lock" => ?stats.min_leader_resolved_ts.min_lock,
+                "lock_num" => stats.min_leader_resolved_ts.lock_num,
+                "txn_num" => stats.min_leader_resolved_ts.txn_num,
+                "min_memory_lock" => ?stats.cm_min_lock,
+                "duration_to_last_update_safe_ts" => match stats.min_leader_resolved_ts.duration_to_last_update_ms {
+                    Some(d) => format!("{}ms", d),
+                    None => "none".to_owned(),
+                },
+                "last_resolve_attempt" => &stats.min_leader_resolved_ts.last_resolve_attempt,
+            );
+        }
+
+        // min follower safe ts
+        let min_follower_safe_ts_gap =
+            now.saturating_sub(TimeStamp::from(stats.min_follower_safe_ts.safe_ts).physical());
+        if min_follower_safe_ts_gap > follower_threshold {
+            info!(
+                "the max gap of follower safe-ts is large";
+                "region_id" => stats.min_follower_safe_ts.region_id,
+                "gap" => format!("{}ms", min_follower_safe_ts_gap),
+                "safe_ts" => stats.min_follower_safe_ts.safe_ts,
+                "resolved_ts" => stats.min_follower_safe_ts.resolved_ts,
+                "duration_to_last_consume_leader" => match stats.min_follower_safe_ts.duration_to_last_consume_leader {
+                    Some(d) => format!("{}ms", d),
+                    None => "none".to_owned(),
+                },
+                "applied_index" => stats.min_follower_safe_ts.applied_index,
+                "latest_candidate" => ?stats.min_follower_safe_ts.latest_candidate,
+                "oldest_candidate" => ?stats.min_follower_safe_ts.oldest_candidate,
+            );
+        }
+
+        // min follower resolved ts
+        let min_follower_resolved_ts_gap = now
+            .saturating_sub(TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical());
+        if min_follower_resolved_ts_gap > follower_threshold {
+            if stats.min_follower_resolved_ts.region_id == stats.min_follower_safe_ts.region_id {
+                info!(
+                    "the max gap of follower resolved-ts is large; it's the same region that has the min safe-ts"
+                );
+            } else {
+                info!(
+                    "the max gap of follower resolved-ts is large";
+                    "region_id" => stats.min_follower_resolved_ts.region_id,
+                    "gap" => format!("{}ms", min_follower_resolved_ts_gap),
+                    "safe_ts" => stats.min_follower_resolved_ts.safe_ts,
+                    "resolved_ts" => stats.min_follower_resolved_ts.resolved_ts,
+                    "duration_to_last_consume_leader" => match stats.min_follower_resolved_ts.duration_to_last_consume_leader {
+                        Some(d) => format!("{}ms", d),
+                        None => "none".to_owned(),
+                    },
+                    "applied_index" => stats.min_follower_resolved_ts.applied_index,
+                    "latest_candidate" => ?stats.min_follower_resolved_ts.latest_candidate,
+                    "oldest_candidate" => ?stats.min_follower_resolved_ts.oldest_candidate,
+                );
+            }
+        }
+    }
 }
 
 impl<T, E, S> Endpoint<T, E, S>
@@ -457,7 +797,7 @@ where
             // Stop observing data
             handle.stop_observing();
             // Stop scanning data
-            if let ResolverStatus::Pending { cancelled, .. } = resolver_status {
+            if let ResolverStatus::Pending { ref cancelled, .. } = resolver_status {
                 cancelled.store(true, Ordering::Release);
             }
         } else {
@@ -545,7 +885,12 @@ where
 
     // Update advanced resolved ts.
     // Must ensure all regions are leaders at the point of ts.
-    fn handle_resolved_ts_advanced(&mut self, regions: Vec<u64>, ts: TimeStamp) {
+    fn handle_resolved_ts_advanced(
+        &mut self,
+        regions: Vec<u64>,
+        ts: TimeStamp,
+        ts_source: TsSource,
+    ) {
         if regions.is_empty() {
             return;
         }
@@ -553,7 +898,9 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region.resolver.resolve(ts, Some(now));
+                    let _ = observe_region
+                        .resolver
+                        .resolve(ts, Some(now), ts_source.clone());
                 }
             }
         }
@@ -698,6 +1045,7 @@ pub enum Task {
     ResolvedTsAdvanced {
         regions: Vec<u64>,
         ts: TimeStamp,
+        ts_source: TsSource,
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
@@ -752,10 +1100,12 @@ impl fmt::Debug for Task {
             Task::ResolvedTsAdvanced {
                 ref regions,
                 ref ts,
+                ref ts_source,
             } => de
                 .field("name", &"advance_resolved_ts")
                 .field("regions", &regions)
                 .field("ts", &ts)
+                .field("ts_source", &ts_source.label())
                 .finish(),
             Task::ChangeLog { .. } => de.field("name", &"change_log").finish(),
             Task::ScanLocks {
@@ -812,9 +1162,11 @@ where
             Task::AdvanceResolvedTs { leader_resolver } => {
                 self.handle_advance_resolved_ts(leader_resolver)
             }
-            Task::ResolvedTsAdvanced { regions, ts } => {
-                self.handle_resolved_ts_advanced(regions, ts)
-            }
+            Task::ResolvedTsAdvanced {
+                regions,
+                ts,
+                ts_source,
+            } => self.handle_resolved_ts_advanced(regions, ts, ts_source),
             Task::ChangeLog { cmd_batch } => self.handle_change_log(cmd_batch),
             Task::ScanLocks {
                 region_id,
@@ -850,6 +1202,138 @@ impl ConfigManager for ResolvedTsConfigManager {
     }
 }
 
+#[derive(Default)]
+struct Stats {
+    // stats for metrics
+    zero_ts_count: i64,
+    min_leader_resolved_ts: LeaderStats,
+    min_follower_safe_ts: FollowerStats,
+    min_follower_resolved_ts: FollowerStats,
+    resolver: ResolverStats,
+    // we don't care about min_safe_ts_leader, because safe_ts should be equal to resolved_ts in
+    // leaders
+    // The min memory lock in concurrency manager.
+    cm_min_lock: Option<(TimeStamp, Key)>,
+}
+
+struct LeaderStats {
+    region_id: u64,
+    resolved_ts: u64,
+    read_state: ReadState,
+    duration_to_last_update_ms: Option<u64>,
+    last_resolve_attempt: Option<LastAttempt>,
+    applied_index: u64,
+    // min lock in LOCK CF
+    min_lock: Option<(TimeStamp, Key)>,
+    lock_num: Option<u64>,
+    txn_num: Option<u64>,
+}
+
+impl Default for LeaderStats {
+    fn default() -> Self {
+        Self {
+            region_id: 0,
+            resolved_ts: u64::MAX,
+            read_state: ReadState::default(),
+            duration_to_last_update_ms: None,
+            applied_index: 0,
+            last_resolve_attempt: None,
+            min_lock: None,
+            lock_num: None,
+            txn_num: None,
+        }
+    }
+}
+
+impl LeaderStats {
+    fn set(
+        &mut self,
+        region_id: u64,
+        resolver: Option<&Resolver>,
+        region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
+        leader_info: &LeaderInfo,
+    ) {
+        *self = LeaderStats {
+            region_id,
+            resolved_ts: leader_info.get_read_state().get_safe_ts(),
+            read_state: region_read_progress.read_state().clone(),
+            duration_to_last_update_ms: region_read_progress
+                .last_instant_of_update_ts()
+                .map(|i| i.saturating_elapsed().as_millis() as u64),
+            last_resolve_attempt: resolver.and_then(|r| r.last_attempt.clone()),
+            min_lock: resolver.and_then(|r| {
+                r.oldest_transaction().map(|(ts, keys)| {
+                    (
+                        *ts,
+                        keys.iter()
+                            .next()
+                            .map(|k| Key::from_encoded_slice(k.as_ref()))
+                            .unwrap_or_else(|| Key::from_encoded_slice("no_keys_found".as_ref())),
+                    )
+                })
+            }),
+            applied_index: region_read_progress.applied_index(),
+            lock_num: resolver.map(|r| r.num_locks()),
+            txn_num: resolver.map(|r| r.num_transactions()),
+        };
+    }
+}
+
+struct FollowerStats {
+    region_id: u64,
+    resolved_ts: u64,
+    safe_ts: u64,
+    latest_candidate: Option<ReadState>,
+    oldest_candidate: Option<ReadState>,
+    applied_index: u64,
+    duration_to_last_consume_leader: Option<u64>,
+}
+
+impl Default for FollowerStats {
+    fn default() -> Self {
+        Self {
+            region_id: 0,
+            safe_ts: u64::MAX,
+            resolved_ts: u64::MAX,
+            latest_candidate: None,
+            oldest_candidate: None,
+            applied_index: 0,
+            duration_to_last_consume_leader: None,
+        }
+    }
+}
+
+impl FollowerStats {
+    fn set(
+        &mut self,
+        region_id: u64,
+        region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
+    ) {
+        let read_state = region_read_progress.read_state();
+        *self = FollowerStats {
+            region_id,
+            resolved_ts: region_read_progress
+                .get_leader_info()
+                .get_read_state()
+                .get_safe_ts(),
+            safe_ts: read_state.ts,
+            applied_index: region_read_progress.applied_index(),
+            latest_candidate: region_read_progress.pending_items().back().cloned(),
+            oldest_candidate: region_read_progress.pending_items().front().cloned(),
+            duration_to_last_consume_leader: region_read_progress
+                .last_instant_of_consume_leader()
+                .map(|i| i.saturating_elapsed().as_millis() as u64),
+        };
+    }
+}
+
+#[derive(Default)]
+struct ResolverStats {
+    resolved_count: i64,
+    unresolved_count: i64,
+    heap_size: i64,
+}
+
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 impl<T, E, S> RunnableWithTimer for Endpoint<T, E, S>
@@ -859,138 +1343,9 @@ where
     S: StoreRegionMeta,
 {
     fn on_timeout(&mut self) {
-        let store_id = self.get_or_init_store_id();
-        let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
-        let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
-        let (mut oldest_safe_ts, mut oldest_safe_ts_region) = (u64::MAX, 0);
-        let mut oldest_duration_to_last_update_ms = 0;
-        let mut oldest_duration_to_last_consume_leader_ms = 0;
-        self.region_read_progress.with(|registry| {
-            for (region_id, read_progress) in registry {
-                let safe_ts = read_progress.safe_ts();
-                if safe_ts > 0 && safe_ts < oldest_safe_ts {
-                    oldest_safe_ts = safe_ts;
-                    oldest_safe_ts_region = *region_id;
-                }
-
-                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
-                // this is maximum resolved-ts pushed to region_read_progress, namely candidates
-                // of safe_ts. It may not be the safe_ts yet
-                let ts = leader_info.get_read_state().get_safe_ts();
-                if ts == 0 {
-                    zero_ts_count += 1;
-                    continue;
-                }
-                if ts < oldest_ts {
-                    oldest_ts = ts;
-                    oldest_region = *region_id;
-                    // use -1 to denote none.
-                    oldest_duration_to_last_update_ms = read_progress
-                        .get_core()
-                        .last_instant_of_consume_leader()
-                        .map(|t| t.saturating_elapsed().as_millis() as i64)
-                        .unwrap_or(-1);
-                    oldest_duration_to_last_consume_leader_ms = read_progress
-                        .get_core()
-                        .last_instant_of_consume_leader()
-                        .map(|t| t.saturating_elapsed().as_millis() as i64)
-                        .unwrap_or(-1);
-                }
-
-                if let (Some(store_id), Some(leader_store_id)) = (store_id, leader_store_id) {
-                    if leader_store_id == store_id && ts < oldest_leader_ts {
-                        oldest_leader_ts = ts;
-                        oldest_leader_region = *region_id;
-                    }
-                }
-            }
-        });
-        let mut lock_heap_size = 0;
-        let (mut resolved_count, mut unresolved_count) = (0, 0);
-        for observe_region in self.regions.values() {
-            match &observe_region.resolver_status {
-                ResolverStatus::Pending { locks, .. } => {
-                    for l in locks {
-                        match l {
-                            PendingLock::Track { key, .. } => lock_heap_size += key.len(),
-                            PendingLock::Untrack { key, .. } => lock_heap_size += key.len(),
-                        }
-                    }
-                    unresolved_count += 1;
-                }
-                ResolverStatus::Ready { .. } => {
-                    lock_heap_size += observe_region.resolver.approximate_heap_bytes();
-                    resolved_count += 1;
-                }
-            }
-        }
-        // approximate a TSO from PD. It is better than local timestamp when clock skew
-        // exists.
-        let now: u64 = self
-            .advance_worker
-            .last_pd_tso
-            .try_lock()
-            .map(|opt| {
-                opt.map(|(pd_ts, instant)| {
-                    pd_ts.physical() + instant.saturating_elapsed().as_millis() as u64
-                })
-                .unwrap_or_else(|| TimeStamp::physical_now())
-            })
-            .unwrap_or_else(|_| TimeStamp::physical_now());
-
-        RTS_MIN_SAFE_TS.set(oldest_safe_ts as i64);
-        RTS_MIN_SAFE_TS_REGION.set(oldest_safe_ts_region as i64);
-        let safe_ts_gap = now.saturating_sub(TimeStamp::from(oldest_safe_ts).physical());
-        if safe_ts_gap
-            > self.cfg.advance_ts_interval.as_millis()
-                + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64
-                + SLOW_LOG_GRACE_PERIOD_MS
-        {
-            let mut lock_num = None;
-            let mut min_start_ts = None;
-            if let Some(ob) = self.regions.get(&oldest_safe_ts_region) {
-                min_start_ts = ob
-                    .resolver
-                    .locks()
-                    .keys()
-                    .next()
-                    .cloned()
-                    .map(TimeStamp::into_inner);
-                lock_num = Some(ob.resolver.num_locks());
-            }
-            info!(
-                "the max gap of safe-ts is large";
-                "gap" => safe_ts_gap,
-                "oldest_safe_ts" => ?oldest_safe_ts,
-                "region_id" => oldest_safe_ts_region,
-                "advance_ts_interval" => ?self.cfg.advance_ts_interval,
-                "lock_num" => lock_num,
-                "min_start_ts" => min_start_ts,
-            );
-        }
-        RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);
-        RTS_MIN_SAFE_TS_DUATION_TO_UPDATE_SAFE_TS.set(oldest_duration_to_last_update_ms);
-        RTS_MIN_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER
-            .set(oldest_duration_to_last_consume_leader_ms);
-
-        RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
-        RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
-        RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
-        RTS_MIN_RESOLVED_TS_GAP
-            .set(now.saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64);
-
-        RTS_MIN_LEADER_RESOLVED_TS_REGION.set(oldest_leader_region as i64);
-        RTS_MIN_LEADER_RESOLVED_TS.set(oldest_leader_ts as i64);
-        RTS_MIN_LEADER_RESOLVED_TS_GAP
-            .set(now.saturating_sub(TimeStamp::from(oldest_leader_ts).physical()) as i64);
-
-        RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
-        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
-            .with_label_values(&["resolved"])
-            .set(resolved_count as _);
-        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
-            .with_label_values(&["unresolved"])
-            .set(unresolved_count as _);
+        let stats = self.collect_stats();
+        self.update_metrics(&stats);
+        self.log_slow_regions(&stats);
     }
 
     fn get_interval(&self) -> Duration {
