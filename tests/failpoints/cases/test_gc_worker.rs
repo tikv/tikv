@@ -67,7 +67,7 @@ fn test_error_in_compaction_filter() {
 #[test_case(test_raftstore::must_new_and_configure_cluster)]
 #[test_case(test_raftstore_v2::must_new_and_configure_cluster)]
 fn test_orphan_versions_from_compaction_filter() {
-    let (cluster, leader, ctx) = test_raftstore::must_new_and_configure_cluster(|cluster| {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
         cluster.cfg.gc.enable_compaction_filter = true;
         cluster.cfg.gc.compaction_filter_skip_version_check = true;
         cluster.pd_client.disable_default_operator();
