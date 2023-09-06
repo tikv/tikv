@@ -961,10 +961,7 @@ where
             match &observe_region.resolver_status {
                 ResolverStatus::Pending { locks, .. } => {
                     for l in locks {
-                        match l {
-                            PendingLock::Track { key, .. } => lock_heap_size += key.len(),
-                            PendingLock::Untrack { key, .. } => lock_heap_size += key.len(),
-                        }
+                        lock_heap_size += l.heap_size();
                     }
                     unresolved_count += 1;
                 }
@@ -1034,6 +1031,7 @@ where
         RTS_MIN_LEADER_RESOLVED_TS_GAP
             .set(now.saturating_sub(TimeStamp::from(oldest_leader_ts).physical()) as i64);
 
+        RTS_LOCK_QUOTA_IN_USE_BYTES_GAUGE.set(self.memory_quota.in_use() as i64);
         RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
             .with_label_values(&["resolved"])
