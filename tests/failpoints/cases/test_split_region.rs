@@ -18,6 +18,7 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
+    pdpb::CheckPolicy,
     raft_serverpb::RaftMessage,
     tikvpb::TikvClient,
 };
@@ -260,6 +261,67 @@ impl Filter for PrevoteRangeFilter {
         }
         Ok(())
     }
+}
+
+#[test]
+fn test_region_size_after_split() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_size = 1440;
+    let region_split_size = 960;
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // insert 20 key value pairs into the cluster.
+    // from 000000001 to 000000020
+    let mut range = 1..;
+    put_till_size(&mut cluster, region_max_size - 100, &mut range);
+    sleep_ms(100);
+    // disable check split.
+    fail::cfg("on_split_region_check_tick", "return").unwrap();
+    let max_key = put_till_size(&mut cluster, region_max_size, &mut range);
+    // split by use key, split region 1 to region 1 and region 2.
+    // region 1: ["000000010",""]
+    // region 2: ["","000000010")
+    let region = pd_client.get_region(&max_key).unwrap();
+    cluster.must_split(&region, b"000000010");
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size >= region_max_size - 100, "{}", size);
+
+    let region = pd_client.get_region(b"000000009").unwrap();
+    let size1 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert_eq!(0, size1, "{}", size1);
+
+    // split region by size check, the region 1 will be split to region 1 and region
+    // 3. and the region3 will contains one half region size data.
+    let region = pd_client.get_region(&max_key).unwrap();
+    pd_client.split_region(region.clone(), CheckPolicy::Scan, vec![]);
+    sleep_ms(200);
+    let size2 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size > size2, "{}:{}", size, size2);
+    fail::remove("on_split_region_check_tick");
+
+    let region = pd_client.get_region(b"000000010").unwrap();
+    let size3 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size3 > 0, "{}", size3);
 }
 
 // Test if a peer is created from splitting when another initialized peer with
