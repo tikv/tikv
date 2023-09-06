@@ -43,16 +43,16 @@ use crate::{
         GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
     errors::{Error, Result},
-    event_loader::{InitialDataLoader, PendingMemoryQuota, SubscribeByTlsHandle},
+    event_loader::{InitialDataLoader, PendingMemoryQuota},
     future,
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{self, ApplyEvents, Router, TaskSelector},
-    subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
+    subscription_manager::{RegionSubscriptionManager, ResolvedRegions, TlsCdcHandle},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
-    utils::{self, CallbackWaitGroup, StopWatch, Work},
+    utils::{self, CallbackWaitGroup, RegionPager, StopWatch, Work},
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
@@ -60,7 +60,7 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
-pub struct Endpoint<S, R, E: KvEngine, RT, PDC> {
+pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
     // context type.
@@ -69,7 +69,6 @@ pub struct Endpoint<S, R, E: KvEngine, RT, PDC> {
     pub(crate) store_id: u64,
     pub(crate) regions: R,
     pub(crate) engine: PhantomData<E>,
-    pub(crate) router: RT,
     pub(crate) pd_client: Arc<PDC>,
     pub(crate) subs: SubscriptionTracer,
     pub(crate) concurrency_manager: ConcurrencyManager,
@@ -78,8 +77,6 @@ pub struct Endpoint<S, R, E: KvEngine, RT, PDC> {
     pub range_router: Router,
     observer: BackupStreamObserver,
     pool: Runtime,
-    initial_scan_memory_quota: PendingMemoryQuota,
-    initial_scan_throughput_quota: Limiter,
     region_operator: RegionSubscriptionManager<S, R, PDC>,
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
@@ -94,15 +91,14 @@ pub struct Endpoint<S, R, E: KvEngine, RT, PDC> {
     pub abort_last_storage_save: Option<AbortHandle>,
 }
 
-impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
+impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
 where
     R: RegionInfoProvider + 'static + Clone,
     E: KvEngine,
-    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
     S: MetaStore + 'static,
 {
-    pub fn new(
+    pub fn new<RT: CdcHandle<E> + 'static>(
         store_id: u64,
         store: S,
         config: BackupStreamConfig,
@@ -151,9 +147,9 @@ where
                 range_router.clone(),
                 subs.clone(),
                 scheduler.clone(),
-                initial_scan_memory_quota.clone(),
-                initial_scan_throughput_quota.clone(),
-                SubscribeByTlsHandle::<E, RT>::default(),
+                initial_scan_memory_quota,
+                initial_scan_throughput_quota,
+                TlsCdcHandle::<E, RT>::default(),
             ),
             &router,
             observer.clone(),
@@ -174,12 +170,9 @@ where
             store_id,
             regions: accessor,
             engine: PhantomData,
-            router,
             pd_client,
             subs,
             concurrency_manager,
-            initial_scan_memory_quota,
-            initial_scan_throughput_quota,
             region_operator,
             failover_time: None,
             config,
@@ -191,12 +184,11 @@ where
     }
 }
 
-impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
+impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
-    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
 {
     fn get_meta_client(&self) -> MetadataClient<S> {
@@ -494,19 +486,6 @@ where
         });
     }
 
-    /// Make an initial data loader using the resource of the endpoint.
-    pub fn make_initial_loader(&self) -> InitialDataLoader<E, R, SubscribeByTlsHandle<E, RT>> {
-        InitialDataLoader::new(
-            self.regions.clone(),
-            self.range_router.clone(),
-            self.subs.clone(),
-            self.scheduler.clone(),
-            self.initial_scan_memory_quota.clone(),
-            self.initial_scan_throughput_quota.clone(),
-            SubscribeByTlsHandle::<E, RT>::default(),
-        )
-    }
-
     pub fn handle_watch_task(&self, op: TaskOp) {
         match op {
             TaskOp::AddTask(task) => {
@@ -526,7 +505,6 @@ where
 
     async fn observe_regions_in_range(
         &self,
-        init: InitialDataLoader<E, R, SubscribeByTlsHandle<E, RT>>,
         task: &StreamTask,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
@@ -548,7 +526,7 @@ where
         // directly and this would be fast. If this gets slow, maybe make it async
         // again. (Will that bring race conditions? say `Start` handled after
         // `ResfreshResolver` of some region.)
-        let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
+        let range_init_result = self.initialize_range(start_key.clone(), end_key.clone());
         match range_init_result {
             Ok(()) => {
                 info!("backup stream success to initialize";
@@ -558,6 +536,26 @@ where
             }
             Err(e) => {
                 e.report("backup stream initialize failed");
+            }
+        }
+        Ok(())
+    }
+
+    /// initialize a range: it simply scan the regions with leader role and send
+    /// them to [`initialize_region`].
+    pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
+        loop {
+            let regions = pager.next_page(8)?;
+            debug!("scanning for entries in region."; "regions" => ?regions);
+            if regions.is_empty() {
+                break;
+            }
+            for r in regions {
+                try_send!(
+                    self.scheduler,
+                    Task::ModifyObserve(ObserveOp::Start { region: r.region })
+                );
             }
         }
         Ok(())
@@ -577,7 +575,6 @@ where
     /// Load the task into memory: this would make the endpint start to observe.
     fn load_task(&self, task: StreamTask) {
         let cli = self.meta_client.clone();
-        let init = self.make_initial_loader();
         let range_router = self.range_router.clone();
 
         info!(
@@ -620,9 +617,7 @@ where
                     .await?;
 
                 for (start_key, end_key) in ranges {
-                    let init = init.clone();
-
-                    self.observe_regions_in_range(init, &task, start_key, end_key)
+                    self.observe_regions_in_range(&task, start_key, end_key)
                         .await?
                 }
                 info!(
@@ -1278,12 +1273,11 @@ impl Task {
     }
 }
 
-impl<S, R, E, RT, PDC> Runnable for Endpoint<S, R, E, RT, PDC>
+impl<S, R, E, PDC> Runnable for Endpoint<S, R, E, PDC>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
-    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
 {
     type Task = Task;
@@ -1296,10 +1290,7 @@ where
 #[cfg(test)]
 mod test {
     use engine_rocks::RocksEngine;
-    use raftstore::{
-        coprocessor::region_info_accessor::MockRegionInfoProvider, router::CdcRaftRouter,
-    };
-    use test_raftstore::MockRaftStoreRouter;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::worker::dummy_scheduler;
 
     use crate::{
@@ -1314,13 +1305,9 @@ mod test {
         cli.insert_task_with_range(&task, &[]).await.unwrap();
 
         fail::cfg("failed_to_get_tasks", "1*return").unwrap();
-        Endpoint::<
-            _,
-            MockRegionInfoProvider,
-            RocksEngine,
-            CdcRaftRouter<MockRaftStoreRouter>,
-            MockPdClient,
-        >::start_and_watch_tasks(cli, sched)
+        Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockPdClient>::start_and_watch_tasks(
+            cli, sched,
+        )
         .await
         .unwrap();
         fail::remove("failed_to_get_tasks");

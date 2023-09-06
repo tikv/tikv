@@ -32,13 +32,13 @@ use kvproto::{
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
 use raftstore::{
-    router::{CdcRaftRouter, ServerRaftStoreRouter},
+    router::{CdcRaftRouter},
     RegionInfoAccessor,
 };
 use resolved_ts::LeadershipResolver;
 use tempdir::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateTransport};
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
@@ -57,11 +57,6 @@ pub type TestEndpoint = Endpoint<
     ErrorStore<SlashEtcStore>,
     RegionInfoAccessor,
     engine_test::kv::KvTestEngine,
-    CdcRaftRouter<
-        SimulateTransport<
-            ServerRaftStoreRouter<engine_test::kv::KvTestEngine, engine_test::raft::RaftTestEngine>,
-        >,
-    >,
     TestPdClient,
 >;
 

@@ -2,14 +2,11 @@
 
 use std::{
     cell::RefCell,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    marker::PhantomData,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
-use crossbeam::channel::{Receiver as SyncReceiver, Sender as SyncSender};
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
@@ -19,7 +16,7 @@ use raft::StateRole;
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
-    store::{fsm::ChangeObserver, RegionSnapshot},
+    store::fsm::ChangeObserver,
 };
 use tikv::storage::Statistics;
 use tikv_util::{
@@ -32,7 +29,7 @@ use crate::{
     annotate,
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, Result},
-    event_loader::{CaptureChange, InitialDataLoader, SubscribeByTlsHandle},
+    event_loader::InitialDataLoader,
     future,
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
     metrics,
@@ -75,6 +72,40 @@ pub fn set_tls_cdc_handle<EK: KvEngine>(item: impl CdcHandle<EK> + 'static) {
 }
 
 const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
+
+#[derive(Clone)]
+pub struct TlsCdcHandle<E, H>(PhantomData<E>, PhantomData<H>);
+
+impl<E, H> Default for TlsCdcHandle<E, H> {
+    fn default() -> Self {
+        Self(Default::default(), Default::default())
+    }
+}
+
+// SAFETY: they are phantom types.
+unsafe impl<E, H> Sync for TlsCdcHandle<E, H> {}
+
+impl<E: KvEngine, H: CdcHandle<E> + 'static> CdcHandle<E> for TlsCdcHandle<E, H> {
+    fn capture_change(
+        &self,
+        region_id: u64,
+        region_epoch: kvproto::metapb::RegionEpoch,
+        change_observer: ChangeObserver,
+        callback: raftstore::store::Callback<E::Snapshot>,
+    ) -> raftstore::Result<()> {
+        with_tls_cdc_handle::<H, _, _>(move |h| {
+            h.capture_change(region_id, region_epoch, change_observer, callback)
+        })
+    }
+
+    fn check_leadership(
+        &self,
+        region_id: u64,
+        callback: raftstore::store::Callback<E::Snapshot>,
+    ) -> raftstore::Result<()> {
+        with_tls_cdc_handle::<H, _, _>(move |h| h.check_leadership(region_id, callback))
+    }
+}
 
 // The retry parameters for failed to get last checkpoint ts.
 // When PD is temporarily disconnected, we may need this retry.
@@ -174,7 +205,7 @@ impl<E, R, RT> InitialScan for InitialDataLoader<E, R, RT>
 where
     E: KvEngine,
     R: RegionInfoProvider + Clone + 'static,
-    RT: CaptureChange<RegionSnapshot<<E as KvEngine>::Snapshot>> + 'static,
+    RT: CdcHandle<E> + Sync + 'static,
 {
     async fn do_initial_scan(
         &self,
@@ -255,11 +286,15 @@ impl ScanCmd {
 
 async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>) {
     while let Some(cmd) = cmds.recv().await {
-        fail::fail_point!("execute_scan_command");
         debug!("handling initial scan request"; "region_id" => %cmd.region.get_id());
         metrics::PENDING_INITIAL_SCAN_LEN
             .with_label_values(&["queuing"])
             .dec();
+        #[cfg(features = "failpoints")]
+        {
+            let sleep = || { fail::fail_point!("execute_scan_command_sleep_100", |_| { 100 }); 0  }();
+            tokio::time::sleep(std::time::Duration::from_secs).await;
+        }
 
         let init = init.clone();
         tokio::task::spawn(async move {
@@ -287,7 +322,6 @@ fn spawn_executors<E: KvEngine>(
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(router, number);
-    let init = init.clone();
     pool.spawn(async move {
         scan_executor_loop(init, rx).await;
     });
@@ -391,7 +425,7 @@ where
     /// a two-tuple, the first is the handle to the manager, the second is the
     /// operator loop future.
     pub fn start<E, RT>(
-        initial_loader: InitialDataLoader<E, R, SubscribeByTlsHandle<E, RT>>,
+        initial_loader: InitialDataLoader<E, R, TlsCdcHandle<E, RT>>,
         router: &RT,
         observer: BackupStreamObserver,
         meta_cli: MetadataClient<S>,
@@ -797,7 +831,11 @@ mod test {
     fn test_message_delay_and_exit() {
         use std::time::Duration;
 
-        use super::ScanCmd;
+        use engine_test::kv::KvTestEngine as EK;
+        use raftstore::router::CdcRaftRouter;
+        use test_raftstore::MockRaftStoreRouter;
+
+        use super::{ScanCmd, TlsCdcHandle};
         use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
 
         fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
@@ -814,19 +852,26 @@ mod test {
             pool.block_on(tokio::time::timeout(d, rx)).unwrap().unwrap();
         }
 
-        let pool = spawn_executors(NoopInitialScan, 1);
+        let pool = spawn_executors(
+            NoopInitialScan,
+            1,
+            TlsCdcHandle::<EK, CdcRaftRouter<MockRaftStoreRouter>>::default(),
+        );
         let wg = CallbackWaitGroup::new();
-        fail::cfg("execute_scan_command", "sleep(100)").unwrap();
+        fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {
             let wg = wg.clone();
-            pool.request(ScanCmd {
-                region: Default::default(),
-                handle: Default::default(),
-                last_checkpoint: Default::default(),
-                // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
-                _work: wg.work(),
-            })
-            .unwrap()
+            assert!(
+                pool._pool
+                    .block_on(pool.request(ScanCmd {
+                        region: Default::default(),
+                        handle: Default::default(),
+                        last_checkpoint: Default::default(),
+                        // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
+                        _work: wg.work(),
+                    }))
+                    .is_ok()
+            )
         }
 
         should_finish_in(move || drop(pool), Duration::from_secs(5));

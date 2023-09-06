@@ -3,12 +3,11 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
-use futures::executor::block_on;
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
-    store::{fsm::ChangeObserver, Callback, RegionSnapshot},
+    store::{fsm::ChangeObserver, Callback},
 };
 use tikv::storage::{
     kv::StatisticsSummary,
@@ -21,23 +20,16 @@ use tikv_util::{
     time::{Instant, Limiter},
     worker::Scheduler,
 };
-use tokio::{
-    runtime::Handle,
-    sync::{OwnedSemaphorePermit, Semaphore},
-};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
     annotate, debug,
-    endpoint::ObserveOp,
     errors::{ContextualResultExt, Error, Result},
     metrics,
     router::{ApplyEvent, ApplyEvents, Router},
-    subscription_manager::with_tls_cdc_handle,
     subscription_track::{Ref, RefMut, SubscriptionTracer, TwoPhaseResolver},
-    try_send,
-    utils::{self, RegionPager},
-    Task,
+    utils, Task,
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
@@ -80,83 +72,6 @@ pub struct EventLoader<S: Snapshot> {
 }
 
 const ENTRY_BATCH_SIZE: usize = 1024;
-
-#[async_trait::async_trait]
-pub trait CaptureChange<Snap>: Clone + Send + Sync {
-    async fn capture_change(&self, region: &Region, handle: ChangeObserver) -> Result<Snap>;
-}
-
-#[derive(Clone)]
-pub struct SubscribeByTlsHandle<E, H>(PhantomData<E>, PhantomData<H>);
-
-impl<E, H> Default for SubscribeByTlsHandle<E, H> {
-    fn default() -> Self {
-        Self(PhantomData, PhantomData)
-    }
-}
-
-// SAFETY: they are just phantom data.
-unsafe impl<E: KvEngine, H: CdcHandle<E>> Sync for SubscribeByTlsHandle<E, H> {}
-
-#[async_trait::async_trait]
-impl<E, H> CaptureChange<RegionSnapshot<<E as KvEngine>::Snapshot>> for SubscribeByTlsHandle<E, H>
-where
-    E: KvEngine,
-    H: CdcHandle<E> + 'static,
-{
-    async fn capture_change(
-        &self,
-        region: &Region,
-        cmd: ChangeObserver,
-    ) -> Result<RegionSnapshot<<E as KvEngine>::Snapshot>> {
-        let (callback, fut) =
-            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
-
-        with_tls_cdc_handle::<H, _, _>(|h| {
-            h.capture_change(
-                region.get_id(),
-                region.get_region_epoch().clone(),
-                cmd,
-                Callback::read(Box::new(|snapshot| {
-                    if snapshot.response.get_header().has_error() {
-                        callback(Err(Error::RaftRequest(
-                            snapshot.response.get_header().get_error().clone(),
-                        )));
-                        return;
-                    }
-                    if let Some(snap) = snapshot.snapshot {
-                        callback(Ok(snap));
-                        return;
-                    }
-                    callback(Err(Error::Other(box_err!(
-                        "PROBABLY BUG: the response contains neither error nor snapshot"
-                    ))))
-                })),
-            )
-            .context(format_args!(
-                "failed to register the observer to region {}",
-                region.get_id()
-            ))
-        })?;
-
-        let snap = fut
-            .await
-            .map_err(|err| {
-                annotate!(
-                    err,
-                    "message 'CaptureChange' dropped for region {}",
-                    region.id
-                )
-            })
-            .flatten()
-            .context(format_args!(
-                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
-                region.get_id(),
-            ))?;
-        // Note: maybe warp the snapshot via `RegionSnapshot`?
-        Ok(snap)
-    }
-}
 
 impl<S: Snapshot> EventLoader<S> {
     pub fn load_from(
@@ -258,7 +173,7 @@ impl<S: Snapshot> EventLoader<S> {
 /// Like [`cdc::Initializer`].
 /// Note: maybe we can merge those two structures?
 #[derive(Clone)]
-pub struct InitialDataLoader<E: KvEngine, R, S> {
+pub struct InitialDataLoader<E: KvEngine, R, H> {
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
@@ -269,16 +184,16 @@ pub struct InitialDataLoader<E: KvEngine, R, S> {
     pub(crate) quota: PendingMemoryQuota,
     pub(crate) limit: Limiter,
 
-    subscribe: S,
+    cdc_handle: H,
 
     _engine: PhantomData<E>,
 }
 
-impl<E, R, S> InitialDataLoader<E, R, S>
+impl<E, R, H> InitialDataLoader<E, R, H>
 where
     E: KvEngine,
     R: RegionInfoProvider + Clone + 'static,
-    S: CaptureChange<RegionSnapshot<<E as KvEngine>::Snapshot>>,
+    H: CdcHandle<E> + Sync,
 {
     pub fn new(
         regions: R,
@@ -287,7 +202,7 @@ where
         sched: Scheduler<Task>,
         quota: PendingMemoryQuota,
         limiter: Limiter,
-        subscribe: S,
+        cdc_handle: H,
     ) -> Self {
         Self {
             regions,
@@ -296,9 +211,61 @@ where
             scheduler: sched,
             _engine: PhantomData,
             quota,
-            subscribe,
+            cdc_handle,
             limit: limiter,
         }
+    }
+
+    pub async fn capture_change(
+        &self,
+        region: &Region,
+        cmd: ChangeObserver,
+    ) -> Result<impl Snapshot> {
+        let (callback, fut) =
+            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
+
+        self.cdc_handle
+            .capture_change(
+                region.get_id(),
+                region.get_region_epoch().clone(),
+                cmd,
+                Callback::read(Box::new(|snapshot| {
+                    if snapshot.response.get_header().has_error() {
+                        callback(Err(Error::RaftRequest(
+                            snapshot.response.get_header().get_error().clone(),
+                        )));
+                        return;
+                    }
+                    if let Some(snap) = snapshot.snapshot {
+                        callback(Ok(snap));
+                        return;
+                    }
+                    callback(Err(Error::Other(box_err!(
+                        "PROBABLY BUG: the response contains neither error nor snapshot"
+                    ))))
+                })),
+            )
+            .context(format_args!(
+                "failed to register the observer to region {}",
+                region.get_id()
+            ))?;
+
+        let snap = fut
+            .await
+            .map_err(|err| {
+                annotate!(
+                    err,
+                    "message 'CaptureChange' dropped for region {}",
+                    region.id
+                )
+            })
+            .flatten()
+            .context(format_args!(
+                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
+                region.get_id(),
+            ))?;
+        // Note: maybe warp the snapshot via `RegionSnapshot`?
+        Ok(snap)
     }
 
     pub async fn observe_over_with_retry(
@@ -309,7 +276,7 @@ where
         let mut last_err = None;
         for _ in 0..MAX_GET_SNAPSHOT_RETRY {
             let c = cmd();
-            let r = self.subscribe.capture_change(region, c).await;
+            let r = self.capture_change(region, c).await;
             match r {
                 Ok(s) => {
                     return Ok(s);
@@ -484,26 +451,6 @@ where
         ))?;
 
         Ok(stats)
-    }
-
-    /// initialize a range: it simply scan the regions with leader role and send
-    /// them to [`initialize_region`].
-    pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
-        let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
-        loop {
-            let regions = pager.next_page(8)?;
-            debug!("scanning for entries in region."; "regions" => ?regions);
-            if regions.is_empty() {
-                break;
-            }
-            for r in regions {
-                try_send!(
-                    self.scheduler,
-                    Task::ModifyObserve(ObserveOp::Start { region: r.region })
-                );
-            }
-        }
-        Ok(())
     }
 }
 
