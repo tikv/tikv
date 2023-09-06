@@ -48,6 +48,7 @@ use kvproto::{
 use security::SecurityManager;
 use tikv_util::{
     box_err,
+    config::ReadableDuration,
     error, info,
     mpsc::future as mpsc,
     slow_log, thd_name,
