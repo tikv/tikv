@@ -334,7 +334,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         // Check whether the admin request can be proposed when disk full.
-        if let Err(e) = self.validate_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull) {
+        if let Err(e) =
+            self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        {
             info!(self.logger, "disk is full, skip split"; "err" => ?e);
             ch.set_result(cmd_resp::new_error(e));
             return;
@@ -373,7 +375,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         // Check whether the admin request can be proposed when disk full.
-        if let Err(e) = self.validate_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull) {
+        if let Err(e) =
+            self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        {
             info!(self.logger, "disk is full, skip half split"; "err" => ?e);
             return;
         }

@@ -62,7 +62,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // Check whether the write request can be proposed with the given disk full
         // option.
-        if let Some(opt) = disk_full_opt && let Err(e) = self.validate_with_disk_full_opt(ctx, opt) {
+        if let Some(opt) = disk_full_opt && let Err(e) = self.check_proposal_with_disk_full_opt(ctx, opt) {
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             return;

@@ -32,19 +32,23 @@ use batch_system::BasicMailbox;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
-    metapb::{self, Region},
+    kvrpcpb::DiskFullOpt,
+    metapb::{self, PeerRole, Region},
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage},
 };
 use raft::eraftpb::MessageType;
-use raftstore::store::{
-    fsm::{
-        apply,
-        life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
-        Proposal,
+use raftstore::{
+    store::{
+        fsm::{
+            apply,
+            life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
+            Proposal,
+        },
+        metrics::RAFT_PEER_PENDING_DURATION,
+        util, DiskFullPeers, Transport, WriteTask,
     },
-    metrics::RAFT_PEER_PENDING_DURATION,
-    util, DiskFullPeers, Transport, WriteTask,
+    Error, Result,
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{
@@ -805,6 +809,83 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "peer_id" => id
             );
         });
+    }
+
+    // Check disk usages for the peer itself and other peers in the raft group.
+    // The return value indicates whether the proposal is allowed or not.
+    pub fn check_proposal_with_disk_full_opt<T>(
+        &mut self,
+        ctx: &StoreContext<EK, ER, T>,
+        disk_full_opt: DiskFullOpt,
+    ) -> Result<()> {
+        let leader_allowed = match ctx.self_disk_usage {
+            DiskUsage::Normal => true,
+            DiskUsage::AlmostFull => !matches!(disk_full_opt, DiskFullOpt::NotAllowedOnFull),
+            DiskUsage::AlreadyFull => false,
+        };
+        let mut disk_full_stores = Vec::new();
+        let abnormal_peer_context = self.abnormal_peer_context();
+        let disk_full_peers = abnormal_peer_context.disk_full_peers();
+        if !leader_allowed {
+            disk_full_stores.push(ctx.store_id);
+            // Try to transfer leader to a node with disk usage normal to maintain write
+            // availability. If majority node is disk full, to transfer leader or not is not
+            // necessary. Note: Need to exclude learner node.
+            if !disk_full_peers.majority() {
+                let target_peer = self
+                    .region()
+                    .get_peers()
+                    .iter()
+                    .find(|x| {
+                        !disk_full_peers.has(x.get_id())
+                            && x.get_id() != self.peer_id()
+                            && !self
+                                .abnormal_peer_context()
+                                .down_peers()
+                                .contains(&x.get_id())
+                            && !matches!(x.get_role(), PeerRole::Learner)
+                    })
+                    .cloned();
+                if let Some(p) = target_peer {
+                    debug!(
+                        self.logger,
+                        "try to transfer leader because of current leader disk full";
+                        "region_id" => self.region().get_id(),
+                        "peer_id" => self.peer_id(),
+                        "target_peer_id" => p.get_id(),
+                    );
+                    self.pre_transfer_leader(&p);
+                }
+            }
+        } else {
+            // Check followers.
+            if disk_full_peers.is_empty() {
+                return Ok(());
+            }
+            if !abnormal_peer_context.is_dangerous_majority_set() {
+                if !disk_full_peers.majority() {
+                    return Ok(());
+                }
+                // Majority peers are in disk full status but the request carries a special
+                // flag.
+                if matches!(disk_full_opt, DiskFullOpt::AllowedOnAlmostFull)
+                    && disk_full_peers.peers().values().any(|x| x.1)
+                {
+                    return Ok(());
+                }
+            }
+            for peer in self.region().get_peers() {
+                let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
+                if disk_full_peers.peers().get(&peer_id).is_some() {
+                    disk_full_stores.push(store_id);
+                }
+            }
+        }
+        let errmsg = format!(
+            "propose failed: tikv disk full, cmd diskFullOpt={:?}, leader diskUsage={:?}",
+            disk_full_opt, ctx.self_disk_usage
+        );
+        Err(Error::DiskFull(disk_full_stores, errmsg))
     }
 
     pub fn clear_disk_full_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {

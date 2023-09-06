@@ -100,7 +100,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         // Check whether the admin request can be proposed when disk full.
-        if let Err(e) = self.validate_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull) {
+        if let Err(e) =
+            self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        {
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
             self.post_propose_fail(cmd_type);
