@@ -2,7 +2,7 @@
 
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
-use engine_traits::{data_cf_offset, KvEngine, RaftEngine};
+use engine_traits::{data_cf_offset, KvEngine, RaftEngine, DATA_CFS_LEN};
 use kvproto::import_sstpb::SstMeta;
 use raftstore::{
     store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER, util},
@@ -16,7 +16,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyResReporter, Store, StoreFsmDelegate},
     raft::{Apply, Peer},
-    router::{PeerMsg, StoreTick},
+    router::{PeerMsg, SstApplyIndex, StoreTick},
     worker::tablet,
 };
 
@@ -111,6 +111,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let mut infos = Vec::with_capacity(ssts.len());
         let mut size: i64 = 0;
         let mut keys: u64 = 0;
+        let mut cf_indexes = [u64::MAX; DATA_CFS_LEN];
         for sst in &ssts {
             // This may not be enough as ingest sst may not trigger flush at all.
             let off = data_cf_offset(sst.get_cf_name());
@@ -138,6 +139,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     slog_panic!(self.logger, "corrupted sst"; "sst" => ?sst, "error" => ?e);
                 }
             }
+            cf_indexes[off] = index;
         }
         if !infos.is_empty() {
             // Unlike v1, we can't batch ssts accross regions.
@@ -154,6 +156,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.metrics.size_diff_hint += size;
         self.metrics.written_bytes += size as u64;
         self.metrics.written_keys += keys;
+        for (cf_index, index) in cf_indexes.into_iter().enumerate() {
+            if index != u64::MAX {
+                // self.modifications_mut()[i] = idx;
+                self.sst_applied_index
+                    .push(SstApplyIndex { cf_index, index });
+            }
+        }
         Ok(())
     }
 }

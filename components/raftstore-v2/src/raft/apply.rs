@@ -20,7 +20,7 @@ use tikv_util::{log::SlogFormat, worker::Scheduler, yatp_pool::FuturePool};
 
 use crate::{
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
-    router::CmdResChannel,
+    router::{CmdResChannel, SstApplyIndex},
     TabletTask,
 };
 
@@ -64,6 +64,7 @@ pub struct Apply<EK: KvEngine, R> {
     admin_cmd_result: Vec<AdminCmdResult>,
     flush_state: Arc<FlushState>,
     sst_apply_state: SstApplyState,
+    pub(crate) sst_applied_index: Vec<SstApplyIndex>,
     /// The flushed indexes of each column family before being restarted.
     ///
     /// If an apply index is less than the flushed index, the log can be
@@ -138,6 +139,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             res_reporter,
             flush_state,
             sst_apply_state,
+            sst_applied_index: vec![],
             log_recovery,
             metrics: ApplyMetrics::default(),
             buckets,
