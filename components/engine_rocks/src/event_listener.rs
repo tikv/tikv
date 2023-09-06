@@ -192,13 +192,45 @@ impl RocksPersistenceListener {
 
 impl rocksdb::EventListener for RocksPersistenceListener {
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
+        slog_global::info!(
+            "on memtable sealed";
+            "cf" => info.cf_name(),
+            "earlist_seqno" => info.earliest_seqno(),
+            "first_seqno" => info.first_seqno(),
+            "largest_seqno" => info.largest_seqno(),
+        );
         // Note: first_seqno is effectively the smallest seqno of memtable.
         // earliest_seqno has ambiguous semantics.
-        self.0
-            .on_memtable_sealed(info.cf_name().to_string(), info.first_seqno());
+        self.0.on_memtable_sealed(
+            info.cf_name().to_string(),
+            info.first_seqno(),
+            info.largest_seqno(),
+        );
+    }
+
+    fn on_flush_begin(&self, f: &FlushJobInfo) {
+        fail::fail_point!("on_flush_begin");
+        slog_global::info!(
+            "on flush begin";
+            "cf" => f.cf_name(),
+            "file_path" => ?f.file_path(),
+            "smallest_seqno" => f.smallest_seqno(),
+            "largest_seqno" => f.largest_seqno(),
+        );
+    }
+
+    fn on_external_file_ingested(&self, info: &IngestionInfo) {
+        println!("file path: {:?}", info.internal_file_path());
     }
 
     fn on_flush_completed(&self, job: &FlushJobInfo) {
+        slog_global::info!(
+            "on flush completed";
+            "cf" => job.cf_name(),
+            "file_path" => ?job.file_path(),
+            "smallest_seqno" => job.smallest_seqno(),
+            "largest_seqno" => job.largest_seqno(),
+        );
         let num = match job
             .file_path()
             .file_prefix()
