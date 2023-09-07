@@ -407,6 +407,7 @@ fn create_scan_pool<EK: KvEngine>(
             || {},
         )
         .thread_name("log-backup-scan")
+        .enable_time()
         .worker_threads(num_threads)
         .build()
         .unwrap()
