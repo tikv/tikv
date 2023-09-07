@@ -1,38 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
-
-use engine_traits::{SyncMutable, MiscExt};
 use kvproto::kvrpcpb::*;
 use test_coprocessor::{init_with_data, DagSelect, ProductTable};
 use test_raftstore::{
     kv_batch_read, kv_read, must_kv_commit, must_kv_prewrite, must_new_cluster_and_kv_client,
 };
-
-#[test]
-fn test_temp() {
-    use test_raftstore_v2::*;
-
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.run();
-
-    let a = cluster.get_engine(1);
-    let rocksdb = a.get_tablet_by_id(1).unwrap();
-    let r2 = rocksdb.clone();
-    fail::cfg("on_memtable_begin", "pause").unwrap();
-    rocksdb.put(b"key", b"val").unwrap();
-    let a = std::thread::spawn(move || {
-        rocksdb.flush_cf("default", true).unwrap();
-        println!("flush done");
-    });
-
-    std::thread::sleep(Duration::from_secs(10));
-
-    r2.flush_cf("default", true).unwrap();
-    println!("flush done 2");
-
-    a.join().unwrap();
-}
 
 #[test]
 fn test_read_execution_tracking() {

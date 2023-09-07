@@ -203,14 +203,7 @@ impl PersistenceListener {
     /// Called when memtable is frozen.
     ///
     /// `smallest_seqno` should be the smallest seqno of the memtable.
-    pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64) {
-        info!(
-            "on_memtable_sealed";
-            "tablet_index" => self.tablet_index,
-            "region_id" => self.region_id,
-            "cf" => ?cf,
-            "smallest_seqno" => smallest_seqno,
-        );
+    pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64, largest_seqno: u64) {
         (|| {
             fail_point!("on_memtable_sealed", |t| {
                 assert_eq!(t.unwrap().as_str(), cf);
@@ -226,8 +219,9 @@ impl PersistenceListener {
         let flushed = prs.last_flushed[offset];
         if flushed > smallest_seqno {
             panic!(
-                "sealed seqno has been flushed {} {} {} <= {}",
-                cf, apply_index, smallest_seqno, flushed
+                "sealed seqno conflict with latest flushed index, cf {},
+                sealed smallest_seqno {}, sealed largest_seqno {}, last_flushed{}, apply_index {}",
+                cf, smallest_seqno, largest_seqno, flushed apply_index,
             );
         }
         prs.prs.push_back(ApplyProgress {
@@ -241,13 +235,6 @@ impl PersistenceListener {
     ///
     /// `largest_seqno` should be the largest seqno of the generated file.
     pub fn on_flush_completed(&self, cf: &str, largest_seqno: u64, file_no: u64) {
-        info!(
-            "on_flush_completed";
-            "region_id" => self.region_id,
-            "tablet_index" => self.tablet_index,
-            "cf" => cf,
-            "largest_seqno" => largest_seqno,
-        );
         fail_point!("on_flush_completed", |_| {});
         // Maybe we should hook the compaction to avoid the file is compacted before
         // being recorded.
@@ -258,10 +245,15 @@ impl PersistenceListener {
             if flushed >= largest_seqno {
                 // According to facebook/rocksdb#11183, it's possible OnFlushCompleted can be
                 // called out of order. But it's guaranteed files are installed in order.
-                info!("flush complete reorder found"; "flushed" => flushed, "largest_seqno" => largest_seqno, "file_no" => file_no, "cf" => cf);
+                info!(
+                    "flush complete reorder found";
+                    "flushed" => flushed,
+                    "largest_seqno" => largest_seqno,
+                    "file_no" => file_no,
+                    "cf" => cf
+                );
                 return;
             }
-            info!("on_flush_completed: update largest_seqno"; "largest_seqno" => largest_seqno, "cf" => cf);
             prs.last_flushed[offset] = largest_seqno;
             let mut cursor = prs.prs.cursor_front_mut();
             let mut flushed_pr = None;
