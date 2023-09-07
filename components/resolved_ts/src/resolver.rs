@@ -12,13 +12,12 @@ use txn_types::{Key, TimeStamp};
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
-const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
 pub const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 #[derive(Clone)]
 pub enum TsSource {
     // A lock in LOCK CF
-    Lock(Arc<[u8]>),
+    Lock(usize),
     // A memory lock in concurrency manager
     MemoryLock(Key),
     PdTso,
@@ -41,7 +40,7 @@ impl TsSource {
 
     pub fn key(&self) -> Option<Key> {
         match self {
-            TsSource::Lock(k) => Some(Key::from_encoded_slice(k)),
+            TsSource::Lock(_) => None,
             TsSource::MemoryLock(k) => Some(k.clone()),
             _ => None,
         }
@@ -55,7 +54,7 @@ pub struct Resolver {
     // key -> start_ts
     locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
-    pub(crate) lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
+    lock_ts_heap: BTreeMap<TimeStamp, usize>,
     // The last shrink time.
     last_aggressive_shrink_time: Instant,
     // The timestamps that guarantees no more commit will happen before.
@@ -71,7 +70,7 @@ pub struct Resolver {
     // The memory quota for the `Resolver` and its lock keys and timestamps.
     memory_quota: Arc<MemoryQuota>,
     // The last attempt of resolve(), used for diagnosis.
-    pub(crate) last_attempt: Option<LastAttempt>,
+    last_attempt: Option<LastAttempt>,
 }
 
 #[derive(Clone)]
@@ -107,14 +106,8 @@ impl std::fmt::Debug for Resolver {
         let mut dt = f.debug_tuple("Resolver");
         dt.field(&format_args!("region={}", self.region_id));
 
-        if let Some((ts, keys)) = far_lock {
-            dt.field(&format_args!(
-                "oldest_lock={:?}",
-                keys.iter()
-                    // We must use Display format here or the redact won't take effect.
-                    .map(|k| format!("{}", log_wrappers::Value::key(k)))
-                    .collect::<Vec<_>>()
-            ));
+        if let Some((ts, count)) = far_lock {
+            dt.field(&format_args!("oldest_lock_count={:?}", count));
             dt.field(&format_args!("oldest_lock_ts={:?}", ts));
         }
 
@@ -180,7 +173,7 @@ impl Resolver {
         self.stopped
     }
 
-    pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
+    pub fn locks(&self) -> &BTreeMap<TimeStamp, usize> {
         &self.lock_ts_heap
     }
 
@@ -228,7 +221,7 @@ impl Resolver {
         key.heap_size() + std::mem::size_of::<TimeStamp>()
     }
 
-    fn shrink_ratio(&mut self, ratio: usize, timestamp: Option<TimeStamp>) {
+    fn shrink_ratio(&mut self, ratio: usize) {
         // HashMap load factor is 87% approximately, leave some margin to avoid
         // frequent rehash.
         //
@@ -238,10 +231,6 @@ impl Resolver {
             > self.locks_by_key.len() * cmp::max(MIN_SHRINK_RATIO, ratio)
         {
             self.locks_by_key.shrink_to_fit();
-        }
-        if let Some(ts) = timestamp && let Some(lock_set) = self.lock_ts_heap.get_mut(&ts)
-            && lock_set.capacity() > lock_set.len() * cmp::max(MIN_SHRINK_RATIO, ratio) {
-            lock_set.shrink_to_fit();
         }
     }
 
@@ -264,8 +253,9 @@ impl Resolver {
             return false;
         }
         let key: Arc<[u8]> = key.into_boxed_slice().into();
-        self.locks_by_key.insert(key.clone(), start_ts);
-        self.lock_ts_heap.entry(start_ts).or_default().insert(key);
+        if self.locks_by_key.insert(key, start_ts).is_none() {
+            *self.lock_ts_heap.entry(start_ts).or_default() += 1;
+        }
         true
     }
 
@@ -292,22 +282,23 @@ impl Resolver {
             "memory_in_use" => self.memory_quota.in_use(),
         );
 
-        let mut shrink_ts = None;
-        if let Some(locked_keys) = self.lock_ts_heap.get_mut(&start_ts) {
-            // Only shrink large set, because committing a small transaction is
-            // fast and shrink adds unnecessary overhead.
-            const SHRINK_SET_CAPACITY: usize = 256;
-            if locked_keys.capacity() > SHRINK_SET_CAPACITY {
-                shrink_ts = Some(start_ts);
+        let lock_count = match self.lock_ts_heap.get_mut(&start_ts) {
+            Some(0) | None => {
+                panic!(
+                    "lock ts {} must exist in lock_ts_heap, key: {:?}",
+                    start_ts,
+                    log_wrappers::Value::key(key),
+                )
             }
-            locked_keys.remove(key);
-            if locked_keys.is_empty() {
-                self.lock_ts_heap.remove(&start_ts);
-            }
+            Some(c) => c,
+        };
+        *lock_count -= 1;
+        if *lock_count == 0 {
+            self.lock_ts_heap.remove(&start_ts);
         }
         // Use a large ratio to amortize the cost of rehash.
         let shrink_ratio = 8;
-        self.shrink_ratio(shrink_ratio, shrink_ts);
+        self.shrink_ratio(shrink_ratio);
     }
 
     /// Try to advance resolved ts.
@@ -324,7 +315,7 @@ impl Resolver {
         const AGGRESSIVE_SHRINK_RATIO: usize = 2;
         const AGGRESSIVE_SHRINK_INTERVAL: Duration = Duration::from_secs(10);
         if self.last_aggressive_shrink_time.saturating_elapsed() > AGGRESSIVE_SHRINK_INTERVAL {
-            self.shrink_ratio(AGGRESSIVE_SHRINK_RATIO, None);
+            self.shrink_ratio(AGGRESSIVE_SHRINK_RATIO);
             self.last_aggressive_shrink_time = Instant::now_coarse();
         }
 
@@ -335,9 +326,7 @@ impl Resolver {
         }
 
         // Find the min start ts.
-        let min_lock = self
-            .oldest_transaction()
-            .and_then(|(ts, locks)| locks.iter().next().map(|lock| (*ts, lock)));
+        let min_lock = self.oldest_transaction().map(|(ts, count)| (*ts, *count));
         let has_lock = min_lock.is_some();
         let min_start_ts = min_lock.map(|(ts, _)| ts).unwrap_or(min_ts);
 
@@ -345,7 +334,7 @@ impl Resolver {
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
         // reason is the min source of the new resolved ts.
         let reason = match (min_lock, min_ts) {
-            (Some(lock), min_ts) if lock.0 < min_ts => TsSource::Lock(lock.1.clone()),
+            (Some(lock), min_ts) if lock.0 < min_ts => TsSource::Lock(lock.1),
             (Some(_), _) => source,
             (None, _) => source,
         };
@@ -391,21 +380,16 @@ impl Resolver {
 
     pub(crate) fn log_locks(&self, min_start_ts: u64) {
         // log lock with the minimum start_ts >= min_start_ts
-        if let Some((start_ts, keys)) = self
+        if let Some((start_ts, lock_key_count)) = self
             .lock_ts_heap
             .range(TimeStamp::new(min_start_ts)..)
             .next()
         {
-            let keys_for_log = keys
-                .iter()
-                .map(|key| log_wrappers::Value::key(key))
-                .take(MAX_NUMBER_OF_LOCKS_IN_LOG)
-                .collect::<Vec<_>>();
             info!(
                 "locks with the minimum start_ts in resolver";
                 "region_id" => self.region_id,
                 "start_ts" => start_ts,
-                "sampled_keys" => ?keys_for_log,
+                "lock_key_count" => lock_key_count,
             );
         }
     }
@@ -422,8 +406,12 @@ impl Resolver {
         self.read_progress.as_ref()
     }
 
-    pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &HashSet<Arc<[u8]>>)> {
+    pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &usize)> {
         self.lock_ts_heap.iter().next()
+    }
+
+    pub(crate) fn take_last_attempt(&mut self) -> Option<LastAttempt> {
+        self.last_attempt.take()
     }
 }
 
@@ -597,36 +585,6 @@ mod tests {
             "{}, {}",
             resolver.locks_by_key.capacity(),
             resolver.locks_by_key.len(),
-        );
-    }
-
-    #[test]
-    fn test_untrack_lock_set_shrink_ratio() {
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let mut resolver = Resolver::new(1, memory_quota);
-        let mut key = vec![0; 16];
-        let ts = TimeStamp::new(1);
-        for i in 0..1000usize {
-            key[0..8].copy_from_slice(&i.to_be_bytes());
-            let _ = resolver.track_lock(ts, key.clone(), None);
-        }
-        assert!(
-            resolver.lock_ts_heap[&ts].capacity() >= 1000,
-            "{}",
-            resolver.lock_ts_heap[&ts].capacity()
-        );
-
-        for i in 0..990usize {
-            key[0..8].copy_from_slice(&i.to_be_bytes());
-            resolver.untrack_lock(&key, None);
-        }
-        // shrink_to_fit may reserve some space in accordance with the resize
-        // policy, but it is expected to be less than 100.
-        assert!(
-            resolver.lock_ts_heap[&ts].capacity() < 500,
-            "{}, {}",
-            resolver.lock_ts_heap[&ts].capacity(),
-            resolver.lock_ts_heap[&ts].len(),
         );
     }
 }

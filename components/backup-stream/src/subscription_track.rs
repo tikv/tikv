@@ -99,7 +99,7 @@ impl ActiveSubscription {
 pub enum CheckpointType {
     MinTs,
     StartTsOfInitialScan,
-    StartTsOfTxn(Option<Arc<[u8]>>),
+    StartTsOfTxn(Option<(TimeStamp, usize)>),
 }
 
 impl std::fmt::Debug for CheckpointType {
@@ -109,10 +109,7 @@ impl std::fmt::Debug for CheckpointType {
             Self::StartTsOfInitialScan => write!(f, "StartTsOfInitialScan"),
             Self::StartTsOfTxn(arg0) => f
                 .debug_tuple("StartTsOfTxn")
-                .field(&format_args!(
-                    "{}",
-                    utils::redact(&arg0.as_ref().map(|x| x.as_ref()).unwrap_or(&[]))
-                ))
+                .field(&format_args!("{:?}", arg0))
                 .finish(),
         }
     }
@@ -466,9 +463,11 @@ impl std::fmt::Debug for FutureLock {
 
 impl TwoPhaseResolver {
     /// try to get one of the key of the oldest lock in the resolver.
-    pub fn sample_far_lock(&self) -> Option<Arc<[u8]>> {
-        let (_, keys) = self.resolver.locks().first_key_value()?;
-        keys.iter().next().cloned()
+    pub fn sample_far_lock(&self) -> Option<(TimeStamp, usize)> {
+        self.resolver
+            .locks()
+            .first_key_value()
+            .map(|(ts, lock_count)| (*ts, *lock_count))
     }
 
     pub fn in_phase_one(&self) -> bool {
@@ -674,7 +673,7 @@ mod test {
                 (
                     region(4, 8, 1),
                     128.into(),
-                    StartTsOfTxn(Some(Arc::from(b"Alpi".as_slice())))
+                    StartTsOfTxn(Some((TimeStamp::new(128), 1)))
                 ),
             ]
         );
