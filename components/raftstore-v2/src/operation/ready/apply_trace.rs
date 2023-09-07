@@ -36,7 +36,7 @@ use std::{
 
 use encryption_export::DataKeyManager;
 use engine_traits::{
-    data_cf_offset, offset_to_cf, ApplyProgress, CfName, KvEngine, RaftEngine, RaftLogBatch,
+    data_cf_offset, offset_to_cf, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch,
     TabletRegistry, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use fail::fail_point;
@@ -152,7 +152,7 @@ struct Progress {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-// A range represent [start, end)
+// A range represent [start, end]
 struct IndexRange(u64, u64);
 
 #[derive(Debug)]
@@ -250,10 +250,10 @@ impl ApplyTrace {
             let p = &mut self.data_cfs[cf_index];
             if p.flushed < index {
                 let max_idx = p.pending_sst_ranges.iter().last().map(|r| r.1).unwrap_or(0);
-                if max_idx < index {
-                    p.pending_sst_ranges.push_back(IndexRange(index, index + 1));
-                } else if max_idx == index {
-                    p.pending_sst_ranges.iter_mut().last().unwrap().1 += 1;
+                if max_idx + 1 < index {
+                    p.pending_sst_ranges.push_back(IndexRange(index, index));
+                } else if max_idx + 1 == index {
+                    p.pending_sst_ranges.iter_mut().last().unwrap().1 = index;
                 }
             }
         }
@@ -316,7 +316,7 @@ impl ApplyTrace {
         // At best effort, we can only advance the index to `mem_index`.
         let candidate = cmp::min(mem_index, min_flushed.unwrap_or(u64::MAX));
         // always flush if there is any sst ingestion.
-        let has_ingested_sst = self.advance_flushed_index_for_ingest(candidate);
+        let (candidate, has_ingested_sst) = self.advance_flushed_index_for_ingest(candidate);
         if candidate > self.admin.flushed {
             self.admin.flushed = candidate;
             if has_ingested_sst || (self.admin.flushed > self.persisted_applied + 100) {
@@ -326,24 +326,29 @@ impl ApplyTrace {
         // TODO: persist admin.flushed every 10 minutes.
     }
 
-    fn advance_flushed_index_for_ingest(&mut self, max_index: u64) -> bool {
+    fn advance_flushed_index_for_ingest(&mut self, mut max_index: u64) -> (u64, bool) {
         let mut has_ingest = false;
-        let upper_bound = max_index + 1;
-        for p in self.data_cfs.iter_mut() {
-            while let Some(r) = p.pending_sst_ranges.front_mut() {
-                if r.0 >= upper_bound {
-                    break;
-                } else if r.1 <= upper_bound {
+        loop {
+            let mut has_change = false;
+            for p in self.data_cfs.iter_mut() {
+                while let Some(r) = p.pending_sst_ranges.front_mut() {
+                    if r.0 > max_index + 1 {
+                        break;
+                    } else if r.1 > max_index {
+                        max_index = r.1;
+                        has_change = true;
+                    }
                     drop(r);
                     p.pending_sst_ranges.pop_front();
                     has_ingest = true;
-                } else {
-                    r.0 = upper_bound;
-                    has_ingest = true;
                 }
             }
+            if !has_change {
+                break;
+            }
         }
-        has_ingest
+
+        (max_index, has_ingest)
     }
 
     /// Get the flushed indexes of all data CF that is needed when recoverying
@@ -666,7 +671,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn cleanup_stale_ssts<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        cfs: &[CfName],
+        cfs: &[&str],
         index: u64,
         apply_index: u64,
     ) {
@@ -786,7 +791,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::RaftEngineReadOnly;
+    use engine_traits::{CfName, RaftEngineReadOnly};
     use kvproto::metapb::Peer;
     use tempfile::TempDir;
 
@@ -907,8 +912,15 @@ mod tests {
         // modification and index can be advanced.
         assert_eq!(5, trace.admin.flushed);
 
-        fn range_equals(pending_ranges: &VecDeque<IndexRange>, expected: Vec<IndexRange>) {
-            assert_eq!(pending_ranges.len(), expected.len());
+        fn range_equals(trace: &ApplyTrace, cf: &str, expected: Vec<IndexRange>) {
+            let pending_ranges = &trace.data_cfs[data_cf_offset(cf)].pending_sst_ranges;
+            assert_eq!(
+                pending_ranges.len(),
+                expected.len(),
+                "actual: {:?}, expected: {:?}",
+                pending_ranges,
+                &expected
+            );
             pending_ranges
                 .iter()
                 .zip(expected.iter())
@@ -919,34 +931,64 @@ mod tests {
 
         trace.on_modify(CF_DEFAULT, 8);
         let ingested_ssts_idx =
-            make_sst_apply_index(vec![(CF_DEFAULT, 6), (CF_WRITE, 6), (CF_DEFAULT, 7)]);
+            make_sst_apply_index(vec![(CF_DEFAULT, 6), (CF_WRITE, 6), (CF_WRITE, 7)]);
         trace.on_sst_ingested(&ingested_ssts_idx);
+        range_equals(&trace, CF_DEFAULT, vec![IndexRange(6, 6)]);
+        range_equals(&trace, CF_WRITE, vec![IndexRange(6, 7)]);
         trace.maybe_advance_admin_flushed(8);
-        assert_eq!(5, trace.admin.flushed);
-        range_equals(
-            &trace.data_cfs[data_cf_offset(CF_DEFAULT)].pending_sst_ranges,
-            vec![IndexRange(6, 8)],
-        );
-        range_equals(
-            &trace.data_cfs[data_cf_offset(CF_WRITE)].pending_sst_ranges,
-            vec![IndexRange(6, 7)],
-        );
-
-        let ingested_ssts_idx = make_sst_apply_index(vec![(CF_DEFAULT, 9)]);
+        assert_eq!(7, trace.admin.flushed);
+        for cf in [CF_DEFAULT, CF_WRITE] {
+            assert_eq!(
+                trace.data_cfs[data_cf_offset(cf)].pending_sst_ranges.len(),
+                0
+            );
+        }
+        trace.on_modify(CF_DEFAULT, 10);
+        let ingested_ssts_idx = make_sst_apply_index(vec![(CF_DEFAULT, 10)]);
         trace.on_sst_ingested(&ingested_ssts_idx);
         trace.on_flush(CF_DEFAULT, 8);
-        trace.maybe_advance_admin_flushed(8);
+        trace.maybe_advance_admin_flushed(10);
         assert_eq!(8, trace.admin.flushed);
+        range_equals(&trace, CF_DEFAULT, vec![IndexRange(10, 10)]);
+
+        trace.on_modify(CF_DEFAULT, 16);
+        let ingested_ssts_idx = make_sst_apply_index(vec![
+            (CF_DEFAULT, 11),
+            (CF_WRITE, 12),
+            (CF_LOCK, 13),
+            (CF_DEFAULT, 14),
+            (CF_WRITE, 14),
+            (CF_WRITE, 15),
+            (CF_LOCK, 16),
+        ]);
+        trace.on_sst_ingested(&ingested_ssts_idx);
         range_equals(
-            &trace.data_cfs[data_cf_offset(CF_DEFAULT)].pending_sst_ranges,
-            vec![IndexRange(9, 10)],
+            &trace,
+            CF_DEFAULT,
+            vec![IndexRange(10, 11), IndexRange(14, 14)],
         );
-        assert_eq!(
-            trace.data_cfs[data_cf_offset(CF_WRITE)]
-                .pending_sst_ranges
-                .len(),
-            0
+        range_equals(
+            &trace,
+            CF_WRITE,
+            vec![IndexRange(12, 12), IndexRange(14, 15)],
         );
+        range_equals(
+            &trace,
+            CF_LOCK,
+            vec![IndexRange(13, 13), IndexRange(16, 16)],
+        );
+        trace.maybe_advance_admin_flushed(16);
+        assert_eq!(8, trace.admin.flushed);
+
+        trace.on_flush(CF_DEFAULT, 9);
+        trace.maybe_advance_admin_flushed(16);
+        assert_eq!(16, trace.admin.flushed);
+        for cf in DATA_CFS {
+            assert_eq!(
+                trace.data_cfs[data_cf_offset(cf)].pending_sst_ranges.len(),
+                0
+            );
+        }
     }
 
     fn make_sst_apply_index(data: Vec<(CfName, u64)>) -> Vec<SstApplyIndex> {
