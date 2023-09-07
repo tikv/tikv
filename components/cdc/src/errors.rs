@@ -10,6 +10,7 @@ use tikv::storage::{
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{Error as TxnError, ErrorInner as TxnErrorInner},
 };
+use tikv_util::memory::MemoryQuotaExceeded;
 use txn_types::Error as TxnTypesError;
 
 use crate::channel::SendError;
@@ -35,6 +36,11 @@ pub enum Error {
     EngineTraits(#[from] EngineTraitsError),
     #[error("Sink send error {0:?}")]
     Sink(#[from] SendError),
+<<<<<<< HEAD
+=======
+    #[error("Memory quota exceeded")]
+    MemoryQuotaExceeded(#[from] MemoryQuotaExceeded),
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
 }
 
 macro_rules! impl_from {
