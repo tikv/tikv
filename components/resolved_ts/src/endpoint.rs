@@ -49,6 +49,100 @@ enum ResolverStatus {
     Ready,
 }
 
+<<<<<<< HEAD
+=======
+impl Drop for ResolverStatus {
+    fn drop(&mut self) {
+        let ResolverStatus::Pending {
+            locks,
+            memory_quota,
+            ..
+        } = self else {
+            return;
+        };
+        if locks.is_empty() {
+            return;
+        }
+
+        // Free memory quota used by pending locks and unlocks.
+        let mut bytes = 0;
+        let num_locks = locks.len();
+        for lock in locks {
+            bytes += lock.heap_size();
+        }
+        if bytes > ON_DROP_WARN_HEAP_SIZE {
+            warn!("drop huge ResolverStatus";
+                "bytes" => bytes,
+                "num_locks" => num_locks,
+                "memory_quota_in_use" => memory_quota.in_use(),
+                "memory_quota_capacity" => memory_quota.capacity(),
+            );
+        }
+        memory_quota.free(bytes);
+    }
+}
+
+impl ResolverStatus {
+    fn push_pending_lock(&mut self, lock: PendingLock, region_id: u64) -> Result<()> {
+        let ResolverStatus::Pending {
+            locks,
+            memory_quota,
+            ..
+        } = self else {
+            panic!("region {:?} resolver has ready", region_id)
+        };
+        // Check if adding a new lock or unlock will exceed the memory
+        // quota.
+        memory_quota.alloc(lock.heap_size()).map_err(|e| {
+            fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
+            Error::MemoryQuotaExceeded(e)
+        })?;
+        locks.push(lock);
+        Ok(())
+    }
+
+    fn update_tracked_index(&mut self, index: u64, region_id: u64) {
+        let ResolverStatus::Pending {
+            tracked_index,
+            ..
+        } = self else {
+            panic!("region {:?} resolver has ready", region_id)
+        };
+        assert!(
+            *tracked_index < index,
+            "region {}, tracked_index: {}, incoming index: {}",
+            region_id,
+            *tracked_index,
+            index
+        );
+        *tracked_index = index;
+    }
+
+    fn drain_pending_locks(
+        &mut self,
+        region_id: u64,
+    ) -> (u64, impl Iterator<Item = PendingLock> + '_) {
+        let ResolverStatus::Pending {
+            locks,
+            memory_quota,
+            tracked_index,
+            ..
+        } = self else {
+            panic!("region {:?} resolver has ready", region_id)
+        };
+        // Must take locks, otherwise it may double free memory quota on drop.
+        let locks = std::mem::take(locks);
+        (
+            *tracked_index,
+            locks.into_iter().map(|lock| {
+                memory_quota.free(lock.heap_size());
+                lock
+            }),
+        )
+    }
+}
+
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
 #[allow(dead_code)]
 enum PendingLock {
     Track {
@@ -157,6 +251,7 @@ impl ObserveRegion {
                             );
                             continue;
                         }
+<<<<<<< HEAD
                         ChangeLog::Admin(req_type) => match req_type {
                             AdminCmdType::Split
                             | AdminCmdType::BatchSplit
@@ -184,6 +279,19 @@ impl ObserveRegion {
                                 ChangeRow::Prewrite { key, start_ts, .. } => self
                                     .resolver
                                     .track_lock(*start_ts, key.to_raw().unwrap(), Some(*index)),
+=======
+                    },
+                    ChangeLog::Rows { rows, index } => {
+                        for row in rows {
+                            match row {
+                                ChangeRow::Prewrite { key, start_ts, .. } => {
+                                    self.resolver.track_lock(
+                                        *start_ts,
+                                        key.to_raw().unwrap(),
+                                        Some(*index),
+                                    )?;
+                                }
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
                                 ChangeRow::Commit { key, .. } => self
                                     .resolver
                                     .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
@@ -208,13 +316,22 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
+<<<<<<< HEAD
                         self.resolver
                             .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index));
+=======
+                        self.resolver.track_lock(
+                            lock.ts,
+                            key.to_raw().unwrap(),
+                            Some(apply_index),
+                        )?;
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
                     }
                 }
                 ScanEntry::None => {
                     // Update the `tracked_index` to the snapshot's `apply_index`
                     self.resolver.update_tracked_index(apply_index);
+<<<<<<< HEAD
                     let pending_tracked_index =
                         match std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready) {
                             ResolverStatus::Pending {
@@ -235,6 +352,20 @@ impl ObserveRegion {
                                         .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
                                 });
                                 tracked_index
+=======
+                    let mut resolver_status =
+                        std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
+                    let (pending_tracked_index, pending_locks) =
+                        resolver_status.drain_pending_locks(self.meta.id);
+                    for lock in pending_locks {
+                        match lock {
+                            PendingLock::Track { key, start_ts } => {
+                                self.resolver.track_lock(
+                                    start_ts,
+                                    key.to_raw().unwrap(),
+                                    Some(pending_tracked_index),
+                                )?;
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
                             }
                             ResolverStatus::Ready => {
                                 panic!("region {:?} resolver has ready", self.meta.id)
@@ -512,6 +643,7 @@ where
     ) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
+<<<<<<< HEAD
         let logs = cmd_batch
             .into_iter()
             .filter_map(|batch| {
@@ -537,6 +669,24 @@ where
                                 "current" => ?observe_region.handle.id,
                             );
                         }
+=======
+        for batch in cmd_batch {
+            if batch.is_empty() {
+                continue;
+            }
+            if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
+                let observe_id = batch.rts_id;
+                let region_id = observe_region.meta.id;
+                if observe_region.handle.id == observe_id {
+                    let logs = ChangeLog::encode_change_log(region_id, batch);
+                    if let Err(e) = observe_region.track_change_log(&logs) {
+                        drop(observe_region);
+                        let backoff = match e {
+                            Error::MemoryQuotaExceeded(_) => Some(MEMORY_QUOTA_EXCEEDED_BACKOFF),
+                            Error::Other(_) => None,
+                        };
+                        self.re_register_region(region_id, observe_id, e, backoff);
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
                     }
                 }
                 None
@@ -555,6 +705,7 @@ where
         entries: Vec<ScanEntry>,
         apply_index: u64,
     ) {
+<<<<<<< HEAD
         match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
                 if observe_region.handle.id == observe_id {
@@ -564,6 +715,25 @@ where
             None => {
                 debug!("scan locks region not exist"; "region_id" => region_id, "observe_id" => ?observe_id);
             }
+=======
+        let mut memory_quota_exceeded = None;
+        if let Some(observe_region) = self.regions.get_mut(&region_id) {
+            if observe_region.handle.id == observe_id {
+                if let Err(Error::MemoryQuotaExceeded(e)) =
+                    observe_region.track_scan_locks(entries, apply_index)
+                {
+                    memory_quota_exceeded = Some(Error::MemoryQuotaExceeded(e));
+                }
+            }
+        } else {
+            debug!("scan locks region not exist";
+                "region_id" => region_id,
+                "observe_id" => ?observe_id);
+        }
+        if let Some(e) = memory_quota_exceeded {
+            let backoff = Some(MEMORY_QUOTA_EXCEEDED_BACKOFF);
+            self.re_register_region(region_id, observe_id, e, backoff);
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
         }
     }
 

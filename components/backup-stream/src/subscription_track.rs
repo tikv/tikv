@@ -272,7 +272,12 @@ impl TwoPhaseResolver {
         if !self.in_phase_one() {
             warn!("backup stream tracking lock as if in phase one"; "start_ts" => %start_ts, "key" => %utils::redact(&key))
         }
+<<<<<<< HEAD
         self.resolver.track_lock(start_ts, key, None)
+=======
+        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+        self.resolver.track_lock(start_ts, key, None).unwrap();
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
@@ -280,7 +285,12 @@ impl TwoPhaseResolver {
             self.future_locks.push(FutureLock::Lock(key, start_ts));
             return;
         }
+<<<<<<< HEAD
         self.resolver.track_lock(start_ts, key, None)
+=======
+        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+        self.resolver.track_lock(start_ts, key, None).unwrap();
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
     }
 
     pub fn untrack_lock(&mut self, key: &[u8]) {
@@ -294,7 +304,14 @@ impl TwoPhaseResolver {
 
     fn handle_future_lock(&mut self, lock: FutureLock) {
         match lock {
+<<<<<<< HEAD
             FutureLock::Lock(key, ts) => self.resolver.track_lock(ts, key, None),
+=======
+            FutureLock::Lock(key, ts) => {
+                // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                self.resolver.track_lock(ts, key, None).unwrap();
+            }
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
             FutureLock::Unlock(key) => self.resolver.untrack_lock(&key, None),
         }
     }
