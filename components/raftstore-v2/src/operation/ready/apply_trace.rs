@@ -648,24 +648,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply_trace = self.storage_mut().apply_trace_mut();
         apply_trace.on_flush(cf, index);
         apply_trace.maybe_advance_admin_flushed(apply_index);
-        let stale_ssts = self.sst_apply_state().stale_ssts(cf, index);
-        if stale_ssts.is_empty() {
-            return;
-        }
-        info!(
-            self.logger,
-            "schedule delete stale ssts after flush";
-            "stale_ssts" => ?stale_ssts,
-            "apply_index" => apply_index,
-            "cf" => cf,
-            "flushed_index" => index,
-        );
-        let _ = ctx
-            .schedulers
-            .tablet
-            .schedule(tablet::Task::CleanupImportSst(
-                stale_ssts.into_boxed_slice(),
-            ));
+        self.cleanup_stale_ssts(ctx, &[cf], index, apply_index);
     }
 
     pub fn on_data_modified(&mut self, modification: DataTrace) {
@@ -680,7 +663,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         apply_trace.maybe_advance_admin_flushed(apply_index);
     }
 
-    pub fn gc_stale_ssts<T>(
+    pub fn cleanup_stale_ssts<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         cfs: &[CfName],

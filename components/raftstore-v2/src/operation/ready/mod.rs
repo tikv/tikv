@@ -903,7 +903,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         info!(self.logger, "take_flush_index"; "ready" => ready_number, "index" => ?flushed_idx);
         if let Some(idx) = flushed_idx {
             let apply_index = self.flush_state().applied_index();
-            self.gc_stale_ssts(ctx, DATA_CFS, idx, apply_index);
+            self.cleanup_stale_ssts(ctx, DATA_CFS, idx, apply_index);
         }
 
         if self.is_in_force_leader() {
