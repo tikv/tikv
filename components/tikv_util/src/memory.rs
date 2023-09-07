@@ -85,8 +85,6 @@ impl_display_as_debug!(MemoryQuotaExceeded);
 pub struct MemoryQuota {
     in_use: AtomicUsize,
     capacity: AtomicUsize,
-    // 80% of capacity.
-    high_water: AtomicUsize,
 }
 
 impl MemoryQuota {
@@ -94,7 +92,6 @@ impl MemoryQuota {
         MemoryQuota {
             in_use: AtomicUsize::new(0),
             capacity: AtomicUsize::new(capacity),
-            high_water: AtomicUsize::new(capacity * 4 / 5),
         }
     }
 
@@ -103,17 +100,16 @@ impl MemoryQuota {
     }
 
     pub fn capacity(&self) -> usize {
-        self.capacity.load(Ordering::Acquire)
+        self.capacity.load(Ordering::Relaxed)
     }
 
     pub fn set_capacity(&self, capacity: usize) {
-        self.capacity.store(capacity, Ordering::Release);
-        self.high_water.store(capacity * 4 / 5, Ordering::Release);
+        self.capacity.store(capacity, Ordering::Relaxed);
     }
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
+        let capacity = self.capacity.load(Ordering::Relaxed);
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        let capacity = self.capacity.load(Ordering::Acquire);
         loop {
             if in_use_bytes + bytes > capacity {
                 return Err(MemoryQuotaExceeded);
@@ -122,27 +118,7 @@ impl MemoryQuota {
             match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
-                Ordering::Acquire,
                 Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(current) => in_use_bytes = current,
-            }
-        }
-    }
-
-    pub fn alloc_high_water(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        let high_water = self.high_water.load(Ordering::Acquire);
-        loop {
-            if in_use_bytes + bytes > high_water {
-                return Err(MemoryQuotaExceeded);
-            }
-            let new_in_use_bytes = std::cmp::max(in_use_bytes, in_use_bytes + bytes);
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Acquire,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => return Ok(()),
@@ -159,7 +135,7 @@ impl MemoryQuota {
             match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
-                Ordering::Acquire,
+                Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => return,
@@ -179,24 +155,18 @@ mod tests {
         quota.alloc(10).unwrap();
         assert_eq!(quota.in_use(), 10);
         quota.alloc(100).unwrap_err();
-        quota.alloc_high_water(100).unwrap_err();
         assert_eq!(quota.in_use(), 10);
         quota.free(5);
         assert_eq!(quota.in_use(), 5);
-        quota.alloc_high_water(95).unwrap_err();
         quota.alloc(95).unwrap();
-        quota.alloc_high_water(1).unwrap_err();
         assert_eq!(quota.in_use(), 100);
         quota.free(95);
         assert_eq!(quota.in_use(), 5);
-        quota.alloc_high_water(60).unwrap();
-        assert_eq!(quota.in_use(), 65);
     }
 
     #[test]
     fn test_resize_memory_quota() {
         let quota = MemoryQuota::new(100);
-        assert_eq!(quota.high_water.load(Ordering::Relaxed), 80);
         quota.alloc(10).unwrap();
         assert_eq!(quota.in_use(), 10);
         quota.alloc(100).unwrap_err();
@@ -205,7 +175,6 @@ mod tests {
         quota.alloc(100).unwrap();
         assert_eq!(quota.in_use(), 110);
         quota.set_capacity(50);
-        assert_eq!(quota.high_water.load(Ordering::Relaxed), 40);
         quota.alloc(100).unwrap_err();
         assert_eq!(quota.in_use(), 110);
         quota.free(100);
