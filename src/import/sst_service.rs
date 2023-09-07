@@ -43,6 +43,7 @@ use tikv_util::{
     HandyRwLock,
 };
 use tokio::{runtime::Runtime, time::sleep};
+use tikv_util::future::paired_future_callback;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -628,7 +629,7 @@ fn check_local_region_stale(
     epoch: &RegionEpoch,
     region_info_accessor: Arc<dyn RegionInfoProvider>,
 ) -> Result<()> {
-    let (tx2, rx2) = crossbeam::channel::bounded(1);
+    let (tx2, rx2) = paired_future_callback();
     region_info_accessor
         .find_region_by_id(
             region_id,

@@ -22,36 +22,16 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner<EK, C, S>
-where
-    EK: KvEngine,
-    S: StoreRouter<EK>,
-{
-    _store_id: u64,
-    _store_router: S,
+pub struct Runner {
     importer: Arc<SstImporter>,
-    _pd_client: Arc<C>,
-    _engine: PhantomData<EK>,
 }
 
-impl<EK, C, S> Runner<EK, C, S>
-where
-    EK: KvEngine,
-    C: PdClient,
-    S: StoreRouter<EK>,
-{
+impl Runner{
     pub fn new(
-        store_id: u64,
-        store_router: S,
         importer: Arc<SstImporter>,
-        pd_client: Arc<C>,
-    ) -> Runner<EK, C, S> {
+    ) -> Runner {
         Runner {
-            _store_id: store_id,
-            _store_router: store_router,
             importer,
-            _pd_client: pd_client,
-            _engine: PhantomData,
         }
     }
 
@@ -63,12 +43,7 @@ where
     }
 }
 
-impl<EK, C, S> Runnable for Runner<EK, C, S>
-where
-    EK: KvEngine,
-    C: PdClient,
-    S: StoreRouter<EK>,
-{
+impl Runnable for Runner {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
