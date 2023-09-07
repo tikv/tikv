@@ -201,10 +201,9 @@ trait InitialScan: Clone + Sync + Send + 'static {
 }
 
 #[async_trait::async_trait]
-impl<E, R, RT> InitialScan for InitialDataLoader<E, R, RT>
+impl<E, RT> InitialScan for InitialDataLoader<E, RT>
 where
     E: KvEngine,
-    R: RegionInfoProvider + Clone + 'static,
     RT: CdcHandle<E> + Sync + 'static,
 {
     async fn do_initial_scan(
@@ -426,7 +425,8 @@ where
     /// a two-tuple, the first is the handle to the manager, the second is the
     /// operator loop future.
     pub fn start<E, RT>(
-        initial_loader: InitialDataLoader<E, R, TlsCdcHandle<E, RT>>,
+        initial_loader: InitialDataLoader<E, TlsCdcHandle<E, RT>>,
+        regions: R,
         router: &RT,
         observer: BackupStreamObserver,
         meta_cli: MetadataClient<S>,
@@ -442,7 +442,7 @@ where
         let scan_pool_handle =
             spawn_executors(initial_loader.clone(), scan_pool_size, router.clone());
         let op = Self {
-            regions: initial_loader.regions.clone(),
+            regions,
             meta_cli,
             pd_client,
             range_router: initial_loader.sink.clone(),

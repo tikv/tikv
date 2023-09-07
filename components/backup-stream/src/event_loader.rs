@@ -5,7 +5,7 @@ use std::{marker::PhantomData, sync::Arc, time::Duration};
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
-    coprocessor::{ObserveHandle, RegionInfoProvider},
+    coprocessor::ObserveHandle,
     router::CdcHandle,
     store::{fsm::ChangeObserver, Callback},
 };
@@ -33,6 +33,7 @@ use crate::{
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
+const CONCURRENCY_INITIAL_SCAN_LIMIT: usize = 32;
 
 #[derive(Clone)]
 pub struct PendingMemoryQuota(Arc<Semaphore>);
@@ -173,45 +174,48 @@ impl<S: Snapshot> EventLoader<S> {
 /// Like [`cdc::Initializer`].
 /// Note: maybe we can merge those two structures?
 #[derive(Clone)]
-pub struct InitialDataLoader<E: KvEngine, R, H> {
+pub struct InitialDataLoader<E: KvEngine, H> {
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
-    // Note: this is only for `init_range`, maybe make it an argument?
-    pub(crate) regions: R,
+
     pub(crate) quota: PendingMemoryQuota,
     pub(crate) limit: Limiter,
+    // If there are too many concurrent initial scanning, the limit of disk speed or pending memory
+    // quota will probably be triggered. Then the whole scanning will be pretty slow. And when
+    // we are holding a iterator for a long time, the memtable may not be able to be flushed.
+    // Using this to restrict the possibility of that.
+    concurrency_limit: Arc<Semaphore>,
 
     cdc_handle: H,
 
     _engine: PhantomData<E>,
 }
 
-impl<E, R, H> InitialDataLoader<E, R, H>
+impl<E, H> InitialDataLoader<E, H>
 where
     E: KvEngine,
-    R: RegionInfoProvider + Clone + 'static,
     H: CdcHandle<E> + Sync,
 {
     pub fn new(
-        regions: R,
         sink: Router,
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
         quota: PendingMemoryQuota,
         limiter: Limiter,
         cdc_handle: H,
+        concurrency_limit: Arc<Semaphore>,
     ) -> Self {
         Self {
-            regions,
             sink,
             tracing,
             scheduler: sched,
             _engine: PhantomData,
             quota,
             cdc_handle,
+            concurrency_limit,
             limit: limiter,
         }
     }
@@ -431,11 +435,17 @@ where
 
         let mut join_handles = Vec::with_capacity(8);
 
+        let permit = self
+            .concurrency_limit
+            .acquire()
+            .await
+            .expect("BUG: semaphore closed");
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let stats = self
             .scan_and_async_send(region, &handle, event_loader, &mut join_handles)
             .await?;
+        drop(permit);
 
         futures::future::try_join_all(join_handles)
             .await

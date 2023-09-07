@@ -5,7 +5,7 @@ use std::{any::Any, collections::HashSet, fmt, marker::PhantomData, sync::Arc, t
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use futures::{stream::AbortHandle, FutureExt};
+use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -30,7 +30,7 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::oneshot,
+    sync::{oneshot, Semaphore},
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
@@ -89,6 +89,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     /// This is used for simulating an asynchronous background worker.
     /// Each time we spawn a task, once time goes by, we abort that task.
     pub abort_last_storage_save: Option<AbortHandle>,
+    pub initial_scan_semaphore: Arc<Semaphore>,
 }
 
 impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
@@ -141,16 +142,18 @@ where
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer::default();
 
+        let initial_scan_semaphore = Arc::new(Semaphore::new(config.initial_scan_concurrency));
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
-                accessor.clone(),
                 range_router.clone(),
                 subs.clone(),
                 scheduler.clone(),
                 initial_scan_memory_quota,
                 initial_scan_throughput_quota,
                 TlsCdcHandle::<E, RT>::default(),
+                Arc::clone(&initial_scan_semaphore),
             ),
+            accessor.clone(),
             &router,
             observer.clone(),
             meta_client.clone(),
@@ -162,6 +165,7 @@ where
         let mut checkpoint_mgr = CheckpointManager::default();
         pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
         let ep = Endpoint {
+            initial_scan_semaphore,
             meta_client,
             range_router,
             scheduler,
@@ -858,6 +862,10 @@ where
              "config" => ?cfg,
         );
         self.range_router.udpate_config(&cfg);
+        let concurrency_diff =
+            cfg.initial_scan_concurrency as isize - self.config.initial_scan_concurrency as isize;
+        self.update_semaphore_capacity(&self.initial_scan_semaphore, concurrency_diff);
+
         self.config = cfg;
     }
 
@@ -865,6 +873,19 @@ where
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
         self.pool.block_on(self.region_operator.request(op));
+    }
+
+    fn update_semaphore_capacity(&self, sema: &Arc<Semaphore>, diff: isize) {
+        if diff > 0 {
+            sema.add_permits(diff as _);
+        } else if diff < 0 {
+            self.pool.spawn(
+                Arc::clone(sema)
+                    .acquire_many_owned(-diff as _)
+                    // It is OK to trivially ignore the Error case (semaphore has been closed, we are shutting down the server.)
+                    .map_ok(|p| p.forget()),
+            );
+        }
     }
 
     pub fn run_task(&mut self, task: Task) {
