@@ -158,7 +158,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.metrics.written_keys += keys;
         for (cf_index, index) in cf_indexes.into_iter().enumerate() {
             if index != u64::MAX {
-                // self.modifications_mut()[i] = idx;
                 self.sst_applied_index
                     .push(SstApplyIndex { cf_index, index });
             }

@@ -151,12 +151,13 @@ struct Progress {
     pending_sst_ranges: VecDeque<IndexRange>,
 }
 
+// A range representing [start, end], upper bound inclusive for handling
+// convenience.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-// A range represent [start, end]
 struct IndexRange(u64, u64);
 
 #[derive(Debug)]
-// track the global flushed index in the write task.
+// track the global flushed index related to the write task.
 struct ReadyFlushedIndex {
     ready_number: u64,
     flushed_index: u64,
@@ -192,6 +193,8 @@ pub struct ApplyTrace {
     last_flush_trigger: u64,
     /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
+    // Because we persist the global flushed in the write task, so we should track
+    // the task and handle sst cleanup after the write task finished.
     flushed_index_queue: VecDeque<ReadyFlushedIndex>,
 }
 
