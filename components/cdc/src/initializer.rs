@@ -416,7 +416,13 @@ impl<E: KvEngine> Initializer<E> {
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
                     match lock.lock_type {
+<<<<<<< HEAD
                         LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key, None),
+=======
+                        LockType::Put | LockType::Delete => {
+                            resolver.track_lock(lock.ts, key, None)?;
+                        }
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
                         _ => (),
                     };
                 }

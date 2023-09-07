@@ -2521,8 +2521,16 @@ mod tests {
                 version: version.clone(),
             });
 
+<<<<<<< HEAD
             let mut resolver = Resolver::new(id);
             resolver.track_lock(TimeStamp::compose(0, id), vec![], None);
+=======
+            let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+            let mut resolver = Resolver::new(id, memory_quota);
+            resolver
+                .track_lock(TimeStamp::compose(0, id), vec![], None)
+                .unwrap();
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
             let mut region = Region::default();
             region.id = id;
             region.set_region_epoch(region_epoch);
