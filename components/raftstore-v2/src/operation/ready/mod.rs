@@ -896,12 +896,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
-        let flushed_idx = self
+        if let Some(idx) = self
             .storage_mut()
             .apply_trace_mut()
-            .take_flush_index(ready_number);
-        info!(self.logger, "take_flush_index"; "ready" => ready_number, "index" => ?flushed_idx);
-        if let Some(idx) = flushed_idx {
+            .take_flush_index(ready_number)
+        {
             let apply_index = self.flush_state().applied_index();
             self.cleanup_stale_ssts(ctx, DATA_CFS, idx, apply_index);
         }

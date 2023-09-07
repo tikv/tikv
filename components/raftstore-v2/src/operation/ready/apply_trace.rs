@@ -315,7 +315,8 @@ impl ApplyTrace {
 
         // At best effort, we can only advance the index to `mem_index`.
         let candidate = cmp::min(mem_index, min_flushed.unwrap_or(u64::MAX));
-        // always flush if there is any sst ingestion.
+        // try advance the index if there are any sst ingestion next to the flushed
+        // index, and always trigger a flush if there is any sst ingestion.
         let (candidate, has_ingested_sst) = self.advance_flushed_index_for_ingest(candidate);
         if candidate > self.admin.flushed {
             self.admin.flushed = candidate;
