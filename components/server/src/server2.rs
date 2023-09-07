@@ -103,6 +103,7 @@ use tikv::{
         Engine, Storage,
     },
 };
+use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
@@ -289,6 +290,13 @@ where
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .after_start(|| {
+                    // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
+                    unsafe { add_thread_memory_accessor() };
+                })
+                .before_stop(|| {
+                    remove_thread_memory_accessor();
+                })
                 .build(),
         );
         let pd_client = TikvServerCore::connect_to_pd_cluster(
