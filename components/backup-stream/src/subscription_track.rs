@@ -567,8 +567,6 @@ impl std::fmt::Debug for TwoPhaseResolver {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
     use kvproto::metapb::{Region, RegionEpoch};
     use raftstore::coprocessor::ObserveHandle;
     use txn_types::TimeStamp;

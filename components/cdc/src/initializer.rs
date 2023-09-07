@@ -575,7 +575,6 @@ mod tests {
         time::Duration,
     };
 
-    use collections::HashSet;
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
@@ -681,7 +680,7 @@ mod tests {
     fn test_initializer_build_resolver() {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
-        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
+        let mut expected_locks = BTreeMap::<TimeStamp, usize>::new();
 
         // Only observe ["", "b\0x90"]
         let observed_range = ObservedRange::new(
@@ -704,10 +703,7 @@ mod tests {
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&mut engine, k, v, k, ts);
-            expected_locks
-                .entry(ts)
-                .or_default()
-                .insert(k.to_vec().into());
+            *expected_locks.entry(ts).or_default() += 1;
         }
 
         let region = Region::default();
