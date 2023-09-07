@@ -17,7 +17,7 @@ use txn_types::Key;
 #[test_case(test_raftstore::must_new_cluster_mul)]
 #[test_case(test_raftstore_v2::must_new_cluster_mul)]
 fn test_gc_bypass_raft() {
-    let (cluster, leader, ctx) = must_new_cluster_mul(2);
+    let (cluster, leader, ctx) = new_cluster(2);
     cluster.pd_client.disable_default_operator();
 
     let env = Arc::new(Environment::new(1));
