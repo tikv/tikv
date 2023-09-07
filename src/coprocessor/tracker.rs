@@ -264,8 +264,11 @@ impl<E: Engine> Tracker<E> {
                     .unwrap_or_default()
             });
 
+            let source_stmt = self.req_ctx.context.get_source_stmt();
             with_tls_tracker(|tracker| {
                 info!(#"slow_log", "slow-query";
+                    "connection_id" => source_stmt.get_connection_id(),
+                    "session_alias" => source_stmt.get_session_alias(),
                     "region_id" => &self.req_ctx.context.get_region_id(),
                     "remote_host" => &self.req_ctx.peer,
                     "total_lifetime" => ?self.req_lifetime,
