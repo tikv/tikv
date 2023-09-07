@@ -270,13 +270,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.logger,
             "propose {} locks before transferring leader", lock_count;
         );
-        let PeerMsg::SimpleWrite(write) = PeerMsg::simple_write(header, encoder.encode()).0 else {unreachable!()};
+        let PeerMsg::SimpleWrite(write) = PeerMsg::simple_write_with_opt(header, encoder.encode(), DiskFullOpt::AllowedOnAlmostFull).0 else {unreachable!()};
         self.on_simple_write(
             ctx,
             write.header,
             write.data,
             write.ch,
-            Some(DiskFullOpt::AllowedOnAlmostFull),
+            Some(write.disk_full_opt),
         );
         true
     }
