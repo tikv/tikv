@@ -598,7 +598,7 @@ fn check_local_region_stale(
             region_id,
             Box::new(move |item| {
                 tx2.send(item)
-                    .expect("BUG: failed to send to newly created channel.");
+                    .unwrap();
             }),
         )
         .map_err(|e| {
