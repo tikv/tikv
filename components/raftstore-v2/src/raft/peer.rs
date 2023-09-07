@@ -23,8 +23,8 @@ use raftstore::{
         fsm::ApplyMetrics,
         metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
-        TabletSnapManager, WriteTask,
+        Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue, ReadDelegate,
+        ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState, WriteTask,
     },
 };
 use slog::{debug, info, Logger};
@@ -48,7 +48,6 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
-    tablet_being_flushed: bool,
 
     /// Statistics for self.
     self_stat: PeerStat,
@@ -126,6 +125,17 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     gc_peer_context: GcPeerContext,
 
     abnormal_peer_context: AbnormalPeerContext,
+
+    /// Force leader state is only used in online recovery when the majority of
+    /// peers are missing. In this state, it forces one peer to become leader
+    /// out of accordance with Raft election rule, and forbids any
+    /// read/write proposals. With that, we can further propose remove
+    /// failed-nodes conf-change, to make the Raft group forms majority and
+    /// works normally later on.
+    ///
+    /// For details, see the comment of `ForceLeaderState`.
+    force_leader_state: Option<ForceLeaderState>,
+    unsafe_recovery_state: Option<UnsafeRecoveryState>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -148,6 +158,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
         let merge_context = MergeContext::from_region_state(&logger, storage.region_state());
+        let persisted_applied = storage.apply_trace().persisted_apply_index();
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
@@ -171,11 +182,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: cached_tablet,
-            tablet_being_flushed: false,
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
-            compact_log_context: CompactLogContext::new(applied_index),
+            compact_log_context: CompactLogContext::new(applied_index, persisted_applied),
             merge_context: merge_context.map(|c| Box::new(c)),
             last_sent_snapshot_index: 0,
             raw_write_encoder: None,
@@ -217,6 +227,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
             abnormal_peer_context: AbnormalPeerContext::default(),
+            force_leader_state: None,
+            unsafe_recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -321,16 +333,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer().get_id()
-    }
-
-    #[inline]
-    pub fn tablet_being_flushed(&self) -> bool {
-        self.tablet_being_flushed
-    }
-
-    #[inline]
-    pub fn set_tablet_being_flushed(&mut self, v: bool) {
-        self.tablet_being_flushed = v;
     }
 
     #[inline]
@@ -602,7 +604,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 continue;
             }
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                let elapsed = instant.saturating_duration_since(now);
+                let elapsed = now.saturating_duration_since(*instant);
                 if elapsed >= max_duration {
                     let mut stats = pdpb::PeerStats::default();
                     stats.set_peer(p.clone());
@@ -651,10 +653,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group.raft.term
     }
 
-    #[inline]
-    // TODO
-    pub fn has_force_leader(&self) -> bool {
-        false
+    pub fn voters(&self) -> raft::util::Union<'_> {
+        self.raft_group.raft.prs().conf().voters().ids()
     }
 
     pub fn serving(&self) -> bool {
@@ -966,5 +966,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 true
             })
+    }
+
+    pub fn has_force_leader(&self) -> bool {
+        self.force_leader_state.is_some()
+    }
+
+    pub fn is_in_force_leader(&self) -> bool {
+        matches!(
+            self.force_leader_state,
+            Some(ForceLeaderState::ForceLeader { .. })
+        )
+    }
+
+    pub fn force_leader(&self) -> Option<&ForceLeaderState> {
+        self.force_leader_state.as_ref()
+    }
+
+    pub fn force_leader_mut(&mut self) -> &mut Option<ForceLeaderState> {
+        &mut self.force_leader_state
+    }
+
+    pub fn unsafe_recovery_state(&self) -> Option<&UnsafeRecoveryState> {
+        self.unsafe_recovery_state.as_ref()
+    }
+
+    pub fn unsafe_recovery_state_mut(&mut self) -> &mut Option<UnsafeRecoveryState> {
+        &mut self.unsafe_recovery_state
     }
 }

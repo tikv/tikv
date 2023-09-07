@@ -4,6 +4,8 @@ use std::cmp;
 
 use txn_types::TimeStamp;
 
+use crate::TtlProperties;
+
 #[derive(Clone, Debug)]
 pub struct MvccProperties {
     pub min_ts: TimeStamp,     // The minimal timestamp.
@@ -13,6 +15,7 @@ pub struct MvccProperties {
     pub num_deletes: u64,      // The number of MVCC deletes of all rows.
     pub num_versions: u64,     // The number of MVCC versions of all rows.
     pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
+    pub ttl: TtlProperties,    // The ttl properties of all rows, for RawKV only.
 }
 
 impl MvccProperties {
@@ -25,6 +28,7 @@ impl MvccProperties {
             num_deletes: 0,
             num_versions: 0,
             max_row_versions: 0,
+            ttl: TtlProperties::default(),
         }
     }
 
@@ -36,6 +40,7 @@ impl MvccProperties {
         self.num_deletes += other.num_deletes;
         self.num_versions += other.num_versions;
         self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
+        self.ttl.merge(&other.ttl);
     }
 }
 

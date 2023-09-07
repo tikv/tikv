@@ -30,7 +30,7 @@ use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, Re
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
-    peer::{
+    unsafe_recovery::{
         SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
         UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
         UnsafeRecoveryWaitApplySyncer,
@@ -544,6 +544,7 @@ pub enum CasualMessage<EK: KvEngine> {
         split_keys: Vec<Vec<u8>>,
         callback: Callback<EK::Snapshot>,
         source: Cow<'static, str>,
+        share_source_region_size: bool,
     },
 
     /// Hash result of ComputeHash command.

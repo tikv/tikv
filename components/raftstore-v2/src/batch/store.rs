@@ -21,6 +21,7 @@ use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType, WithIoType};
+use futures::compat::Future01CompatExt;
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::{StateRole, INVALID_ID};
@@ -34,11 +35,13 @@ use raftstore::{
         local_metrics::RaftMetrics,
         util::LatencyInspector,
         AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
-        SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteRouterContext,
-        WriteSenders,
+        SplitCheckTask, StoreWriters, StoreWritersContext, TabletSnapManager, Transport,
+        WriteRouterContext, WriteSenders, WriterContoller,
     },
 };
+use resource_control::ResourceController;
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use slog::{warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -46,8 +49,8 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     log::SlogFormat,
     sys::SysQuota,
-    time::{duration_to_sec, Instant as TiInstant, Limiter},
-    timer::SteadyTimer,
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, Limiter},
+    timer::{SteadyTimer, GLOBAL_TIMER_HANDLE},
     worker::{Builder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
@@ -61,12 +64,12 @@ use crate::{
     },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
-    worker::{checkpoint, cleanup, pd, refresh_config, tablet},
+    worker::{cleanup, pd, refresh_config, tablet},
     Error, Result,
 };
 
-const MIN_MANUAL_FLUSH_RATE: f64 = 0.3;
-const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(60);
+const MIN_MANUAL_FLUSH_RATE: f64 = 0.2;
+const MAX_MANUAL_FLUSH_PERIOD: Duration = Duration::from_secs(120);
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
@@ -76,7 +79,6 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub coprocessor_host: CoprocessorHost<EK>,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
-    pub current_time: Option<Timespec>,
     pub has_ready: bool,
     pub raft_metrics: RaftMetrics,
     /// The latest configuration.
@@ -88,12 +90,18 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
     pub schedulers: Schedulers<EK, ER>,
-    /// store meta
     pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub shutdown: Arc<AtomicBool>,
     pub engine: ER,
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
+    /// A background pool used for high-priority works.
+    pub high_priority_pool: FuturePool,
+
+    /// current_time from monotonic_raw_now.
+    pub current_time: Option<Timespec>,
+    /// unsafe_vote_deadline from monotonic_raw_now.
+    pub unsafe_vote_deadline: Option<Timespec>,
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
@@ -133,6 +141,23 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             self.cfg.check_long_uncommitted_interval.0;
         self.tick_batch[PeerTick::GcPeer as usize].wait_duration =
             60 * cmp::min(Duration::from_secs(1), self.cfg.raft_base_tick_interval.0);
+    }
+
+    // Return None means it has passed unsafe vote period.
+    pub fn maybe_in_unsafe_vote_period(&mut self) -> Option<Duration> {
+        if self.cfg.allow_unsafe_vote_after_start {
+            return None;
+        }
+        let deadline = TiInstant::Monotonic(self.unsafe_vote_deadline?);
+        let current_time =
+            TiInstant::Monotonic(*self.current_time.get_or_insert_with(monotonic_raw_now));
+        let remain_duration = deadline.saturating_duration_since(current_time);
+        if remain_duration > Duration::ZERO {
+            Some(remain_duration)
+        } else {
+            self.unsafe_vote_deadline.take();
+            None
+        }
     }
 }
 
@@ -217,6 +242,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         self.poll_ctx.has_ready = false;
         self.poll_ctx.current_time = None;
         self.timer = tikv_util::time::Instant::now();
+        // update store writers if necessary
+        self.poll_ctx.schedulers.write.refresh();
     }
 
     fn handle_control(&mut self, fsm: &mut StoreFsm) -> Option<usize> {
@@ -329,6 +356,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     router: StoreRouter<EK, ER>,
     schedulers: Schedulers<EK, ER>,
     apply_pool: FuturePool,
+    high_priority_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
     shutdown: Arc<AtomicBool>,
@@ -336,6 +364,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     global_stat: GlobalStoreStat,
     sst_importer: Arc<SstImporter>,
     key_manager: Option<Arc<DataKeyManager>>,
+    node_start_time: Timespec, // monotonic_raw_now
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -347,6 +376,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         trans: T,
         router: StoreRouter<EK, ER>,
         schedulers: Schedulers<EK, ER>,
+        high_priority_pool: FuturePool,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
         shutdown: Arc<AtomicBool>,
@@ -354,6 +384,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         coprocessor_host: CoprocessorHost<EK>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
+        node_start_time: Timespec, // monotonic_raw_now
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -374,6 +405,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             trans,
             router,
             apply_pool,
+            high_priority_pool,
             logger,
             schedulers,
             store_meta,
@@ -383,6 +415,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             global_stat,
             sst_importer,
             key_manager,
+            node_start_time,
         }
     }
 
@@ -501,11 +534,20 @@ where
 
     fn build(&mut self, _priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
+        let election_timeout = cfg.raft_base_tick_interval.0
+            * if cfg.raft_min_election_timeout_ticks != 0 {
+                cfg.raft_min_election_timeout_ticks as u32
+            } else {
+                cfg.raft_election_timeout_ticks as u32
+            };
+        let unsafe_vote_deadline =
+            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
         let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
             store_id: self.store_id,
             trans: self.trans.clone(),
             current_time: None,
+            unsafe_vote_deadline,
             has_ready: false,
             raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
             cfg,
@@ -518,6 +560,7 @@ where
             engine: self.engine.clone(),
             tablet_registry: self.tablet_registry.clone(),
             apply_pool: self.apply_pool.clone(),
+            high_priority_pool: self.high_priority_pool.clone(),
             self_disk_usage: DiskUsage::Normal,
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
@@ -538,7 +581,6 @@ pub struct Schedulers<EK: KvEngine, ER: RaftEngine> {
     pub read: Scheduler<ReadTask<EK>>,
     pub pd: Scheduler<pd::Task>,
     pub tablet: Scheduler<tablet::Task<EK>>,
-    pub checkpoint: Scheduler<checkpoint::Task<EK>>,
     pub write: WriteSenders<EK, ER>,
     pub cleanup: Scheduler<cleanup::Task>,
     pub refresh_config: Scheduler<RefreshConfigTask>,
@@ -572,21 +614,35 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
     // Following is not maintained by raftstore itself.
     background: Worker,
+
+    // A background pool used for high-priority works. We need to hold a reference to shut it down
+    // manually.
+    high_priority_pool: FuturePool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
-    fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
+    fn new(
+        background: Worker,
+        pd: LazyWorker<pd::Task>,
+        purge: Option<Worker>,
+        resource_control: Option<Arc<ResourceController>>,
+    ) -> Self {
         let checkpoint = Builder::new("checkpoint-worker").thread_count(2).create();
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
             tablet: Worker::new("tablet-worker"),
             checkpoint,
-            async_write: StoreWriters::new(None),
+            async_write: StoreWriters::new(resource_control),
             purge,
             cleanup_worker: Worker::new("cleanup-worker"),
-            background,
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            background,
+            high_priority_pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .thread_count(1, 1, 1)
+                .after_start(move || set_io_type(IoType::ForegroundWrite))
+                .name_prefix("store-bg")
+                .build_future_pool(),
         }
     }
 
@@ -600,6 +656,7 @@ impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
         if let Some(w) = self.purge {
             w.stop();
         }
+        self.high_priority_pool.shutdown();
     }
 }
 
@@ -610,6 +667,7 @@ pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     schedulers: Option<Schedulers<EK, ER>>,
     logger: Logger,
     shutdown: Arc<AtomicBool>,
+    node_start_time: Timespec, // monotonic_raw_now
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
@@ -633,6 +691,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         pd_worker: LazyWorker<pd::Task>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
+        grpc_service_mgr: GrpcServiceManager,
+        resource_ctl: Option<Arc<ResourceController>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -654,52 +714,78 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             let logger = self.logger.clone();
             let router = router.clone();
             let registry = tablet_registry.clone();
-            let limiter = Limiter::new(MIN_MANUAL_FLUSH_RATE);
-            let mut max_rate = cfg.value().max_manual_flush_rate;
-            if max_rate < MIN_MANUAL_FLUSH_RATE {
-                max_rate = MIN_MANUAL_FLUSH_RATE;
-            }
-            worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
-                let _guard = WithIoType::new(IoType::RewriteLog);
-                match raft_clone.manual_purge() {
-                    Ok(mut regions) => {
-                        if regions.is_empty() {
-                            return;
+            let base_max_rate = cfg
+                .value()
+                .max_manual_flush_rate
+                .clamp(MIN_MANUAL_FLUSH_RATE, f64::INFINITY);
+            let mut last_flush = (
+                EK::get_accumulated_flush_count().unwrap(),
+                TiInstant::now_coarse(),
+            );
+            worker.spawn_interval_async_task(cfg.value().raft_engine_purge_interval.0, move || {
+                let regions = {
+                    let _guard = WithIoType::new(IoType::RewriteLog);
+                    match raft_clone.manual_purge() {
+                        Err(e) => {
+                            warn!(logger, "purge expired files"; "err" => %e);
+                            Vec::new()
                         }
-                        warn!(logger, "flushing oldest cf of regions {regions:?}");
-                        // Try to finish flush in 1m.
-                        let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
-                        let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, max_rate);
-                        limiter.set_speed_limit(rate);
-                        // Return early if there're too many regions.
-                        regions.truncate((rate * MAX_MANUAL_FLUSH_PERIOD.as_secs_f64()) as usize);
-                        // Skip tablets that are flushed elsewhere.
-                        let threshold = std::time::SystemTime::now() - Duration::from_secs(60 * 2);
-                        for r in regions {
-                            let _ = router.send(r, PeerMsg::ForceCompactLog);
-                            if let Some(mut t) = registry.get(r)
-                                && let Some(t) = t.latest()
-                            {
-                                if let Err(e) = t.flush_oldest_cf(true, Some(threshold)) {
-                                    warn!(logger, "failed to flush oldest cf"; "err" => %e);
-                                }
-                            } else {
-                                continue;
-                            }
-                            std::thread::sleep(limiter.consume_duration(1));
-                        }
-                    }
-                    Err(e) => {
-                        warn!(logger, "purge expired files"; "err" => %e);
+                        Ok(regions) => regions,
                     }
                 };
+                // Lift up max rate if the background flush rate is high.
+                let flush_count = EK::get_accumulated_flush_count().unwrap();
+                let now = TiInstant::now_coarse();
+                let duration = now.saturating_duration_since(last_flush.1).as_secs_f64();
+                let max_rate = if duration > 10.0 {
+                    let total_flush_rate = (flush_count - last_flush.0) as f64 / duration;
+                    last_flush = (flush_count, now);
+                    base_max_rate.clamp(total_flush_rate, f64::INFINITY)
+                } else {
+                    base_max_rate
+                };
+                // Try to finish flush just in time.
+                let rate = regions.len() as f64 / MAX_MANUAL_FLUSH_PERIOD.as_secs_f64();
+                let rate = rate.clamp(MIN_MANUAL_FLUSH_RATE, max_rate);
+                // Return early if there're too many regions. Otherwise even if we manage to
+                // compact regions, the space can't be reclaimed in time.
+                let mut to_flush = (rate * MAX_MANUAL_FLUSH_PERIOD.as_secs_f64()) as usize;
+                // Skip tablets that are flushed elsewhere.
+                let threshold = std::time::SystemTime::now() - MAX_MANUAL_FLUSH_PERIOD;
+                for r in &regions {
+                    let _ = router.send(*r, PeerMsg::ForceCompactLog);
+                }
+                let registry = registry.clone();
+                let logger = logger.clone();
+                let limiter = Limiter::new(rate);
+                async move {
+                    for r in regions {
+                        if to_flush == 0 {
+                            break;
+                        }
+                        if let Some(mut t) = registry.get(r)
+                            && let Some(t) = t.latest()
+                        {
+                            match t.flush_oldest_cf(true, Some(threshold)) {
+                                Err(e) => warn!(logger, "failed to flush oldest cf"; "err" => %e),
+                                Ok(true) => {
+                                    to_flush -= 1;
+                                    let time =
+                                        std::time::Instant::now() + limiter.consume_duration(1);
+                                    let _ = GLOBAL_TIMER_HANDLE.delay(time).compat().await;
+                                }
+                                _ => (),
+                            }
+                        }
+                    }
+                }
             });
             Some(worker)
         } else {
             None
         };
 
-        let mut workers = Workers::new(background, pd_worker, purge_worker);
+        let mut workers = Workers::new(background, pd_worker, purge_worker, resource_ctl);
         workers
             .async_write
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
@@ -722,6 +808,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             auto_split_controller,
             store_meta.lock().unwrap().region_read_progress.clone(),
             collector_reg_handle,
+            grpc_service_mgr,
             self.logger.clone(),
             self.shutdown.clone(),
             cfg.clone(),
@@ -752,17 +839,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             .cleanup_worker
             .start("cleanup-worker", cleanup::Runner::new(compact_runner));
 
-        let checkpoint_scheduler = workers.checkpoint.start(
-            "checkpoint-worker",
-            checkpoint::Runner::new(self.logger.clone(), tablet_registry.clone()),
-        );
-
         let refresh_config_scheduler = workers.refresh_config_worker.scheduler();
+
         let schedulers = Schedulers {
             read: read_scheduler,
             pd: workers.pd.scheduler(),
             tablet: tablet_scheduler,
-            checkpoint: checkpoint_scheduler,
             write: workers.async_write.senders(),
             split_check: split_check_scheduler,
             cleanup: cleanup_worker_scheduler,
@@ -772,11 +854,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
-            raft_engine,
+            raft_engine.clone(),
             tablet_registry,
-            trans,
+            trans.clone(),
             router.clone(),
             schedulers.clone(),
+            workers.high_priority_pool.clone(),
             self.logger.clone(),
             store_meta.clone(),
             self.shutdown.clone(),
@@ -784,6 +867,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             coprocessor_host,
             sst_importer,
             key_manager,
+            self.node_start_time,
         );
 
         self.schedulers = Some(schedulers);
@@ -793,10 +877,24 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let tag = format!("rs-{}", store_id);
         self.system.spawn(tag, builder.clone());
 
+        let writer_control = WriterContoller::new(
+            StoreWritersContext {
+                store_id,
+                raft_engine,
+                kv_engine: None,
+                transfer: trans,
+                notifier: router.clone(),
+                cfg: cfg.clone(),
+            },
+            workers.async_write.clone(),
+        );
+        let apply_pool = builder.apply_pool.clone();
         let refresh_config_runner = refresh_config::Runner::new(
             self.logger.clone(),
             router.router().clone(),
             self.system.build_pool_state(builder),
+            writer_control,
+            apply_pool,
         );
         assert!(workers.refresh_config_worker.start(refresh_config_runner));
         self.workers = Some(workers);
@@ -935,6 +1033,7 @@ pub fn create_store_batch_system<EK, ER>(
     cfg: &Config,
     store_id: u64,
     logger: Logger,
+    resource_ctl: Option<Arc<ResourceController>>,
 ) -> (StoreRouter<EK, ER>, StoreSystem<EK, ER>)
 where
     EK: KvEngine,
@@ -942,13 +1041,14 @@ where
 {
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
-        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm, None);
+        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm, resource_ctl);
     let system = StoreSystem {
         system,
         workers: None,
         schedulers: None,
         logger: logger.clone(),
         shutdown: Arc::new(AtomicBool::new(false)),
+        node_start_time: monotonic_raw_now(),
     };
     (StoreRouter { router, logger }, system)
 }

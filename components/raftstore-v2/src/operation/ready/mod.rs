@@ -229,6 +229,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
         self.retry_pending_reads(&store_ctx.cfg);
+        self.check_force_leader(store_ctx);
         self.raft_group_mut().tick()
     }
 
@@ -265,8 +266,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
-        if util::is_vote_msg(msg.get_message()) && self.maybe_gc_sender(&msg) {
-            return;
+        if util::is_vote_msg(msg.get_message()) {
+            if self.maybe_gc_sender(&msg) {
+                return;
+            }
+            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
+                debug!(self.logger,
+                    "drop request vote for one election timeout after node starts";
+                    "from_peer_id" => msg.get_message().get_from(),
+                    "remain_duration" => ?remain,
+                );
+                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
+                return;
+            }
         }
         if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
@@ -298,6 +310,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .tablet
                         .schedule(crate::worker::tablet::Task::Flush {
                             region_id: self.region().get_id(),
+                            reason: "unknown",
+                            high_priority: false,
+                            threshold: Some(std::time::Duration::from_secs(10)),
                             cb: None,
                         });
                     return;
@@ -319,6 +334,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         msg.get_from_peer().get_id(),
                         msg.get_extra_msg(),
                     );
+                    return;
+                }
+                ExtraMessageType::MsgRefreshBuckets => {
+                    self.on_msg_refresh_buckets(ctx, &msg);
                     return;
                 }
                 _ => (),
@@ -488,7 +507,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
-                warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to, "message_type" => ?msg.msg_type);
+                warn!(
+                    self.logger,
+                    "failed to look up recipient peer";
+                    "to_peer" => msg.to,
+                    "message_type" => ?msg.msg_type
+                );
                 return None;
             }
         };
@@ -506,9 +530,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
         }
 
-        // Filling start and end key is only needed for being compatible with
-        // raftstore v1 learners (e.g. tiflash engine).
-        //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
         //   leader yet
@@ -837,7 +858,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        let (persisted_message, has_snapshot) =
+        let (persisted_message, flushed_epoch, has_snapshot) =
             self.async_writer
                 .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
@@ -861,11 +882,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
+
+            if self.unsafe_recovery_state().is_some() {
+                debug!(self.logger, "unsafe recovery finishes applying a snapshot");
+                self.check_unsafe_recovery_state(ctx);
+            }
+        }
+
+        if let Some(flushed_epoch) = flushed_epoch {
+            self.storage_mut().set_flushed_epoch(&flushed_epoch);
         }
 
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
+
+        if self.is_in_force_leader() {
+            // forward commit index, the committed entries will be applied in
+            // the next raft tick round.
+            self.maybe_force_forward_commit_index();
+        }
+
         if !self.destroy_progress().started() {
             // We may need to check if there is persisted committed logs.
             self.set_has_ready();
@@ -1029,6 +1066,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
+
+            if self.is_in_force_leader() && ss.raft_state != StateRole::Leader {
+                // for some reason, it's not leader anymore
+                info!(self.logger,
+                    "step down in force leader state";
+                    "state" => ?ss.raft_state,
+                );
+                self.on_force_leader_fail();
+            }
+
             self.read_progress()
                 .update_leader_info(ss.leader_id, term, self.region());
             let target = self.refresh_leader_transferee();

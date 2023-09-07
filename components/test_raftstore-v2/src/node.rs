@@ -33,6 +33,7 @@ use raftstore_v2::{
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
@@ -47,6 +48,7 @@ use tikv::{
 use tikv_util::{
     box_err,
     config::VersionTrack,
+    mpsc,
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
@@ -151,7 +153,7 @@ pub struct NodeCluster<EK: KvEngine> {
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
-    cfg_controller: Option<ConfigController>,
+    cfg_controller: HashMap<u64, ConfigController>,
 }
 
 impl<EK: KvEngine> NodeCluster<EK> {
@@ -163,7 +165,7 @@ impl<EK: KvEngine> NodeCluster<EK> {
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             snap_mgrs: HashMap::default(),
-            cfg_controller: None,
+            cfg_controller: HashMap::default(),
         }
     }
 
@@ -171,8 +173,8 @@ impl<EK: KvEngine> NodeCluster<EK> {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 
-    pub fn get_cfg_controller(&self) -> Option<&ConfigController> {
-        self.cfg_controller.as_ref()
+    pub fn get_cfg_controller(&self, node_id: u64) -> Option<&ConfigController> {
+        self.cfg_controller.get(&node_id)
     }
 }
 
@@ -203,7 +205,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<EK>,
-        _resource_manager: &Option<Arc<ResourceGroupManager>>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64> {
         assert!(!self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -216,10 +218,18 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                true,
             )
             .unwrap();
 
-        let mut node = NodeV2::new(&cfg.server, self.pd_client.clone(), None);
+        let mut node = NodeV2::new(
+            &cfg.server,
+            self.pd_client.clone(),
+            None,
+            resource_manager
+                .as_ref()
+                .map(|r| r.derive_controller("raft-v2".into(), false)),
+        );
         node.try_bootstrap_store(&raft_store, &raft_engine).unwrap();
         assert_eq!(node.id(), node_id);
 
@@ -292,11 +302,13 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                     dir,
                     key_manager.clone(),
                     cfg.storage.api_version(),
+                    true,
                 )
                 .unwrap(),
             )
         };
 
+        let (sender, _) = mpsc::unbounded();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
         node.start(
@@ -316,6 +328,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             &state,
             importer,
             key_manager,
+            GrpcServiceManager::new(sender),
         )?;
         assert!(
             raft_engine
@@ -332,7 +345,12 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let mut raftstore_cfg = cfg.tikv.raft_store;
         raftstore_cfg.optimize_for(true);
         raftstore_cfg
-            .validate(region_split_size, enable_region_bucket, region_bucket_size)
+            .validate(
+                region_split_size,
+                enable_region_bucket,
+                region_bucket_size,
+                true,
+            )
             .unwrap();
 
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
@@ -362,7 +380,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
-        self.cfg_controller = Some(cfg_controller);
+        self.cfg_controller.insert(node_id, cfg_controller);
         Ok(node_id)
     }
 

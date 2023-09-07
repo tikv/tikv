@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod test_apply_trace;
 mod test_async_fetch;
 mod test_async_io;
 mod test_backup;
@@ -8,9 +7,11 @@ mod test_bootstrap;
 mod test_cmd_epoch_checker;
 mod test_conf_change;
 mod test_coprocessor;
+mod test_debugger;
 mod test_disk_full;
 mod test_early_apply;
 mod test_encryption;
+mod test_engine;
 mod test_gc_metrics;
 mod test_gc_worker;
 mod test_hibernate;

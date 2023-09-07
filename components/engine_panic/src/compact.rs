@@ -44,6 +44,10 @@ impl CompactExt for PanicEngine {
     ) -> Result<()> {
         panic!()
     }
+
+    fn check_in_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
+        panic!()
+    }
 }
 
 pub struct PanicCompactedEvent;

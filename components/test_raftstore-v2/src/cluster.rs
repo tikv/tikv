@@ -17,14 +17,13 @@ use engine_traits::{
     TabletRegistry, CF_DEFAULT,
 };
 use file_system::IoRateLimiter;
-use futures::{
-    compat::Future01CompatExt, executor::block_on, future::BoxFuture, select, Future, FutureExt,
-};
+use futures::{executor::block_on, future::BoxFuture, Future};
 use keys::{data_key, validate_data_key, DATA_PREFIX_KEY};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::ApiVersion,
     metapb::{self, Buckets, PeerRole, RegionEpoch},
+    pdpb,
     raft_cmdpb::{
         AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, RegionDetailResponse,
         Request, Response, StatusCmdType,
@@ -44,7 +43,7 @@ use raftstore::{
     Error, Result,
 };
 use raftstore_v2::{
-    router::{DebugInfoChannel, PeerMsg, QueryResult},
+    router::{DebugInfoChannel, PeerMsg, QueryResult, StoreMsg, StoreTick},
     write_initial_states, SimpleWriteEncoder, StoreMeta, StoreRouter,
 };
 use resource_control::ResourceGroupManager;
@@ -52,7 +51,7 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
     check_raft_cmd_request, is_error_response, new_admin_request, new_delete_cmd,
-    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd,
+    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd, new_put_cmd,
     new_region_detail_cmd, new_region_leader_cmd, new_request, new_status_request, new_store,
     new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
     PartitionFilterFactory, RawEngine,
@@ -64,7 +63,6 @@ use tikv_util::{
     safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
-    timer::GLOBAL_TIMER_HANDLE,
     warn,
     worker::LazyWorker,
     HandyRwLock,
@@ -108,17 +106,9 @@ pub trait Simulator<EK: KvEngine> {
 
     fn read(&mut self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
-        let timeout_f = GLOBAL_TIMER_HANDLE
-            .delay(std::time::Instant::now() + timeout)
-            .compat();
-        futures::executor::block_on(async move {
-            futures::select! {
-                res = self.async_read(node_id, request).fuse() => res,
-                e = timeout_f.fuse() => {
-                    Err(Error::Timeout(format!("request timeout for {:?}: {:?}", timeout,e)))
-                },
-            }
-        })
+        let f = self.async_read(node_id, request);
+        block_on_timeout(f, timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
     }
 
     fn async_read(
@@ -222,8 +212,7 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        let mut fut = Box::pin(sub.result());
-        match block_on_timeout(fut.as_mut(), timeout)
+        match block_on_timeout(sub.result(), timeout)
             .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
         {
             Some(QueryResult::Read(_)) => unreachable!(),
@@ -288,14 +277,9 @@ pub trait Simulator<EK: KvEngine> {
             }
         }
 
-        let timeout_f = GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + timeout);
-        block_on(async move {
-            select! {
-                // todo: unwrap?
-                res = sub.result().fuse() => Ok(res.unwrap()),
-                _ = timeout_f.compat().fuse() => Err(Error::Timeout(format!("request timeout for {:?}", timeout))),
-            }
-        })
+        Ok(block_on_timeout(sub.result(), timeout)
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))?
+            .unwrap())
     }
 
     fn async_command_on_node(
@@ -433,6 +417,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
 
     pub fn id(&self) -> u64 {
         self.cfg.server.cluster_id
+    }
+
+    pub fn get_node_ids(&self) -> HashSet<u64> {
+        self.sim.rl().get_node_ids()
     }
 
     pub fn flush_data(&self) {
@@ -1275,6 +1263,29 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
+    pub fn async_request(
+        &mut self,
+        mut req: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
+        let region_id = req.get_header().get_region_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .wl()
+            .async_command_on_node(leader.get_store_id(), req)
+    }
+
+    pub fn async_put(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let mut region = self.get_region(key);
+        let reqs = vec![new_put_cmd(key, value)];
+        let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
+        Ok(self.async_request(put))
+    }
+
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
         self.must_put_cf(CF_DEFAULT, key, value);
     }
@@ -1654,6 +1665,30 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn must_remove_region(&mut self, store_id: u64, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            let peer = new_peer(store_id, 0);
+            let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+            let resp = self
+                .call_command(find_leader, Duration::from_secs(5))
+                .unwrap();
+
+            if is_error_response(&resp) {
+                assert!(
+                    resp.get_header().get_error().has_region_not_found(),
+                    "unexpected error resp: {:?}",
+                    resp
+                );
+                break;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(60) {
+                panic!("region {} is not removed after 60s.", region_id);
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
@@ -1668,12 +1703,23 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
 
     pub fn refresh_region_bucket_keys(
         &mut self,
-        _region: &metapb::Region,
-        _buckets: Vec<Bucket>,
-        _bucket_ranges: Option<Vec<BucketRange>>,
+        region: &metapb::Region,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
         _expect_buckets: Option<Buckets>,
     ) -> u64 {
-        unimplemented!()
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let refresh_buckets_msg = PeerMsg::RefreshRegionBuckets {
+            region_epoch: region.get_region_epoch().clone(),
+            buckets,
+            bucket_ranges,
+        };
+
+        if let Err(e) = router.send(region.get_id(), refresh_buckets_msg) {
+            panic!("router send refresh buckets msg failed, error: {:?}", e,);
+        }
+        0
     }
 
     pub fn send_half_split_region_message(
@@ -1769,6 +1815,67 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         debug!("all nodes are shut down.");
     }
 
+    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
+        let timer = Instant::now_coarse();
+        while timer.saturating_elapsed() < Duration::from_secs(5) {
+            if self
+                .query_leader(node_id, region_id, Duration::from_secs(1))
+                .is_none()
+            {
+                return;
+            }
+            sleep_ms(100);
+        }
+        panic!(
+            "region {}'s replica in store {} still has a valid leader after 5 secs",
+            region_id, node_id
+        );
+    }
+
+    pub fn must_send_store_heartbeat(&self, node_id: u64) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        router
+            .send_control(StoreMsg::Tick(StoreTick::PdStoreHeartbeat))
+            .unwrap();
+    }
+
+    pub fn enter_force_leader(&mut self, region_id: u64, store_id: u64, failed_stores: Vec<u64>) {
+        let mut plan = pdpb::RecoveryPlan::default();
+        let mut force_leader = pdpb::ForceLeader::default();
+        force_leader.set_enter_force_leaders([region_id].to_vec());
+        force_leader.set_failed_stores(failed_stores.to_vec());
+        plan.set_force_leader(force_leader);
+        // Triggers the unsafe recovery plan execution.
+        self.pd_client.must_set_unsafe_recovery_plan(store_id, plan);
+        self.must_send_store_heartbeat(store_id);
+    }
+
+    pub fn must_enter_force_leader(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        failed_stores: Vec<u64>,
+    ) -> pdpb::StoreReport {
+        self.enter_force_leader(region_id, store_id, failed_stores);
+        let mut store_report = None;
+        for _ in 0..20 {
+            store_report = self.pd_client.must_get_store_report(store_id);
+            if store_report.is_some() {
+                break;
+            }
+            sleep_ms(100);
+        }
+        assert_ne!(store_report, None);
+        store_report.unwrap()
+    }
+
+    pub fn exit_force_leader(&mut self, region_id: u64, store_id: u64) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        router
+            .send(region_id, PeerMsg::ExitForceLeaderState)
+            .unwrap();
+    }
+
     pub fn must_send_flashback_msg(
         &mut self,
         region_id: u64,
@@ -1809,6 +1916,10 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
                 );
             }
         });
+    }
+
+    pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
+        self.pd_client.get_down_peers()
     }
 }
 

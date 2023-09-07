@@ -92,7 +92,7 @@ fn test_delete() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+// v2 doesn't support RocksDB delete range.
 fn test_node_use_delete_range() {
     let mut cluster = new_cluster(0, 1);
     cluster.cfg.raft_store.use_delete_range = true;

@@ -1,19 +1,22 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{mpsc::channel, Arc, Mutex},
     time::Duration,
 };
 
-use kvproto::raft_serverpb::{PeerState, RaftMessage};
+use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage};
 use raftstore::errors::Result;
-use test_raftstore::{new_learner_peer, sleep_ms, Filter, FilterFactory, Simulator as S1};
+use test_raftstore::{
+    new_learner_peer, new_peer, sleep_ms, Filter, FilterFactory, Simulator as S1,
+};
 use test_raftstore_v2::Simulator as S2;
-use tikv_util::time::Instant;
+use tikv_util::{time::Instant, HandyRwLock};
 
 struct ForwardFactory {
     node_id: u64,
     chain_send: Arc<dyn Fn(RaftMessage) + Send + Sync + 'static>,
+    keep_msg: bool,
 }
 
 impl FilterFactory for ForwardFactory {
@@ -21,6 +24,7 @@ impl FilterFactory for ForwardFactory {
         vec![Box::new(ForwardFilter {
             node_id: self.node_id,
             chain_send: self.chain_send.clone(),
+            keep_msg: self.keep_msg,
         })]
     }
 }
@@ -28,13 +32,22 @@ impl FilterFactory for ForwardFactory {
 struct ForwardFilter {
     node_id: u64,
     chain_send: Arc<dyn Fn(RaftMessage) + Send + Sync + 'static>,
+    keep_msg: bool,
 }
 
 impl Filter for ForwardFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        for m in msgs.drain(..) {
-            if self.node_id == m.get_to_peer().get_store_id() {
-                (self.chain_send)(m);
+        if self.keep_msg {
+            for m in msgs {
+                if self.node_id == m.get_to_peer().get_store_id() {
+                    (self.chain_send)(m.clone());
+                }
+            }
+        } else {
+            for m in msgs.drain(..) {
+                if self.node_id == m.get_to_peer().get_store_id() {
+                    (self.chain_send)(m);
+                }
             }
         }
         Ok(())
@@ -91,6 +104,7 @@ fn test_gc_peer_tiflash_engine() {
             info!("send to trans2"; "msg" => ?m);
             let _ = trans2.lock().unwrap().send_raft_message(Box::new(m));
         }),
+        keep_msg: false,
     };
     cluster_v1.add_send_filter(factory1);
     // For cluster 2, it intercepts msgs sent to learner node, and then
@@ -101,6 +115,7 @@ fn test_gc_peer_tiflash_engine() {
             info!("send to trans1"; "msg" => ?m);
             let _ = trans1.lock().unwrap().send_raft_message(m);
         }),
+        keep_msg: false,
     };
     cluster_v2.add_send_filter(factory2);
 
@@ -123,4 +138,83 @@ fn test_gc_peer_tiflash_engine() {
             panic!("timeout");
         }
     }
+}
+
+#[test]
+fn test_gc_removed_peer() {
+    let mut cluster = test_raftstore::new_node_cluster(1, 2);
+    cluster.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster.pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
+    let factory = ForwardFactory {
+        node_id: 1,
+        chain_send: Arc::new(move |m| {
+            if m.get_extra_msg().get_type() == ExtraMessageType::MsgGcPeerResponse {
+                let _ = tx.lock().unwrap().send(m);
+            }
+        }),
+        keep_msg: true,
+    };
+    cluster.add_send_filter(factory);
+
+    let check_gc_peer = |to_peer: kvproto::metapb::Peer, timeout| -> bool {
+        let epoch = cluster.get_region_epoch(region_id);
+        let mut msg = RaftMessage::default();
+        msg.set_is_tombstone(true);
+        msg.set_region_id(region_id);
+        msg.set_from_peer(new_peer(1, 1));
+        msg.set_to_peer(to_peer.clone());
+        msg.set_region_epoch(epoch.clone());
+        let extra_msg = msg.mut_extra_msg();
+        extra_msg.set_type(ExtraMessageType::MsgGcPeerRequest);
+        let check_peer = extra_msg.mut_check_gc_peer();
+        check_peer.set_from_region_id(region_id);
+        check_peer.set_check_region_id(region_id);
+        check_peer.set_check_peer(to_peer.clone());
+        check_peer.set_check_region_epoch(epoch);
+
+        cluster.sim.wl().send_raft_msg(msg.clone()).unwrap();
+        let Ok(gc_resp) = rx.recv_timeout(timeout) else {
+            return false;
+        };
+        assert_eq!(gc_resp.get_region_id(), region_id);
+        assert_eq!(*gc_resp.get_from_peer(), to_peer);
+        true
+    };
+
+    // Mock gc a peer that has been removed before creation.
+    assert!(check_gc_peer(
+        new_learner_peer(2, 5),
+        Duration::from_secs(5)
+    ));
+
+    cluster
+        .pd_client
+        .must_add_peer(region_id, new_learner_peer(2, 4));
+    // Make sure learner is created.
+    cluster.wait_peer_state(region_id, 2, PeerState::Normal);
+
+    cluster
+        .pd_client
+        .must_remove_peer(region_id, new_learner_peer(2, 4));
+    // Make sure learner is removed.
+    cluster.wait_peer_state(region_id, 2, PeerState::Tombstone);
+
+    // Mock gc peer request. GC learner(2, 4).
+    let start = Instant::now();
+    loop {
+        if check_gc_peer(new_learner_peer(2, 4), Duration::from_millis(200)) {
+            return;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            break;
+        }
+    }
+    assert!(check_gc_peer(
+        new_learner_peer(2, 4),
+        Duration::from_millis(200)
+    ));
 }

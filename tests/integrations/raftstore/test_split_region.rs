@@ -20,11 +20,14 @@ use raftstore::{
     store::{Bucket, BucketRange, Callback, WriteResponse},
     Result,
 };
+use raftstore_v2::router::QueryResult;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::config::*;
+use tikv_util::{config::*, future::block_on_timeout};
 use txn_types::{Key, LastChange, PessimisticLock};
+
+use crate::tikv_util::HandyRwLock;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -1430,4 +1433,64 @@ fn test_node_slow_split_does_not_prevent_leader_election() {
     notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
     cluster.must_put(b"k0", b"v0");
+}
+
+// A filter that disable read index by heartbeat.
+#[derive(Clone)]
+struct EraseHeartbeatContext;
+
+impl Filter for EraseHeartbeatContext {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
+                msg.mut_message().clear_context();
+            }
+        }
+        Ok(())
+    }
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_split_during_read_index() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    let region = cluster.get_region(b"");
+
+    // Delay read index.
+    cluster.add_recv_filter_on_node(2, Box::new(EraseHeartbeatContext));
+    cluster.add_recv_filter_on_node(3, Box::new(EraseHeartbeatContext));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (msg, sub) = raftstore_v2::router::PeerMsg::raft_query(request);
+    cluster
+        .sim
+        .rl()
+        .async_peer_msg_on_node(1, region.get_id(), msg)
+        .unwrap();
+
+    cluster.must_split(&region, b"a");
+
+    // Enable read index
+    cluster.clear_recv_filter_on_node(2);
+    cluster.clear_recv_filter_on_node(3);
+
+    match block_on_timeout(sub.result(), Duration::from_secs(5)) {
+        Ok(Some(QueryResult::Response(resp))) if resp.get_header().has_error() => {}
+        other => {
+            panic!("{:?}", other);
+        }
+    }
 }

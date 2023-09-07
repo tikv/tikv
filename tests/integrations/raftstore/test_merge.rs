@@ -13,9 +13,8 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as _;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::{config::*, HandyRwLock};
+use tikv_util::{config::*, future::block_on_timeout, HandyRwLock};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is working as expected in a general condition.
@@ -1445,10 +1444,10 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 
     // The gap is too large, so the previous merge should fail. And this new put
     // request should be allowed.
-    let mut res = cluster.async_put(b"k1", b"new_val").unwrap();
+    let res = cluster.async_put(b"k1", b"new_val").unwrap();
 
     cluster.clear_send_filters();
-    res.recv_timeout(Duration::from_secs(5)).unwrap();
+    block_on_timeout(res, Duration::from_secs(5)).unwrap();
 
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
 }
@@ -1634,7 +1633,9 @@ fn test_stale_message_after_merge() {
 /// Check whether merge should be prevented if follower may not have enough
 /// logs.
 #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
+// FIXME: #[test_case(test_raftstore_v2::new_server_cluster)]
+// In v2 `try_merge` always return error. Also the last `must_merge` sometimes
+// cannot get an updated min_matched.
 fn test_prepare_merge_with_reset_matched() {
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);

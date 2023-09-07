@@ -215,6 +215,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_tick(&mut self, tick: PeerTick) {
         self.fsm.tick_registry[tick as usize] = false;
+        if !self.fsm.peer().serving() {
+            return;
+        }
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat(),
@@ -291,9 +294,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     tablet_index,
                     flushed_index,
                 } => {
-                    self.fsm
-                        .peer_mut()
-                        .on_data_flushed(cf, tablet_index, flushed_index);
+                    self.fsm.peer_mut().on_data_flushed(
+                        self.store_ctx,
+                        cf,
+                        tablet_index,
+                        flushed_index,
+                    );
                 }
                 PeerMsg::PeerUnreachable { to_peer_id } => {
                     self.fsm.peer_mut().on_peer_unreachable(to_peer_id)
@@ -356,6 +362,45 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::FlushBeforeClose { tx } => {
                     self.fsm.peer_mut().flush_before_close(self.store_ctx, tx)
                 }
+                PeerMsg::EnterForceLeaderState {
+                    syncer,
+                    failed_stores,
+                } => self.fsm.peer_mut().on_enter_pre_force_leader(
+                    self.store_ctx,
+                    syncer,
+                    failed_stores,
+                ),
+                PeerMsg::ExitForceLeaderState => {
+                    self.fsm.peer_mut().on_exit_force_leader(self.store_ctx)
+                }
+                PeerMsg::ExitForceLeaderStateCampaign => {
+                    self.fsm.peer_mut().on_exit_force_leader_campaign()
+                }
+                PeerMsg::UnsafeRecoveryWaitApply(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_wait_apply(syncer)
+                }
+                PeerMsg::UnsafeRecoveryFillOutReport(syncer) => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_fill_out_report(syncer),
+                PeerMsg::UnsafeRecoveryWaitInitialized(syncer) => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_wait_initialized(syncer),
+                PeerMsg::UnsafeRecoveryDestroy(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_destroy_peer(syncer)
+                }
+                PeerMsg::UnsafeRecoveryDemoteFailedVoters {
+                    failed_voters,
+                    syncer,
+                } => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_pre_demote_failed_voters(
+                        self.store_ctx,
+                        syncer,
+                        failed_voters,
+                    ),
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

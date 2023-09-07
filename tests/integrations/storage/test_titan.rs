@@ -12,7 +12,7 @@ use engine_rocks::{
 use engine_test::new_temp_engine;
 use engine_traits::{
     CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
-    SstWriterBuilder, SyncMutable, CF_DEFAULT, CF_WRITE,
+    SstWriterBuilder, SyncMutable, WriteOptions, CF_DEFAULT, CF_WRITE,
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
@@ -149,10 +149,7 @@ fn test_delete_files_in_range_for_titan() {
 
     // Set configs and create engines
     let mut cfg = TikvConfig::default();
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(cfg.storage.engine);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     cfg.rocksdb.titan.enabled = true;
     cfg.rocksdb.titan.disable_gc = true;
     cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
@@ -311,6 +308,7 @@ fn test_delete_files_in_range_for_titan() {
     engines
         .kv
         .delete_ranges_cfs(
+            &WriteOptions::default(),
             DeleteStrategy::DeleteFiles,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -321,6 +319,7 @@ fn test_delete_files_in_range_for_titan() {
     engines
         .kv
         .delete_ranges_cfs(
+            &WriteOptions::default(),
             DeleteStrategy::DeleteByKey,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -331,6 +330,7 @@ fn test_delete_files_in_range_for_titan() {
     engines
         .kv
         .delete_ranges_cfs(
+            &WriteOptions::default(),
             DeleteStrategy::DeleteBlobs,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),

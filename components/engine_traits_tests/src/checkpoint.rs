@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use encryption_export::data_key_manager_from_config;
+use encryption_export::{data_key_manager_from_config, trash_dir_all};
 use engine_test::{
     ctor::{CfOptions, DbOptions, KvEngineConstructorExt},
     kv::KvTestEngine,
@@ -28,7 +28,7 @@ fn test_encrypted_checkpoint() {
     );
 
     let mut db_opts = DbOptions::default();
-    db_opts.set_key_manager(Some(key_manager));
+    db_opts.set_key_manager(Some(key_manager.clone()));
     let cf_opts: Vec<_> = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
 
     let path1 = root_path.join("1").to_str().unwrap().to_owned();
@@ -46,4 +46,10 @@ fn test_encrypted_checkpoint() {
         db2.get_value_cf(CF_DEFAULT, b"foo").unwrap().unwrap(),
         b"bar"
     );
+    drop(db1);
+    drop(db2);
+    // Match KvEngineFactory::destroy_tablet.
+    trash_dir_all(path1, Some(&key_manager)).unwrap();
+    trash_dir_all(path2, Some(&key_manager)).unwrap();
+    assert_eq!(key_manager.file_count(), 0);
 }

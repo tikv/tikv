@@ -53,6 +53,64 @@ pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
+pub trait GrpcBuilderFactory {
+    fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder>;
+}
+
+struct BuilderFactory<S: Tikv + Send + Clone + 'static> {
+    kv_service: S,
+    cfg: Arc<VersionTrack<Config>>,
+    security_mgr: Arc<SecurityManager>,
+    health_service: HealthService,
+}
+
+impl<S> BuilderFactory<S>
+where
+    S: Tikv + Send + Clone + 'static,
+{
+    pub fn new(
+        kv_service: S,
+        cfg: Arc<VersionTrack<Config>>,
+        security_mgr: Arc<SecurityManager>,
+        health_service: HealthService,
+    ) -> BuilderFactory<S> {
+        BuilderFactory {
+            kv_service,
+            cfg,
+            security_mgr,
+            health_service,
+        }
+    }
+}
+
+impl<S> GrpcBuilderFactory for BuilderFactory<S>
+where
+    S: Tikv + Send + Clone + 'static,
+{
+    fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder> {
+        let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
+        let ip: String = format!("{}", addr.ip());
+        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
+            .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
+        let channel_args = ChannelBuilder::new(Arc::clone(&env))
+            .stream_initial_window_size(self.cfg.value().grpc_stream_initial_window_size.0 as i32)
+            .max_concurrent_stream(self.cfg.value().grpc_concurrent_stream)
+            .max_receive_message_len(-1)
+            .set_resource_quota(mem_quota)
+            .max_send_message_len(-1)
+            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
+            .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
+            .keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.into())
+            .build_args();
+
+        let sb = ServerBuilder::new(Arc::clone(&env))
+            .channel_args(channel_args)
+            .register_service(create_tikv(self.kv_service.clone()))
+            .register_service(create_health(self.health_service.clone()));
+        Ok(self.security_mgr.bind(sb, &ip, addr.port()))
+    }
+}
+
 /// The TiKV server
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
@@ -79,6 +137,7 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     debug_thread_pool: Arc<Runtime>,
     health_service: HealthService,
     timer: Handle,
+    builder_factory: Box<dyn GrpcBuilderFactory>,
 }
 
 impl<S, E> Server<S, E>
@@ -111,8 +170,7 @@ where
                 RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
                     .worker_threads(cfg.value().stats_concurrency)
-                    .after_start_wrapper(|| {})
-                    .before_stop_wrapper(|| {})
+                    .with_sys_hooks()
                     .build()
                     .unwrap(),
             )
@@ -142,30 +200,17 @@ where
             cfg.value().reject_messages_on_memory_ratio,
             resource_manager,
         );
+        let builder_factory = Box::new(BuilderFactory::new(
+            kv_service,
+            cfg.clone(),
+            security_mgr.clone(),
+            health_service.clone(),
+        ));
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
-        let ip = format!("{}", addr.ip());
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
-        let channel_args = ChannelBuilder::new(Arc::clone(&env))
-            .stream_initial_window_size(cfg.value().grpc_stream_initial_window_size.0 as i32)
-            .max_concurrent_stream(cfg.value().grpc_concurrent_stream)
-            .max_receive_message_len(-1)
-            .set_resource_quota(mem_quota.clone())
-            .max_send_message_len(-1)
-            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
-            .keepalive_time(cfg.value().grpc_keepalive_time.into())
-            .keepalive_timeout(cfg.value().grpc_keepalive_timeout.into())
-            .build_args();
-
-        let builder = {
-            let mut sb = ServerBuilder::new(Arc::clone(&env))
-                .channel_args(channel_args)
-                .register_service(create_tikv(kv_service))
-                .register_service(create_health(health_service.clone()));
-            sb = security_mgr.bind(sb, &ip, addr.port());
-            Either::Left(sb)
-        };
+        let builder = Either::Left(builder_factory.create_builder(env.clone())?);
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
@@ -196,6 +241,7 @@ where
             debug_thread_pool,
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
+            builder_factory,
         };
 
         Ok(svr)
@@ -249,6 +295,15 @@ where
         Ok(addr)
     }
 
+    fn start_grpc(&mut self) {
+        info!("listening on addr"; "addr" => &self.local_addr);
+        let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
+        grpc_server.start();
+        self.builder_or_server = Some(Either::Right(grpc_server));
+        self.health_service
+            .set_serving_status("", ServingStatus::Serving);
+    }
+
     /// Starts the TiKV server.
     /// Notice: Make sure call `build_and_bind` first.
     pub fn start(
@@ -281,10 +336,7 @@ where
             }
         }
 
-        let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
-        info!("listening on addr"; "addr" => &self.local_addr);
-        grpc_server.start();
-        self.builder_or_server = Some(Either::Right(grpc_server));
+        self.start_grpc();
 
         // Note this should be called only after grpc server is started.
         let mut grpc_load_stats = {
@@ -324,8 +376,6 @@ where
                 option_env!("TIKV_BUILD_GIT_HASH").unwrap_or("None"),
             ])
             .set(startup_ts as i64);
-        self.health_service
-            .set_serving_status("", ServingStatus::Serving);
 
         info!("TiKV is ready to serve");
         Ok(())
@@ -343,6 +393,33 @@ where
         let _ = self.yatp_read_pool.take();
         self.health_service.shutdown();
         Ok(())
+    }
+
+    pub fn pause(&mut self) -> Result<()> {
+        let start = Instant::now();
+        // Prepare the builder for resume grpc server. And if the builder cannot be
+        // created, then pause will be skipped.
+        let builder = Either::Left(self.builder_factory.create_builder(self.env.clone())?);
+        if let Some(Either::Right(server)) = self.builder_or_server.take() {
+            drop(server);
+        }
+        self.health_service
+            .set_serving_status("", ServingStatus::NotServing);
+        self.builder_or_server = Some(builder);
+        info!("paused the grpc server"; "takes" => ?start.elapsed(),);
+        Ok(())
+    }
+
+    pub fn resume(&mut self) -> Result<()> {
+        if let Some(builder) = self.builder_or_server.as_ref() {
+            let start = Instant::now();
+            assert!(builder.is_left());
+            self.build_and_bind()?;
+            self.start_grpc();
+            info!("resumed the grpc server"; "takes" => ?start.elapsed(),);
+            return Ok(());
+        }
+        Err(Error::Other(box_err!("resume the grpc server is skipped.")))
     }
 
     // Return listening address, this may only be used for outer test
@@ -560,14 +637,14 @@ mod tests {
             storage.get_concurrency_manager(),
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap(),
         );

@@ -176,7 +176,7 @@ pub fn check_ttl_and_compact_files<E: KvEngine>(
         return;
     }
     for (file_name, prop) in res {
-        if prop.max_expire_ts <= current_ts {
+        if prop.max_expire_ts.unwrap_or(u64::MAX) <= current_ts {
             files.push(file_name);
         }
     }

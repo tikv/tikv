@@ -180,6 +180,7 @@ make_static_metric! {
         disk_full,
         non_witness,
         recovery,
+        unsafe_vote,
     }
 
     pub label_enum ProposalType {

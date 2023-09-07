@@ -71,6 +71,9 @@ pub trait CompactExt: CfNamesExt {
         max_subcompactions: u32,
         exclude_l0: bool,
     ) -> Result<()>;
+
+    // Check all data is in the range [start, end).
+    fn check_in_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()>;
 }
 
 pub trait CompactedEvent: Send {

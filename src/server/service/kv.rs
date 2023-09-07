@@ -192,11 +192,11 @@ macro_rules! handle_request {
         handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
     };
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
-        fn $fn_name(&mut self, ctx: RpcContext<'_>, mut req: $req_ty, sink: UnarySink<$resp_ty>) {
+        fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now();
 
-            let source = req.mut_context().take_request_source();
+            let source = req.get_context().get_request_source().to_owned();
             let resource_control_ctx = req.get_context().get_resource_control_context();
             if let Some(resource_manager) = &self.resource_manager {
                 resource_manager.consume_penalty(resource_control_ctx);
@@ -417,12 +417,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     fn kv_prepare_flashback_to_version(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: PrepareFlashbackToVersionRequest,
+        req: PrepareFlashbackToVersionRequest,
         sink: UnarySink<PrepareFlashbackToVersionResponse>,
     ) {
         let begin_instant = Instant::now();
 
-        let source = req.mut_context().take_request_source();
+        let source = req.get_context().get_request_source().to_owned();
         let resp = future_prepare_flashback_to_version(self.storage.clone(), req);
         let task = async move {
             let resp = resp.await?;
@@ -448,12 +448,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     fn kv_flashback_to_version(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: FlashbackToVersionRequest,
+        req: FlashbackToVersionRequest,
         sink: UnarySink<FlashbackToVersionResponse>,
     ) {
         let begin_instant = Instant::now();
 
-        let source = req.mut_context().take_request_source();
+        let source = req.get_context().get_request_source().to_owned();
         let resp = future_flashback_to_version(self.storage.clone(), req);
         let task = async move {
             let resp = resp.await?;
@@ -476,9 +476,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         ctx.spawn(task);
     }
 
-    fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
+    fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
-        let source = req.mut_context().take_request_source();
+        let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(resource_control_ctx);
@@ -513,10 +513,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     fn raw_coprocessor(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: RawCoprocessorRequest,
+        req: RawCoprocessorRequest,
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
-        let source = req.mut_context().take_request_source();
+        let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(resource_control_ctx);
@@ -561,7 +561,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         assert!(!req.get_start_key().is_empty());
         assert!(!req.get_end_key().is_empty());
 
-        let source = req.mut_context().take_request_source();
+        let source = req.get_context().get_request_source().to_owned();
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.unsafe_destroy_range(
             req.take_context(),
@@ -1149,7 +1149,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let resp = future::ok(batch_commands_response::Response::default());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default());
                 },
-                Some(batch_commands_request::request::Cmd::Get(mut req)) => {
+                Some(batch_commands_request::request::Cmd::Get(req)) => {
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     if let Some(resource_manager) = resource_manager {
                         resource_manager.consume_penalty(resource_control_ctx);
@@ -1163,14 +1163,14 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         batcher.as_mut().unwrap().add_get_request(req, id);
                     } else {
                        let begin_instant = Instant::now();
-                       let source = req.mut_context().take_request_source();
+                       let source = req.get_context().get_request_source().to_owned();
                        let resp = future_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source);
                     }
                 },
-                Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
+                Some(batch_commands_request::request::Cmd::RawGet(req)) => {
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     if let Some(resource_manager) = resource_manager {
                         resource_manager.consume_penalty(resource_control_ctx);
@@ -1184,7 +1184,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         batcher.as_mut().unwrap().add_raw_get_request(req, id);
                     } else {
                        let begin_instant = Instant::now();
-                       let source = req.mut_context().take_request_source();
+                       let source = req.get_context().get_request_source().to_owned();
                        let resp = future_raw_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
@@ -2296,12 +2296,13 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
         if (raft_msg_usage + cached_entries + applying_entries) as f64
             > usage as f64 * reject_messages_on_memory_ratio
         {
+            // FIXME: this doesn't output to logfile.
             debug!("need reject log append on memory limit";
-                "raft messages" => raft_msg_usage,
-                "cached entries" => cached_entries,
-                "applying entries" => applying_entries,
-                "current usage" => usage,
-                "reject ratio" => reject_messages_on_memory_ratio);
+                "raft_messages" => raft_msg_usage,
+                "cached_entries" => cached_entries,
+                "applying_entries" => applying_entries,
+                "current_usage" => usage,
+                "reject_ratio" => reject_messages_on_memory_ratio);
             return true;
         }
     }

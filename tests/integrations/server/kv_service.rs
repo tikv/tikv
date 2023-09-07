@@ -3,7 +3,7 @@
 use std::{
     char::from_u32,
     path::Path,
-    sync::*,
+    sync::{atomic::AtomicU64, *},
     thread,
     time::{Duration, Instant},
 };
@@ -32,6 +32,7 @@ use raftstore::{
     store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
@@ -1388,7 +1389,9 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(MiscExt::path(&engines.kv)).join("import-sst");
-        Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
+        Arc::new(
+            SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1, false).unwrap(),
+        )
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -1407,6 +1410,8 @@ fn test_double_run_node() {
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
@@ -2537,7 +2542,6 @@ fn test_storage_with_quota_limiter_disable() {
 #[test_case(test_raftstore::must_new_and_configure_cluster_and_kv_client)]
 #[test_case(test_raftstore_v2::must_new_and_configure_cluster_and_kv_client)]
 fn test_commands_write_detail() {
-    test_util::init_log_for_test();
     let (cluster, client, ctx) = new_cluster(|cluster| {
         cluster.cfg.pessimistic_txn.pipelined = false;
         cluster.cfg.pessimistic_txn.in_memory = false;

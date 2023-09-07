@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     convert::identity,
     future::Future,
     path::PathBuf,
@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use collections::HashSet;
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
@@ -27,6 +26,8 @@ use kvproto::{
     metapb::RegionEpoch,
 };
 use raftstore::{coprocessor::RegionInfoProvider, store::util::is_epoch_stale, RegionInfoAccessor};
+use raftstore_v2::StoreMeta;
+use resource_control::{with_resource_limiter, ResourceGroupManager};
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, ConfigManager,
     Error, Result, SstImporter,
@@ -119,6 +120,10 @@ pub struct ImportSstService<E: Engine> {
     region_info_accessor: Arc<RegionInfoAccessor>,
 
     writer: raft_writer::ThrottledTlsEngineWriter,
+
+    // it's some iff multi-rocksdb is enabled
+    store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
 }
 
 struct RequestCollector {
@@ -299,6 +304,8 @@ impl<E: Engine> ImportSstService<E> {
         engine: E,
         tablets: LocalTablets<E::Local>,
         importer: Arc<SstImporter>,
+        store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
@@ -307,21 +314,24 @@ impl<E: Engine> ImportSstService<E> {
             .worker_threads(cfg.num_threads)
             .enable_all()
             .thread_name("sst-importer")
-            .after_start_wrapper(move || {
-                tikv_util::thread_group::set_properties(props.clone());
-                tikv_alloc::add_thread_memory_accessor();
-                set_io_type(IoType::Import);
-                tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
-            })
-            .before_stop_wrapper(move || {
-                tikv_alloc::remove_thread_memory_accessor();
-                // SAFETY: we have set the engine at some lines above with type `E`.
-                unsafe { tikv_kv::destroy_tls_engine::<E>() };
-            })
+            .with_sys_and_custom_hooks(
+                move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+
+                    set_io_type(IoType::Import);
+                    tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
+                },
+                move || {
+                    // SAFETY: we have set the engine at some lines above with type `E`.
+                    unsafe { tikv_kv::destroy_tls_engine::<E>() };
+                },
+            )
             .build()
             .unwrap();
         if let LocalTablets::Singleton(tablet) = &tablets {
-            importer.start_switch_mode_check(threads.handle(), tablet.clone());
+            importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
+        } else {
+            importer.start_switch_mode_check::<E::Local>(threads.handle(), None);
         }
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
@@ -346,6 +356,8 @@ impl<E: Engine> ImportSstService<E> {
             raft_entry_max_size,
             region_info_accessor,
             writer,
+            store_meta,
+            resource_manager,
         }
     }
 
@@ -406,7 +418,36 @@ impl<E: Engine> ImportSstService<E> {
                 return Some(errorpb);
             }
         };
-        if self.importer.get_mode() == SwitchMode::Normal
+
+        let reject_error = |region_id: Option<u64>| -> Option<errorpb::Error> {
+            let mut errorpb = errorpb::Error::default();
+            let err = if let Some(id) = region_id {
+                format!("too many sst files are ingesting for region {}", id)
+            } else {
+                "too many sst files are ingesting".to_string()
+            };
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(err.clone());
+            errorpb.set_message(err);
+            errorpb.set_server_is_busy(server_is_busy_err);
+            Some(errorpb)
+        };
+
+        // store_meta being Some means it is v2
+        if let Some(ref store_meta) = self.store_meta {
+            if let Some((region, _)) = store_meta.lock().unwrap().regions.get(&region_id) {
+                if !self.importer.region_in_import_mode(region)
+                    && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
+                {
+                    return reject_error(Some(region_id));
+                }
+            } else {
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message(format!("region {} not found", region_id));
+                errorpb.mut_region_not_found().set_region_id(region_id);
+                return Some(errorpb);
+            }
+        } else if self.importer.get_mode() == SwitchMode::Normal
             && tablet.ingest_maybe_slowdown_writes(CF_WRITE).expect("cf")
         {
             match tablet.get_sst_key_ranges(CF_WRITE, 0) {
@@ -420,14 +461,9 @@ impl<E: Engine> ImportSstService<E> {
                     error!("get sst key ranges failed"; "err" => ?e);
                 }
             }
-            let mut errorpb = errorpb::Error::default();
-            let err = "too many sst files are ingesting";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(err.to_string());
-            errorpb.set_message(err.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-            return Some(errorpb);
+            return reject_error(None);
         }
+
         None
     }
 
@@ -674,14 +710,25 @@ macro_rules! impl_write {
 
             let timer = Instant::now_coarse();
             let label = stringify!($fn);
+            let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
                 let res = async move {
                     let first_req = rx.try_next().await?;
-                    let meta = match first_req {
-                        Some(r) => match r.chunk {
-                            Some($chunk_ty::Meta(m)) => m,
-                            _ => return Err(Error::InvalidChunk),
-                        },
+                    let (meta, resource_limiter) = match first_req {
+                        Some(r) => {
+                            let limiter = resource_manager.as_ref().and_then(|m| {
+                                m.get_resource_limiter(
+                                    r.get_context()
+                                        .get_resource_control_context()
+                                        .get_resource_group_name(),
+                                    r.get_context().get_request_source(),
+                                )
+                            });
+                            match r.chunk {
+                                Some($chunk_ty::Meta(m)) => (m, limiter),
+                                _ => return Err(Error::InvalidChunk),
+                            }
+                        }
                         _ => return Err(Error::InvalidChunk),
                     };
                     // wait the region epoch on this TiKV to catch up with the epoch
@@ -709,22 +756,33 @@ macro_rules! impl_write {
                             return Err(Error::InvalidChunk);
                         }
                     };
-                    let writer = rx
-                        .try_fold(writer, |mut writer, req| async move {
-                            // Migrated to 2021 migration. This let statement is probably not
-                            // needed, see   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-                            let _ = &req;
-                            let batch = match req.chunk {
-                                Some($chunk_ty::Batch(b)) => b,
-                                _ => return Err(Error::InvalidChunk),
-                            };
-                            writer.write(batch)?;
-                            Ok(writer)
-                        })
+                    let (writer, resource_limiter) = rx
+                        .try_fold(
+                            (writer, resource_limiter),
+                            |(mut writer, limiter), req| async move {
+                                let batch = match req.chunk {
+                                    Some($chunk_ty::Batch(b)) => b,
+                                    _ => return Err(Error::InvalidChunk),
+                                };
+                                let f = async {
+                                    writer.write(batch)?;
+                                    Ok(writer)
+                                };
+                                with_resource_limiter(f, limiter.clone())
+                                    .await
+                                    .map(|w| (w, limiter))
+                            },
+                        )
                         .await?;
 
-                    let metas = writer.finish()?;
-                    import.verify_checksum(&metas)?;
+                    let finish_fn = async {
+                        let metas = writer.finish()?;
+                        import.verify_checksum(&metas)?;
+                        Ok(metas)
+                    };
+
+                    let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
+                    let metas = metas?;
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
                     Ok(resp)
@@ -740,10 +798,23 @@ macro_rules! impl_write {
 }
 
 impl<E: Engine> ImportSst for ImportSstService<E> {
+    // Switch mode for v1 and v2 is quite different.
+    //
+    // For v1, once it enters import mode, all regions are in import mode as there's
+    // only one kv rocksdb.
+    //
+    // V2 is different. The switch mode with import mode request carries a range
+    // where only regions overlapped with the range can enter import mode.
+    // And unlike v1, where some rocksdb configs will be changed when entering
+    // import mode, the config of the rocksdb will not change when entering import
+    // mode due to implementation complexity (a region's rocksdb can change
+    // overtime due to snapshot, split, and merge, which brings some
+    // implemention complexities). If it really needs, we will implement it in the
+    // future.
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
-        req: SwitchModeRequest,
+        mut req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
         let label = "switch_mode";
@@ -754,17 +825,37 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
             }
 
-            if let LocalTablets::Singleton(tablet) = &self.tablets {
-                match req.get_mode() {
+            match &self.tablets {
+                LocalTablets::Singleton(tablet) => match req.get_mode() {
                     SwitchMode::Normal => self.importer.enter_normal_mode(tablet.clone(), mf),
                     SwitchMode::Import => self.importer.enter_import_mode(tablet.clone(), mf),
+                },
+                LocalTablets::Registry(_) => {
+                    if req.get_mode() == SwitchMode::Import {
+                        if !req.get_ranges().is_empty() {
+                            let ranges = req.take_ranges().to_vec();
+                            self.importer.ranges_enter_import_mode(ranges);
+                            Ok(true)
+                        } else {
+                            Err(sst_importer::Error::Engine(
+                                "partitioned-raft-kv only support switch mode with range set"
+                                    .into(),
+                            ))
+                        }
+                    } else {
+                        // case SwitchMode::Normal
+                        if !req.get_ranges().is_empty() {
+                            let ranges = req.take_ranges().to_vec();
+                            self.importer.clear_import_mode_regions(ranges);
+                            Ok(true)
+                        } else {
+                            Err(sst_importer::Error::Engine(
+                                "partitioned-raft-kv only support switch mode with range set"
+                                    .into(),
+                            ))
+                        }
+                    }
                 }
-            } else if req.get_mode() != SwitchMode::Normal {
-                Err(sst_importer::Error::Engine(
-                    "partitioned-raft-kv doesn't support import mode".into(),
-                ))
-            } else {
-                Ok(false)
             }
         };
         match res {
@@ -902,6 +993,14 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let region_id = req.get_sst().get_region_id();
         let tablets = self.tablets.clone();
         let start = Instant::now();
+        let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                req.get_context()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req.get_context().get_request_source(),
+            )
+        });
 
         let handle_task = async move {
             // Records how long the download task waits to be scheduled.
@@ -932,17 +1031,20 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
-            let res = importer.download_ext::<E::Local>(
-                req.get_sst(),
-                req.get_storage_backend(),
-                req.get_name(),
-                req.get_rewrite_rule(),
-                cipher,
-                limiter,
-                tablet.into_owned(),
-                DownloadExt::default()
-                    .cache_key(req.get_storage_cache_id())
-                    .req_type(req.get_request_type()),
+            let res = with_resource_limiter(
+                importer.download_ext::<E::Local>(
+                    req.get_sst(),
+                    req.get_storage_backend(),
+                    req.get_name(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    tablet.into_owned(),
+                    DownloadExt::default()
+                        .cache_key(req.get_storage_cache_id())
+                        .req_type(req.get_request_type()),
+                ),
+                resource_limiter,
             );
             let mut resp = DownloadResponse::default();
             match res.await {
@@ -1263,7 +1365,7 @@ fn write_needs_restore(write: &[u8]) -> bool {
             false
         }
         Err(err) => {
-            warn!("write cannot be parsed, skipping"; "err" => %err, 
+            warn!("write cannot be parsed, skipping"; "err" => %err,
                         "write" => %log_wrappers::Value::key(write));
             false
         }

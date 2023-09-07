@@ -39,6 +39,7 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use file_system::IoBytes;
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp},
@@ -47,7 +48,7 @@ use kvproto::{
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
-use resource_control::{ResourceController, TaskMetadata};
+use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
@@ -98,6 +99,10 @@ pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 
 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
+
+// we only do resource control in txn scheduler, so the cpu time tracked is much
+// less than the actual cost, so we increase it by a factor.
+const SCHEDULER_CPU_TIME_FACTOR: u32 = 5;
 
 type SVec<T> = SmallVec<[T; 4]>;
 
@@ -286,6 +291,7 @@ struct TxnSchedulerInner<L: LockManager> {
     lock_wait_queues: LockWaitQueues<L>,
 
     quota_limiter: Arc<QuotaLimiter>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
     feature_gate: FeatureGate,
 }
 
@@ -441,6 +447,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
         resource_ctl: Option<Arc<ResourceController>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -475,6 +482,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             resource_tag_factory,
             lock_wait_queues,
             quota_limiter,
+            resource_manager,
             feature_gate,
         });
 
@@ -1205,7 +1213,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let tracker = task.tracker;
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
+        let resource_limiter = self.inner.resource_manager.as_ref().and_then(|m| {
+            m.get_resource_limiter(
+                task.cmd
+                    .ctx()
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                task.cmd.ctx().get_request_source(),
+            )
+        });
         let mut sample = quota_limiter.new_sample(true);
+        if resource_limiter.is_some() {
+            sample.enable_cpu_limit();
+        }
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
@@ -1259,6 +1279,20 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
             sample.add_write_bytes(write_bytes);
+            // estimate the cpu time for write by the schdule cpu time and write bytes
+            let expected_dur = (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
+                * SCHEDULER_CPU_TIME_FACTOR;
+            if let Some(limiter) = resource_limiter {
+                limiter
+                    .async_consume(
+                        expected_dur,
+                        IoBytes {
+                            read: 0,
+                            write: write_bytes as u64,
+                        },
+                    )
+                    .await;
+            }
         }
         let read_bytes = sched_details
             .stat
@@ -1508,7 +1542,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // sent to the raftstore.
         //
         // If some in-memory pessimistic locks need to be proposed, we will propose
-        // another TransferLeader command. Then, we can guarentee even if the proposed
+        // another TransferLeader command. Then, we can guarantee even if the proposed
         // locks don't include the locks deleted here, the response message of the
         // transfer leader command must be later than this write command because this
         // write command has been sent to the raftstore. Then, we don't need to worry
@@ -1631,10 +1665,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // it may break correctness.
         // However, not release latch will cause deadlock which may ultimately block all
         // following txns, so we panic here.
-        panic!(
-            "response channel is unexpectedly dropped, tag {:?}, cid {}",
-            tag, cid
-        );
+        //
+        // todo(spadea): Now, we only panic if it's not shutting down, although even in
+        // close, this behavior is not acceptable.
+        if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+            panic!(
+                "response channel is unexpectedly dropped, tag {:?}, cid {}",
+                tag, cid
+            );
+        }
     }
 
     /// Returns whether it succeeds to write pessimistic locks to the in-memory
@@ -1984,6 +2023,7 @@ mod tests {
                     "test".to_owned(),
                     true,
                 ))),
+                None,
             ),
             engine,
         )
@@ -2339,6 +2379,7 @@ mod tests {
                 "test".to_owned(),
                 true,
             ))),
+            None,
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

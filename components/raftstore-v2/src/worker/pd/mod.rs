@@ -19,6 +19,7 @@ use raftstore::store::{
     WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
+use service::service_manager::GrpcServiceManager;
 use slog::{error, warn, Logger};
 use tikv_util::{
     config::VersionTrack,
@@ -46,7 +47,8 @@ pub enum Task {
     // In store.rs.
     StoreHeartbeat {
         stats: pdpb::StoreStats,
-        // TODO: StoreReport, StoreDrAutoSyncStatus
+        report: Option<pdpb::StoreReport>,
+        // TODO: StoreDrAutoSyncStatus
     },
     UpdateStoreInfos {
         cpu_usages: RecordPairVec,
@@ -68,6 +70,7 @@ pub enum Task {
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+        share_source_region_size: bool,
         ch: CmdResChannel,
     },
     ReportBatchSplit {
@@ -217,6 +220,9 @@ where
     // For slowness detection
     slowness_stats: slowness::SlownessStatistics,
 
+    // For grpc server.
+    grpc_service_manager: GrpcServiceManager,
+
     logger: Logger,
     shutdown: Arc<AtomicBool>,
     cfg: Arc<VersionTrack<Config>>,
@@ -242,6 +248,7 @@ where
         auto_split_controller: AutoSplitController,
         region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
+        grpc_service_manager: GrpcServiceManager,
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
@@ -279,6 +286,7 @@ where
             concurrency_manager,
             causal_ts_provider,
             slowness_stats,
+            grpc_service_manager,
             logger,
             shutdown,
             cfg,
@@ -297,7 +305,9 @@ where
     fn run(&mut self, task: Task) {
         self.maybe_schedule_heartbeat_receiver();
         match task {
-            Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
+            Task::StoreHeartbeat { stats, report } => {
+                self.handle_store_heartbeat(stats, false /* is_fake_hb */, report)
+            }
             Task::UpdateStoreInfos {
                 cpu_usages,
                 read_io_rates,
@@ -315,7 +325,15 @@ where
                 peer,
                 right_derive,
                 ch,
-            } => self.handle_ask_batch_split(region, split_keys, peer, right_derive, ch),
+                share_source_region_size,
+            } => self.handle_ask_batch_split(
+                region,
+                split_keys,
+                peer,
+                right_derive,
+                share_source_region_size,
+                ch,
+            ),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::AutoSplit { split_infos } => self.handle_auto_split(split_infos),
             Task::UpdateMaxTimestamp {

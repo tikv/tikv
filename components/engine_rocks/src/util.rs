@@ -3,6 +3,7 @@
 use std::{ffi::CString, fs, path::Path, str::FromStr, sync::Arc};
 
 use engine_traits::{Engines, Range, Result, CF_DEFAULT};
+use fail::fail_point;
 use rocksdb::{
     load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactionFilter,
     CompactionFilterContext, CompactionFilterDecision, CompactionFilterFactory,
@@ -436,7 +437,7 @@ pub struct StackingCompactionFilter<A: CompactionFilter, B: CompactionFilter> {
 }
 
 impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingCompactionFilter<A, B> {
-    fn featured_filter(
+    fn unsafe_filter(
         &mut self,
         level: usize,
         key: &[u8],
@@ -445,12 +446,12 @@ impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingComp
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
         if let Some(outer) = self.outer.as_mut()
-            && let r = outer.featured_filter(level, key, seqno, value, value_type)
+            && let r = outer.unsafe_filter(level, key, seqno, value, value_type)
             && !matches!(r, CompactionFilterDecision::Keep)
         {
             r
         } else if let Some(inner) = self.inner.as_mut() {
-            inner.featured_filter(level, key, seqno, value, value_type)
+            inner.unsafe_filter(level, key, seqno, value, value_type)
         } else {
             CompactionFilterDecision::Keep
         }
@@ -462,6 +463,13 @@ pub struct RangeCompactionFilterFactory(Arc<OwnedRange>);
 
 impl RangeCompactionFilterFactory {
     pub fn new(start_key: Box<[u8]>, end_key: Box<[u8]>) -> Self {
+        fail_point!("unlimited_range_compaction_filter", |_| {
+            let range = OwnedRange {
+                start_key: keys::data_key(b"").into_boxed_slice(),
+                end_key: keys::data_end_key(b"").into_boxed_slice(),
+            };
+            Self(Arc::new(range))
+        });
         let range = OwnedRange { start_key, end_key };
         Self(Arc::new(range))
     }
@@ -489,7 +497,7 @@ impl CompactionFilterFactory for RangeCompactionFilterFactory {
 pub struct RangeCompactionFilter(Arc<OwnedRange>);
 
 impl CompactionFilter for RangeCompactionFilter {
-    fn featured_filter(
+    fn unsafe_filter(
         &mut self,
         _level: usize,
         key: &[u8],
@@ -497,8 +505,11 @@ impl CompactionFilter for RangeCompactionFilter {
         _value: &[u8],
         _value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
-        if key < self.0.start_key.as_ref() || key >= self.0.end_key.as_ref() {
-            CompactionFilterDecision::Remove
+        if key < self.0.start_key.as_ref() {
+            CompactionFilterDecision::RemoveAndSkipUntil(self.0.start_key.to_vec())
+        } else if key >= self.0.end_key.as_ref() {
+            assert!(key < keys::DATA_MAX_KEY);
+            CompactionFilterDecision::RemoveAndSkipUntil(keys::DATA_MAX_KEY.to_vec())
         } else {
             CompactionFilterDecision::Keep
         }
@@ -507,7 +518,9 @@ impl CompactionFilter for RangeCompactionFilter {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{CfOptionsExt, Peekable, SyncMutable, CF_DEFAULT};
+    use engine_traits::{
+        CfOptionsExt, FlowControlFactorsExt, Iterable, MiscExt, Peekable, SyncMutable, CF_DEFAULT,
+    };
     use rocksdb::DB;
     use tempfile::Builder;
 
@@ -607,5 +620,74 @@ mod tests {
         assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
         let tmp_cf_opts = db.get_options_cf("cf_dynamic_level_bytes").unwrap();
         assert!(tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
+    }
+
+    #[test]
+    fn test_range_filter() {
+        let path = Builder::new()
+            .prefix("test_range_filter")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let mut cf_opts = RocksCfOptions::default();
+        cf_opts
+            .set_compaction_filter_factory(
+                "range",
+                RangeCompactionFilterFactory::new(
+                    b"b".to_vec().into_boxed_slice(),
+                    b"c".to_vec().into_boxed_slice(),
+                ),
+            )
+            .unwrap();
+        let cfs_opts = vec![(CF_DEFAULT, cf_opts)];
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
+
+        // in-range keys.
+        db.put(b"b1", b"").unwrap();
+        db.put(b"c2", b"").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(
+            db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
+            Some(1)
+        );
+
+        // put then delete.
+        db.put(b"a1", b"").unwrap();
+        // avoid merging put and delete.
+        let _iter = db.iterator(CF_DEFAULT).unwrap();
+        db.delete(b"a1").unwrap();
+        db.delete(b"a1").unwrap();
+        db.put(b"c1", b"").unwrap();
+        let _iter = db.iterator(CF_DEFAULT).unwrap();
+        db.delete(b"c1").unwrap();
+        db.delete(b"c1").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(
+            db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
+            Some(1)
+        );
+
+        // multiple puts.
+        db.put(b"a2", b"").unwrap();
+        db.put(b"a2", b"").unwrap();
+        db.put(b"c2", b"").unwrap();
+        db.put(b"c2", b"").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(
+            db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
+            Some(1)
+        );
+
+        // multiple deletes.
+        db.delete(b"a3").unwrap();
+        db.delete(b"a3").unwrap();
+        db.delete(b"c3").unwrap();
+        db.delete(b"c3").unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+        assert_eq!(
+            db.get_cf_num_files_at_level(CF_DEFAULT, 0).unwrap(),
+            Some(1)
+        );
     }
 }

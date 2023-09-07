@@ -40,7 +40,7 @@ use engine_traits::{
     TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
+use futures::{future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
@@ -51,7 +51,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
-use tikv_util::{deadline::Deadline, escape, time::ThreadReadId, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{deadline::Deadline, escape, future::block_on_timeout, time::ThreadReadId};
 use tracker::with_tls_tracker;
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
@@ -376,34 +376,19 @@ pub trait Engine: Send + Clone + 'static {
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let f = write(self, ctx, batch, None);
-        let timeout = GLOBAL_TIMER_HANDLE
-            .delay(Instant::now() + DEFAULT_TIMEOUT)
-            .compat();
-
-        futures::executor::block_on(async move {
-            futures::select! {
-                res = f.fuse() => {
-                    if let Some(res) = res {
-                        return res;
-                    }
-                },
-                _ = timeout.fuse() => (),
-            };
-            Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))
-        })
+        let res = block_on_timeout(f, DEFAULT_TIMEOUT)
+            .map_err(|_| Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))?;
+        if let Some(res) = res {
+            return res;
+        }
+        Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))
     }
 
     fn release_snapshot(&mut self) {}
 
     fn snapshot(&mut self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
-        let deadline = Instant::now() + DEFAULT_TIMEOUT;
-        let timeout = GLOBAL_TIMER_HANDLE.delay(deadline).compat();
-        futures::executor::block_on(async move {
-            futures::select! {
-                res = self.async_snapshot(ctx).fuse() => res,
-                _ = timeout.fuse() => Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT))),
-            }
-        })
+        block_on_timeout(self.async_snapshot(ctx), DEFAULT_TIMEOUT)
+            .map_err(|_| Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))?
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {

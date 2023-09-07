@@ -40,8 +40,9 @@ use openssl::{
 };
 use pin_project::pin_project;
 pub use profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
+    activate_heap_profile, deactivate_heap_profile, heap_profiles_dir, jeprof_heap_profile,
+    list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
+    HEAP_PROFILE_REGEX,
 };
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
@@ -49,6 +50,7 @@ use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
 use serde::Serialize;
 use serde_json::Value;
+use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     logger::set_log_level,
@@ -93,6 +95,7 @@ pub struct StatusServer<R> {
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    grpc_service_mgr: GrpcServiceManager,
 }
 
 impl<R> StatusServer<R>
@@ -106,13 +109,16 @@ where
         router: R,
         store_path: PathBuf,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
-            .after_start_wrapper(|| debug!("Status server started"))
-            .before_stop_wrapper(|| debug!("stopping status server"))
+            .with_sys_and_custom_hooks(
+                || debug!("Status server started"),
+                || debug!("stopping status server"),
+            )
             .build()?;
 
         let (tx, rx) = oneshot::channel::<()>();
@@ -126,6 +132,7 @@ where
             security_config,
             store_path,
             resource_manager,
+            grpc_service_mgr,
         })
     }
 
@@ -201,10 +208,34 @@ where
         let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
 
         let result = if let Some(name) = query_pairs.get("name") {
-            if use_jeprof {
-                jeprof_heap_profile(name)
+            let re = Regex::new(HEAP_PROFILE_REGEX).unwrap();
+            if !re.is_match(name) {
+                let errmsg = format!("heap profile name {} is invalid", name);
+                return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
+            }
+            let profiles = match list_heap_profiles() {
+                Ok(s) => s,
+                Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
+            };
+            if profiles.iter().any(|(f, _)| f == name) {
+                let dir = match heap_profiles_dir() {
+                    Some(path) => path,
+                    None => {
+                        return Ok(make_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "heap profile is not active",
+                        ));
+                    }
+                };
+                let path = dir.join(name.as_ref());
+                if use_jeprof {
+                    jeprof_heap_profile(path.to_str().unwrap())
+                } else {
+                    read_file(path.to_str().unwrap())
+                }
             } else {
-                read_file(name)
+                let errmsg = format!("heap profile {} not found", name);
+                return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
             }
         } else {
             let mut seconds = 10;
@@ -438,6 +469,36 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
+    async fn handle_pause_grpc(
+        mut grpc_service_mgr: GrpcServiceManager,
+    ) -> hyper::Result<Response<Body>> {
+        if let Err(err) = grpc_service_mgr.pause() {
+            return Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to pause grpc: {}", err),
+            ));
+        }
+        Ok(make_response(
+            StatusCode::OK,
+            "Successfully pause grpc service",
+        ))
+    }
+
+    async fn handle_resume_grpc(
+        mut grpc_service_mgr: GrpcServiceManager,
+    ) -> hyper::Result<Response<Body>> {
+        if let Err(err) = grpc_service_mgr.resume() {
+            return Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to resume grpc: {}", err),
+            ));
+        }
+        Ok(make_response(
+            StatusCode::OK,
+            "Successfully resume grpc service",
+        ))
+    }
+
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -551,6 +612,7 @@ where
         let router = self.router.clone();
         let store_path = self.store_path.clone();
         let resource_manager = self.resource_manager.clone();
+        let grpc_service_mgr = self.grpc_service_mgr.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -559,6 +621,7 @@ where
             let router = router.clone();
             let store_path = store_path.clone();
             let resource_manager = resource_manager.clone();
+            let grpc_service_mgr = grpc_service_mgr.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -568,6 +631,7 @@ where
                     let router = router.clone();
                     let store_path = store_path.clone();
                     let resource_manager = resource_manager.clone();
+                    let grpc_service_mgr = grpc_service_mgr.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -610,9 +674,9 @@ where
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 Self::deactivate_heap_prof(req)
                             }
-                            // (Method::GET, "/debug/pprof/heap") => {
-                            //     Self::dump_heap_prof_to_resp(req).await
-                            // }
+                            (Method::GET, "/debug/pprof/heap") => {
+                                Self::dump_heap_prof_to_resp(req).await
+                            }
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }
@@ -647,6 +711,12 @@ where
                             }
                             (Method::GET, "/resource_groups") => {
                                 Self::handle_get_all_resource_groups(resource_manager.as_ref())
+                            }
+                            (Method::PUT, "/pause_grpc") => {
+                                Self::handle_pause_grpc(grpc_service_mgr).await
+                            }
+                            (Method::PUT, "/resume_grpc") => {
+                                Self::handle_resume_grpc(grpc_service_mgr).await
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
@@ -720,14 +790,20 @@ where
 }
 
 #[derive(Serialize)]
+struct BackgroundSetting {
+    task_types: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct ResourceGroupSetting {
     name: String,
     ru: u64,
     priority: u32,
     burst_limit: i64,
+    background: BackgroundSetting,
 }
 
-fn into_debug_request_group(rg: ResourceGroup) -> ResourceGroupSetting {
+fn into_debug_request_group(mut rg: ResourceGroup) -> ResourceGroupSetting {
     ResourceGroupSetting {
         name: rg.name,
         ru: rg
@@ -743,6 +819,12 @@ fn into_debug_request_group(rg: ResourceGroup) -> ResourceGroupSetting {
             .get_r_u()
             .get_settings()
             .get_burst_limit(),
+        background: BackgroundSetting {
+            task_types: rg
+                .background_settings
+                .as_mut()
+                .map_or(vec![], |s| s.take_job_types().into()),
+        },
     }
 }
 
@@ -1030,6 +1112,7 @@ mod tests {
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
     use raftstore::store::region_meta::RegionMeta;
     use security::SecurityConfig;
+    use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
     use tikv_util::logger::get_log_level;
@@ -1059,6 +1142,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1108,6 +1192,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1154,6 +1239,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1271,6 +1357,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1316,6 +1403,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1353,6 +1441,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1427,6 +1516,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1458,6 +1548,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1492,6 +1583,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1548,6 +1640,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
             None,
+            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1603,6 +1696,7 @@ mod tests {
                 MockRouter,
                 temp_dir.path().to_path_buf(),
                 None,
+                GrpcServiceManager::dummy(),
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1623,6 +1717,48 @@ mod tests {
                 assert_eq!(engine_type, resp_str);
             });
             block_on(handle).unwrap();
+            status_server.stop();
+        }
+    }
+
+    #[test]
+    fn test_control_grpc_service() {
+        let mut multi_rocks_cfg = TikvConfig::default();
+        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
+        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
+        for cfg in IntoIterator::into_iter(cfgs) {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(cfg),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                temp_dir.path().to_path_buf(),
+                None,
+                GrpcServiceManager::dummy(),
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            for req in ["/pause_grpc", "/resume_grpc"] {
+                let client = Client::new();
+                let uri = Uri::builder()
+                    .scheme("http")
+                    .authority(status_server.listening_addr().to_string().as_str())
+                    .path_and_query(req)
+                    .build()
+                    .unwrap();
+
+                let mut grpc_req = Request::default();
+                *grpc_req.method_mut() = Method::PUT;
+                *grpc_req.uri_mut() = uri;
+                let handle = status_server.thread_pool.spawn(async move {
+                    let res = client.request(grpc_req).await.unwrap();
+                    // Dummy grpc service manager, should return error.
+                    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+                });
+                block_on(handle).unwrap();
+            }
             status_server.stop();
         }
     }

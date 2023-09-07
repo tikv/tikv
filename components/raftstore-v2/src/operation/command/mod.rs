@@ -23,6 +23,7 @@ use std::{
 };
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
+use fail::fail_point;
 use kvproto::raft_cmdpb::{
     AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
 };
@@ -145,8 +146,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             mailbox,
             store_ctx.tablet_registry.clone(),
             read_scheduler,
-            store_ctx.schedulers.checkpoint.clone(),
             store_ctx.schedulers.tablet.clone(),
+            store_ctx.high_priority_pool.clone(),
             self.flush_state().clone(),
             sst_apply_state,
             self.storage().apply_trace().log_recovery(),
@@ -195,6 +196,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             return Err(e);
         }
+        if self.has_force_leader() {
+            metrics.invalid_proposal.force_leader.inc();
+            // in force leader state, forbid requests to make the recovery
+            // progress less error-prone.
+            if !(admin_type.is_some()
+                && (admin_type.unwrap() == AdminCmdType::ChangePeer
+                    || admin_type.unwrap() == AdminCmdType::ChangePeerV2))
+            {
+                return Err(Error::RecoveryInProgress(self.region_id()));
+            }
+        }
         // Check whether the region is in the flashback state and the request could be
         // proposed. Skip the not prepared error because the
         // `self.region().is_in_flashback` may not be the latest right after applying
@@ -237,6 +249,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         data: Vec<u8>,
         proposal_ctx: Vec<u8>,
     ) -> Result<u64> {
+        // Should not propose normal in force leader state.
+        // In `pre_propose_raft_command`, it rejects all the requests expect
+        // conf-change if in force leader state.
+        if self.has_force_leader() {
+            store_ctx.raft_metrics.invalid_proposal.force_leader.inc();
+            panic!(
+                "[{}] {} propose normal in force leader state {:?}",
+                self.region_id(),
+                self.peer_id(),
+                self.force_leader()
+            );
+        };
+
         store_ctx.raft_metrics.propose.normal.inc();
         store_ctx
             .raft_metrics
@@ -406,7 +431,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         self.region_buckets_info_mut()
             .add_bucket_flow(&apply_res.bucket_stat);
-        self.update_split_flow_control(&apply_res.metrics);
+        self.update_split_flow_control(
+            &apply_res.metrics,
+            ctx.cfg.region_split_check_diff().0 as i64,
+        );
         self.update_stat(&apply_res.metrics);
         ctx.store_stat.engine_total_bytes_written += apply_res.metrics.written_bytes;
         ctx.store_stat.engine_total_keys_written += apply_res.metrics.written_keys;
@@ -446,6 +474,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // We need to continue to apply after previous page is finished.
             self.set_has_ready();
         }
+        self.check_unsafe_recovery_state(ctx);
     }
 }
 
@@ -512,7 +541,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
                 }
                 SimpleWrite::DeleteRange(dr) => {
-                    let use_delete_range = self.use_delete_range();
                     let _ = self
                         .apply_delete_range(
                             dr.cf,
@@ -520,7 +548,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.start_key,
                             dr.end_key,
                             dr.notify_only,
-                            use_delete_range,
                         )
                         .await;
                 }
@@ -556,6 +583,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
         fail::fail_point!("on_handle_apply_1003", self.peer_id() == 1003, |_| {});
         fail::fail_point!("on_handle_apply_2", self.peer_id() == 2, |_| {});
+        fail::fail_point!("on_handle_apply", |_| {});
+        fail::fail_point!("on_handle_apply_store_1", self.store_id() == 1, |_| {});
         let now = std::time::Instant::now();
         let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
         for (e, ch) in ce.entry_and_proposals {
@@ -637,14 +666,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 self.apply_delete(delete.cf, log_index, delete.key)?;
                             }
                             SimpleWrite::DeleteRange(dr) => {
-                                let use_delete_range = self.use_delete_range();
                                 self.apply_delete_range(
                                     dr.cf,
                                     log_index,
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
-                                    use_delete_range,
                                 )
                                 .await?;
                             }
@@ -692,7 +719,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
                 AdminCmdType::Split => self.apply_split(admin_req, log_index).await?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index).await?,
-                AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
+                AdminCmdType::PrepareMerge => {
+                    self.apply_prepare_merge(admin_req, log_index).await?
+                }
                 AdminCmdType::CommitMerge => self.apply_commit_merge(admin_req, log_index).await?,
                 AdminCmdType::RollbackMerge => self.apply_rollback_merge(admin_req, log_index)?,
                 AdminCmdType::TransferLeader => {
@@ -737,7 +766,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         self.apply_delete(delete.get_cf(), log_index, delete.get_key())?;
                     }
                     CmdType::DeleteRange => {
-                        let use_delete_range = self.use_delete_range();
                         let dr = r.get_delete_range();
                         self.apply_delete_range(
                             dr.get_cf(),
@@ -745,7 +773,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
-                            use_delete_range,
                         )
                         .await?;
                     }
@@ -840,7 +867,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.metrics = mem::take(&mut self.metrics);
         apply_res.bucket_stat = self.buckets.clone();
         let written_bytes = apply_res.metrics.written_bytes;
-        self.res_reporter().report(apply_res);
+
+        let skip_report = || -> bool {
+            fail_point!("before_report_apply_res", |_| { true });
+            false
+        }();
+        if !skip_report {
+            self.res_reporter().report(apply_res);
+        }
         if let Some(buckets) = &mut self.buckets {
             buckets.clear_stats();
         }

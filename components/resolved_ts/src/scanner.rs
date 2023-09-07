@@ -21,12 +21,12 @@ use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{
     errors::{Error, Result},
-    metrics::RTS_SCAN_DURATION_HISTOGRAM,
+    metrics::*,
 };
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
-const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(25);
+const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(100);
 
 pub type BeforeStartCallback = Box<dyn Fn() + Send>;
 pub type OnErrorCallback = Box<dyn Fn(ObserveId, Region, Error) + Send>;
@@ -45,6 +45,7 @@ pub struct ScanTask {
     pub mode: ScanMode,
     pub region: Region,
     pub checkpoint_ts: TimeStamp,
+    pub backoff: Option<Duration>,
     pub is_cancelled: IsCancelledCallback,
     pub send_entries: OnEntriesCallback,
     pub on_error: Option<OnErrorCallback>,
@@ -70,8 +71,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
             Builder::new_multi_thread()
                 .thread_name("inc-scan")
                 .worker_threads(count)
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()
                 .unwrap(),
         );
@@ -85,6 +85,19 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
     pub fn spawn_task(&self, mut task: ScanTask) {
         let cdc_handle = self.cdc_handle.clone();
         let fut = async move {
+            if let Some(backoff) = task.backoff {
+                RTS_INITIAL_SCAN_BACKOFF_DURATION_HISTOGRAM.observe(backoff.as_secs_f64());
+                if let Err(e) = GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + backoff)
+                    .compat()
+                    .await
+                {
+                    error!("failed to backoff"; "err" => ?e);
+                }
+                if (task.is_cancelled)() {
+                    return;
+                }
+            }
             let snap = match Self::get_snapshot(&mut task, cdc_handle).await {
                 Ok(snap) => snap,
                 Err(e) => {
@@ -101,6 +114,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             };
+            fail::fail_point!("resolved_ts_after_scanner_get_snapshot");
             let start = Instant::now();
             let apply_index = snap.get_apply_index().unwrap();
             let mut entries = vec![];
@@ -184,7 +198,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
             if retry_times != 0 {
                 if let Err(e) = GLOBAL_TIMER_HANDLE
                     .delay(
-                        std::time::Instant::now() + retry_times * GET_SNAPSHOT_RETRY_BACKOFF_STEP,
+                        std::time::Instant::now()
+                            + GET_SNAPSHOT_RETRY_BACKOFF_STEP
+                                .mul_f64(10_f64.powi(retry_times as i32 - 1)),
                     )
                     .compat()
                     .await
@@ -192,37 +208,36 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                     error!("failed to backoff"; "err" => ?e);
                 }
                 if (task.is_cancelled)() {
-                    return Err(Error::Other("scan task cancelled".into()));
+                    return Err(box_err!("scan task cancelled"));
                 }
             }
             let (cb, fut) = tikv_util::future::paired_future_callback();
             let change_cmd = ChangeObserver::from_rts(task.region.id, task.handle.clone());
-            cdc_handle.capture_change(
-                task.region.id,
-                task.region.get_region_epoch().clone(),
-                change_cmd,
-                Callback::read(Box::new(cb)),
-            )?;
+            cdc_handle
+                .capture_change(
+                    task.region.id,
+                    task.region.get_region_epoch().clone(),
+                    change_cmd,
+                    Callback::read(Box::new(cb)),
+                )
+                .map_err(|e| Error::Other(box_err!("{:?}", e)))?;
             let mut resp = box_try!(fut.await);
             if resp.response.get_header().has_error() {
                 let err = resp.response.take_header().take_error();
                 // These two errors can't handled by retrying since the epoch and observe id is
                 // unchanged
                 if err.has_epoch_not_match() || err.get_message().contains("stale observe id") {
-                    return Err(Error::request(err));
+                    return Err(box_err!("get snapshot failed: {:?}", err));
                 }
                 last_err = Some(err)
             } else {
                 return Ok(resp.snapshot.unwrap());
             }
         }
-        Err(Error::Other(
-            format!(
-                "backoff timeout after {} try, last error: {:?}",
-                GET_SNAPSHOT_RETRY_TIME,
-                last_err.unwrap()
-            )
-            .into(),
+        Err(box_err!(
+            "backoff timeout after {} try, last error: {:?}",
+            GET_SNAPSHOT_RETRY_TIME,
+            last_err.unwrap()
         ))
     }
 
@@ -231,12 +246,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         start: Option<&Key>,
         _checkpoint_ts: TimeStamp,
     ) -> Result<(Vec<(Key, Lock)>, bool)> {
-        let (locks, has_remaining) = reader.scan_locks(
-            start,
-            None,
-            |lock| matches!(lock.lock_type, LockType::Put | LockType::Delete),
-            DEFAULT_SCAN_BATCH_SIZE,
-        )?;
+        let (locks, has_remaining) = reader
+            .scan_locks(
+                start,
+                None,
+                |lock| matches!(lock.lock_type, LockType::Put | LockType::Delete),
+                DEFAULT_SCAN_BATCH_SIZE,
+            )
+            .map_err(|e| Error::Other(box_err!("{:?}", e)))?;
         Ok((locks, has_remaining))
     }
 
@@ -244,7 +261,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         let mut entries = Vec::with_capacity(DEFAULT_SCAN_BATCH_SIZE);
         let mut has_remaining = true;
         while entries.len() < entries.capacity() {
-            match scanner.next_entry()? {
+            match scanner
+                .next_entry()
+                .map_err(|e| Error::Other(box_err!("{:?}", e)))?
+            {
                 Some(entry) => {
                     entries.push(entry);
                 }

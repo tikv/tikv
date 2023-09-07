@@ -411,18 +411,14 @@ where
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
+
                     info!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
                         log_wrappers::Value::key(&start_key),
                         log_wrappers::Value::key(&end_key)
                     );
-
-                    let result =
-                        recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index);
-                    tikv_alloc::remove_thread_memory_accessor();
-                    result
+                    recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
                 })
                 .unwrap();
 

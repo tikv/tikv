@@ -25,14 +25,18 @@ fn test_observe_duplicate_cmd() {
 }
 
 fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
-    let mut suite = TestSuite::new(3, F::TAG);
+    let mut suite = TestSuite::new(1, F::TAG);
+    suite.cluster.pd_client.disable_default_operator();
 
     let region = suite.cluster.get_region(&[]);
-    let req = suite.new_changedata_request(region.get_id());
-    let (mut req_tx, event_feed_wrap, receive_event) =
+    let mut req = suite.new_changedata_request(region.get_id());
+
+    req.request_id = 1;
+    let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
-    let mut events = receive_event(false).events.to_vec();
+    block_on(req_tx_1.send((req.clone(), WriteFlags::default()))).unwrap();
+
+    let mut events = receive_event_1(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -46,7 +50,6 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
 
     // If tikv enable ApiV2, txn key needs to start with 'x';
     let (k, v) = ("xkey1".to_owned(), "value".to_owned());
-    // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -58,7 +61,7 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
         k.clone().into_bytes(),
         start_ts,
     );
-    let mut events = receive_event(false).events.to_vec();
+    let mut events = receive_event_1(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
@@ -67,31 +70,38 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    let fp = "before_cdc_flush_apply";
-    fail::cfg(fp, "pause").unwrap();
+
+    fail::cfg("before_cdc_flush_apply", "pause").unwrap();
 
     // Async commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let commit_resp =
         suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
+
     sleep_ms(200);
-    // Close previous connection and open a new one twice time
-    let (mut req_tx, resp_rx) = suite
-        .get_region_cdc_client(region.get_id())
-        .event_feed()
-        .unwrap();
-    event_feed_wrap.replace(Some(resp_rx));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
-    let (mut req_tx, resp_rx) = suite
-        .get_region_cdc_client(region.get_id())
-        .event_feed()
-        .unwrap();
-    event_feed_wrap.replace(Some(resp_rx));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    fail::remove(fp);
+
+    // Open two new connections and close the old one.
+    let (mut req_tx_2, event_feed_wrap_2, _) =
+        new_event_feed(suite.get_region_cdc_client(region.get_id()));
+    req.request_id = 2;
+    block_on(req_tx_2.send((req.clone(), WriteFlags::default()))).unwrap();
+
+    let (mut req_tx_3, event_feed_wrap_3, receive_event_3) =
+        new_event_feed(suite.get_region_cdc_client(region.get_id()));
+    req.request_id = 3;
+    block_on(req_tx_3.send((req, WriteFlags::default()))).unwrap();
+
+    sleep_ms(200);
+    drop(req_tx_1);
+    drop(req_tx_2);
+    drop(event_feed_wrap_1);
+    drop(event_feed_wrap_2);
+
+    fail::remove("before_cdc_flush_apply");
+
     // Receive Commit response
     block_on(commit_resp).unwrap();
-    let mut events = receive_event(false).events.to_vec();
+    let mut events = receive_event_3(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -110,7 +120,7 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
-        let event = receive_event(true);
+        let event = receive_event_3(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             assert_ne!(0, resolved_ts.ts);
             counter += 1;
@@ -120,7 +130,8 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
         }
     }
 
-    event_feed_wrap.replace(None);
+    drop(req_tx_3);
+    drop(event_feed_wrap_3);
     suite.stop();
 }
 

@@ -14,7 +14,7 @@ use engine_traits::PerfLevel;
 use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
-use resource_control::TaskMetadata;
+use resource_control::{ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
@@ -70,6 +70,7 @@ pub struct Endpoint<E: Engine> {
     slow_log_threshold: Duration,
 
     quota_limiter: Arc<QuotaLimiter>,
+    resource_ctl: Option<Arc<ResourceGroupManager>>,
 
     _phantom: PhantomData<E>,
 }
@@ -83,6 +84,7 @@ impl<E: Engine> Endpoint<E> {
         concurrency_manager: ConcurrencyManager,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
+        resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress
         // to avoid using too much memory. However, if there are a number of large
@@ -103,9 +105,10 @@ impl<E: Engine> Endpoint<E> {
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
-            max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            max_handle_duration: cfg.end_point_request_max_handle_duration().0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             quota_limiter,
+            resource_ctl,
             _phantom: Default::default(),
         }
     }
@@ -190,7 +193,6 @@ impl<E: Engine> Endpoint<E> {
 
         let mut req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
-
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -416,10 +418,24 @@ impl<E: Engine> Endpoint<E> {
         let snapshot =
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
                 .await?;
+        let latest_buckets = snapshot.ext().get_buckets();
+
+        // Check if the buckets version is latest.
+        // skip if request don't carry this bucket version.
+        if let Some(ref buckets) = latest_buckets&&
+            buckets.version > tracker.req_ctx.context.buckets_version &&
+            tracker.req_ctx.context.buckets_version!=0 {
+                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+                bucket_not_match.set_version(buckets.version);
+                bucket_not_match.set_keys(buckets.keys.clone().into());
+                let mut err = errorpb::Error::default();
+                err.set_bucket_version_not_match(bucket_not_match);
+                return Err(Error::Region(err));
+        }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
-        tracker.buckets = snapshot.ext().get_buckets();
+        tracker.buckets = latest_buckets;
         let buckets_version = tracker.buckets.as_ref().map_or(0, |b| b.version);
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()
@@ -488,6 +504,15 @@ impl<E: Engine> Endpoint<E> {
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
+        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req_ctx.context.get_request_source(),
+            )
+        });
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -499,6 +524,7 @@ impl<E: Engine> Endpoint<E> {
                 priority,
                 task_id,
                 metadata,
+                resource_limiter,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -723,6 +749,15 @@ impl<E: Engine> Endpoint<E> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
+        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req_ctx.context.get_request_source(),
+            )
+        });
         let key_ranges = req_ctx
             .ranges
             .iter()
@@ -746,6 +781,7 @@ impl<E: Engine> Endpoint<E> {
                 priority,
                 task_id,
                 metadata,
+                resource_limiter,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)
@@ -1030,6 +1066,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         // a normal request
@@ -1071,6 +1108,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
         copr.recursion_limit = 100;
 
@@ -1109,6 +1147,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let mut req = coppb::Request::default();
@@ -1132,6 +1171,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let mut req = coppb::Request::default();
@@ -1180,6 +1220,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1231,6 +1272,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let handler_builder =
@@ -1256,6 +1298,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         // Fail immediately
@@ -1309,6 +1352,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1337,6 +1381,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1436,6 +1481,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1492,9 +1538,9 @@ mod tests {
         ));
 
         let config = Config {
-            end_point_request_max_handle_duration: ReadableDuration(
+            end_point_request_max_handle_duration: Some(ReadableDuration(
                 (PAYLOAD_SMALL + PAYLOAD_LARGE) * 2,
-            ),
+            )),
             ..Default::default()
         };
 
@@ -1505,6 +1551,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1884,6 +1931,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
 
         {
@@ -1949,6 +1997,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            None,
         );
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);

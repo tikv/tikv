@@ -338,9 +338,11 @@ enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -403,9 +405,11 @@ enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -431,6 +435,7 @@ compression-per-level = [
     "lz4",
 ]
 write-buffer-size = "1MB"
+write-buffer-limit = "16MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
 max-bytes-for-level-base = "12KB"
@@ -455,9 +460,11 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -507,9 +514,11 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
@@ -591,7 +600,7 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
-format-version = 5
+format-version = 0
 checksum = "xxh3"
 max-compactions = 3
 
@@ -697,6 +706,7 @@ sink-memory-quota = "7MB"
 enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
+memory-quota = "1MB"
 
 [split]
 detect-times = 10

@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use engine_traits::{KvEngine, RaftEngine};
+use fail::fail_point;
 use kvproto::pdpb;
 use pd_client::PdClient;
 use raftstore::store::{metrics::*, util::RaftstoreDuration, Config};
@@ -81,23 +82,36 @@ where
     }
 
     pub fn handle_slowness_stats_tick(&mut self) {
-        // The following code records a periodic "white noise", which helps
-        // mitigate any minor fluctuations in disk I/O or network I/O latency.
-        // After conducting extensive e2e testing, "100ms" has been determined
-        // to be the most suitable choice for it.
-        self.slowness_stats
-            .slow_cause
-            .record(100_000, Instant::now()); // 100ms
-        // Handle timeout if last tick is not finished as expected.
-        if !self.slowness_stats.last_tick_finished && self.is_store_heartbeat_delayed() {
-            // If the last slowness tick already reached abnormal state and was delayed for
-            // reporting by `store-heartbeat` to PD, we should report it here manually as a
-            // FAKE `store-heartbeat`. It's an assurance that the heartbeat to
-            // PD is not lost. Normally, this case rarely happens in
-            // raftstore-v2.
-            self.handle_fake_store_heartbeat();
+        let mock_slowness_last_tick_unfinished = || {
+            fail_point!("mock_slowness_last_tick_unfinished", |_| { true });
+            false
+        };
+        // Handle timeout if the last tick is not finished as expected.
+        if mock_slowness_last_tick_unfinished() || !self.slowness_stats.last_tick_finished {
+            // Record a sufficiently large interval to indicate potential write progress
+            // hanging on I/O. We use the store heartbeat interval as the default value.
+            self.slowness_stats.slow_cause.record(
+                self.store_heartbeat_interval.as_micros() as u64,
+                Instant::now(),
+            );
+
+            // If the last slowness tick already reached an abnormal state and was delayed
+            // for reporting by `store-heartbeat` to PD, we should manually report it here
+            // as a FAKE `store-heartbeat`. This ensures that the heartbeat to PD is not
+            // lost. Normally, this case rarely happens in raftstore-v2.
+            if self.is_store_heartbeat_delayed() {
+                self.handle_fake_store_heartbeat();
+            }
+        } else {
+            // The following code records a periodic "white noise", which helps mitigate any
+            // minor fluctuations in disk I/O or network I/O latency. After
+            // extensive e2e testing, a duration of "100ms" has been determined
+            // to be the most suitable choice.
+            self.slowness_stats
+                .slow_cause
+                .record(100_000, Instant::now()); // 100ms
         }
-        // Move to next tick.
+        // Move to the next tick.
         self.slowness_stats.last_tick_finished = false;
     }
 

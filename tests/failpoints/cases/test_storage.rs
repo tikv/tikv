@@ -26,7 +26,6 @@ use resource_control::ResourceGroupManager;
 use test_raftstore::*;
 use tikv::{
     config::{ConfigController, Module},
-    server::raftkv::ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG,
     storage::{
         self,
         config_manager::StorageConfigManger,
@@ -42,7 +41,6 @@ use tikv::{
         Error as StorageError, ErrorInner as StorageErrorInner, *,
     },
 };
-use tikv_kv::ErrorInner::Undetermined;
 use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -114,9 +112,6 @@ fn test_scheduler_leader_change_twice() {
 fn test_server_catching_api_error() {
     let raftkv_fp = "raftkv_early_error_report";
     let mut cluster = new_server_cluster(0, 1);
-    // One scheduler worker thread would panic after processing the prewrite
-    // request because of undetermined error.
-    cluster.cfg.storage.scheduler_worker_pool_size = 2;
     cluster.run();
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
@@ -145,10 +140,12 @@ fn test_server_catching_api_error() {
     prewrite_req.primary_lock = b"k3".to_vec();
     prewrite_req.start_version = 1;
     prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-    let prewrite_err = client.kv_prewrite(&prewrite_req).unwrap_err();
-    assert_eq!(
-        prewrite_err.to_string(),
-        "RpcFailure: 1-CANCELLED CANCELLED"
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(prewrite_resp.has_region_error(), "{:?}", prewrite_resp);
+    assert!(
+        prewrite_resp.get_region_error().has_region_not_found(),
+        "{:?}",
+        prewrite_resp
     );
     must_get_none(&cluster.get_engine(1), b"k3");
 
@@ -157,9 +154,11 @@ fn test_server_catching_api_error() {
     put_req.key = b"k3".to_vec();
     put_req.value = b"v3".to_vec();
     let put_resp = client.raw_put(&put_req).unwrap();
-    assert_eq!(
-        put_resp.get_error(),
-        Undetermined(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string()).to_string()
+    assert!(put_resp.has_region_error(), "{:?}", put_resp);
+    assert!(
+        put_resp.get_region_error().has_region_not_found(),
+        "{:?}",
+        put_resp
     );
     must_get_none(&cluster.get_engine(1), b"k3");
 
@@ -199,9 +198,11 @@ fn test_raftkv_early_error_report() {
         put_req.key = k.to_vec();
         put_req.value = b"v".to_vec();
         let put_resp = client.raw_put(&put_req).unwrap();
-        assert_eq!(
-            put_resp.get_error(),
-            Undetermined(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string()).to_string()
+        assert!(put_resp.has_region_error(), "{:?}", put_resp);
+        assert!(
+            put_resp.get_region_error().has_region_not_found(),
+            "{:?}",
+            put_resp
         );
         must_get_none(&cluster.get_engine(1), k);
     }
@@ -217,12 +218,15 @@ fn test_raftkv_early_error_report() {
         put_req.value = b"v".to_vec();
         let put_resp = client.raw_put(&put_req).unwrap();
         if ctx.get_region_id() == injected_region_id {
-            assert_eq!(
-                put_resp.get_error(),
-                Undetermined(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string()).to_string()
+            assert!(put_resp.has_region_error(), "{:?}", put_resp);
+            assert!(
+                put_resp.get_region_error().has_region_not_found(),
+                "{:?}",
+                put_resp
             );
             must_get_none(&cluster.get_engine(1), k);
         } else {
+            assert!(!put_resp.has_region_error(), "{:?}", put_resp);
             must_get_equal(&cluster.get_engine(1), k, b"v");
         }
     }
@@ -1526,6 +1530,65 @@ fn test_before_async_write_deadline() {
         rx.recv().unwrap(),
         Err(StorageError(box StorageErrorInner::DeadlineExceeded))
     ));
+}
+
+#[test]
+fn test_deadline_exceeded_on_get_and_batch_get() {
+    use tikv_util::time::Instant;
+    use tracker::INVALID_TRACKER_TOKEN;
+
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .build()
+        .unwrap();
+
+    fail::cfg("after-snapshot", "sleep(100)").unwrap();
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+    ctx.max_execution_duration_ms = 20;
+    let f = storage.get(ctx.clone(), Key::from_raw(b"a"), 1.into());
+    assert!(matches!(
+        block_on(f),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+    let f = storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a")], 1.into());
+    assert!(matches!(
+        block_on(f),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+
+    let consumer = GetConsumer::new();
+    let mut get_req = GetRequest::default();
+    get_req.set_key(b"a".to_vec());
+    get_req.set_version(1_u64);
+    get_req.set_context(ctx.clone());
+    block_on(storage.batch_get_command(
+        vec![get_req],
+        vec![1],
+        vec![INVALID_TRACKER_TOKEN; 1],
+        consumer.clone(),
+        Instant::now(),
+    ))
+    .unwrap();
+    let result = consumer.take_data();
+    assert_eq!(1, result.len());
+    assert!(matches!(
+        result[0],
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+    fail::remove("after-snapshot");
 }
 
 #[test]

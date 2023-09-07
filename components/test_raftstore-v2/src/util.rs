@@ -22,7 +22,6 @@ use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, Con
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
-        config::EngineType,
         kv::{SnapContext, SnapshotExt},
         point_key_range, Engine, Snapshot,
     },
@@ -57,10 +56,7 @@ pub fn create_test_engine(
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(EngineType::RaftKv2);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
@@ -75,8 +71,8 @@ pub fn create_test_engine(
         bootstrap_store(&raft_engine, cluster_id, store_id).unwrap();
     }
 
-    let builder =
-        KvEngineFactoryBuilder::new(env, &cfg.tikv, cache).sst_recovery_sender(Some(scheduler));
+    let builder = KvEngineFactoryBuilder::new(env, &cfg.tikv, cache, key_manager.clone())
+        .sst_recovery_sender(Some(scheduler));
 
     let factory = Box::new(builder.build());
     let rocks_statistics = factory.rocks_statistics();
@@ -270,7 +266,7 @@ pub fn batch_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
         request.mut_header().set_peer(peer.clone());
         let snap = cluster.sim.wl().async_snapshot(node_id, request);
         let resp = block_on_timeout(
-            Box::pin(async move {
+            async move {
                 match snap.await {
                     Ok(snap) => ReadResponse {
                         response: Default::default(),
@@ -283,7 +279,7 @@ pub fn batch_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
                         txn_extra_op: Default::default(),
                     },
                 }
-            }),
+            },
             Duration::from_secs(1),
         )
         .unwrap();
@@ -416,11 +412,38 @@ pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
 ) -> Result<RaftCmdResponse> {
     let mut region = cluster.get_region(key);
     let region_id = region.get_id();
-    let req = new_request(
+    let mut req = new_request(
         region_id,
         region.take_region_epoch(),
         vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
         false,
     );
+    req.mut_header().set_peer(
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == node_id)
+            .unwrap()
+            .clone(),
+    );
     cluster.call_command_on_node(node_id, req, timeout)
+}
+
+pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    count: u64,
+    peer: Option<u64>,
+) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
+    }
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers, count, peer
+    );
 }

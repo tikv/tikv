@@ -81,15 +81,14 @@ pub fn must_get<EK: KvEngine>(
     }
     debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
     let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-    if value.is_none() && res.is_none()
-        || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
-    {
+    if value == res.as_ref().map(|r| r.as_ref()) {
         return;
     }
     panic!(
-        "can't get value {:?} for key {}",
+        "can't get value {:?} for key {}, actual={:?}",
         value.map(escape),
-        log_wrappers::hex_encode_upper(key)
+        log_wrappers::hex_encode_upper(key),
+        res
     )
 }
 
@@ -151,13 +150,16 @@ lazy_static! {
     pub static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+        let mut cfg = TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 manifest_dir.display(),
                 e
             );
-        })
+        });
+        // To speed up leader transfer.
+        cfg.raft_store.allow_unsafe_vote_after_start = true;
+        cfg
     };
 }
 
@@ -636,10 +638,7 @@ pub fn create_test_engine(
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(cfg.storage.engine);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
@@ -649,8 +648,8 @@ pub fn create_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder =
-        KvEngineFactoryBuilder::new(env, &cfg, cache).sst_recovery_sender(Some(scheduler));
+    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, cache, key_manager.clone())
+        .sst_recovery_sender(Some(scheduler));
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),
@@ -669,11 +668,11 @@ pub fn create_test_engine(
     )
 }
 
-pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_request_snapshot(config: &mut Config) {
     // We don't want to generate snapshots due to compact log.
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
+    config.raft_store.raft_log_gc_threshold = 1000;
+    config.raft_store.raft_log_gc_count_limit = Some(1000);
+    config.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
 pub fn configure_for_hibernate(config: &mut Config) {
@@ -1560,4 +1559,19 @@ pub fn put_with_timeout<T: Simulator>(
         false,
     );
     cluster.call_command_on_node(node_id, req, timeout)
+}
+
+pub fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
+    }
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers, count, peer
+    );
 }

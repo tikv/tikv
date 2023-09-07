@@ -2,7 +2,7 @@
 
 use std::{
     iter::FromIterator,
-    sync::{mpsc, Arc, Mutex},
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
 };
 
@@ -20,6 +20,7 @@ use raftstore::{
     Result,
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -76,7 +77,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SstImporter::new(&cfg.import, p, None, cfg.storage.api_version()).unwrap())
+        Arc::new(SstImporter::new(&cfg.import, p, None, cfg.storage.api_version(), false).unwrap())
     };
     let snap_mgr = {
         let p = dir
@@ -112,6 +113,8 @@ fn start_raftstore(
             CollectorRegHandle::new_for_test(),
             None,
             None,
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
         )
         .unwrap();
 

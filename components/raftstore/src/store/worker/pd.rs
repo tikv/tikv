@@ -8,7 +8,7 @@ use std::{
     sync::{
         atomic::Ordering,
         mpsc::{self, Receiver, Sender},
-        Arc,
+        Arc, Mutex,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -36,6 +36,7 @@ use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
+use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
@@ -58,15 +59,16 @@ use crate::{
     store::{
         cmd_resp::new_error,
         metrics::*,
-        peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
-        transport::SignificantRouter,
+        unsafe_recovery::{
+            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+        },
         util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
         worker::{
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
         Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
+        RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
 };
 
@@ -139,6 +141,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
     },
     AskBatchSplit {
@@ -147,6 +150,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
     },
     AutoSplit {
@@ -198,6 +202,7 @@ where
         min_resolved_ts: u64,
     },
     ReportBuckets(BucketStat),
+    ControlGrpcServer(pdpb::ControlGrpcEvent),
 }
 
 pub struct StoreStat {
@@ -428,6 +433,9 @@ where
             Task::ReportBuckets(ref buckets) => {
                 write!(f, "report buckets: {:?}", buckets)
             }
+            Task::ControlGrpcServer(ref event) => {
+                write!(f, "control grpc server: {:?}", event)
+            }
         }
     }
 }
@@ -643,7 +651,7 @@ where
             .name(thd_name!("stats-monitor"))
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
+
                 // Create different `ThreadInfoStatistics` for different purposes to
                 // make sure the record won't be disturbed.
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
@@ -652,7 +660,7 @@ where
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
-                    .region_cpu_overload_threshold_ratio
+                    .region_cpu_overload_threshold_ratio()
                     > 0.0
                 {
                     region_cpu_records_collector =
@@ -689,7 +697,6 @@ where
                     }
                     timer_cnt += 1;
                 }
-                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);
@@ -951,6 +958,9 @@ where
     curr_health_status: ServingStatus,
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+
+    // Service manager for grpc service.
+    grpc_service_manager: GrpcServiceManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -974,6 +984,7 @@ where
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_manager: GrpcServiceManager,
     ) -> Runner<EK, ER, T> {
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
@@ -1046,6 +1057,7 @@ where
             curr_health_status: ServingStatus::Serving,
             coprocessor_host,
             causal_ts_provider,
+            grpc_service_manager,
         }
     }
 
@@ -1056,6 +1068,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
     ) {
@@ -1077,6 +1090,7 @@ where
                         resp.get_new_region_id(),
                         resp.take_new_peer_ids(),
                         right_derive,
+                        share_source_region_size,
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
@@ -1111,6 +1125,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
         remote: Remote<yatp::task::future::TaskCell>,
@@ -1136,6 +1151,7 @@ where
                         split_keys,
                         resp.take_ids().into(),
                         right_derive,
+                        share_source_region_size,
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
@@ -1164,6 +1180,7 @@ where
                         split_key: split_keys.pop().unwrap(),
                         peer,
                         right_derive,
+                        share_source_region_size,
                         callback,
                     };
                     if let Err(ScheduleError::Stopped(t)) = scheduler.schedule(task) {
@@ -1356,6 +1373,9 @@ where
         stats.set_slow_score(slow_score as u64);
         self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
 
+        stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
+
+        let scheduler = self.scheduler.clone();
         let router = self.router.clone();
         let resp = self
             .pd_client
@@ -1368,6 +1388,7 @@ where
                     }
                     if let Some(mut plan) = resp.recovery_plan.take() {
                         info!("Unsafe recovery, received a recovery plan");
+                        let handle = Arc::new(Mutex::new(router.clone()));
                         if plan.has_force_leader() {
                             let mut failed_stores = HashSet::default();
                             for failed_store in plan.get_force_leader().get_failed_stores() {
@@ -1375,15 +1396,13 @@ where
                             }
                             let syncer = UnsafeRecoveryForceLeaderSyncer::new(
                                 plan.get_step(),
-                                router.clone(),
+                                handle.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
-                                if let Err(e) = router.significant_send(
+                                if let Err(e) = handle.send_enter_force_leader(
                                     *region,
-                                    SignificantMsg::EnterForceLeaderState {
-                                        syncer: syncer.clone(),
-                                        failed_stores: failed_stores.clone(),
-                                    },
+                                    syncer.clone(),
+                                    failed_stores.clone(),
                                 ) {
                                     error!("fail to send force leader message for recovery"; "err" => ?e);
                                 }
@@ -1391,33 +1410,23 @@ where
                         } else {
                             let syncer = UnsafeRecoveryExecutePlanSyncer::new(
                                 plan.get_step(),
-                                router.clone(),
+                                handle.clone(),
                             );
                             for create in plan.take_creates().into_iter() {
-                                if let Err(e) =
-                                    router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
-                                        syncer: syncer.clone(),
-                                        create,
-                                    })
-                                {
+                                if let Err(e) = handle.send_create_peer(create, syncer.clone()) {
                                     error!("fail to send create peer message for recovery"; "err" => ?e);
                                 }
                             }
                             for delete in plan.take_tombstones().into_iter() {
-                                if let Err(e) = router.significant_send(
-                                    delete,
-                                    SignificantMsg::UnsafeRecoveryDestroy(syncer.clone()),
-                                ) {
-                                    error!("fail to send delete peer message for recovery"; "err" => ?e);
+                                if let Err(e) = handle.send_destroy_peer(delete, syncer.clone()) {
+                                    error!("fail to send destroy peer message for recovery"; "err" => ?e);
                                 }
                             }
                             for mut demote in plan.take_demotes().into_iter() {
-                                if let Err(e) = router.significant_send(
+                                if let Err(e) = handle.send_demote_peers(
                                     demote.get_region_id(),
-                                    SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
-                                        syncer: syncer.clone(),
-                                        failed_voters: demote.take_failed_voters().into_vec(),
-                                    },
+                                    demote.take_failed_voters().into_vec(),
+                                    syncer.clone(),
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
                                 }
@@ -1431,6 +1440,14 @@ where
                         let _ = router.send_store_msg(StoreMsg::AwakenRegions {
                             abnormal_stores: awaken_regions.get_abnormal_stores().to_vec(),
                         });
+                    }
+                    // Control grpc server.
+                    if let Some(op) = resp.control_grpc.take() {
+                        if let Err(e) =
+                            scheduler.schedule(Task::ControlGrpcServer(op.get_ctrl_event()))
+                        {
+                            warn!("fail to schedule control grpc task"; "err" => ?e);
+                        }
                     }
                 }
                 Err(e) => {
@@ -1635,6 +1652,7 @@ where
                             split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
                             source: "pd".into(),
+                            share_source_region_size: false,
                         }
                     } else {
                         CasualMessage::HalfSplitRegion {
@@ -1667,7 +1685,7 @@ where
                     let mut switches = resp.take_switch_witnesses();
                     info!("try to switch witness";
                           "region_id" => region_id,
-                          "switch witness" => ?switches
+                          "switch_witness" => ?switches
                     );
                     let req = new_batch_switch_witness(switches.take_switch_witnesses().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
@@ -1755,6 +1773,8 @@ where
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
         let causal_ts_provider = self.causal_ts_provider.clone();
+        let log_interval = Duration::from_secs(5);
+        let mut last_log_ts = Instant::now().checked_sub(log_interval).unwrap();
 
         let f = async move {
             let mut success = false;
@@ -1793,10 +1813,14 @@ where
                         break;
                     }
                     Err(e) => {
-                        warn!(
-                            "failed to update max timestamp for region {}: {:?}",
-                            region_id, e
-                        );
+                        if last_log_ts.elapsed() > log_interval {
+                            warn!(
+                                "failed to update max timestamp for region";
+                                "region_id" => region_id,
+                                "error" => ?e
+                            );
+                            last_log_ts = Instant::now();
+                        }
                     }
                 }
             }
@@ -1961,8 +1985,37 @@ where
     fn is_store_heartbeat_delayed(&self) -> bool {
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
-        (interval_second >= self.store_heartbeat_interval.as_secs())
+        // Only if the `last_report_ts`, that is, the last timestamp of
+        // store_heartbeat, exceeds the interval of store heartbaet but less than
+        // the given limitation, will it trigger a report of fake heartbeat to
+        // make the statistics of slowness percepted by PD timely.
+        (interval_second > self.store_heartbeat_interval.as_secs())
             && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
+    }
+
+    fn handle_control_grpc_server(&mut self, event: pdpb::ControlGrpcEvent) {
+        info!("forcely control grpc server";
+                "curr_health_status" => ?self.curr_health_status,
+                "event" => ?event,
+        );
+        match event {
+            pdpb::ControlGrpcEvent::Pause => {
+                if let Err(e) = self.grpc_service_manager.pause() {
+                    warn!("failed to send service event to PAUSE grpc server";
+                            "err" => ?e);
+                } else {
+                    self.update_health_status(ServingStatus::NotServing);
+                }
+            }
+            pdpb::ControlGrpcEvent::Resume => {
+                if let Err(e) = self.grpc_service_manager.resume() {
+                    warn!("failed to send service event to RESUME grpc server";
+                            "err" => ?e);
+                } else {
+                    self.update_health_status(ServingStatus::Serving);
+                }
+            }
+        }
     }
 }
 
@@ -2003,12 +2056,14 @@ where
                 split_key,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
             } => self.handle_ask_split(
                 region,
                 split_key,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
                 String::from("ask_split"),
             ),
@@ -2017,6 +2072,7 @@ where
                 split_keys,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
             } => Self::handle_ask_batch_split(
                 self.router.clone(),
@@ -2026,6 +2082,7 @@ where
                 split_keys,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
                 String::from("batch_split"),
                 self.remote.clone(),
@@ -2050,6 +2107,7 @@ where
                                 vec![split_key],
                                 split_info.peer,
                                 true,
+                                false,
                                 Callback::None,
                                 String::from("auto_split"),
                                 remote.clone(),
@@ -2217,6 +2275,9 @@ where
             Task::ReportBuckets(buckets) => {
                 self.handle_report_region_buckets(buckets);
             }
+            Task::ControlGrpcServer(event) => {
+                self.handle_control_grpc_server(event);
+            }
         };
     }
 
@@ -2337,6 +2398,7 @@ fn new_split_region_request(
     new_region_id: u64,
     peer_ids: Vec<u64>,
     right_derive: bool,
+    share_source_region_size: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::Split);
@@ -2344,6 +2406,8 @@ fn new_split_region_request(
     req.mut_split().set_new_region_id(new_region_id);
     req.mut_split().set_new_peer_ids(peer_ids);
     req.mut_split().set_right_derive(right_derive);
+    req.mut_split()
+        .set_share_source_region_size(share_source_region_size);
     req
 }
 
@@ -2351,10 +2415,13 @@ fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
     ids: Vec<pdpb::SplitId>,
     right_derive: bool,
+    share_source_region_size: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::BatchSplit);
     req.mut_splits().set_right_derive(right_derive);
+    req.mut_splits()
+        .set_share_source_region_size(share_source_region_size);
     let mut requests = Vec::with_capacity(ids.len());
     for (mut id, key) in ids.into_iter().zip(split_keys) {
         let mut split = SplitRequest::default();
