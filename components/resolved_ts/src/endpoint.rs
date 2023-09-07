@@ -955,6 +955,8 @@ where
             self.advance_notify.notify_waiters();
             self.memory_quota
                 .set_capacity(self.cfg.memory_quota.0 as usize);
+            self.scan_concurrency_semaphore =
+                Arc::new(Semaphore::new(self.cfg.incremental_scan_concurrency));
             info!(
                 "resolved-ts config changed";
                 "prev" => prev,
