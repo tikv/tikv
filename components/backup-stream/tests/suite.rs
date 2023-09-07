@@ -31,10 +31,7 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
-use raftstore::{
-    router::{CdcRaftRouter},
-    RegionInfoAccessor,
-};
+use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
 use resolved_ts::LeadershipResolver;
 use tempdir::TempDir;
 use test_pd_client::TestPdClient;
