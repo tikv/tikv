@@ -183,7 +183,6 @@ impl Resolver {
         }
     }
 
-    #[must_use]
     pub fn track_lock(
         &mut self,
         start_ts: TimeStamp,
