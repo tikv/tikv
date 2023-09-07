@@ -154,9 +154,53 @@ impl Downstream {
 
 #[derive(Default)]
 struct Pending {
+<<<<<<< HEAD
     pub downstreams: Vec<Downstream>,
     pub locks: Vec<PendingLock>,
     pub pending_bytes: usize,
+=======
+    downstreams: Vec<Downstream>,
+    locks: Vec<PendingLock>,
+    pending_bytes: usize,
+    memory_quota: Arc<MemoryQuota>,
+}
+
+impl Pending {
+    fn new(memory_quota: Arc<MemoryQuota>) -> Pending {
+        Pending {
+            downstreams: vec![],
+            locks: vec![],
+            pending_bytes: 0,
+            memory_quota,
+        }
+    }
+
+    fn push_pending_lock(&mut self, lock: PendingLock) -> Result<()> {
+        let bytes = lock.heap_size();
+        self.memory_quota.alloc(bytes)?;
+        self.locks.push(lock);
+        self.pending_bytes += bytes;
+        CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
+        Ok(())
+    }
+
+    fn on_region_ready(&mut self, resolver: &mut Resolver) -> Result<()> {
+        fail::fail_point!("cdc_pending_on_region_ready", |_| Err(
+            Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
+        ));
+        // Must take locks, otherwise it may double free memory quota on drop.
+        for lock in mem::take(&mut self.locks) {
+            self.memory_quota.free(lock.heap_size());
+            match lock {
+                PendingLock::Track { key, start_ts } => {
+                    resolver.track_lock(start_ts, key, None)?;
+                }
+                PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
+            }
+        }
+        Ok(())
+    }
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
 }
 
 impl Drop for Pending {
@@ -667,7 +711,11 @@ impl Delegate {
                 // we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
+<<<<<<< HEAD
                         resolver.track_lock(row.start_ts.into(), row.key.clone(), None)
+=======
+                        resolver.track_lock(row.start_ts.into(), row.key.clone(), None)?;
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
                     }
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
