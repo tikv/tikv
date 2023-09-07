@@ -107,6 +107,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub fn apply_ingest(&mut self, index: u64, ssts: Vec<SstMeta>) -> Result<()> {
+        fail::fail_point!("on_apply_ingest");
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let mut infos = Vec::with_capacity(ssts.len());
         let mut size: i64 = 0;
