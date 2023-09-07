@@ -249,14 +249,19 @@ impl ApplyTrace {
     }
 
     pub fn on_sst_ingested(&mut self, sst_applied_index: &[SstApplyIndex]) {
+        use std::cmp::Ordering;
         for &SstApplyIndex { cf_index, index } in sst_applied_index {
             let p = &mut self.data_cfs[cf_index];
             if p.flushed < index {
-                let max_idx = p.pending_sst_ranges.iter().last().map(|r| r.1).unwrap_or(0);
-                if max_idx + 1 < index {
-                    p.pending_sst_ranges.push_back(IndexRange(index, index));
-                } else if max_idx + 1 == index {
-                    p.pending_sst_ranges.iter_mut().last().unwrap().1 = index;
+                let max_idx = p.pending_sst_ranges.iter().last().map(|r| r.1).unwrap_or(0) + 1;
+                match max_idx.cmp(&index) {
+                    Ordering::Less => {
+                        p.pending_sst_ranges.push_back(IndexRange(index, index));
+                    }
+                    Ordering::Equal => {
+                        p.pending_sst_ranges.iter_mut().last().unwrap().1 = index;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -342,7 +347,6 @@ impl ApplyTrace {
                         max_index = r.1;
                         has_change = true;
                     }
-                    drop(r);
                     p.pending_sst_ranges.pop_front();
                     has_ingest = true;
                 }
@@ -428,12 +432,15 @@ impl ApplyTrace {
 
     #[inline]
     pub fn take_flush_index(&mut self, ready_number: u64) -> Option<u64> {
+        use std::cmp::Ordering;
         while let Some(r) = self.flushed_index_queue.pop_front() {
-            if r.ready_number == ready_number {
-                return Some(r.flushed_index);
-            } else if r.ready_number > ready_number {
-                self.flushed_index_queue.push_front(r);
-                break;
+            match r.ready_number.cmp(&ready_number) {
+                Ordering::Equal => return Some(r.flushed_index),
+                Ordering::Greater => {
+                    self.flushed_index_queue.push_front(r);
+                    break;
+                }
+                _ => {}
             }
         }
         None
