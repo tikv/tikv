@@ -46,7 +46,7 @@ use kvproto::{
 use raftstore::store::{
     util, ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use slog::{info, trace, Logger};
+use slog::{info, trace, warn, Logger};
 use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
@@ -619,7 +619,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // flush the oldest cf one by one until we are under the replay count threshold
             loop {
                 let replay_count = self.storage().estimate_replay_count();
-                if replay_count < flush_threshold {
+                if replay_count < flush_threshold || tried_count == 3 {
+                    // Ideally, the replay count should be 0 after three flush_oldest_cf. If not,
+                    // there may exist bug, but it's not desireable to block here, so we at most try
+                    // three times.
+                    if replay_count >= flush_threshold && tried_count == 3 {
+                        warn!(
+                            self.logger,
+                            "after three flush_oldest_cf, the expected replay count still exceeds the threshold";
+                            "replay_count" => replay_count,
+                            "threshold" => flush_threshold,
+                        );
+                    }
                     if flushed {
                         let admin_flush = self.storage_mut().apply_trace_mut().admin.flushed;
                         let (_, _, tablet_index) = ctx

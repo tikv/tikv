@@ -52,6 +52,9 @@ pub enum CdcEvent {
 
 impl CdcEvent {
     pub fn size(&self) -> u32 {
+        fail::fail_point!("cdc_event_size", |size| size
+            .map(|s| s.parse::<u32>().unwrap())
+            .unwrap_or(0));
         match self {
             CdcEvent::ResolvedTs(ref r) => {
                 // For region id, it is unlikely to exceed 100,000,000 which is
