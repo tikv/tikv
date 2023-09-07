@@ -5,15 +5,48 @@ use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use tikv_util::{
-    memory::{HeapSize, MemoryQuota},
+    memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
 };
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
 pub const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
+
+#[derive(Clone)]
+pub enum TsSource {
+    // A lock in LOCK CF
+    Lock(Arc<[u8]>),
+    // A memory lock in concurrency manager
+    MemoryLock(Key),
+    PdTso,
+    // The following sources can also come from PD or memory lock, but we care more about sources
+    // in resolved-ts.
+    BackupStream,
+    Cdc,
+}
+
+impl TsSource {
+    pub fn label(&self) -> &str {
+        match self {
+            TsSource::Lock(_) => "lock",
+            TsSource::MemoryLock(_) => "rts_cm_min_lock",
+            TsSource::PdTso => "pd_tso",
+            TsSource::BackupStream => "backup_stream",
+            TsSource::Cdc => "cdc",
+        }
+    }
+
+    pub fn key(&self) -> Option<Key> {
+        match self {
+            TsSource::Lock(k) => Some(Key::from_encoded_slice(k)),
+            TsSource::MemoryLock(k) => Some(k.clone()),
+            _ => None,
+        }
+    }
+}
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -22,7 +55,7 @@ pub struct Resolver {
     // key -> start_ts
     locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
-    lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
+    pub(crate) lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The last shrink time.
     last_aggressive_shrink_time: Instant,
     // The timestamps that guarantees no more commit will happen before.
@@ -35,14 +68,42 @@ pub struct Resolver {
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped
     stopped: bool,
-
     // The memory quota for the `Resolver` and its lock keys and timestamps.
     memory_quota: Arc<MemoryQuota>,
+    // The last attempt of resolve(), used for diagnosis.
+    pub(crate) last_attempt: Option<LastAttempt>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LastAttempt {
+    success: bool,
+    ts: TimeStamp,
+    reason: TsSource,
+}
+
+impl slog::Value for LastAttempt {
+    fn serialize(
+        &self,
+        _record: &slog::Record<'_>,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_arguments(
+            key,
+            &format_args!(
+                "{{ success={}, ts={}, reason={}, key={:?} }}",
+                self.success,
+                self.ts,
+                self.reason.label(),
+                self.reason.key(),
+            ),
+        )
+    }
 }
 
 impl std::fmt::Debug for Resolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let far_lock = self.lock_ts_heap.iter().next();
+        let far_lock = self.oldest_transaction();
         let mut dt = f.debug_tuple("Resolver");
         dt.field(&format_args!("region={}", self.region_id));
 
@@ -103,6 +164,7 @@ impl Resolver {
             min_ts: TimeStamp::zero(),
             stopped: false,
             memory_quota,
+            last_attempt: None,
         }
     }
 
@@ -183,8 +245,12 @@ impl Resolver {
         }
     }
 
-    #[must_use]
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) -> bool {
+    pub fn track_lock(
+        &mut self,
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        index: Option<u64>,
+    ) -> Result<(), MemoryQuotaExceeded> {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
@@ -198,13 +264,11 @@ impl Resolver {
             "memory_capacity" => self.memory_quota.capacity(),
             "key_heap_size" => bytes,
         );
-        if !self.memory_quota.alloc(bytes) {
-            return false;
-        }
+        self.memory_quota.alloc(bytes)?;
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         self.locks_by_key.insert(key.clone(), start_ts);
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
-        true
+        Ok(())
     }
 
     pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
@@ -252,7 +316,12 @@ impl Resolver {
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp, now: Option<Instant>) -> TimeStamp {
+    pub fn resolve(
+        &mut self,
+        min_ts: TimeStamp,
+        now: Option<Instant>,
+        source: TsSource,
+    ) -> TimeStamp {
         // Use a small ratio to shrink the memory usage aggressively.
         const AGGRESSIVE_SHRINK_RATIO: usize = 2;
         const AGGRESSIVE_SHRINK_INTERVAL: Duration = Duration::from_secs(10);
@@ -268,17 +337,36 @@ impl Resolver {
         }
 
         // Find the min start ts.
-        let min_lock = self.lock_ts_heap.keys().next().cloned();
+        let min_lock = self
+            .oldest_transaction()
+            .and_then(|(ts, locks)| locks.iter().next().map(|lock| (*ts, lock)));
         let has_lock = min_lock.is_some();
-        let min_start_ts = min_lock.unwrap_or(min_ts);
+        let min_start_ts = min_lock.map(|(ts, _)| ts).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+        // reason is the min source of the new resolved ts.
+        let reason = match (min_lock, min_ts) {
+            (Some(lock), min_ts) if lock.0 < min_ts => TsSource::Lock(lock.1.clone()),
+            (Some(_), _) => source,
+            (None, _) => source,
+        };
+
         if self.resolved_ts >= new_resolved_ts {
-            let label = if has_lock { "has_lock" } else { "stale_ts" };
             RTS_RESOLVED_FAIL_ADVANCE_VEC
-                .with_label_values(&[label])
+                .with_label_values(&[reason.label()])
                 .inc();
+            self.last_attempt = Some(LastAttempt {
+                success: false,
+                ts: new_resolved_ts,
+                reason,
+            });
+        } else {
+            self.last_attempt = Some(LastAttempt {
+                success: true,
+                ts: new_resolved_ts,
+                reason,
+            })
         }
 
         // Resolved ts never decrease.
@@ -334,6 +422,10 @@ impl Resolver {
 
     pub(crate) fn read_progress(&self) -> Option<&Arc<RegionReadProgress>> {
         self.read_progress.as_ref()
+    }
+
+    pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &HashSet<Arc<[u8]>>)> {
+        self.lock_ts_heap.iter().next()
     }
 }
 
@@ -410,16 +502,14 @@ mod tests {
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        assert!(resolver.track_lock(
-                            start_ts.into(),
-                            key.into_raw().unwrap(),
-                            None
-                        ));
+                        resolver
+                            .track_lock(start_ts.into(), key.into_raw().unwrap(), None)
+                            .unwrap();
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(
-                            resolver.resolve(min_ts.into(), None),
+                            resolver.resolve(min_ts.into(), None, TsSource::PdTso),
                             expect.into(),
                             "case {}",
                             i
@@ -437,7 +527,7 @@ mod tests {
         let mut key = vec![0; 77];
         let lock_size = resolver.lock_heap_size(&key);
         let mut ts = TimeStamp::default();
-        while resolver.track_lock(ts, key.clone(), None) {
+        while resolver.track_lock(ts, key.clone(), None).is_ok() {
             ts.incr();
             key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
         }
@@ -501,7 +591,7 @@ mod tests {
 
         // Trigger aggressive shrink.
         resolver.last_aggressive_shrink_time = Instant::now_coarse() - Duration::from_secs(600);
-        resolver.resolve(TimeStamp::new(0), None);
+        resolver.resolve(TimeStamp::new(0), None, TsSource::PdTso);
         assert!(
             resolver.locks_by_key.capacity() == 0,
             "{}, {}",
