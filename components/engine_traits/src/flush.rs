@@ -203,7 +203,7 @@ impl PersistenceListener {
     /// Called when memtable is frozen.
     ///
     /// `smallest_seqno` should be the smallest seqno of the memtable.
-    pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64, largest_seqno: u64) {
+    pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64) {
         info!(
             "on_memtable_sealed";
             "tablet_index" => self.tablet_index,

@@ -75,7 +75,7 @@ fn test_rocksdb_listener() {
 
     let r1 = cluster.get_region(b"k00").get_id();
     let r2 = cluster.get_region(b"k15").get_id();
-    
+
     let engine = cluster.get_engine(1);
     let tablet1 = engine.get_tablet_by_id(r1).unwrap();
     let tablet2 = engine.get_tablet_by_id(r2).unwrap();
@@ -91,9 +91,8 @@ fn test_rocksdb_listener() {
     }
     fail::cfg("on_memtable_sealed", "pause").unwrap();
 
-    std::thread::spawn(move || {
+    let h = std::thread::spawn(move || {
         tablet2.flush_cf("default", true).unwrap();
-        println!("flush done");
     });
 
     let (tx, rx) = channel();
@@ -107,4 +106,6 @@ fn test_rocksdb_listener() {
     let _ = rx.recv();
     let _ = rx.recv();
     fail::remove("on_memtable_sealed");
+
+    h.join().unwrap();
 }

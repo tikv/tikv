@@ -201,11 +201,8 @@ impl rocksdb::EventListener for RocksPersistenceListener {
         );
         // Note: first_seqno is effectively the smallest seqno of memtable.
         // earliest_seqno has ambiguous semantics.
-        self.0.on_memtable_sealed(
-            info.cf_name().to_string(),
-            info.first_seqno(),
-            info.largest_seqno(),
-        );
+        self.0
+            .on_memtable_sealed(info.cf_name().to_string(), info.first_seqno());
     }
 
     fn on_flush_begin(&self, f: &FlushJobInfo) {
