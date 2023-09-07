@@ -220,8 +220,8 @@ impl PersistenceListener {
         if flushed > smallest_seqno {
             panic!(
                 "sealed seqno conflict with latest flushed index, cf {},
-                sealed smallest_seqno {}, sealed largest_seqno {}, last_flushed{}, apply_index {}",
-                cf, smallest_seqno, largest_seqno, flushed apply_index,
+                sealed smallest_seqno {}, sealed largest_seqno {}, last_flushed {}, apply_index {}",
+                cf, smallest_seqno, largest_seqno, flushed, apply_index,
             );
         }
         prs.prs.push_back(ApplyProgress {
