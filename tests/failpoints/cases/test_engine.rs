@@ -1,6 +1,11 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use std::{
+    sync::{mpsc::channel, Mutex},
+    time::Duration,
+};
+
+use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv_util::config::ReadableSize;
 
 fn dummy_string(len: usize) -> String {

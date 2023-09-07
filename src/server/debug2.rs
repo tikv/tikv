@@ -688,20 +688,20 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
     fn region_size<T: AsRef<str>>(&self, region_id: u64, cfs: Vec<T>) -> Result<Vec<(T, usize)>> {
         match self.raft_engine.get_region_state(region_id, u64::MAX) {
             Ok(Some(region_state)) => {
-                if region_state.get_state() != PeerState::Normal {
-                    return Err(Error::NotFound(format!(
-                        "peer state of region {:?} is {:?}",
-                        region_id,
-                        region_state.get_state()
-                    )));
-                }
                 let region = region_state.get_region();
+                let state = region_state.get_state();
                 let start_key = &keys::data_key(region.get_start_key());
                 let end_key = &keys::data_end_key(region.get_end_key());
                 let mut sizes = vec![];
                 let mut tablet_cache =
                     get_tablet_cache(&self.tablet_reg, region.id, Some(region_state))?;
-                let tablet = tablet_cache.latest().unwrap();
+                let Some(tablet) = tablet_cache.latest() else {
+                    return Err(Error::NotFound(format!(
+                        "tablet not found, region_id={:?}, peer_state={:?}",
+                        region_id,
+                        state
+                    )));
+                };
                 for cf in cfs {
                     let mut size = 0;
                     box_try!(tablet.scan(cf.as_ref(), start_key, end_key, false, |k, v| {
@@ -1462,6 +1462,7 @@ mod tests {
         let mut wb = raft_engine.log_batch(10);
         wb.put_region_state(region_id, 10, &state).unwrap();
         raft_engine.consume(&mut wb, true).unwrap();
+        debugger.tablet_reg.remove(region_id);
         debugger.region_size(region_id, cfs.clone()).unwrap_err();
     }
 

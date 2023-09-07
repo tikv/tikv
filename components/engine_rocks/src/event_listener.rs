@@ -198,6 +198,10 @@ impl rocksdb::EventListener for RocksPersistenceListener {
             .on_memtable_sealed(info.cf_name().to_string(), info.first_seqno());
     }
 
+    fn on_flush_begin(&self, _: &FlushJobInfo) {
+        fail::fail_point!("on_flush_begin");
+    }
+
     fn on_flush_completed(&self, job: &FlushJobInfo) {
         let num = match job
             .file_path()
