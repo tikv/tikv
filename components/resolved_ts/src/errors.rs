@@ -6,6 +6,7 @@ use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
 use raftstore::Error as RaftstoreError;
 use thiserror::Error;
+<<<<<<< HEAD
 use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
@@ -29,6 +30,14 @@ pub enum Error {
     TxnTypes(#[from] TxnTypesError),
     #[error("Raftstore error {0}")]
     Raftstore(#[from] RaftstoreError),
+=======
+use tikv_util::memory::MemoryQuotaExceeded;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Memory quota exceeded")]
+    MemoryQuotaExceeded(#[from] MemoryQuotaExceeded),
+>>>>>>> 23c89b3fd2 (*: let alloc API return result (#15529))
     #[error("Other error {0}")]
     Other(#[from] Box<dyn std::error::Error + Sync + Send>),
 }
