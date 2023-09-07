@@ -13,7 +13,12 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
-use tikv_util::{impl_display_as_debug, memory::MemoryQuota, time::Instant, warn};
+use tikv_util::{
+    impl_display_as_debug,
+    memory::{MemoryQuota, MemoryQuotaExceeded},
+    time::Instant,
+    warn,
+};
 
 use crate::metrics::*;
 
@@ -232,6 +237,12 @@ impl_from_future_send_error! {
     TrySendError<(CdcEvent, usize)>,
 }
 
+impl From<MemoryQuotaExceeded> for SendError {
+    fn from(_: MemoryQuotaExceeded) -> Self {
+        SendError::Congested
+    }
+}
+
 #[derive(Clone)]
 pub struct Sink {
     unbounded_sender: UnboundedSender<(CdcEvent, usize)>,
@@ -243,8 +254,8 @@ impl Sink {
     pub fn unbounded_send(&self, event: CdcEvent, force: bool) -> Result<(), SendError> {
         // Try it's best to send error events.
         let bytes = if !force { event.size() as usize } else { 0 };
-        if bytes != 0 && !self.memory_quota.alloc(bytes) {
-            return Err(SendError::Congested);
+        if bytes != 0 {
+            self.memory_quota.alloc(bytes)?;
         }
         match self.unbounded_sender.unbounded_send((event, bytes)) {
             Ok(_) => Ok(()),
@@ -263,9 +274,7 @@ impl Sink {
             let bytes = event.size();
             total_bytes += bytes;
         }
-        if !self.memory_quota.alloc(total_bytes as _) {
-            return Err(SendError::Congested);
-        }
+        self.memory_quota.alloc(total_bytes as _)?;
         for event in events {
             let bytes = event.size() as usize;
             if let Err(e) = self.bounded_sender.feed((event, bytes)).await {
@@ -583,9 +592,9 @@ mod tests {
                 }
             }
             let memory_quota = rx.memory_quota.clone();
-            assert_eq!(memory_quota.alloc(event.size() as _), false,);
+            memory_quota.alloc(event.size() as _).unwrap_err();
             drop(rx);
-            assert_eq!(memory_quota.alloc(1024), true);
+            memory_quota.alloc(1024).unwrap();
         }
         // Make sure memory quota is freed when tx is dropped before rx.
         {
@@ -600,10 +609,10 @@ mod tests {
                 }
             }
             let memory_quota = rx.memory_quota.clone();
-            assert_eq!(memory_quota.alloc(event.size() as _), false,);
+            memory_quota.alloc(event.size() as _).unwrap_err();
             drop(send);
             drop(rx);
-            assert_eq!(memory_quota.alloc(1024), true);
+            memory_quota.alloc(1024).unwrap();
         }
         // Make sure sending message to a closed channel does not leak memory quota.
         {
@@ -615,7 +624,7 @@ mod tests {
                 send(CdcEvent::Event(e.clone())).unwrap_err();
             }
             assert_eq!(memory_quota.in_use(), 0);
-            assert_eq!(memory_quota.alloc(1024), true);
+            memory_quota.alloc(1024).unwrap();
 
             // Freeing bytes should not cause overflow.
             memory_quota.free(1024);
