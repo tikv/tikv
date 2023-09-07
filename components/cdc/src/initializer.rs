@@ -411,9 +411,7 @@ impl<E: KvEngine> Initializer<E> {
                     let lock = Lock::parse(value)?;
                     match lock.lock_type {
                         LockType::Put | LockType::Delete => {
-                            if !resolver.track_lock(lock.ts, key, None) {
-                                return Err(Error::MemoryQuotaExceeded);
-                            }
+                            resolver.track_lock(lock.ts, key, None)?;
                         }
                         _ => (),
                     };

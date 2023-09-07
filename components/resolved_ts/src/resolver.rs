@@ -5,7 +5,7 @@ use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use tikv_util::{
-    memory::{HeapSize, MemoryQuota},
+    memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
 };
 use txn_types::{Key, TimeStamp};
@@ -202,23 +202,6 @@ impl Resolver {
         self.tracked_index = index;
     }
 
-    fn shrink_ratio(&mut self, ratio: usize, timestamp: Option<TimeStamp>) {
-        // HashMap load factor is 87% approximately, leave some margin to avoid
-        // frequent rehash.
-        //
-        // See https://github.com/rust-lang/hashbrown/blob/v0.14.0/src/raw/mod.rs#L208-L220
-        const MIN_SHRINK_RATIO: usize = 2;
-        if self.locks_by_key.capacity()
-            > self.locks_by_key.len() * cmp::max(MIN_SHRINK_RATIO, ratio)
-        {
-            self.locks_by_key.shrink_to_fit();
-        }
-        if let Some(ts) = timestamp && let Some(lock_set) = self.lock_ts_heap.get_mut(&ts)
-            && lock_set.capacity() > lock_set.len() * cmp::max(MIN_SHRINK_RATIO, ratio) {
-            lock_set.shrink_to_fit();
-        }
-    }
-
     // Return an approximate heap memory usage in bytes.
     pub fn approximate_heap_bytes(&self) -> usize {
         // memory used by locks_by_key.
@@ -246,8 +229,29 @@ impl Resolver {
         key.heap_size() + std::mem::size_of::<TimeStamp>()
     }
 
-    #[must_use]
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) -> bool {
+    fn shrink_ratio(&mut self, ratio: usize, timestamp: Option<TimeStamp>) {
+        // HashMap load factor is 87% approximately, leave some margin to avoid
+        // frequent rehash.
+        //
+        // See https://github.com/rust-lang/hashbrown/blob/v0.14.0/src/raw/mod.rs#L208-L220
+        const MIN_SHRINK_RATIO: usize = 2;
+        if self.locks_by_key.capacity()
+            > self.locks_by_key.len() * cmp::max(MIN_SHRINK_RATIO, ratio)
+        {
+            self.locks_by_key.shrink_to_fit();
+        }
+        if let Some(ts) = timestamp && let Some(lock_set) = self.lock_ts_heap.get_mut(&ts)
+            && lock_set.capacity() > lock_set.len() * cmp::max(MIN_SHRINK_RATIO, ratio) {
+            lock_set.shrink_to_fit();
+        }
+    }
+
+    pub fn track_lock(
+        &mut self,
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        index: Option<u64>,
+    ) -> Result<(), MemoryQuotaExceeded> {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
@@ -261,13 +265,11 @@ impl Resolver {
             "memory_capacity" => self.memory_quota.capacity(),
             "key_heap_size" => bytes,
         );
-        if !self.memory_quota.alloc(bytes) {
-            return false;
-        }
+        self.memory_quota.alloc(bytes)?;
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         self.locks_by_key.insert(key.clone(), start_ts);
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
-        true
+        Ok(())
     }
 
     pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
@@ -501,11 +503,9 @@ mod tests {
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        assert!(resolver.track_lock(
-                            start_ts.into(),
-                            key.into_raw().unwrap(),
-                            None
-                        ));
+                        resolver
+                            .track_lock(start_ts.into(), key.into_raw().unwrap(), None)
+                            .unwrap();
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
@@ -519,6 +519,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_memory_quota() {
+        let memory_quota = Arc::new(MemoryQuota::new(1024));
+        let mut resolver = Resolver::new(1, memory_quota.clone());
+        let mut key = vec![0; 77];
+        let lock_size = resolver.lock_heap_size(&key);
+        let mut ts = TimeStamp::default();
+        while resolver.track_lock(ts, key.clone(), None).is_ok() {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+        }
+        let remain = 1024 % lock_size;
+        assert_eq!(memory_quota.in_use(), 1024 - remain);
+
+        let mut ts = TimeStamp::default();
+        for _ in 0..5 {
+            ts.incr();
+            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
+            resolver.untrack_lock(&key, None);
+        }
+        assert_eq!(memory_quota.in_use(), 1024 - 5 * lock_size - remain);
+        drop(resolver);
+        assert_eq!(memory_quota.in_use(), 0);
     }
 
     #[test]
@@ -604,30 +629,5 @@ mod tests {
             resolver.lock_ts_heap[&ts].capacity(),
             resolver.lock_ts_heap[&ts].len(),
         );
-    }
-
-    #[test]
-    fn test_memory_quota() {
-        let memory_quota = Arc::new(MemoryQuota::new(1024));
-        let mut resolver = Resolver::new(1, memory_quota.clone());
-        let mut key = vec![0; 77];
-        let lock_size = resolver.lock_heap_size(&key);
-        let mut ts = TimeStamp::default();
-        while resolver.track_lock(ts, key.clone(), None) {
-            ts.incr();
-            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-        }
-        let remain = 1024 % lock_size;
-        assert_eq!(memory_quota.in_use(), 1024 - remain);
-
-        let mut ts = TimeStamp::default();
-        for _ in 0..5 {
-            ts.incr();
-            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-            resolver.untrack_lock(&key, None);
-        }
-        assert_eq!(memory_quota.in_use(), 1024 - 5 * lock_size - remain);
-        drop(resolver);
-        assert_eq!(memory_quota.in_use(), 0);
     }
 }
