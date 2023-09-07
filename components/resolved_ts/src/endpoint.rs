@@ -103,10 +103,10 @@ impl ResolverStatus {
         };
         // Check if adding a new lock or unlock will exceed the memory
         // quota.
-        if !memory_quota.alloc(lock.heap_size()) {
+        memory_quota.alloc(lock.heap_size()).map_err(|e| {
             fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
-            return Err(Error::MemoryQuotaExceeded);
-        }
+            Error::MemoryQuotaExceeded(e)
+        })?;
         locks.push(lock);
         Ok(())
     }
@@ -293,13 +293,11 @@ impl ObserveRegion {
                         for row in rows {
                             match row {
                                 ChangeRow::Prewrite { key, start_ts, .. } => {
-                                    if !self.resolver.track_lock(
+                                    self.resolver.track_lock(
                                         *start_ts,
                                         key.to_raw().unwrap(),
                                         Some(*index),
-                                    ) {
-                                        return Err(Error::MemoryQuotaExceeded);
-                                    }
+                                    )?;
                                 }
                                 ChangeRow::Commit { key, .. } => self
                                     .resolver
@@ -329,13 +327,11 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
-                        if !self.resolver.track_lock(
+                        self.resolver.track_lock(
                             lock.ts,
                             key.to_raw().unwrap(),
                             Some(apply_index),
-                        ) {
-                            return Err(Error::MemoryQuotaExceeded);
-                        }
+                        )?;
                     }
                 }
                 ScanEntry::None => {
@@ -348,13 +344,11 @@ impl ObserveRegion {
                     for lock in pending_locks {
                         match lock {
                             PendingLock::Track { key, start_ts } => {
-                                if !self.resolver.track_lock(
+                                self.resolver.track_lock(
                                     start_ts,
                                     key.to_raw().unwrap(),
                                     Some(pending_tracked_index),
-                                ) {
-                                    return Err(Error::MemoryQuotaExceeded);
-                                }
+                                )?;
                             }
                             PendingLock::Untrack { key, .. } => self
                                 .resolver
@@ -923,7 +917,7 @@ where
                     if let Err(e) = observe_region.track_change_log(&logs) {
                         drop(observe_region);
                         let backoff = match e {
-                            Error::MemoryQuotaExceeded => Some(MEMORY_QUOTA_EXCEEDED_BACKOFF),
+                            Error::MemoryQuotaExceeded(_) => Some(MEMORY_QUOTA_EXCEEDED_BACKOFF),
                             Error::Other(_) => None,
                         };
                         self.re_register_region(region_id, observe_id, e, backoff);
@@ -946,13 +940,13 @@ where
         entries: Vec<ScanEntry>,
         apply_index: u64,
     ) {
-        let mut is_memory_quota_exceeded = false;
+        let mut memory_quota_exceeded = None;
         if let Some(observe_region) = self.regions.get_mut(&region_id) {
             if observe_region.handle.id == observe_id {
-                if let Err(Error::MemoryQuotaExceeded) =
+                if let Err(Error::MemoryQuotaExceeded(e)) =
                     observe_region.track_scan_locks(entries, apply_index)
                 {
-                    is_memory_quota_exceeded = true;
+                    memory_quota_exceeded = Some(Error::MemoryQuotaExceeded(e));
                 }
             }
         } else {
@@ -960,9 +954,9 @@ where
                 "region_id" => region_id,
                 "observe_id" => ?observe_id);
         }
-        if is_memory_quota_exceeded {
+        if let Some(e) = memory_quota_exceeded {
             let backoff = Some(MEMORY_QUOTA_EXCEEDED_BACKOFF);
-            self.re_register_region(region_id, observe_id, Error::MemoryQuotaExceeded, backoff);
+            self.re_register_region(region_id, observe_id, e, backoff);
         }
     }
 

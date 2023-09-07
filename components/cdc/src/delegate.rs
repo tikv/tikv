@@ -243,9 +243,7 @@ impl Pending {
 
     fn push_pending_lock(&mut self, lock: PendingLock) -> Result<()> {
         let bytes = lock.heap_size();
-        if !self.memory_quota.alloc(bytes) {
-            return Err(Error::MemoryQuotaExceeded);
-        }
+        self.memory_quota.alloc(bytes)?;
         self.locks.push(lock);
         self.pending_bytes += bytes;
         CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
@@ -254,16 +252,14 @@ impl Pending {
 
     fn on_region_ready(&mut self, resolver: &mut Resolver) -> Result<()> {
         fail::fail_point!("cdc_pending_on_region_ready", |_| Err(
-            Error::MemoryQuotaExceeded
+            Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
         // Must take locks, otherwise it may double free memory quota on drop.
         for lock in mem::take(&mut self.locks) {
             self.memory_quota.free(lock.heap_size());
             match lock {
                 PendingLock::Track { key, start_ts } => {
-                    if !resolver.track_lock(start_ts, key, None) {
-                        return Err(Error::MemoryQuotaExceeded);
-                    }
+                    resolver.track_lock(start_ts, key, None)?;
                 }
                 PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
             }
@@ -895,9 +891,7 @@ impl Delegate {
                 // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
-                        if !resolver.track_lock(row.start_ts.into(), row.key.clone(), None) {
-                            return Err(Error::MemoryQuotaExceeded);
-                        }
+                        resolver.track_lock(row.start_ts.into(), row.key.clone(), None)?;
                     }
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
