@@ -28,9 +28,9 @@ use storage::{
     txn::{self, commands},
 };
 use test_raftstore::{
-    configure_for_lease_read, new_learner_peer, new_server_cluster, try_kv_prewrite,
-    DropMessageFilter,
+    configure_for_lease_read, new_learner_peer, try_kv_prewrite, DropMessageFilter,
 };
+use test_raftstore_macro::test_case;
 use tikv::{
     server::gc_worker::gc_by_compact,
     storage::{
@@ -446,9 +446,10 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     assert!(res.one_pc_commit_ts.is_zero());
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_pessimistic_lock_check_epoch() {
-    let mut cluster = new_server_cluster(0, 2);
+    let mut cluster = new_cluster(0, 2);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
     cluster.run();
@@ -503,9 +504,10 @@ fn test_pessimistic_lock_check_epoch() {
     assert!(resp.get_region_error().has_stale_command());
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_pessimistic_lock_check_valid() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
     cluster.run();
@@ -556,9 +558,10 @@ fn test_pessimistic_lock_check_valid() {
     assert!(txn_ext.pessimistic_locks.read().is_empty());
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
-    let mut cluster = new_server_cluster(0, 1);
+    let mut cluster = new_cluster(0, 1);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
     cluster.run();
@@ -621,9 +624,10 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_read_index_with_max_ts() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     // Increase the election tick to make this test case running reliably.
     // Use async apply prewrite to let tikv response before applying on the leader
     // peer.
