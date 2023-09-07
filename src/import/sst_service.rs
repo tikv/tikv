@@ -633,8 +633,7 @@ fn check_local_region_stale(
         .find_region_by_id(
             region_id,
             Box::new(move |item| {
-                tx2.send(item)
-                    .unwrap();
+                tx2.send(item).unwrap();
             }),
         )
         .map_err(|e| {
