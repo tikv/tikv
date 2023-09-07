@@ -24,7 +24,6 @@ use kvproto::{
 };
 use resource_control::ResourceGroupManager;
 use test_raftstore::*;
-use test_raftstore_macro::test_case;
 use tikv::{
     config::{ConfigController, Module},
     storage::{
