@@ -1005,6 +1005,16 @@ impl SstImporter {
             event_iter.next()?;
             INPORTER_APPLY_COUNT.with_label_values(&["key_meet"]).inc();
 
+            if !event_iter
+                .key()
+                .starts_with(rewrite_rule.get_new_key_prefix())
+            {
+                return Err(Error::WrongKeyPrefix {
+                    what: "do_apply_kv_file",
+                    key: event_iter.key().to_vec(),
+                    prefix: rewrite_rule.get_old_key_prefix().to_vec(),
+                });
+            }
             let key = event_iter.key().to_vec();
             let value = event_iter.value().to_vec();
             let ts = Key::decode_ts_from(&key)?;

@@ -82,6 +82,8 @@ impl EventIterator<'_> {
             return;
         }
         self.key_buf.clear();
+        self.key_buf
+            .reserve(rewrite.to.len() + key_len - rewrite.from.len());
         self.key_buf.extend_from_slice(rewrite.to);
         self.key_buf
             .extend_from_slice(&self.buf[self.offset + rewrite.from.len()..self.offset + key_len]);
@@ -216,7 +218,8 @@ mod tests {
         let count = 20;
 
         for _i in 0..count {
-            let mut key: Vec<u8> = std::iter::once(b'k')
+            let should_rewrite = rng.gen::<bool>();
+            let mut key: Vec<u8> = std::iter::once(if should_rewrite { b'k' } else { b'l' })
                 .chain((0..100).map(|_| rng.gen_range(0..255)))
                 .collect();
             let val: Vec<u8> = (0..100).map(|_| rng.gen_range(0..255)).collect();
@@ -224,7 +227,9 @@ mod tests {
             for s in e {
                 event.extend_from_slice(s.as_ref());
             }
-            key[0] = b'r';
+            if should_rewrite {
+                key[0] = b'r';
+            }
             keys.push(key);
             vals.push(val);
         }
