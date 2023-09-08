@@ -18,13 +18,16 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock,
     },
+    time::Duration,
 };
 
 use kvproto::import_sstpb::SstMeta;
-use slog_global::info;
-use tikv_util::set_panic_mark;
+use slog_global::{info, warn};
+use tikv_util::{set_panic_mark, time::Instant};
 
 use crate::{data_cf_offset, RaftEngine, RaftLogBatch, DATA_CFS_LEN};
+
+const HEAVY_WORKER_THRESHOLD: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
 pub struct ApplyProgress {
@@ -203,7 +206,11 @@ impl PersistenceListener {
     /// Called when memtable is frozen.
     ///
     /// `smallest_seqno` should be the smallest seqno of the memtable.
+    ///
+    /// Note: After https://github.com/tikv/rocksdb/pull/347, rocksdb global lock will
+    /// be held during this method, so we should avoid do heavy things in it.
     pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64, largest_seqno: u64) {
+        let t = Instant::now_coarse();
         (|| {
             fail_point!("on_memtable_sealed", |t| {
                 assert_eq!(t.unwrap().as_str(), cf);
@@ -229,6 +236,11 @@ impl PersistenceListener {
             apply_index,
             smallest_seqno,
         });
+        if t.saturating_elapsed() > HEAVY_WORKER_THRESHOLD {
+            warn!(
+                "heavy work in on_memtable_sealed, the code should be reviewed";
+            );
+        }
     }
 
     /// Called a memtable finished flushing.
