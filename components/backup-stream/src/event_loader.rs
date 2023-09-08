@@ -33,7 +33,6 @@ use crate::{
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
-const CONCURRENCY_INITIAL_SCAN_LIMIT: usize = 32;
 
 #[derive(Clone)]
 pub struct PendingMemoryQuota(Arc<Semaphore>);
