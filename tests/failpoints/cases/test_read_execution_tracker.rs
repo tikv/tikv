@@ -2,13 +2,13 @@
 
 use kvproto::kvrpcpb::*;
 use test_coprocessor::{init_with_data, DagSelect, ProductTable};
-use test_raftstore::{
-    kv_batch_read, kv_read, must_kv_commit, must_kv_prewrite, must_new_cluster_and_kv_client,
-};
+use test_raftstore::{kv_batch_read, kv_read, must_kv_commit, must_kv_prewrite};
+use test_raftstore_macro::test_case;
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_read_execution_tracking() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
     let (k2, v2) = (b"k2".to_vec(), b"v2".to_vec());
 
@@ -104,18 +104,21 @@ fn test_read_execution_tracking() {
         );
     };
 
-    fail::cfg("perform_read_index", "return()").unwrap();
+    // return read_index twich: one for local reader and one for raftstore
+    fail::cfg("perform_read_index", "2*return()").unwrap();
 
     // should perform read index
     let resp = kv_read(&client, ctx.clone(), k1.clone(), 100);
 
     read_index_checker(resp.get_exec_details_v2().get_scan_detail_v2());
 
+    fail::cfg("perform_read_index", "2*return()").unwrap();
     // should perform read index
     let resp = kv_batch_read(&client, ctx, vec![k1, k2], 100);
 
     read_index_checker(resp.get_exec_details_v2().get_scan_detail_v2());
 
+    fail::cfg("perform_read_index", "2*return()").unwrap();
     // should perform read index
     let resp = client.coprocessor(&coprocessor_request).unwrap();
 
