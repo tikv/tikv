@@ -173,16 +173,19 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         let mut last_err = None;
         for retry_times in 0..=GET_SNAPSHOT_RETRY_TIME {
             if retry_times != 0 {
-                if let Err(e) = GLOBAL_TIMER_HANDLE
+                let mut backoff = GLOBAL_TIMER_HANDLE
                     .delay(
                         std::time::Instant::now()
                             + GET_SNAPSHOT_RETRY_BACKOFF_STEP
                                 .mul_f64(10_f64.powi(retry_times as i32 - 1)),
                     )
                     .compat()
-                    .await
-                {
-                    error!("failed to backoff"; "err" => ?e);
+                    .fuse();
+                futures::select! {
+                    res = backoff => if let Err(e) = res {
+                        error!("failed to backoff"; "err" => ?e);
+                    },
+                    _ = &mut task.cancelled => {}
                 }
                 if task.is_cancelled() {
                     return Err(box_err!("scan task cancelled"));
