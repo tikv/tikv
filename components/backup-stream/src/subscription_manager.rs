@@ -43,6 +43,10 @@ use crate::{
 
 type ScanPool = tokio::runtime::Runtime;
 
+// For now, the implemenation of `CdcHandle` will also maintain the local read
+// state and some batching information of FSMs, which are !Sync types.
+// Trivially add a `Mutex` or `Clone` it each time we need it may be hurtful for
+// performance or rarely deadlock, so we register a handle for each thread.
 thread_local! {
     static THREAD_LOCAL_CDC_HANDLE: RefCell<Option<Box<dyn std::any::Any>>> = RefCell::default();
 }

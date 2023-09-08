@@ -11,6 +11,7 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::PdClient;
+use raft::StateRole;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
@@ -52,7 +53,7 @@ use crate::{
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions, TlsCdcHandle},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
-    utils::{self, CallbackWaitGroup, RegionPager, StopWatch, Work},
+    utils::{self, CallbackWaitGroup, StopWatch, Work},
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
@@ -512,7 +513,7 @@ where
         task: &StreamTask,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> Result<()> {
+    ) {
         let start = Instant::now_coarse();
         let success = self
             .observer
@@ -530,7 +531,9 @@ where
         // directly and this would be fast. If this gets slow, maybe make it async
         // again. (Will that bring race conditions? say `Start` handled after
         // `ResfreshResolver` of some region.)
-        let range_init_result = self.initialize_range(start_key.clone(), end_key.clone());
+        let range_init_result = self
+            .initialize_range(start_key.clone(), end_key.clone())
+            .await;
         match range_init_result {
             Ok(()) => {
                 info!("backup stream success to initialize";
@@ -542,25 +545,44 @@ where
                 e.report("backup stream initialize failed");
             }
         }
-        Ok(())
     }
 
     /// initialize a range: it simply scan the regions with leader role and send
     /// them to [`initialize_region`].
-    pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
-        let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
-        loop {
-            let regions = pager.next_page(8)?;
-            debug!("scanning for entries in region."; "regions" => ?regions);
-            if regions.is_empty() {
-                break;
-            }
-            for r in regions {
-                try_send!(
-                    self.scheduler,
-                    Task::ModifyObserve(ObserveOp::Start { region: r.region })
-                );
-            }
+    pub async fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        // Generally we will be very very fast to consume.
+        // Directly clone the initial data loader to the background thread looks a
+        // little heavier than creating a new channel. TODO: Perhaps we need a
+        // handle to the `InitialDataLoader`. Making it a `Runnable` worker might be a
+        // good idea.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        self.regions
+            .seek_region(
+                &start_key,
+                Box::new(move |i| {
+                    // Ignore the error, this can only happen while the server is shutting down, the
+                    // future has been canceled.
+                    let _ = i
+                        .filter(|r| r.role == StateRole::Leader)
+                        .take_while(|r| r.region.start_key < end_key)
+                        .try_for_each(|r| {
+                            tx.blocking_send(ObserveOp::Start {
+                                region: r.region.clone(),
+                            })
+                        });
+                }),
+            )
+            .map_err(|err| {
+                Error::Other(box_err!(
+                    "failed to seek region for start key {}: {}",
+                    utils::redact(&start_key),
+                    err
+                ))
+            })?;
+        // Don't reschedule this command: or once the endpoint's mailbox gets
+        // full, the system might deadlock.
+        while let Some(cmd) = rx.recv().await {
+            self.region_operator.request(cmd).await;
         }
         Ok(())
     }
@@ -622,7 +644,7 @@ where
 
                 for (start_key, end_key) in ranges {
                     self.observe_regions_in_range(&task, start_key, end_key)
-                        .await?
+                        .await
                 }
                 info!(
                     "finish register backup stream ranges";
@@ -876,15 +898,20 @@ where
     }
 
     fn update_semaphore_capacity(&self, sema: &Arc<Semaphore>, diff: isize) {
-        if diff > 0 {
-            sema.add_permits(diff as _);
-        } else if diff < 0 {
-            self.pool.spawn(
-                Arc::clone(sema)
+        use std::cmp::Ordering::*;
+        match diff.cmp(&0) {
+            Less => {
+                self.pool.spawn(
+                    Arc::clone(sema)
                     .acquire_many_owned(-diff as _)
                     // It is OK to trivially ignore the Error case (semaphore has been closed, we are shutting down the server.)
                     .map_ok(|p| p.forget()),
-            );
+                );
+            }
+            Equal => {}
+            Greater => {
+                sema.add_permits(diff as _);
+            }
         }
     }
 
