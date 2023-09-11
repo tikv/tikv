@@ -63,8 +63,7 @@ impl EventIterator<'_> {
         result
     }
 
-    fn move_to_next_key_without_rewrite(&mut self) {
-        let key_len = self.get_size() as usize;
+    fn consume_key_with_len(&mut self, key_len: usize) {
         self.key_buf.clear();
         self.key_buf.reserve(key_len);
         self.key_buf
@@ -78,7 +77,7 @@ impl EventIterator<'_> {
         if key_len < rewrite.from.len()
             || &self.buf[self.offset..self.offset + rewrite.from.len()] != rewrite.from
         {
-            self.move_to_next_key_without_rewrite();
+            self.consume_key_with_len(key_len);
             return;
         }
         self.key_buf.clear();
@@ -94,7 +93,8 @@ impl EventIterator<'_> {
         if self.rewrite_rule.is_some() {
             self.move_to_next_key_with_rewrite()
         } else {
-            self.move_to_next_key_without_rewrite()
+            let key_len = self.get_size() as usize;
+            self.consume_key_with_len(key_len);
         }
     }
 }
