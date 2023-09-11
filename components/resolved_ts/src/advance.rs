@@ -15,7 +15,9 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutureExt};
-use grpcio::{ChannelBuilder, Environment, Error as GrpcError, RpcStatusCode};
+use grpcio::{
+    ChannelBuilder, CompressionAlgorithms, Environment, Error as GrpcError, RpcStatusCode,
+};
 use kvproto::{
     kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse},
     metapb::{Peer, PeerRole},
@@ -44,6 +46,8 @@ use txn_types::TimeStamp;
 use crate::{endpoint::Task, metrics::*};
 
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
+const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
+const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
@@ -528,10 +532,17 @@ async fn get_tikv_client(
     let mut clients = tikv_clients.lock().await;
     let start = Instant::now_coarse();
     // hack: so it's different args, grpc will always create a new connection.
-    let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
-        CString::new("random id").unwrap(),
-        CONN_ID.fetch_add(1, Ordering::SeqCst),
-    );
+    // the check leader requests may be large but not frequent, compress it to
+    // reduce the traffic.
+    let cb = ChannelBuilder::new(env.clone())
+        .raw_cfg_int(
+            CString::new("random id").unwrap(),
+            CONN_ID.fetch_add(1, Ordering::SeqCst),
+        )
+        .default_compression_algorithm(CompressionAlgorithms::GRPC_COMPRESS_GZIP)
+        .default_gzip_compression_level(DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL)
+        .default_grpc_min_message_size_to_compress(DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS);
+
     let channel = security_mgr.connect(cb, &store.peer_address);
     let cli = TikvClient::new(channel);
     clients.insert(store_id, cli.clone());
