@@ -1,7 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, time::Duration,
+    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, thread,
+    time::Duration,
 };
 
 use ::tracker::{
@@ -432,6 +433,15 @@ impl<E: Engine> Endpoint<E> {
                 err.set_bucket_version_not_match(bucket_not_match);
                 return Err(Error::Region(err));
         }
+
+        if tikv_util::time::UnixSecs::now().into_inner() % 10 == 0 {
+            let dur = Duration::from_secs(5);
+            for _ in 0..dur.as_millis() as u64 / 10 {
+                thread::sleep(Duration::from_millis(10));
+                yatp::task::future::reschedule().await;
+            }
+        }
+
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;

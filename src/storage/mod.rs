@@ -69,6 +69,7 @@ use std::{
         atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
     },
+    thread,
     time::Duration,
 };
 
@@ -664,6 +665,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
 
                 {
+                    if tikv_util::time::UnixSecs::now().into_inner() % 10 == 0 {
+                        let dur = Duration::from_secs(5);
+                        for _ in 0..dur.as_millis() as u64 / 10 {
+                            thread::sleep(Duration::from_millis(10));
+                            yatp::task::future::reschedule().await;
+                        }
+                    }
                     deadline.check()?;
                     let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
@@ -1038,6 +1046,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
+                    if tikv_util::time::UnixSecs::now().into_inner() % 10 == 0 {
+                        let dur = Duration::from_secs(5);
+                        for _ in 0..dur.as_millis() as u64 / 10 {
+                            thread::sleep(Duration::from_millis(10));
+                            yatp::task::future::reschedule().await;
+                        }
+                    }
                     deadline.check()?;
                     let begin_instant = Instant::now();
 
