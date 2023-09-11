@@ -159,7 +159,11 @@ impl ReqContext {
         cache_match_version: Option<u64>,
         perf_level: PerfLevel,
     ) -> Self {
-        let deadline = Deadline::from_now(max_handle_duration);
+        let deadline = if context.max_execution_duration_ms > 0 {
+            Deadline::from_now(Duration::from_millis(context.max_execution_duration_ms))
+        } else {
+            Deadline::from_now(max_handle_duration)
+        };
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
         let access_locks = TsSet::from_u64s(context.take_committed_locks());
         let lower_bound = match ranges.first().as_ref() {
@@ -195,6 +199,24 @@ impl ReqContext {
             Default::default(),
             Vec::new(),
             Duration::from_secs(100),
+            None,
+            None,
+            TimeStamp::max(),
+            None,
+            PerfLevel::EnableCount,
+        )
+    }
+
+    #[cfg(test)]
+    fn default_for_test_except_ctx_duration(
+        mut context: kvrpcpb::Context,
+        max_handle_duration: Duration,
+    ) -> Self {
+        Self::new(
+            ReqTag::test,
+            context,
+            Vec::new(),
+            max_handle_duration,
             None,
             None,
             TimeStamp::max(),
@@ -245,5 +267,28 @@ mod tests {
 
         ctx.context.set_task_id(0);
         assert_eq!(ctx.build_task_id(), start_ts);
+    }
+
+    #[test]
+    fn test_deadline_from_req_ctx() {
+        let ctx = kvrpcpb::Context::default();
+        let max_handle_duration = Duration::from_millis(100);
+        let req_ctx = ReqContext::default_for_test_except_ctx_duration(
+            ctx,
+            max_handle_duration,
+        );
+        // sleep at least 100ms
+        std::thread::sleep(Duration::from_millis(200));
+        req_ctx.deadline.check().expect_err("deadline should exceed");
+
+        let mut ctx = kvrpcpb::Context::default();
+        ctx.max_execution_duration_ms = 100_000;
+        let req_ctx = ReqContext::default_for_test_except_ctx_duration(
+            ctx,
+            max_handle_duration,
+        );
+        // sleep at least 100ms
+        std::thread::sleep(Duration::from_millis(200));
+        req_ctx.deadline.check().expect("deadline should not exceed");
     }
 }
