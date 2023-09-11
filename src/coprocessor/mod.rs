@@ -209,7 +209,7 @@ impl ReqContext {
 
     #[cfg(test)]
     fn default_for_test_except_ctx_duration(
-        mut context: kvrpcpb::Context,
+        context: kvrpcpb::Context,
         max_handle_duration: Duration,
     ) -> Self {
         Self::new(
