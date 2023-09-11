@@ -474,7 +474,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // We need to continue to apply after previous page is finished.
             self.set_has_ready();
         }
-        self.check_unsafe_recovery_state(ctx);
+        self.check_unsafe_ecovery_state(ctx);
     }
 }
 
