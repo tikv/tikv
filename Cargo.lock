@@ -2926,7 +2926,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
+=======
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=fix-sealed-chaos#f5121f48a1543c5d576ad7964c617f30f79a3d66"
+>>>>>>> 98eb383b41 (raftstore-v2: fix chaos between on_memtable_sealed and on_flush_completed (#15543))
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2945,7 +2949,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
+=======
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=fix-sealed-chaos#f5121f48a1543c5d576ad7964c617f30f79a3d66"
+>>>>>>> 98eb383b41 (raftstore-v2: fix chaos between on_memtable_sealed and on_flush_completed (#15543))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4873,7 +4881,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
+=======
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=fix-sealed-chaos#f5121f48a1543c5d576ad7964c617f30f79a3d66"
+>>>>>>> 98eb383b41 (raftstore-v2: fix chaos between on_memtable_sealed and on_flush_completed (#15543))
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
