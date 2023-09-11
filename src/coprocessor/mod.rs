@@ -273,22 +273,22 @@ mod tests {
     fn test_deadline_from_req_ctx() {
         let ctx = kvrpcpb::Context::default();
         let max_handle_duration = Duration::from_millis(100);
-        let req_ctx = ReqContext::default_for_test_except_ctx_duration(
-            ctx,
-            max_handle_duration,
-        );
+        let req_ctx = ReqContext::default_for_test_except_ctx_duration(ctx, max_handle_duration);
         // sleep at least 100ms
         std::thread::sleep(Duration::from_millis(200));
-        req_ctx.deadline.check().expect_err("deadline should exceed");
+        req_ctx
+            .deadline
+            .check()
+            .expect_err("deadline should exceed");
 
         let mut ctx = kvrpcpb::Context::default();
         ctx.max_execution_duration_ms = 100_000;
-        let req_ctx = ReqContext::default_for_test_except_ctx_duration(
-            ctx,
-            max_handle_duration,
-        );
+        let req_ctx = ReqContext::default_for_test_except_ctx_duration(ctx, max_handle_duration);
         // sleep at least 100ms
         std::thread::sleep(Duration::from_millis(200));
-        req_ctx.deadline.check().expect("deadline should not exceed");
+        req_ctx
+            .deadline
+            .check()
+            .expect("deadline should not exceed");
     }
 }
