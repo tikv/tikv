@@ -2033,7 +2033,7 @@
           "targets": [
             {
               "datasource": null,
-              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"})",
+              "expr": "(time() - ((\n    process_start_time_seconds\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  )",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -2041,7 +2041,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"})",
+              "query": "(time() - ((\n    process_start_time_seconds\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  )",
               "refId": "",
               "step": 10,
               "target": ""
@@ -3456,7 +3456,7 @@
           "targets": [
             {
               "datasource": null,
-              "expr": "tikv_rocksdb_damaged_files{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}",
+              "expr": "((\n    tikv_rocksdb_damaged_files\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -3464,14 +3464,14 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-existed",
               "metric": "",
-              "query": "tikv_rocksdb_damaged_files{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}",
+              "query": "((\n    tikv_rocksdb_damaged_files\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": null,
-              "expr": "tikv_rocksdb_damaged_files_deleted{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}",
+              "expr": "((\n    tikv_rocksdb_damaged_files_deleted\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -3479,7 +3479,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-deleted",
               "metric": "",
-              "query": "tikv_rocksdb_damaged_files_deleted{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}",
+              "query": "((\n    tikv_rocksdb_damaged_files_deleted\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -3603,15 +3603,15 @@
           "targets": [
             {
               "datasource": null,
-              "expr": "sum(rate(\n    tikv_server_raft_append_rejects\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, store_id) ",
+              "expr": "sum(rate(\n    tikv_server_raft_append_rejects\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{instance}}-memory",
+              "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_server_raft_append_rejects\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, store_id) ",
+              "query": "sum(rate(\n    tikv_server_raft_append_rejects\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""

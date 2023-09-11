@@ -1,3 +1,7 @@
+from typing import Optional, Union
+
+import attr
+from attr.validators import in_, instance_of
 from grafanalib import formatunits as UNITS
 from grafanalib.core import (
     GRAPH_TOOLTIP_MODE_SHARED_TOOLTIP,
@@ -86,15 +90,6 @@ class Layout:
         self.current_row_y_pos += self.PANEL_HEIGHT
 
 
-def target(expr, legendFormat, hide=False) -> Target:
-    return Target(
-        expr=expr,
-        hide=hide,
-        legendFormat=legendFormat,
-        intervalFactor=1,  # Prefer "high" resolution
-    )
-
-
 def timeseries_panel(
     title,
     targets,
@@ -162,6 +157,7 @@ def graph_legend(
 def graph_panel(
     title: str,
     targets: list[Target],
+    description=None,
     yaxes=YAxes(),
     legend=None,
     tooltip=Tooltip(shared=True, valueType="individual"),
@@ -170,7 +166,6 @@ def graph_panel(
     fill=0,
     fillGradient=0,
     stack=False,
-    description=None,
     dataSource=DATASOURCE,
 ) -> Panel:
     # extraJson add patches grafanalib result.
@@ -204,89 +199,120 @@ def graph_panel(
     )
 
 
-def expr_sum_rate(
-    metrics: str,
-    labels_selectors: list[str] = [],
-    range_selector: str = "$__rate_interval",
-    by_labels: list[str] = ["instance"],
-    default_labels_selectors: list[str] = [
-        r'k8s_cluster="$k8s_cluster"',
-        r'tidb_cluster="$tidb_cluster"',
-        r'instance=~"$instance"',
-    ],
-    extra_expr: str = "",
-) -> str:
+@attr.s
+class Expr(object):
     """
-    Calculate the sum of rate of metrics.
+    A prometheus expression that matches the following grammar:
 
-    Example:
-
-        sum(rate(
-            tikv_grpc_msg_duration_seconds_count
-            {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
-            [$__rate_interval]
-        )) by (instance)
+    expr ::= <aggr_op> (
+                [aggr_param,]
+                [func](
+                    <metric name>
+                    [{<labels_selectors>,}]
+                    [[<range_selector>]]
+                )
+            ) [by (<by_labels>,)] [extra_expr]
     """
-    # $__rate_interval is a Grafana variable that is specialized for Prometheus
-    # rate and increase function.
-    # See https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-__rate_interval-for-prometheus-rate-queries-that-just-work/
-    instant_selectors = default_labels_selectors + labels_selectors
-    return expr_aggregate_function(
-        metrics, "sum", "rate", range_selector, instant_selectors, by_labels, extra_expr
+
+    metric: str = attr.ib(validator=instance_of(str))
+    aggr_op: str = attr.ib(
+        default="",
+        validator=in_(
+            [
+                "",
+                "sum",
+                "min",
+                "max",
+                "avg",
+                "group",
+                "stddev",
+                "stdvar",
+                "count",
+                "count_values",
+                "bottomk",
+                "topk",
+                "quantile",
+            ]
+        ),
     )
-
-
-def expr_sum_delta(
-    metrics: str,
-    labels_selectors: list[str] = [],
-    range_selector: str = "$__rate_interval",
-    by_labels: list[str] = ["instance"],
-    default_labels_selectors: list[str] = [
-        r'k8s_cluster="$k8s_cluster"',
-        r'tidb_cluster="$tidb_cluster"',
-        r'instance=~"$instance"',
-    ],
-    extra_expr: str = "",
-) -> str:
-    """
-    Calculate the sum of rate of metrics.
-
-    Example:
-
-        sum(delta(
-            tikv_grpc_msg_duration_seconds_count
-            {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
-            [$__rate_interval]
-        )) by (instance)
-    """
-    # $__rate_interval is a Grafana variable that is specialized for Prometheus
-    # rate and increase function.
-    # See https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-__rate_interval-for-prometheus-rate-queries-that-just-work/
-    instant_selectors = default_labels_selectors + labels_selectors
-    return expr_aggregate_function(
-        metrics,
-        "sum",
-        "delta",
-        range_selector,
-        instant_selectors,
-        by_labels,
-        extra_expr,
+    aggr_param: str = attr.ib(default="", validator=instance_of(str))
+    func: str = attr.ib(default="", validator=instance_of(str))
+    range_selector: str = attr.ib(default="", validator=instance_of(str))
+    labels_selectors: list[str] = attr.ib(default=[], validator=instance_of(list))
+    by_labels: list[str] = attr.ib(default=[], validator=instance_of(list))
+    default_labels_selectors: list[str] = attr.ib(
+        default=[
+            r'k8s_cluster="$k8s_cluster"',
+            r'tidb_cluster="$tidb_cluster"',
+            r'instance=~"$instance"',
+        ],
+        validator=instance_of(list),
     )
+    extra_expr: str = attr.ib(default="", validator=instance_of(str))
+
+    def __str__(self) -> str:
+        aggr_opeator = self.aggr_op if self.aggr_op else ""
+        aggr_param = self.aggr_param + "," if self.aggr_param else ""
+        by_clause = (
+            "by ({})".format(", ".join(self.by_labels)) if self.by_labels else ""
+        )
+        func = self.func if self.func else ""
+        instant_selectors = "{{{}}}".format(
+            ",".join(self.default_labels_selectors + self.labels_selectors)
+        )
+        range_selector = f"[{self.range_selector}]" if self.range_selector else ""
+        extra_expr = self.extra_expr if self.extra_expr else ""
+        return f"""{aggr_opeator}({aggr_param}{func}(
+    {self.metric}
+    {instant_selectors}
+    {range_selector}
+)) {by_clause} {extra_expr}"""
+
+    def aggregate(
+        self,
+        aggr_op: str,
+        aggr_param: str = "",
+        by_labels: list[str] = [],
+        labels_selectors: list[str] = [],
+    ) -> "Expr":
+        self.aggr_op = aggr_op
+        self.aggr_param = aggr_param
+        self.by_labels = by_labels
+        self.labels_selectors = labels_selectors
+        return self
+
+    def function(
+        self,
+        func: str,
+        labels_selectors: list[str] = [],
+        range_selector: str = "",
+    ) -> "Expr":
+        self.func = func
+        self.labels_selectors = labels_selectors
+        self.range_selector = range_selector
+        return self
+
+    def extra(
+        self,
+        extra_expr: Optional[str] = None,
+        default_labels_selectors: Optional[list[str]] = None,
+    ) -> "Expr":
+        if extra_expr is not None:
+            self.extra_expr = extra_expr
+        if default_labels_selectors is not None:
+            self.default_labels_selectors = default_labels_selectors
+        return self
 
 
-def expr_sum(
-    metrics: str,
+def expr_aggr(
+    metric: str,
+    aggr_op: str,
+    aggr_param: str = "",
     labels_selectors: list[str] = [],
     by_labels: list[str] = ["instance"],
-    default_labels_selectors: list[str] = [
-        r'k8s_cluster="$k8s_cluster"',
-        r'tidb_cluster="$tidb_cluster"',
-        r'instance=~"$instance"',
-    ],
-    extra_expr: str = "",
-) -> str:
+) -> Expr:
     """
-    Calculate the sum of metrics.
+    Calculate the aggregation of a metric.
 
     Example:
 
@@ -295,88 +321,167 @@ def expr_sum(
             {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
         )) by (instance)
     """
-    instant_selectors = default_labels_selectors + labels_selectors
-    return expr_aggregate_function(
-        metrics=metrics,
-        agg_opeator="sum",
-        labels_selectors=instant_selectors,
+    expr = Expr(metric=metric)
+    expr.aggregate(
+        aggr_op,
+        aggr_param=aggr_param,
         by_labels=by_labels,
-        extra_expr=extra_expr,
+        labels_selectors=labels_selectors,
     )
+    return expr
 
 
-def expr_avg(
-    metrics: str,
+def expr_sum(
+    metric: str,
     labels_selectors: list[str] = [],
     by_labels: list[str] = ["instance"],
-    default_labels_selectors: list[str] = [
-        r'k8s_cluster="$k8s_cluster"',
-        r'tidb_cluster="$tidb_cluster"',
-        r'instance=~"$instance"',
-    ],
-    extra_expr: str = "",
-) -> str:
+) -> Expr:
     """
-    Calculate the avg of metrics.
+    Calculate the sum of a metric.
 
     Example:
 
-        avg((
+        sum((
             tikv_store_size_bytes
             {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
         )) by (instance)
     """
-    instant_selectors = default_labels_selectors + labels_selectors
-    return expr_aggregate_function(
-        metrics=metrics,
-        agg_opeator="avg",
-        labels_selectors=instant_selectors,
-        by_labels=by_labels,
-        extra_expr=extra_expr,
+    return expr_aggr(
+        metric, "sum", labels_selectors=labels_selectors, by_labels=by_labels
     )
 
 
-def expr_aggregate_function(
-    metrics: str,
-    agg_opeator: str = "",
-    func: str = "",
-    range_selector: str = "",
+def expr_avg(
+    metric: str,
     labels_selectors: list[str] = [],
-    by_labels: list[str] = [],
-    extra_expr: str = "",
-) -> str:
-    instant_selectors = (
-        "{{{}}}".format(",".join(labels_selectors)) if labels_selectors else ""
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the avg of a metric.
+
+    Example:
+
+    avg((
+        tikv_store_size_bytes
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+    )) by (instance)
+    """
+    return expr_aggr(
+        metric, "avg", labels_selectors=labels_selectors, by_labels=by_labels
     )
-    range_selector = f"[{range_selector}]" if len(range_selector) != 0 else ""
-    by_clause = "by ({})".format(", ".join(by_labels)) if by_labels else ""
-    return f"""{agg_opeator}({func}(
-    {metrics}
-    {instant_selectors}
-    {range_selector}
-)) {by_clause} {extra_expr}"""
+
+
+def expr_aggr_func(
+    metric: str,
+    aggr_op: str,
+    func: str,
+    aggr_param: str = "",
+    labels_selectors: list[str] = [],
+    range_selector: str = "",
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the aggregation of function of a metric.
+
+    Example:
+
+    expr_aggr_func(
+        tikv_grpc_msg_duration_seconds_count, "sum", "rate", lables_selectors=['type!="kv_gc"']
+    )
+
+    sum(rate(
+        tikv_grpc_msg_duration_seconds_count
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        [$__rate_interval]
+    )) by (instance)
+    """
+    expr = Expr(metric=metric)
+    expr.aggregate(
+        aggr_op,
+        aggr_param=aggr_param,
+        by_labels=by_labels,
+    )
+    expr.function(
+        func,
+        labels_selectors=labels_selectors,
+        range_selector=range_selector,
+    )
+    return expr
+
+
+def expr_sum_rate(
+    metric: str,
+    labels_selectors: list[str] = [],
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the sum of rate of a metric.
+
+    Example:
+
+    sum(rate(
+        tikv_grpc_msg_duration_seconds_count
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        [$__rate_interval]
+    )) by (instance)
+    """
+    # $__rate_interval is a Grafana variable that is specialized for Prometheus
+    # rate and increase function.
+    # See https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-__rate_interval-for-prometheus-rate-queries-that-just-work/
+    return expr_aggr_func(
+        metric=metric,
+        aggr_op="sum",
+        func="rate",
+        labels_selectors=labels_selectors,
+        range_selector="$__rate_interval",
+        by_labels=by_labels,
+    )
+
+
+def expr_sum_delta(
+    metric: str,
+    labels_selectors: list[str] = [],
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the sum of delta of a metric.
+
+    Example:
+
+    sum(delta(
+        tikv_grpc_msg_duration_seconds_count
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        [$__rate_interval]
+    )) by (instance)
+    """
+    return expr_aggr_func(
+        metric=metric,
+        aggr_op="sum",
+        func="delta",
+        labels_selectors=labels_selectors,
+        range_selector="$__rate_interval",
+        by_labels=by_labels,
+    )
 
 
 def expr_simple(
-    metrics: str,
+    metric: str,
     labels_selectors: list[str] = [],
-    default_labels_selectors: list[str] = [
-        r'k8s_cluster="$k8s_cluster"',
-        r'tidb_cluster="$tidb_cluster"',
-        r'instance=~"$instance"',
-    ],
-    extra_expr: str = "",
-) -> str:
-    default_labels_selectors.extend(labels_selectors)
-    instant_selectors = (
-        "{{{}}}".format(",".join(default_labels_selectors))
-        if default_labels_selectors
-        else ""
-    )
-    return f"""{metrics}{instant_selectors}"""
+) -> Expr:
+    """
+    Query an instant vector of a metric.
+
+    Example:
+
+    tikv_grpc_msg_duration_seconds_count
+    {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+    """
+    expr = Expr(metric=metric)
+    expr.function("", labels_selectors=labels_selectors)
+    return expr
 
 
-def expr_opeator(lhs: str, operator: str, rhs: str):
+def expr_opeator(lhs: Union[Expr, str], operator: str, rhs: Union[Expr, str]) -> str:
     return f"""({lhs} {operator} {rhs})"""
 
 
@@ -394,6 +499,19 @@ def expr_histogram_quantile(
     {{k8s_cluster="{k8s_cluster}", tidb_cluster="{tidb_cluster}", instance=~"{instance}"{mlabels}}}
     [$__rate_interval]
 )) by (le))"""
+
+
+def target(
+    expr: Union[Expr, str], legend_format: Optional[str] = None, hide=False
+) -> Target:
+    if legend_format is None and isinstance(expr, Expr) and expr.by_labels:
+        legend_format = "-".join(map(lambda x: "{{" + f"{x}" + "}}", expr.by_labels))
+    return Target(
+        expr=f"{expr}",
+        hide=hide,
+        legendFormat=legend_format,
+        intervalFactor=1,  # Prefer "high" resolution
+    )
 
 
 #### Utilities Function End ####
@@ -462,32 +580,32 @@ def Duration() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99, "tikv_raftstore_append_log_duration_seconds_bucket"
                         ),
-                        legendFormat="Write Raft Log .99",
+                        legend_format="Write Raft Log .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_raftstore_request_wait_time_duration_secs_bucket",
                         ),
-                        legendFormat="Propose Wait .99",
+                        legend_format="Propose Wait .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99, "tikv_raftstore_apply_wait_time_duration_secs_bucket"
                         ),
-                        legendFormat="Apply Wait .99",
+                        legend_format="Apply Wait .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99, "tikv_raftstore_commit_log_duration_seconds_bucket"
                         ),
-                        legendFormat="Replicate Raft Log .99",
+                        legend_format="Replicate Raft Log .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99, "tikv_raftstore_apply_log_duration_seconds_bucket"
                         ),
-                        legendFormat="Apply Duration .99",
+                        legend_format="Apply Duration .99",
                     ),
                 ],
             ),
@@ -504,19 +622,19 @@ def Duration() -> RowPanel:
                             "tikv_storage_engine_async_request_duration_seconds_bucket",
                             ['type="snapshot"'],
                         ),
-                        legendFormat="Get Snapshot .99",
+                        legend_format="Get Snapshot .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99, "tikv_coprocessor_request_wait_seconds_bucket"
                         ),
-                        legendFormat="Cop Wait .99",
+                        legend_format="Cop Wait .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.95, "tikv_coprocessor_request_handle_seconds_bucket"
                         ),
-                        legendFormat="Cop Handle .99",
+                        legend_format="Cop Handle .99",
                     ),
                 ],
             ),
@@ -539,9 +657,9 @@ def Cluster() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_store_size_bytes", labels_selectors=['type = "used"']
+                            "tikv_store_size_bytes",
+                            labels_selectors=['type = "used"'],
                         ),
-                        legendFormat=r"{{instance}}",
                     ),
                 ],
             ),
@@ -558,7 +676,6 @@ def Cluster() -> RowPanel:
                             "tikv_store_size_bytes",
                             labels_selectors=['type="available"'],
                         ),
-                        legendFormat=r"{{instance}}",
                     ),
                 ],
             ),
@@ -575,7 +692,6 @@ def Cluster() -> RowPanel:
                             "tikv_store_size_bytes",
                             labels_selectors=['type="capacity"'],
                         ),
-                        legendFormat=r"{{instance}}",
                     ),
                 ],
             ),
@@ -589,8 +705,9 @@ def Cluster() -> RowPanel:
                 yaxes=YAxes(left=YAxis(format=UNITS.PERCENT_UNIT)),
                 targets=[
                     target(
-                        expr=expr_sum_rate("process_cpu_seconds_total"),
-                        legendFormat=r"{{instance}}",
+                        expr=expr_sum_rate(
+                            "process_cpu_seconds_total",
+                        ),
                     ),
                 ],
             ),
@@ -601,7 +718,6 @@ def Cluster() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum("process_resident_memory_bytes"),
-                        legendFormat=r"{{instance}}",
                     ),
                 ],
             ),
@@ -615,8 +731,10 @@ def Cluster() -> RowPanel:
                 yaxes=YAxes(left=YAxis(format=UNITS.PERCENT_UNIT)),
                 targets=[
                     target(
-                        expr=expr_sum_rate("node_disk_io_time_seconds_total"),
-                        legendFormat=r"{{instance}}-{{device}}",
+                        expr=expr_sum_rate(
+                            "node_disk_io_time_seconds_total",
+                        ),
+                        legend_format=r"{{instance}}-{{device}}",
                     ),
                 ],
             ),
@@ -630,14 +748,14 @@ def Cluster() -> RowPanel:
                             "tikv_engine_flow_bytes",
                             labels_selectors=['type="wal_file_bytes"'],
                         ),
-                        legendFormat=r"{{instance}}-write",
+                        legend_format=r"{{instance}}-write",
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_engine_flow_bytes",
                             labels_selectors=['type=~"bytes_read|iter_bytes_read"'],
                         ),
-                        legendFormat=r"{{instance}}-read",
+                        legend_format=r"{{instance}}-read",
                     ),
                 ],
             ),
@@ -655,7 +773,7 @@ def Cluster() -> RowPanel:
                             "tikv_grpc_msg_duration_seconds_count",
                             labels_selectors=['type!="kv_gc"'],
                         ),
-                        legendFormat=r"{{instance}}-{{type}}",
+                        legend_format=r"{{instance}}-{{type}}",
                     ),
                 ],
             ),
@@ -669,21 +787,20 @@ def Cluster() -> RowPanel:
                             "tikv_grpc_msg_fail_total",
                             labels_selectors=['type!="kv_gc"'],
                         ),
-                        legendFormat=r"{{instance}}-grpc-msg-fail",
+                        legend_format=r"{{instance}}-grpc-msg-fail",
                     ),
                     target(
                         expr=expr_sum_delta(
                             "tikv_pd_heartbeat_message_total",
                             labels_selectors=['type="noop"'],
-                            extra_expr="< 1",
-                        ),
-                        legendFormat=r"{{instance}}-pd-heartbeat",
+                        ).extra(extra_expr="< 1"),
+                        legend_format=r"{{instance}}-pd-heartbeat",
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_critical_error_total", by_labels=["instance", "type"]
+                            "tikv_critical_error_total",
+                            by_labels=["instance", "type"],
                         ),
-                        legendFormat=r"{{instance}}-{{type}}",
                     ),
                 ],
             ),
@@ -700,7 +817,6 @@ def Cluster() -> RowPanel:
                             "tikv_raftstore_region_count",
                             labels_selectors=['type="leader"'],
                         ),
-                        legendFormat=r"{{instance}}",
                     ),
                 ],
             ),
@@ -713,14 +829,13 @@ def Cluster() -> RowPanel:
                             "tikv_raftstore_region_count",
                             labels_selectors=['type="region"'],
                         ),
-                        legendFormat=r"{{instance}}",
                     ),
                     target(
                         expr=expr_sum(
                             "tikv_raftstore_region_count",
                             labels_selectors=['type="buckets"'],
                         ),
-                        legendFormat=r"{{instance}}-buckets",
+                        legend_format=r"{{instance}}-buckets",
                     ),
                 ],
             ),
@@ -739,7 +854,7 @@ def Cluster() -> RowPanel:
                         expr=expr_opeator(
                             "time()", "-", expr_simple("process_start_time_seconds")
                         ),
-                        legendFormat=r"{{instance}}",
+                        legend_format=r"{{instance}}",
                     ),
                 ],
             )
@@ -761,9 +876,9 @@ def Errors() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_critical_error_total", by_labels=["instance", "type"]
+                            "tikv_critical_error_total",
+                            by_labels=["instance", "type"],
                         ),
-                        legendFormat=r"{{instance}}-{{type}}",
                     ),
                 ],
             )
@@ -779,21 +894,24 @@ temporarily, such as Write Stall, Channel Full, Scheduler Busy, and Coprocessor
 Full""",
                 targets=[
                     target(
-                        expr=expr_sum_rate("tikv_scheduler_too_busy_total"),
-                        legendFormat=r"scheduler-{{instance}}",
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_too_busy_total",
+                        ),
+                        legend_format=r"scheduler-{{instance}}",
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_channel_full_total", by_labels=["instance", "type"]
+                            "tikv_channel_full_total",
+                            by_labels=["instance", "type"],
                         ),
-                        legendFormat=r"channelfull-{{instance}}-{{type}}",
+                        legend_format=r"channelfull-{{instance}}-{{type}}",
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_request_error",
                             labels_selectors=['type="full"'],
                         ),
-                        legendFormat=r"coprocessor-{{instance}}",
+                        legend_format=r"coprocessor-{{instance}}",
                     ),
                     target(
                         expr=expr_avg(
@@ -804,13 +922,13 @@ Full""",
                             ],
                             by_labels=["instance", "db"],
                         ),
-                        legendFormat=r"stall-{{instance}}-{{db}}",
+                        legend_format=r"stall-{{instance}}-{{db}}",
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_raftstore_store_write_msg_block_wait_duration_seconds_count"
+                            "tikv_raftstore_store_write_msg_block_wait_duration_seconds_count",
                         ),
-                        legendFormat=r"store-write-channelfull-{{instance}}",
+                        legend_format=r"store-write-channelfull-{{instance}}",
                     ),
                 ],
             ),
@@ -823,7 +941,7 @@ Full""",
                             "tikv_server_report_failure_msg_total",
                             by_labels=["type", "instance", "store_id"],
                         ),
-                        legendFormat=r"{{instance}}-{{type}}-to-{{store_id}}",
+                        legend_format=r"{{instance}}-{{type}}-to-{{store_id}}",
                     ),
                 ],
             ),
@@ -841,7 +959,6 @@ Full""",
                             labels_selectors=['status!~"success|all"'],
                             by_labels=["instance", "status"],
                         ),
-                        legendFormat=r"{{instance}}-{{status}}",
                     ),
                 ],
             ),
@@ -857,7 +974,6 @@ Full""",
                             ],
                             by_labels=["instance", "stage"],
                         ),
-                        legendFormat=r"{{instance}}-{{stage}}",
                     ),
                 ],
             ),
@@ -874,7 +990,6 @@ Full""",
                             "tikv_coprocessor_request_error",
                             by_labels=["instance", "reason"],
                         ),
-                        legendFormat=r"{{instance}}-{{reason}}",
                     ),
                 ],
             ),
@@ -884,9 +999,9 @@ Full""",
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_grpc_msg_fail_total", by_labels=["instance", "type"]
+                            "tikv_grpc_msg_fail_total",
+                            by_labels=["instance", "type"],
                         ),
-                        legendFormat=r"{{instance}}-{{type}}",
                     ),
                 ],
             ),
@@ -902,9 +1017,7 @@ Full""",
                         expr=expr_sum_delta(
                             "tikv_raftstore_region_count",
                             labels_selectors=['type="leader"'],
-                            by_labels=["instance"],
                         ),
-                        legendFormat=r"{{instance}}",
                     ),
                 ],
             ),
@@ -914,9 +1027,8 @@ Full""",
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_raftstore_leader_missing", by_labels=["instance"]
+                            "tikv_raftstore_leader_missing",
                         ),
-                        legendFormat=r"{{instance}}",
                     ),
                 ],
             ),
@@ -930,11 +1042,11 @@ Full""",
                 targets=[
                     target(
                         expr=expr_simple("tikv_rocksdb_damaged_files"),
-                        legendFormat=r"{{instance}}-existed",
+                        legend_format=r"{{instance}}-existed",
                     ),
                     target(
                         expr=expr_simple("tikv_rocksdb_damaged_files_deleted"),
-                        legendFormat=r"{{instance}}-deleted",
+                        legend_format=r"{{instance}}-deleted",
                     ),
                 ],
             ),
@@ -945,9 +1057,7 @@ Full""",
                     target(
                         expr=expr_sum_rate(
                             "tikv_server_raft_append_rejects",
-                            by_labels=["instance", "store_id"],
                         ),
-                        legendFormat=r"{{instance}}-memory",
                     ),
                 ],
             ),
