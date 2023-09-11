@@ -4,11 +4,45 @@ use std::{cmp, collections::BTreeMap, sync::Arc};
 
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
-use txn_types::TimeStamp;
+use tikv_util::time::Instant;
+use txn_types::{Key, TimeStamp};
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+
+#[derive(Clone)]
+pub enum TsSource {
+    // A lock in LOCK CF
+    Lock(Arc<[u8]>),
+    // A memory lock in concurrency manager
+    MemoryLock(Key),
+    PdTso,
+    // The following sources can also come from PD or memory lock, but we care more about sources
+    // in resolved-ts.
+    BackupStream,
+    Cdc,
+}
+
+impl TsSource {
+    pub fn label(&self) -> &str {
+        match self {
+            TsSource::Lock(_) => "lock",
+            TsSource::MemoryLock(_) => "rts_cm_min_lock",
+            TsSource::PdTso => "pd_tso",
+            TsSource::BackupStream => "backup_stream",
+            TsSource::Cdc => "cdc",
+        }
+    }
+
+    pub fn key(&self) -> Option<Key> {
+        match self {
+            TsSource::Lock(k) => Some(Key::from_encoded_slice(k)),
+            TsSource::MemoryLock(k) => Some(k.clone()),
+            _ => None,
+        }
+    }
+}
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -17,7 +51,7 @@ pub struct Resolver {
     // key -> start_ts
     pub(crate) locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
-    lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
+    pub(crate) lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
     // The highest index `Resolver` had been tracked
@@ -28,11 +62,40 @@ pub struct Resolver {
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped
     stopped: bool,
+    // The last attempt of resolve(), used for diagnosis.
+    pub(crate) last_attempt: Option<LastAttempt>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LastAttempt {
+    success: bool,
+    ts: TimeStamp,
+    reason: TsSource,
+}
+
+impl slog::Value for LastAttempt {
+    fn serialize(
+        &self,
+        _record: &slog::Record<'_>,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_arguments(
+            key,
+            &format_args!(
+                "{{ success={}, ts={}, reason={}, key={:?} }}",
+                self.success,
+                self.ts,
+                self.reason.label(),
+                self.reason.key(),
+            ),
+        )
+    }
 }
 
 impl std::fmt::Debug for Resolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let far_lock = self.lock_ts_heap.iter().next();
+        let far_lock = self.oldest_transaction();
         let mut dt = f.debug_tuple("Resolver");
         dt.field(&format_args!("region={}", self.region_id));
 
@@ -69,6 +132,7 @@ impl Resolver {
             tracked_index: 0,
             min_ts: TimeStamp::zero(),
             stopped: false,
+            last_attempt: None,
         }
     }
 
@@ -159,24 +223,48 @@ impl Resolver {
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
+    pub fn resolve(
+        &mut self,
+        min_ts: TimeStamp,
+        now: Option<Instant>,
+        source: TsSource,
+    ) -> TimeStamp {
         // The `Resolver` is stopped, not need to advance, just return the current
         // `resolved_ts`
         if self.stopped {
             return self.resolved_ts;
         }
         // Find the min start ts.
-        let min_lock = self.lock_ts_heap.keys().next().cloned();
+        let min_lock = self
+            .oldest_transaction()
+            .and_then(|(ts, locks)| locks.iter().next().map(|lock| (*ts, lock)));
         let has_lock = min_lock.is_some();
-        let min_start_ts = min_lock.unwrap_or(min_ts);
+        let min_start_ts = min_lock.map(|(ts, _)| ts).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+        // reason is the min source of the new resolved ts.
+        let reason = match (min_lock, min_ts) {
+            (Some(lock), min_ts) if lock.0 < min_ts => TsSource::Lock(lock.1.clone()),
+            (Some(_), _) => source,
+            (None, _) => source,
+        };
+
         if self.resolved_ts >= new_resolved_ts {
-            let label = if has_lock { "has_lock" } else { "stale_ts" };
             RTS_RESOLVED_FAIL_ADVANCE_VEC
-                .with_label_values(&[label])
+                .with_label_values(&[reason.label()])
                 .inc();
+            self.last_attempt = Some(LastAttempt {
+                success: false,
+                ts: new_resolved_ts,
+                reason,
+            });
+        } else {
+            self.last_attempt = Some(LastAttempt {
+                success: true,
+                ts: new_resolved_ts,
+                reason,
+            })
         }
 
         // Resolved ts never decrease.
@@ -184,7 +272,7 @@ impl Resolver {
 
         // Publish an `(apply index, safe ts)` item into the region read progress
         if let Some(rrp) = &self.read_progress {
-            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
+            rrp.update_safe_ts_with_time(self.tracked_index, self.resolved_ts.into_inner(), now);
         }
 
         let new_min_ts = if has_lock {
@@ -228,6 +316,10 @@ impl Resolver {
 
     pub(crate) fn num_transactions(&self) -> u64 {
         self.lock_ts_heap.len() as u64
+    }
+
+    pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &HashSet<Arc<[u8]>>)> {
+        self.lock_ts_heap.iter().next()
     }
 }
 
@@ -307,7 +399,12 @@ mod tests {
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
-                        assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
+                        assert_eq!(
+                            resolver.resolve(min_ts.into(), None, TsSource::PdTso),
+                            expect.into(),
+                            "case {}",
+                            i
+                        )
                     }
                 }
             }

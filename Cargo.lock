@@ -2830,7 +2830,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#73d6d7f3756b292a56e61469e091591853981aed"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#aeff3660bea4784b51a2c7eb000838c290775712"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2959,7 +2959,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5.4#7d48b10712cbc8fb6cd5f29552c4f4bf2067749b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2978,7 +2978,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5.4#7d48b10712cbc8fb6cd5f29552c4f4bf2067749b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3812,6 +3812,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "prometheus",
+ "prometheus-static-metric",
  "security",
  "semver 0.10.0",
  "serde",
@@ -4854,7 +4855,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5.4#7d48b10712cbc8fb6cd5f29552c4f4bf2067749b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

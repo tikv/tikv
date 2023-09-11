@@ -121,6 +121,7 @@ where
             split_keys,
             callback: raftstore::store::Callback::write(cb),
             source: source.into(),
+            share_source_region_size: false,
         };
         let res = self.router.send_casual_msg(region_id, req);
         Box::pin(async move {
