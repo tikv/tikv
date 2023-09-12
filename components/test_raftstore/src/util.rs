@@ -1001,6 +1001,29 @@ pub fn try_kv_prewrite_with(
     use_async_commit: bool,
     try_one_pc: bool,
 ) -> PrewriteResponse {
+    try_kv_prewrite_with_impl(
+        client,
+        ctx,
+        muts,
+        pk,
+        ts,
+        for_update_ts,
+        use_async_commit,
+        try_one_pc,
+    )
+    .unwrap()
+}
+
+pub fn try_kv_prewrite_with_impl(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+    for_update_ts: u64,
+    use_async_commit: bool,
+    try_one_pc: bool,
+) -> grpcio::Result<PrewriteResponse> {
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
@@ -1014,7 +1037,7 @@ pub fn try_kv_prewrite_with(
     prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
     prewrite_req.use_async_commit = use_async_commit;
     prewrite_req.try_one_pc = try_one_pc;
-    client.kv_prewrite(&prewrite_req).unwrap()
+    client.kv_prewrite(&prewrite_req)
 }
 
 pub fn try_kv_prewrite(

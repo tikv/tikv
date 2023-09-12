@@ -572,6 +572,8 @@ pub enum ErrorInner {
     EmptyRequest,
     #[error("key is locked (backoff or cleanup) {0:?}")]
     KeyIsLocked(kvproto::kvrpcpb::LockInfo),
+    #[error("undetermined write result {0:?}")]
+    Undetermined(String),
     #[error("unknown error {0:?}")]
     Other(#[from] Box<dyn error::Error + Send + Sync>),
 }
@@ -595,6 +597,7 @@ impl ErrorInner {
             ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
             ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
             ErrorInner::KeyIsLocked(ref info) => Some(ErrorInner::KeyIsLocked(info.clone())),
+            ErrorInner::Undetermined(ref msg) => Some(ErrorInner::Undetermined(msg.clone())),
             ErrorInner::Other(_) => None,
         }
     }
@@ -632,6 +635,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
             ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
             ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Undetermined(_) => error_code::storage::UNDETERMINED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }

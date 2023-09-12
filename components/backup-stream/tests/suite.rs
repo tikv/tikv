@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![cfg(test)]
-
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
@@ -51,11 +49,11 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
 
-fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
+pub fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
     mutation_op(k, v, Op::Put)
 }
 
-fn mutation_op(k: Vec<u8>, v: Vec<u8>, op: Op) -> Mutation {
+pub fn mutation_op(k: Vec<u8>, v: Vec<u8>, op: Op) -> Mutation {
     let mut mutation = Mutation::default();
     mutation.set_op(op);
     mutation.key = k;
@@ -63,7 +61,7 @@ fn mutation_op(k: Vec<u8>, v: Vec<u8>, op: Op) -> Mutation {
     mutation
 }
 
-fn make_table_key(table_id: i64, key: &[u8]) -> Vec<u8> {
+pub fn make_table_key(table_id: i64, key: &[u8]) -> Vec<u8> {
     use std::io::Write;
     let mut table_key = b"t".to_vec();
     // make it comparable to uint.
@@ -74,13 +72,13 @@ fn make_table_key(table_id: i64, key: &[u8]) -> Vec<u8> {
     table_key
 }
 
-fn make_record_key(table_id: i64, handle: u64) -> Vec<u8> {
+pub fn make_record_key(table_id: i64, handle: u64) -> Vec<u8> {
     let mut record = make_table_key(table_id, b"_r");
     record.encode_u64(handle ^ 0x8000_0000_0000_0000).unwrap();
     record
 }
 
-fn make_split_key_at_record(table_id: i64, handle: u64) -> Vec<u8> {
+pub fn make_split_key_at_record(table_id: i64, handle: u64) -> Vec<u8> {
     let mut record = make_record_key(table_id, handle);
     // push an extra byte for don't put the key in the boundary of the region.
     // (Or the mock cluster may find wrong region for putting)
@@ -95,7 +93,7 @@ fn make_encoded_record_key(table_id: i64, handle: u64, ts: u64) -> Vec<u8> {
 }
 
 #[derive(Clone)]
-struct ErrorStore<S> {
+pub struct ErrorStore<S> {
     inner: S,
 
     error_provider: Arc<dyn Fn(&str) -> Result<()> + Send + Sync>,
@@ -125,6 +123,7 @@ impl SuiteBuilder {
         self
     }
 
+    #[allow(dead_code)]
     pub fn inject_meta_store_error<F>(mut self, f: F) -> Self
     where
         F: Fn(&str) -> Result<()> + Send + Sync + 'static,
@@ -133,6 +132,7 @@ impl SuiteBuilder {
         self
     }
 
+    #[allow(dead_code)]
     pub fn cfg(mut self, f: impl FnOnce(&mut BackupStreamConfig) + 'static) -> Self {
         let old_f = self.cfg;
         self.cfg = Box::new(move |cfg| {
@@ -227,9 +227,9 @@ impl<S: MetaStore> MetaStore for ErrorStore<S> {
 }
 
 pub struct Suite {
-    endpoints: HashMap<u64, LazyWorker<Task>>,
-    meta_store: ErrorStore<SlashEtcStore>,
-    cluster: Cluster<ServerCluster>,
+    pub endpoints: HashMap<u64, LazyWorker<Task>>,
+    pub meta_store: ErrorStore<SlashEtcStore>,
+    pub cluster: Cluster<ServerCluster>,
     tikv_cli: HashMap<u64, TikvClient>,
     log_backup_cli: HashMap<u64, LogBackupClient>,
     obs: HashMap<u64, BackupStreamObserver>,
@@ -238,7 +238,7 @@ pub struct Suite {
     servers: Vec<Server>,
 
     temp_files: TempDir,
-    flushed_files: TempDir,
+    pub flushed_files: TempDir,
     case_name: String,
 }
 
@@ -278,7 +278,7 @@ impl Suite {
     /// create a subscription stream. this has simply asserted no error, because
     /// in theory observing flushing should not emit error. change that if
     /// needed.
-    fn flush_stream(
+    pub fn flush_stream(
         &self,
         panic_while_fail: bool,
     ) -> impl Stream<Item = (u64, SubscribeFlushEventResponse)> {
@@ -371,16 +371,16 @@ impl Suite {
         worker.start(endpoint);
     }
 
-    fn get_meta_cli(&self) -> MetadataClient<ErrorStore<SlashEtcStore>> {
+    pub fn get_meta_cli(&self) -> MetadataClient<impl MetaStore> {
         MetadataClient::new(self.meta_store.clone(), 0)
     }
 
-    fn must_split(&mut self, key: &[u8]) {
+    pub fn must_split(&mut self, key: &[u8]) {
         let region = self.cluster.get_region(key);
         self.cluster.must_split(&region, key);
     }
 
-    fn must_register_task(&self, for_table: i64, name: &str) {
+    pub fn must_register_task(&self, for_table: i64, name: &str) {
         let cli = self.get_meta_cli();
         block_on(cli.insert_task_with_range(
             &self.simple_task(name),
@@ -399,7 +399,7 @@ impl Suite {
     ///
     /// NOTE: this won't check the region consistency for now, the checkpoint
     /// may be weaker than expected.
-    fn global_checkpoint(&self) -> u64 {
+    pub fn global_checkpoint(&self) -> u64 {
         let (tx, rx) = std::sync::mpsc::channel();
         self.run(|| {
             let tx = tx.clone();
@@ -425,7 +425,7 @@ impl Suite {
             .unwrap_or(0)
     }
 
-    async fn advance_global_checkpoint(&self, task: &str) -> Result<()> {
+    pub async fn advance_global_checkpoint(&self, task: &str) -> Result<()> {
         let cp = self.global_checkpoint();
         self.meta_store
             .set(KeyValue(
@@ -435,7 +435,12 @@ impl Suite {
             .await
     }
 
-    async fn write_records(&mut self, from: usize, n: usize, for_table: i64) -> HashSet<Vec<u8>> {
+    pub async fn write_records(
+        &mut self,
+        from: usize,
+        n: usize,
+        for_table: i64,
+    ) -> HashSet<Vec<u8>> {
         let mut inserted = HashSet::default();
         for ts in (from..(from + n)).map(|x| x * 2) {
             let ts = ts as u64;
@@ -456,7 +461,7 @@ impl Suite {
         inserted
     }
 
-    fn commit_keys(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
+    pub fn commit_keys(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
         let mut region_keys = HashMap::<u64, Vec<Vec<u8>>>::new();
         for k in keys {
             let enc_key = Key::from_raw(&k).into_encoded();
@@ -469,13 +474,13 @@ impl Suite {
         }
     }
 
-    fn just_commit_a_key(&mut self, key: Vec<u8>, start_ts: TimeStamp, commit_ts: TimeStamp) {
+    pub fn just_commit_a_key(&mut self, key: Vec<u8>, start_ts: TimeStamp, commit_ts: TimeStamp) {
         let enc_key = Key::from_raw(&key).into_encoded();
         let region = self.cluster.get_region_id(&enc_key);
         self.must_kv_commit(region, vec![key], start_ts, commit_ts)
     }
 
-    fn just_async_commit_prewrite(&mut self, ts: u64, for_table: i64) -> TimeStamp {
+    pub fn just_async_commit_prewrite(&mut self, ts: u64, for_table: i64) -> TimeStamp {
         let key = make_record_key(for_table, ts);
         let muts = vec![mutation(key.clone(), b"hello, world".to_vec())];
         let enc_key = Key::from_raw(&key).into_encoded();
@@ -485,19 +490,22 @@ impl Suite {
         ts
     }
 
-    fn force_flush_files(&self, task: &str) {
+    pub fn force_flush_files(&self, task: &str) {
         // TODO: use the callback to make the test more stable.
         self.run(|| Task::ForceFlush(task.to_owned()));
         self.sync();
     }
 
-    fn run(&self, mut t: impl FnMut() -> Task) {
+    pub fn run(&self, mut t: impl FnMut() -> Task) {
         for worker in self.endpoints.values() {
             worker.scheduler().schedule(t()).unwrap();
         }
     }
 
-    fn load_metadata_for_write_records(&self, path: &Path) -> HashMap<String, Vec<(usize, usize)>> {
+    pub fn load_metadata_for_write_records(
+        &self,
+        path: &Path,
+    ) -> HashMap<String, Vec<(usize, usize)>> {
         let mut meta_map: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
         for entry in WalkDir::new(path) {
             let entry = entry.unwrap();
@@ -532,7 +540,7 @@ impl Suite {
         meta_map
     }
 
-    async fn check_for_write_records<'a>(
+    pub async fn check_for_write_records<'a>(
         &self,
         path: &Path,
         key_set: impl std::iter::Iterator<Item = &'a [u8]>,
@@ -816,682 +824,10 @@ impl Suite {
     }
 }
 
-fn run_async_test<T>(test: impl Future<Output = T>) -> T {
+pub fn run_async_test<T>(test: impl Future<Output = T>) -> T {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
         .block_on(test)
-}
-
-#[cfg(test)]
-mod test {
-    use std::time::{Duration, Instant};
-
-    use backup_stream::{
-        errors::Error,
-        metadata::{
-            keys::MetaKey,
-            store::{Keys, MetaStore},
-        },
-        router::TaskSelector,
-        GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
-    };
-    use futures::{executor::block_on, Stream, StreamExt};
-    use pd_client::PdClient;
-    use test_raftstore::IsolationFilterFactory;
-    use tikv_util::{box_err, defer, info, HandyRwLock};
-    use tokio::time::timeout;
-    use txn_types::{Key, TimeStamp};
-
-    use crate::{
-        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
-    };
-
-    #[test]
-    fn basic() {
-        let mut suite = super::SuiteBuilder::new_named("basic").build();
-        fail::cfg("try_start_observe", "1*return").unwrap();
-
-        run_async_test(async {
-            // write data before the task starting, for testing incremental scanning.
-            let round1 = suite.write_records(0, 128, 1).await;
-            suite.must_register_task(1, "test_basic");
-            suite.sync();
-            let round2 = suite.write_records(256, 128, 1).await;
-            suite.force_flush_files("test_basic");
-            suite.wait_for_flush();
-            suite
-                .check_for_write_records(
-                    suite.flushed_files.path(),
-                    round1.union(&round2).map(Vec::as_slice),
-                )
-                .await;
-        });
-        suite.cluster.shutdown();
-    }
-
-    #[test]
-    fn with_split() {
-        let mut suite = super::SuiteBuilder::new_named("with_split").build();
-        run_async_test(async {
-            let round1 = suite.write_records(0, 128, 1).await;
-            suite.must_split(&make_split_key_at_record(1, 42));
-            suite.must_register_task(1, "test_with_split");
-            let round2 = suite.write_records(256, 128, 1).await;
-            suite.force_flush_files("test_with_split");
-            suite.wait_for_flush();
-            suite
-                .check_for_write_records(
-                    suite.flushed_files.path(),
-                    round1.union(&round2).map(Vec::as_slice),
-                )
-                .await;
-        });
-        suite.cluster.shutdown();
-    }
-
-    /// This test tests whether we can handle some weird transactions and their
-    /// race with initial scanning.
-    /// Generally, those transactions:
-    /// - Has N mutations, which's values are all short enough to be inlined in
-    ///   the `Write` CF. (N > 1024)
-    /// - Commit the mutation set M first. (for all m in M: Nth-Of-Key(m) >
-    ///   1024)
-    /// ```text
-    /// |--...-----^------*---*-*--*-*-*-> (The line is the Key Space - from "" to inf)
-    ///            +The 1024th key  (* = committed mutation)
-    /// ```
-    /// - Before committing remaining mutations, PiTR triggered initial
-    ///   scanning.
-    /// - The remaining mutations are committed before the instant when initial
-    ///   scanning get the snapshot.
-    #[test]
-    fn with_split_txn() {
-        let mut suite = super::SuiteBuilder::new_named("split_txn").build();
-        run_async_test(async {
-            let start_ts = suite.cluster.pd_client.get_tso().await.unwrap();
-            let keys = (1..1960).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
-            suite.must_kv_prewrite(
-                1,
-                keys.clone()
-                    .into_iter()
-                    .map(|k| mutation(k, b"hello, world".to_vec()))
-                    .collect(),
-                make_record_key(1, 1913),
-                start_ts,
-            );
-            let commit_ts = suite.cluster.pd_client.get_tso().await.unwrap();
-            suite.commit_keys(keys[1913..].to_vec(), start_ts, commit_ts);
-            suite.must_register_task(1, "test_split_txn");
-            suite.commit_keys(keys[..1913].to_vec(), start_ts, commit_ts);
-            suite.force_flush_files("test_split_txn");
-            suite.wait_for_flush();
-            let keys_encoded = keys
-                .iter()
-                .map(|v| {
-                    Key::from_raw(v.as_slice())
-                        .append_ts(commit_ts)
-                        .into_encoded()
-                })
-                .collect::<Vec<_>>();
-            suite
-                .check_for_write_records(
-                    suite.flushed_files.path(),
-                    keys_encoded.iter().map(Vec::as_slice),
-                )
-                .await;
-        });
-        suite.cluster.shutdown();
-    }
-
-    #[test]
-    fn frequent_initial_scan() {
-        let mut suite = super::SuiteBuilder::new_named("frequent_initial_scan")
-            .cfg(|c| c.num_threads = 1)
-            .build();
-        let keys = (1..1024).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
-        let start_ts = suite.tso();
-        suite.must_kv_prewrite(
-            1,
-            keys.clone()
-                .into_iter()
-                .map(|k| mutation(k, b"hello, world".to_vec()))
-                .collect(),
-            make_record_key(1, 886),
-            start_ts,
-        );
-        fail::cfg("scan_after_get_snapshot", "pause").unwrap();
-        suite.must_register_task(1, "frequent_initial_scan");
-        let commit_ts = suite.tso();
-        suite.commit_keys(keys, start_ts, commit_ts);
-        suite.run(|| {
-            Task::ModifyObserve(backup_stream::ObserveOp::Stop {
-                region: suite.cluster.get_region(&make_record_key(1, 886)),
-            })
-        });
-        suite.run(|| {
-            Task::ModifyObserve(backup_stream::ObserveOp::Start {
-                region: suite.cluster.get_region(&make_record_key(1, 886)),
-            })
-        });
-        fail::cfg("scan_after_get_snapshot", "off").unwrap();
-        suite.force_flush_files("frequent_initial_scan");
-        suite.wait_for_flush();
-        std::thread::sleep(Duration::from_secs(1));
-        let c = suite.global_checkpoint();
-        assert!(c > commit_ts.into_inner(), "{} vs {}", c, commit_ts);
-    }
-
-    #[test]
-    /// This case tests whether the backup can continue when the leader failes.
-    fn leader_down() {
-        let mut suite = super::SuiteBuilder::new_named("leader_down").build();
-        suite.must_register_task(1, "test_leader_down");
-        suite.sync();
-        let round1 = run_async_test(suite.write_records(0, 128, 1));
-        let leader = suite.cluster.leader_of_region(1).unwrap().get_store_id();
-        suite.cluster.stop_node(leader);
-        let round2 = run_async_test(suite.write_records(256, 128, 1));
-        suite.force_flush_files("test_leader_down");
-        suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            round1.union(&round2).map(Vec::as_slice),
-        ));
-        suite.cluster.shutdown();
-    }
-
-    #[test]
-    /// This case tests whether the checkpoint ts (next backup ts) can be
-    /// advanced correctly when async commit is enabled.
-    fn async_commit() {
-        let mut suite = super::SuiteBuilder::new_named("async_commit")
-            .nodes(3)
-            .build();
-        run_async_test(async {
-            suite.must_register_task(1, "test_async_commit");
-            suite.sync();
-            suite.write_records(0, 128, 1).await;
-            let ts = suite.just_async_commit_prewrite(256, 1);
-            suite.write_records(258, 128, 1).await;
-            suite.force_flush_files("test_async_commit");
-            std::thread::sleep(Duration::from_secs(4));
-            assert_eq!(suite.global_checkpoint(), 256);
-            suite.just_commit_a_key(make_record_key(1, 256), TimeStamp::new(256), ts);
-            suite.force_flush_files("test_async_commit");
-            suite.wait_for_flush();
-            let cp = suite.global_checkpoint();
-            assert!(cp > 256, "it is {:?}", cp);
-        });
-        suite.cluster.shutdown();
-    }
-
-    #[test]
-    fn fatal_error() {
-        let mut suite = super::SuiteBuilder::new_named("fatal_error")
-            .nodes(3)
-            .build();
-        suite.must_register_task(1, "test_fatal_error");
-        suite.sync();
-        run_async_test(suite.write_records(0, 1, 1));
-        suite.force_flush_files("test_fatal_error");
-        suite.wait_for_flush();
-        run_async_test(suite.advance_global_checkpoint("test_fatal_error")).unwrap();
-        let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
-        endpoint
-            .scheduler()
-            .schedule(Task::FatalError(
-                TaskSelector::ByName("test_fatal_error".to_owned()),
-                Box::new(Error::Other(box_err!("everything is alright"))),
-            ))
-            .unwrap();
-        suite.sync();
-        let err = run_async_test(
-            suite
-                .get_meta_cli()
-                .get_last_error("test_fatal_error", *victim),
-        )
-        .unwrap()
-        .unwrap();
-        info!("err"; "err" => ?err);
-        assert_eq!(err.error_code, error_code::backup_stream::OTHER.code);
-        assert!(err.error_message.contains("everything is alright"));
-        assert_eq!(err.store_id, *victim);
-        let paused =
-            run_async_test(suite.get_meta_cli().check_task_paused("test_fatal_error")).unwrap();
-        assert!(paused);
-        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
-        let checkpoint = suite.global_checkpoint();
-
-        assert!(
-            safepoints.iter().any(|sp| {
-                sp.serivce.contains(&format!("{}", victim))
-                    && sp.ttl >= Duration::from_secs(60 * 60 * 24)
-                    && sp.safepoint.into_inner() == checkpoint - 1
-            }),
-            "{:?}",
-            safepoints
-        );
-    }
-
-    #[test]
-    fn region_checkpoint_info() {
-        let mut suite = super::SuiteBuilder::new_named("checkpoint_info")
-            .nodes(1)
-            .build();
-        suite.must_register_task(1, "checkpoint_info");
-        suite.must_split(&make_split_key_at_record(1, 42));
-        run_async_test(suite.write_records(0, 128, 1));
-        suite.force_flush_files("checkpoint_info");
-        suite.wait_for_flush();
-        std::thread::sleep(Duration::from_secs(1));
-        let (tx, rx) = std::sync::mpsc::channel();
-        suite.run(|| {
-            let tx = tx.clone();
-            Task::RegionCheckpointsOp(RegionCheckpointOperation::Get(
-                RegionSet::Universal,
-                Box::new(move |rs| {
-                    tx.send(rs).unwrap();
-                }),
-            ))
-        });
-        let checkpoints = rx.recv().unwrap();
-        assert!(!checkpoints.is_empty(), "{:?}", checkpoints);
-        assert!(
-            checkpoints
-                .iter()
-                .all(|cp| matches!(cp, GetCheckpointResult::Ok { checkpoint, .. } if checkpoint.into_inner() > 256)),
-            "{:?}",
-            checkpoints
-        );
-    }
-
-    #[test]
-    fn region_failure() {
-        defer! {{
-            fail::remove("try_start_observe");
-        }}
-        let mut suite = SuiteBuilder::new_named("region_failure").build();
-        let keys = run_async_test(suite.write_records(0, 128, 1));
-        fail::cfg("try_start_observe", "1*return").unwrap();
-        suite.must_register_task(1, "region_failure");
-        suite.must_shuffle_leader(1);
-        let keys2 = run_async_test(suite.write_records(256, 128, 1));
-        suite.force_flush_files("region_failure");
-        suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            keys.union(&keys2).map(|s| s.as_slice()),
-        ));
-    }
-
-    #[test]
-    fn initial_scan_failure() {
-        defer! {{
-            fail::remove("scan_and_async_send");
-        }}
-
-        let mut suite = SuiteBuilder::new_named("initial_scan_failure")
-            .nodes(1)
-            .build();
-        let keys = run_async_test(suite.write_records(0, 128, 1));
-        fail::cfg(
-            "scan_and_async_send",
-            "1*return(dive into the temporary dream, where the SLA never bothers)",
-        )
-        .unwrap();
-        suite.must_register_task(1, "initial_scan_failure");
-        let keys2 = run_async_test(suite.write_records(256, 128, 1));
-        suite.force_flush_files("initial_scan_failure");
-        suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            keys.union(&keys2).map(|s| s.as_slice()),
-        ));
-    }
-
-    #[test]
-    fn upload_checkpoint_exits_in_time() {
-        defer! {{
-            std::env::remove_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN");
-        }}
-        let suite = SuiteBuilder::new_named("upload_checkpoint_exits_in_time")
-            .nodes(1)
-            .build();
-        std::env::set_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN", "meow");
-        let (_, victim) = suite.endpoints.iter().next().unwrap();
-        let sched = victim.scheduler();
-        sched
-            .schedule(Task::UpdateGlobalCheckpoint("greenwoods".to_owned()))
-            .unwrap();
-        let start = Instant::now();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        sched
-            .schedule(Task::Sync(
-                Box::new(move || {
-                    tx.send(Instant::now()).unwrap();
-                }),
-                Box::new(|_| true),
-            ))
-            .unwrap();
-        let end = run_async_test(rx).unwrap();
-        assert!(
-            end - start < Duration::from_secs(10),
-            "take = {:?}",
-            end - start
-        );
-    }
-
-    #[test]
-    fn failed_during_refresh_region() {
-        defer! {
-            fail::remove("get_last_checkpoint_of")
-        }
-
-        let mut suite = SuiteBuilder::new_named("fail_to_refresh_region")
-            .nodes(1)
-            .build();
-
-        suite.must_register_task(1, "fail_to_refresh_region");
-        let keys = run_async_test(suite.write_records(0, 128, 1));
-        fail::cfg(
-            "get_last_checkpoint_of",
-            "1*return(the stream handler wants to become a batch processor, and the batch processor wants to be a stream handler.)",
-        ).unwrap();
-
-        suite.must_split(b"SOLE");
-        let keys2 = run_async_test(suite.write_records(256, 128, 1));
-        suite.force_flush_files("fail_to_refresh_region");
-        suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            keys.union(&keys2).map(|s| s.as_slice()),
-        ));
-        let leader = suite.cluster.leader_of_region(1).unwrap().store_id;
-        let (tx, rx) = std::sync::mpsc::channel();
-        suite.endpoints[&leader]
-            .scheduler()
-            .schedule(Task::RegionCheckpointsOp(RegionCheckpointOperation::Get(
-                RegionSet::Universal,
-                Box::new(move |rs| {
-                    let _ = tx.send(rs);
-                }),
-            )))
-            .unwrap();
-
-        let regions = rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        assert!(
-            regions.iter().all(|item| {
-                matches!(item, GetCheckpointResult::Ok { checkpoint, .. } if checkpoint.into_inner() > 500)
-            }),
-            "{:?}",
-            regions
-        );
-    }
-
-    /// This test case tests whether we correctly handle the pessimistic locks.
-    #[test]
-    fn pessimistic_lock() {
-        let mut suite = SuiteBuilder::new_named("pessimistic_lock").nodes(3).build();
-        suite.must_kv_pessimistic_lock(
-            1,
-            vec![make_record_key(1, 42)],
-            suite.tso(),
-            make_record_key(1, 42),
-        );
-        suite.must_register_task(1, "pessimistic_lock");
-        suite.must_kv_pessimistic_lock(
-            1,
-            vec![make_record_key(1, 43)],
-            suite.tso(),
-            make_record_key(1, 43),
-        );
-        let expected_tso = suite.tso().into_inner();
-        suite.force_flush_files("pessimistic_lock");
-        suite.wait_for_flush();
-        std::thread::sleep(Duration::from_secs(1));
-        run_async_test(suite.advance_global_checkpoint("pessimistic_lock")).unwrap();
-        let checkpoint = run_async_test(
-            suite
-                .get_meta_cli()
-                .global_progress_of_task("pessimistic_lock"),
-        )
-        .unwrap();
-        // The checkpoint should be advanced: because PiTR is "Read" operation,
-        // which shouldn't be blocked by pessimistic locks.
-        assert!(
-            checkpoint > expected_tso,
-            "expected = {}; checkpoint = {}",
-            expected_tso,
-            checkpoint
-        );
-    }
-
-    async fn collect_all_current<T>(
-        mut s: impl Stream<Item = T> + Unpin,
-        max_gap: Duration,
-    ) -> Vec<T> {
-        let mut r = vec![];
-        while let Ok(Some(x)) = timeout(max_gap, s.next()).await {
-            r.push(x);
-        }
-        r
-    }
-
-    async fn collect_current<T>(mut s: impl Stream<Item = T> + Unpin, goal: usize) -> Vec<T> {
-        let mut r = vec![];
-        while let Ok(Some(x)) = timeout(Duration::from_secs(10), s.next()).await {
-            r.push(x);
-            if r.len() >= goal {
-                return r;
-            }
-        }
-        r
-    }
-
-    #[test]
-    fn subscribe_flushing() {
-        let mut suite = super::SuiteBuilder::new_named("sub_flush").build();
-        let stream = suite.flush_stream(true);
-        for i in 1..10 {
-            let split_key = make_split_key_at_record(1, i * 20);
-            suite.must_split(&split_key);
-            suite.must_shuffle_leader(suite.cluster.get_region_id(&split_key));
-        }
-
-        let round1 = run_async_test(suite.write_records(0, 128, 1));
-        suite.must_register_task(1, "sub_flush");
-        let round2 = run_async_test(suite.write_records(256, 128, 1));
-        suite.sync();
-        suite.force_flush_files("sub_flush");
-
-        let mut items = run_async_test(async {
-            collect_current(
-                stream.flat_map(|(_, r)| futures::stream::iter(r.events.into_iter())),
-                10,
-            )
-            .await
-        });
-
-        items.sort_by(|x, y| x.start_key.cmp(&y.start_key));
-
-        println!("{:?}", items);
-        assert_eq!(items.len(), 10);
-
-        assert_eq!(items.first().unwrap().start_key, Vec::<u8>::default());
-        for w in items.windows(2) {
-            let a = &w[0];
-            let b = &w[1];
-            assert!(a.checkpoint > 512);
-            assert!(b.checkpoint > 512);
-            assert_eq!(a.end_key, b.start_key);
-        }
-        assert_eq!(items.last().unwrap().end_key, Vec::<u8>::default());
-
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            round1.union(&round2).map(|x| x.as_slice()),
-        ));
-    }
-
-    #[test]
-    fn failure_and_split() {
-        let mut suite = super::SuiteBuilder::new_named("failure_and_split")
-            .nodes(1)
-            .build();
-        fail::cfg("try_start_observe0", "pause").unwrap();
-
-        // write data before the task starting, for testing incremental scanning.
-        let round1 = run_async_test(suite.write_records(0, 128, 1));
-        suite.must_register_task(1, "failure_and_split");
-        suite.sync();
-
-        suite.must_split(&make_split_key_at_record(1, 42));
-        suite.sync();
-        std::thread::sleep(Duration::from_millis(200));
-        fail::cfg("try_start_observe", "2*return").unwrap();
-        fail::cfg("try_start_observe0", "off").unwrap();
-
-        let round2 = run_async_test(suite.write_records(256, 128, 1));
-        suite.force_flush_files("failure_and_split");
-        suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            round1.union(&round2).map(Vec::as_slice),
-        ));
-        let cp = suite.global_checkpoint();
-        assert!(cp > 512, "it is {}", cp);
-        suite.cluster.shutdown();
-    }
-
-    #[test]
-    fn resolved_follower() {
-        let mut suite = super::SuiteBuilder::new_named("r").build();
-        let round1 = run_async_test(suite.write_records(0, 128, 1));
-        suite.must_register_task(1, "r");
-        suite.run(|| Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve));
-        suite.sync();
-        std::thread::sleep(Duration::from_secs(1));
-
-        let leader = suite.cluster.leader_of_region(1).unwrap();
-        suite.must_shuffle_leader(1);
-        let round2 = run_async_test(suite.write_records(256, 128, 1));
-        suite
-            .endpoints
-            .get(&leader.store_id)
-            .unwrap()
-            .scheduler()
-            .schedule(Task::ForceFlush("r".to_owned()))
-            .unwrap();
-        suite.sync();
-        std::thread::sleep(Duration::from_secs(2));
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            round1.iter().map(|x| x.as_slice()),
-        ));
-        assert!(suite.global_checkpoint() > 256);
-        suite.force_flush_files("r");
-        suite.wait_for_flush();
-        assert!(suite.global_checkpoint() > 512);
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            round1.union(&round2).map(|x| x.as_slice()),
-        ));
-    }
-
-    #[test]
-    fn network_partition() {
-        let mut suite = super::SuiteBuilder::new_named("network_partition")
-            .nodes(3)
-            .build();
-        let stream = suite.flush_stream(true);
-        suite.must_register_task(1, "network_partition");
-        let leader = suite.cluster.leader_of_region(1).unwrap();
-        let round1 = run_async_test(suite.write_records(0, 64, 1));
-
-        suite
-            .cluster
-            .add_send_filter(IsolationFilterFactory::new(leader.store_id));
-        suite.cluster.reset_leader_of_region(1);
-        suite
-            .cluster
-            .must_wait_for_leader_expire(leader.store_id, 1);
-        let leader2 = suite.cluster.leader_of_region(1).unwrap();
-        assert_ne!(leader.store_id, leader2.store_id, "leader not switched.");
-        let ts = suite.tso();
-        suite.must_kv_prewrite(
-            1,
-            vec![mutation(make_record_key(1, 778), b"generator".to_vec())],
-            make_record_key(1, 778),
-            ts,
-        );
-        suite.sync();
-        suite.force_flush_files("network_partition");
-        suite.wait_for_flush();
-
-        let cps = run_async_test(collect_all_current(stream, Duration::from_secs(2)));
-        assert!(
-            cps.iter()
-                .flat_map(|(_s, cp)| cp.events.iter().map(|resp| resp.checkpoint))
-                .all(|cp| cp <= ts.into_inner()),
-            "ts={} cps={:?}",
-            ts,
-            cps
-        );
-        run_async_test(suite.check_for_write_records(
-            suite.flushed_files.path(),
-            round1.iter().map(|k| k.as_slice()),
-        ))
-    }
-
-    #[test]
-    fn test_retry_abort() {
-        let mut suite = super::SuiteBuilder::new_named("retry_abort")
-            .nodes(1)
-            .build();
-        defer! {
-            fail::list().into_iter().for_each(|(name, _)| fail::remove(name))
-        };
-
-        suite.must_register_task(1, "retry_abort");
-        fail::cfg("subscribe_mgr_retry_start_observe_delay", "return(10)").unwrap();
-        fail::cfg("try_start_observe", "return()").unwrap();
-
-        suite.must_split(&make_split_key_at_record(1, 42));
-        std::thread::sleep(Duration::from_secs(2));
-
-        let error = run_async_test(suite.get_meta_cli().get_last_error("retry_abort", 1)).unwrap();
-        let error = error.expect("no error uploaded");
-        error
-            .get_error_message()
-            .find("retry")
-            .expect("error doesn't contain retry");
-        fail::cfg("try_start_observe", "10*return()").unwrap();
-        // Resume the task manually...
-        run_async_test(async {
-            suite
-                .meta_store
-                .delete(Keys::Key(MetaKey::pause_of("retry_abort")))
-                .await?;
-            suite
-                .meta_store
-                .delete(Keys::Prefix(MetaKey::last_errors_of("retry_abort")))
-                .await?;
-            backup_stream::errors::Result::Ok(())
-        })
-        .unwrap();
-
-        suite.sync();
-        suite.wait_with(move |r| block_on(r.get_task_info("retry_abort")).is_ok());
-        let items = run_async_test(suite.write_records(0, 128, 1));
-        suite.force_flush_files("retry_abort");
-        suite.wait_for_flush();
-        run_async_test(
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                items.iter().map(Vec::as_slice),
-            ),
-        );
-    }
 }

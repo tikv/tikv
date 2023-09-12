@@ -1016,6 +1016,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        fail::fail_point!(
+            "on_check_long_uncommitted_proposals_1",
+            self.peer_id() == 1,
+            |_| {}
+        );
         if self.has_long_uncommitted_proposals(ctx) {
             let status = self.raft_group().status();
             let mut buffer: Vec<(u64, u64, u64)> = Vec::new();

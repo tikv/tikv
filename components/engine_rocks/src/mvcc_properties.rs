@@ -3,7 +3,7 @@
 use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
 
-use crate::{decode_properties::DecodeProperties, RocksEngine, UserProperties};
+use crate::{decode_properties::DecodeProperties, RocksEngine, RocksTtlProperties, UserProperties};
 
 pub const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 pub const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -28,6 +28,7 @@ impl RocksMvccProperties {
         props.encode_u64(PROP_NUM_DELETES, mvcc_props.num_deletes);
         props.encode_u64(PROP_NUM_VERSIONS, mvcc_props.num_versions);
         props.encode_u64(PROP_MAX_ROW_VERSIONS, mvcc_props.max_row_versions);
+        RocksTtlProperties::encode_to(&mvcc_props.ttl, &mut props);
         props
     }
 
@@ -43,6 +44,7 @@ impl RocksMvccProperties {
             .decode_u64(PROP_NUM_DELETES)
             .unwrap_or(res.num_versions - res.num_puts);
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
+        RocksTtlProperties::decode_from(&mut res.ttl, props);
         Ok(res)
     }
 }
