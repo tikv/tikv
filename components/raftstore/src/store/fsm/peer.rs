@@ -4557,6 +4557,17 @@ where
                         "error_code" => %e.error_code(),
                     );
                     self.rollback_merge();
+                } else if let Some(ForceLeaderState::ForceLeader { .. }) =
+                    &self.fsm.peer.force_leader
+                {
+                    info!(
+                        "failed to schedule merge, rollback in force leader state";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                        "error_code" => %e.error_code(),
+                    );
+                    self.rollback_merge();
                 }
             } else if !is_learner(&self.fsm.peer.peer) {
                 info!(
