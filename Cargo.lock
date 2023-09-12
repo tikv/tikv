@@ -3108,7 +3108,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc38a5b427e6c9b351f835c641e2ee95b8ff8306"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=fix-sealed-chaos#f5121f48a1543c5d576ad7964c617f30f79a3d66"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3127,7 +3127,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc38a5b427e6c9b351f835c641e2ee95b8ff8306"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=fix-sealed-chaos#f5121f48a1543c5d576ad7964c617f30f79a3d66"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5101,7 +5101,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc38a5b427e6c9b351f835c641e2ee95b8ff8306"
+source = "git+https://github.com/SpadeA-Tang/rust-rocksdb.git?branch=fix-sealed-chaos#f5121f48a1543c5d576ad7964c617f30f79a3d66"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
