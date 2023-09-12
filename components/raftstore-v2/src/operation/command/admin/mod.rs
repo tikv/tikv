@@ -99,8 +99,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
+
+        let is_transfer_leader = cmd_type == AdminCmdType::TransferLeader;
+        let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
+            && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL);
+        let is_conf_change = apply::is_conf_change_cmd(&req);
+
         // Check whether the admin request can be proposed when disk full.
-        if let Err(e) =
+        let can_skip_check = is_transfer_leader || pre_transfer_leader || is_conf_change;
+        if !can_skip_check && let Err(e) =
             self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
         {
             let resp = cmd_resp::new_error(e);
@@ -108,11 +116,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.post_propose_fail(cmd_type);
             return;
         }
-
-        let is_transfer_leader = cmd_type == AdminCmdType::TransferLeader;
-        let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
-            && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
-                .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL);
 
         // The admin request is rejected because it may need to update epoch checker
         // which introduces an uncertainty and may breaks the correctness of epoch
@@ -176,7 +179,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);
-        let res = if apply::is_conf_change_cmd(&req) {
+        let res = if is_conf_change {
             self.propose_conf_change(ctx, req)
         } else {
             // propose other admin command.

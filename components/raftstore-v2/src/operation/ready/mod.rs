@@ -259,6 +259,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "message_type" => %util::MsgType(&msg),
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
+            "disk_usage" => ?msg.disk_usage,
         );
         if self.pause_for_replay() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
             ctx.raft_metrics.message_dropped.recovery.inc();
@@ -507,7 +508,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// If the recipient can't be found, `None` is returned.
     #[inline]
-    fn build_raft_message(&mut self, msg: eraftpb::Message) -> Option<RaftMessage> {
+    fn build_raft_message(
+        &mut self,
+        msg: eraftpb::Message,
+        disk_usage: DiskUsage,
+    ) -> Option<RaftMessage> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
@@ -522,6 +527,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
 
         let mut raft_msg = self.prepare_raft_message();
+        // Fill in the disk usage.
+        raft_msg.set_disk_usage(disk_usage);
 
         raft_msg.set_to_peer(to_peer);
         if msg.from != self.peer().id {
@@ -764,8 +771,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         if !ready.messages().is_empty() {
             debug_assert!(self.is_leader());
+            let disk_usage = ctx.self_disk_usage;
             for msg in ready.take_messages() {
-                if let Some(msg) = self.build_raft_message(msg) {
+                if let Some(msg) = self.build_raft_message(msg, disk_usage) {
                     self.send_raft_message_on_leader(ctx, msg);
                 }
             }
@@ -794,10 +802,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
 
         if !ready.persisted_messages().is_empty() {
+            let disk_usage = ctx.self_disk_usage;
             write_task.messages = ready
                 .take_persisted_messages()
                 .into_iter()
-                .flat_map(|m| self.build_raft_message(m))
+                .flat_map(|m| self.build_raft_message(m, disk_usage))
                 .collect();
         }
         if self.has_pending_messages() {
