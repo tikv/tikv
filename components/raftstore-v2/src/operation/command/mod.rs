@@ -871,7 +871,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.modifications = *self.modifications_mut();
         apply_res.metrics = mem::take(&mut self.metrics);
         apply_res.bucket_stat = self.buckets.clone();
-        apply_res.sst_applied_index = mem::take(&mut self.sst_applied_index);
+        apply_res.sst_applied_index = self.take_sst_applied_index();
         let written_bytes = apply_res.metrics.written_bytes;
 
         let skip_report = || -> bool {

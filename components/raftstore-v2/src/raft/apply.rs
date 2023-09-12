@@ -64,7 +64,7 @@ pub struct Apply<EK: KvEngine, R> {
     admin_cmd_result: Vec<AdminCmdResult>,
     flush_state: Arc<FlushState>,
     sst_apply_state: SstApplyState,
-    pub(crate) sst_applied_index: Vec<SstApplyIndex>,
+    sst_applied_index: Vec<SstApplyIndex>,
     /// The flushed indexes of each column family before being restarted.
     ///
     /// If an apply index is less than the flushed index, the log can be
@@ -308,6 +308,16 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn sst_apply_state(&self) -> &SstApplyState {
         &self.sst_apply_state
+    }
+
+    #[inline]
+    pub fn push_sst_applied_index(&mut self, sst_index: SstApplyIndex) {
+        self.sst_applied_index.push(sst_index);
+    }
+
+    #[inline]
+    pub fn take_sst_applied_index(&mut self) -> Vec<SstApplyIndex> {
+        mem::take(&mut self.sst_applied_index)
     }
 
     #[inline]
