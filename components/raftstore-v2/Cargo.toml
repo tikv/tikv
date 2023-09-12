@@ -65,6 +65,8 @@ time = "0.1"
 tracker = { workspace = true }
 txn_types = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+stdext = "0.3.1"
+backtrace = "0.3.65" 
 
 [dev-dependencies]
 engine_rocks = { workspace = true }
