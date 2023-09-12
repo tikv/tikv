@@ -504,6 +504,7 @@ impl<E: Engine> Endpoint<E> {
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
+
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 req_ctx
