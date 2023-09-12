@@ -1,11 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cell::RefCell,
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
@@ -43,73 +38,7 @@ use crate::{
 
 type ScanPool = tokio::runtime::Runtime;
 
-// For now, the implemenation of `CdcHandle` will also maintain the local read
-// state and some batching information of FSMs, which are !Sync types.
-// Trivially add a `Mutex` or `Clone` it each time we need it may be hurtful for
-// performance or rarely deadlock, so we register a handle for each thread.
-thread_local! {
-    static THREAD_LOCAL_CDC_HANDLE: RefCell<Option<Box<dyn std::any::Any>>> = RefCell::default();
-}
-
-pub fn maybe_with_tls_cdc_handle<T: CdcHandle<EK> + 'static, EK: KvEngine, R>(
-    f: impl FnOnce(Option<&mut T>) -> R,
-) -> R {
-    THREAD_LOCAL_CDC_HANDLE.with(|hnd| {
-        f(hnd
-            .borrow_mut()
-            .as_mut()
-            .and_then(move |h| h.downcast_mut::<T>()))
-    })
-}
-
-#[track_caller]
-pub fn with_tls_cdc_handle<T: CdcHandle<EK> + 'static, EK: KvEngine, R>(
-    f: impl FnOnce(&mut T) -> R,
-) -> R {
-    maybe_with_tls_cdc_handle(|v| {
-        f(v.expect("there isn't a cdc handle bind to this thread or the type isn't match, call `set_tls_cdc_handle` firstly and make sure the type matches."))
-    })
-}
-
-pub fn set_tls_cdc_handle<EK: KvEngine>(item: impl CdcHandle<EK> + 'static) {
-    THREAD_LOCAL_CDC_HANDLE.with(|hnd| *hnd.borrow_mut() = Some(Box::new(item)))
-}
-
 const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
-
-#[derive(Clone)]
-pub struct TlsCdcHandle<E, H>(PhantomData<E>, PhantomData<H>);
-
-impl<E, H> Default for TlsCdcHandle<E, H> {
-    fn default() -> Self {
-        Self(Default::default(), Default::default())
-    }
-}
-
-// SAFETY: they are phantom types.
-unsafe impl<E, H> Sync for TlsCdcHandle<E, H> {}
-
-impl<E: KvEngine, H: CdcHandle<E> + 'static> CdcHandle<E> for TlsCdcHandle<E, H> {
-    fn capture_change(
-        &self,
-        region_id: u64,
-        region_epoch: kvproto::metapb::RegionEpoch,
-        change_observer: ChangeObserver,
-        callback: raftstore::store::Callback<E::Snapshot>,
-    ) -> raftstore::Result<()> {
-        with_tls_cdc_handle::<H, _, _>(move |h| {
-            h.capture_change(region_id, region_epoch, change_observer, callback)
-        })
-    }
-
-    fn check_leadership(
-        &self,
-        region_id: u64,
-        callback: raftstore::store::Callback<E::Snapshot>,
-    ) -> raftstore::Result<()> {
-        with_tls_cdc_handle::<H, _, _>(move |h| h.check_leadership(region_id, callback))
-    }
-}
 
 // The retry parameters for failed to get last checkpoint ts.
 // When PD is temporarily disconnected, we may need this retry.
@@ -313,18 +242,12 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
 }
 
 /// spawn the executors in the scan pool.
-/// we make workers thread instead of spawn scan task directly into the pool
-/// because the [`InitialDataLoader`] isn't `Sync` hence we must use it very
-/// carefully or rustc (along with tokio) would complain that we made a `!Send`
-/// future. so we have moved the data loader to the synchronous context so its
-/// reference won't be shared between threads any more.
-fn spawn_executors<E: KvEngine>(
-    init: impl InitialScan + Send + 'static,
+fn spawn_executors(
+    init: impl InitialScan + Send + Sync + 'static,
     number: usize,
-    router: impl CdcHandle<E> + 'static,
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
-    let pool = create_scan_pool(router, number);
+    let pool = create_scan_pool(number);
     pool.spawn(async move {
         scan_executor_loop(init, rx).await;
     });
@@ -395,16 +318,11 @@ where
     }
 }
 
-/// Create a yatp pool for doing initial scanning.
-fn create_scan_pool<EK: KvEngine>(
-    cdc_handle: impl CdcHandle<EK> + 'static,
-    num_threads: usize,
-) -> ScanPool {
-    let handle = Mutex::new(cdc_handle);
+/// Create a pool for doing initial scanning.
+fn create_scan_pool(num_threads: usize) -> ScanPool {
     tokio::runtime::Builder::new_multi_thread()
         .with_sys_and_custom_hooks(
             move || {
-                set_tls_cdc_handle(handle.lock().unwrap().clone());
                 file_system::set_io_type(file_system::IoType::Replication);
             },
             || {},
@@ -428,23 +346,22 @@ where
     ///
     /// a two-tuple, the first is the handle to the manager, the second is the
     /// operator loop future.
-    pub fn start<E, RT>(
-        initial_loader: InitialDataLoader<E, TlsCdcHandle<E, RT>>,
+    pub fn start<E, HInit, HChkLd>(
+        initial_loader: InitialDataLoader<E, HInit>,
         regions: R,
-        router: &RT,
         observer: BackupStreamObserver,
         meta_cli: MetadataClient<S>,
         pd_client: Arc<PDC>,
         scan_pool_size: usize,
-        resolver: BackupStreamResolver<RT, E>,
+        resolver: BackupStreamResolver<HChkLd, E>,
     ) -> (Self, future![()])
     where
         E: KvEngine,
-        RT: CdcHandle<E> + 'static,
+        HInit: CdcHandle<E> + Sync + 'static,
+        HChkLd: CdcHandle<E> + 'static,
     {
         let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
-        let scan_pool_handle =
-            spawn_executors(initial_loader.clone(), scan_pool_size, router.clone());
+        let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);
         let op = Self {
             regions,
             meta_cli,
@@ -836,11 +753,7 @@ mod test {
     fn test_message_delay_and_exit() {
         use std::time::Duration;
 
-        use engine_test::kv::KvTestEngine as EK;
-        use raftstore::router::CdcRaftRouter;
-        use test_raftstore::MockRaftStoreRouter;
-
-        use super::{ScanCmd, TlsCdcHandle};
+        use super::ScanCmd;
         use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
 
         fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
@@ -857,11 +770,7 @@ mod test {
             pool.block_on(tokio::time::timeout(d, rx)).unwrap().unwrap();
         }
 
-        let pool = spawn_executors(
-            NoopInitialScan,
-            1,
-            TlsCdcHandle::<EK, CdcRaftRouter<MockRaftStoreRouter>>::default(),
-        );
+        let pool = spawn_executors(NoopInitialScan, 1);
         let wg = CallbackWaitGroup::new();
         fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {

@@ -1,6 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{any::Any, collections::HashSet, fmt, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    any::Any,
+    collections::HashSet,
+    fmt,
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
@@ -50,7 +57,7 @@ use crate::{
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{self, ApplyEvents, Router, TaskSelector},
-    subscription_manager::{RegionSubscriptionManager, ResolvedRegions, TlsCdcHandle},
+    subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, StopWatch, Work},
@@ -151,11 +158,13 @@ where
                 scheduler.clone(),
                 initial_scan_memory_quota,
                 initial_scan_throughput_quota,
-                TlsCdcHandle::<E, RT>::default(),
+                // NOTE: in fact we can get rid of the `Arc`. Just need to warp the router when the
+                // scanner pool is created. But at that time the handle has been sealed in the
+                // `InitialScan` trait -- we cannot do that.
+                Arc::new(Mutex::new(router)),
                 Arc::clone(&initial_scan_semaphore),
             ),
             accessor.clone(),
-            &router,
             observer.clone(),
             meta_client.clone(),
             pd_client.clone(),
