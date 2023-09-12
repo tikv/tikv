@@ -282,7 +282,7 @@ mod tests {
 
         let mut ctx = kvrpcpb::Context::default();
         ctx.max_execution_duration_ms = 100_000;
-        let req_ctx = ReqContext::default_for_test_except_ctx_duration(ctx, max_handle_duration);
+        let req_ctx = default_req_ctx_with_ctx_duration(ctx, max_handle_duration);
         // sleep at least 100ms
         std::thread::sleep(Duration::from_millis(200));
         req_ctx
