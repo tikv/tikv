@@ -89,7 +89,7 @@ fn test_disk_full_leader_behaviors() {
         let new_last_index = cluster.raft_local_state(1, 1).last_index;
         assert_eq!(old_last_index, new_last_index);
 
-        assert_region_leader_changed!(&mut cluster, 1, 1);
+        assert_region_leader_changed!(&cluster, 1, 1);
         fail::remove(get_fp(usage, 1));
         cluster.must_transfer_leader(1, new_peer(1, 1));
         fail::cfg(get_fp(usage, 1), "return").unwrap();
@@ -169,100 +169,99 @@ fn test_disk_full_follower_behaviors() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_disk_full_txn_behaviors() {
-    for usage in [DiskUsage::AlmostFull] {
-        let mut cluster = new_cluster(0, 3);
-        cluster.pd_client.disable_default_operator();
-        cluster.run();
+    let usage = DiskUsage::AlmostFull;
+    let mut cluster = new_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
 
-        // To ensure all replicas are not pending.
-        cluster.must_put(b"k1", b"v1");
-        must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
-        must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-        must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    // To ensure all replicas are not pending.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
-        cluster.must_transfer_leader(1, new_peer(1, 1));
-        fail::cfg(get_fp(usage, 1), "return").unwrap();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    fail::cfg(get_fp(usage, 1), "return").unwrap();
 
-        // Test normal prewrite is not allowed.
-        let pd_client = cluster.pd_client.clone();
-        let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
-        let prewrite_ts = get_tso(&pd_client);
-        let res = lead_client.try_kv_prewrite(
-            vec![new_mutation(Op::Put, b"k3", b"v3")],
-            b"k3".to_vec(),
-            prewrite_ts,
-            DiskFullOpt::NotAllowedOnFull,
-        );
-        assert!(res.get_region_error().has_disk_full());
-        assert_region_leader_changed!(&mut cluster, 1, 1);
+    // Test normal prewrite is not allowed.
+    let pd_client = cluster.pd_client.clone();
+    let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&pd_client);
+    let res = lead_client.try_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k3", b"v3")],
+        b"k3".to_vec(),
+        prewrite_ts,
+        DiskFullOpt::NotAllowedOnFull,
+    );
+    assert!(res.get_region_error().has_disk_full());
+    assert_region_leader_changed!(&cluster, 1, 1);
 
-        fail::remove(get_fp(usage, 1));
-        cluster.must_transfer_leader(1, new_peer(1, 1));
-        let prewrite_ts = get_tso(&pd_client);
-        lead_client.must_kv_prewrite(
-            vec![new_mutation(Op::Put, b"k4", b"v4")],
-            b"k4".to_vec(),
-            prewrite_ts,
-        );
+    fail::remove(get_fp(usage, 1));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&pd_client);
+    lead_client.must_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k4", b"v4")],
+        b"k4".to_vec(),
+        prewrite_ts,
+    );
 
-        // Test commit is allowed.
-        fail::cfg(get_fp(usage, 1), "return").unwrap();
-        let commit_ts = get_tso(&pd_client);
-        lead_client.must_kv_commit(vec![b"k4".to_vec()], prewrite_ts, commit_ts);
-        lead_client.must_kv_read_equal(b"k4".to_vec(), b"v4".to_vec(), commit_ts);
+    // Test commit is allowed.
+    fail::cfg(get_fp(usage, 1), "return").unwrap();
+    let commit_ts = get_tso(&pd_client);
+    lead_client.must_kv_commit(vec![b"k4".to_vec()], prewrite_ts, commit_ts);
+    lead_client.must_kv_read_equal(b"k4".to_vec(), b"v4".to_vec(), commit_ts);
 
-        // Test prewrite is allowed with a special `DiskFullOpt` flag.
-        let prewrite_ts = get_tso(&pd_client);
-        let res = lead_client.try_kv_prewrite(
-            vec![new_mutation(Op::Put, b"k5", b"v5")],
-            b"k5".to_vec(),
-            prewrite_ts,
-            DiskFullOpt::AllowedOnAlmostFull,
-        );
-        assert!(!res.get_region_error().has_disk_full());
-        let commit_ts = get_tso(&pd_client);
-        lead_client.must_kv_commit(vec![b"k5".to_vec()], prewrite_ts, commit_ts);
-        assert!(!res.get_region_error().has_disk_full());
+    // Test prewrite is allowed with a special `DiskFullOpt` flag.
+    let prewrite_ts = get_tso(&pd_client);
+    let res = lead_client.try_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k5", b"v5")],
+        b"k5".to_vec(),
+        prewrite_ts,
+        DiskFullOpt::AllowedOnAlmostFull,
+    );
+    assert!(!res.get_region_error().has_disk_full());
+    let commit_ts = get_tso(&pd_client);
+    lead_client.must_kv_commit(vec![b"k5".to_vec()], prewrite_ts, commit_ts);
+    assert!(!res.get_region_error().has_disk_full());
 
-        fail::remove(get_fp(usage, 1));
-        let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
-        let prewrite_ts = get_tso(&pd_client);
-        lead_client.must_kv_prewrite(
-            vec![new_mutation(Op::Put, b"k6", b"v6")],
-            b"k6".to_vec(),
-            prewrite_ts,
-        );
+    fail::remove(get_fp(usage, 1));
+    let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let prewrite_ts = get_tso(&pd_client);
+    lead_client.must_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k6", b"v6")],
+        b"k6".to_vec(),
+        prewrite_ts,
+    );
 
-        // Test rollback must be allowed.
-        fail::cfg(get_fp(usage, 1), "return").unwrap();
-        PeerClient::new(&cluster, 1, new_peer(1, 1))
-            .must_kv_rollback(vec![b"k6".to_vec()], prewrite_ts);
+    // Test rollback must be allowed.
+    fail::cfg(get_fp(usage, 1), "return").unwrap();
+    PeerClient::new(&cluster, 1, new_peer(1, 1))
+        .must_kv_rollback(vec![b"k6".to_vec()], prewrite_ts);
 
-        fail::remove(get_fp(usage, 1));
-        let start_ts = get_tso(&pd_client);
-        lead_client.must_kv_pessimistic_lock(b"k7".to_vec(), start_ts);
+    fail::remove(get_fp(usage, 1));
+    let start_ts = get_tso(&pd_client);
+    lead_client.must_kv_pessimistic_lock(b"k7".to_vec(), start_ts);
 
-        // Test pessimistic commit is allowed.
-        fail::cfg(get_fp(usage, 1), "return").unwrap();
-        let res = lead_client.try_kv_prewrite(
-            vec![new_mutation(Op::Put, b"k7", b"v7")],
-            b"k7".to_vec(),
-            start_ts,
-            DiskFullOpt::AllowedOnAlmostFull,
-        );
-        assert!(!res.get_region_error().has_disk_full());
-        lead_client.must_kv_commit(vec![b"k7".to_vec()], start_ts, get_tso(&pd_client));
+    // Test pessimistic commit is allowed.
+    fail::cfg(get_fp(usage, 1), "return").unwrap();
+    let res = lead_client.try_kv_prewrite(
+        vec![new_mutation(Op::Put, b"k7", b"v7")],
+        b"k7".to_vec(),
+        start_ts,
+        DiskFullOpt::AllowedOnAlmostFull,
+    );
+    assert!(!res.get_region_error().has_disk_full());
+    lead_client.must_kv_commit(vec![b"k7".to_vec()], start_ts, get_tso(&pd_client));
 
-        fail::remove(get_fp(usage, 1));
-        let lock_ts = get_tso(&pd_client);
-        lead_client.must_kv_pessimistic_lock(b"k8".to_vec(), lock_ts);
+    fail::remove(get_fp(usage, 1));
+    let lock_ts = get_tso(&pd_client);
+    lead_client.must_kv_pessimistic_lock(b"k8".to_vec(), lock_ts);
 
-        // Test pessimistic rollback is allowed.
-        fail::cfg(get_fp(usage, 1), "return").unwrap();
-        lead_client.must_kv_pessimistic_rollback(b"k8".to_vec(), lock_ts);
+    // Test pessimistic rollback is allowed.
+    fail::cfg(get_fp(usage, 1), "return").unwrap();
+    lead_client.must_kv_pessimistic_rollback(b"k8".to_vec(), lock_ts);
 
-        fail::remove(get_fp(usage, 1));
-    }
+    fail::remove(get_fp(usage, 1));
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
