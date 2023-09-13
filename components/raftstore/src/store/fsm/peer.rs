@@ -4434,6 +4434,9 @@ where
 
     fn schedule_merge(&mut self) -> Result<()> {
         fail_point!("on_schedule_merge", |_| Ok(()));
+        fail_point!("on_schedule_merge_ret_err", |_| Err(Error::RegionNotFound(
+            1
+        )));
         let (request, target_id) = {
             let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
             let expect_region = state.get_target();
@@ -5239,7 +5242,8 @@ where
             // error-prone
             if !(msg.has_admin_request()
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
-                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2))
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::RollbackMerge))
             {
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
