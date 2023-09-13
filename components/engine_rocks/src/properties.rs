@@ -144,10 +144,7 @@ pub struct RangeProperties {
 
 impl RangeProperties {
     pub fn get(&self, key: &[u8]) -> &RangeOffsets {
-        let idx = self
-            .offsets
-            .binary_search_by_key(&key, |(k, _)| k)
-            .unwrap();
+        let idx = self.offsets.binary_search_by_key(&key, |(k, _)| k).unwrap();
         &self.offsets[idx].1
     }
 
