@@ -1206,7 +1206,7 @@ mod tests {
 
     #[test]
     fn test_update_config_endpoint() {
-        let test_config = |persisit: bool| {
+        let test_config = |persist: bool| {
             let temp_dir = tempfile::TempDir::new().unwrap();
             let mut config = TikvConfig::default();
             config.cfg_path = temp_dir
@@ -1228,7 +1228,7 @@ mod tests {
             let addr = "127.0.0.1:0".to_owned();
             let _ = status_server.start(addr);
             let client = Client::new();
-            let uri = if persisit {
+            let uri = if persist {
                 Uri::builder()
                     .scheme("http")
                     .authority(status_server.listening_addr().to_string().as_str())
