@@ -4,6 +4,7 @@ use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{data_cf_offset, KvEngine, RaftEngine};
 use kvproto::import_sstpb::SstMeta;
+use pd_client::metrics::STORE_SIZE_EVENT_INT_VEC;
 use raftstore::{
     store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER, util},
     Result,
@@ -39,6 +40,8 @@ impl Store {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
     ) -> Result<()> {
+        let import_size = box_try!(ctx.sst_importer.get_total_size());
+        STORE_SIZE_EVENT_INT_VEC.import_size.set(import_size as i64);
         let ssts = box_try!(ctx.sst_importer.list_ssts());
         if ssts.is_empty() {
             return Ok(());
