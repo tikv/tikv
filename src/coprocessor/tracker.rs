@@ -278,7 +278,6 @@ impl<E: Engine> Tracker<E> {
                     "table_id" => some_table_id,
                     "tag" => self.req_ctx.tag.get_str(),
                 );
-
             }
             return;
         }
