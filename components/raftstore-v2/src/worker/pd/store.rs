@@ -22,6 +22,7 @@ use slog::{error, info, warn};
 use tikv_util::{
     metrics::RecordPairVec,
     store::QueryStats,
+    sys::SysQuota,
     time::{Duration, Instant as TiInstant, UnixSecs},
     topn::TopN,
 };
@@ -69,6 +70,8 @@ pub struct StoreStat {
     pub store_cpu_usages: RecordPairVec,
     pub store_read_io_rates: RecordPairVec,
     pub store_write_io_rates: RecordPairVec,
+
+    pub total_memory: u64,
 }
 
 impl Default for StoreStat {
@@ -90,6 +93,8 @@ impl Default for StoreStat {
             store_cpu_usages: RecordPairVec::default(),
             store_read_io_rates: RecordPairVec::default(),
             store_write_io_rates: RecordPairVec::default(),
+
+            total_memory: SysQuota::memory_limit_in_bytes(),
         }
     }
 }
@@ -216,9 +221,15 @@ where
             warn!(self.logger, "no available space");
         }
 
+        // Disk stats.
         stats.set_capacity(capacity);
         stats.set_used_size(used_size);
         stats.set_available(available);
+
+        // Memory stats.
+        stats.set_total_memory(self.store_stat.total_memory);
+
+        // Read stats.
         stats.set_bytes_read(
             self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
         );
