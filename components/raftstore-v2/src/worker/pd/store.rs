@@ -228,6 +228,7 @@ where
 
         // Memory stats.
         stats.set_total_memory(self.store_stat.total_memory);
+        info!(self.logger, "dbg report memory"; "total_memory" => self.store_stat.total_memory);
 
         // Read stats.
         stats.set_bytes_read(
