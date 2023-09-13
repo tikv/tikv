@@ -1482,7 +1482,7 @@ impl DbConfig {
             opts.set_paranoid_checks(b);
         }
         if for_engine == EngineType::RaftKv {
-            opts.set_info_log(RocksdbLogger::default());
+            opts.set_info_log(RocksdbLogger);
         }
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {

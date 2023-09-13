@@ -2266,7 +2266,6 @@ mod tests {
 
         fn generate_keys(start: u64, end: u64) -> Vec<Key> {
             (start..end)
-                .into_iter()
                 .map(|i| {
                     let key = format!("k{:02}", i);
                     Key::from_raw(key.as_bytes())

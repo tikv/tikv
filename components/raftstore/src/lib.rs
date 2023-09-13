@@ -11,6 +11,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 #![recursion_limit = "256"]
+#![allow(clippy::needless_pass_by_ref_mut)]
 
 #[cfg(test)]
 extern crate test;

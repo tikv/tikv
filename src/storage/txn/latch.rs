@@ -224,7 +224,7 @@ impl Latches {
         keep_latches_for_next_cmd: Option<(u64, &Lock)>,
     ) -> Vec<u64> {
         // Used to
-        let dummy_vec = vec![];
+        let dummy_vec = [];
         let (keep_latches_for_cid, mut keep_latches_it) = match keep_latches_for_next_cmd {
             Some((cid, lock)) => (Some(cid), lock.required_hashes.iter().peekable()),
             None => (None, dummy_vec.iter().peekable()),

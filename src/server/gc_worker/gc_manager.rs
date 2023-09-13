@@ -809,7 +809,7 @@ mod tests {
 
         // Following code asserts gc_tasks == expected_gc_tasks.
         assert_eq!(gc_tasks.len(), expected_gc_tasks.len());
-        let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks.into_iter()).all(
+        let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks).all(
             |((region, safe_point), (expect_region, expect_safe_point))| {
                 region == expect_region && safe_point == expect_safe_point.into()
             },

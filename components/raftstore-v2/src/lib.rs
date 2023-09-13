@@ -27,7 +27,7 @@
 #![feature(box_into_inner)]
 #![feature(assert_matches)]
 #![feature(option_get_or_insert_default)]
-
+#[allow(clippy::needless_pass_by_ref_mut)]
 mod batch;
 mod bootstrap;
 mod fsm;

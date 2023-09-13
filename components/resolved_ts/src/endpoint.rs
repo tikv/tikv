@@ -902,7 +902,6 @@ where
 
     // Tracking or untracking locks with incoming commands that corresponding
     // observe id is valid.
-    #[allow(clippy::dropping_references)]
     fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);

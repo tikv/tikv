@@ -1091,16 +1091,13 @@ mod tests {
         use tipb::{Expr, ScalarFuncSig};
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
-        #[rpn_fn(capture = [metadata], metadata_mapper = prepare_a::<T>)]
-        fn fn_a_nonnull<T: Evaluable + EvaluableRet>(
-            metadata: &i64,
-            v: &Int,
-        ) -> Result<Option<Int>> {
+        #[rpn_fn(capture = [metadata], metadata_mapper = prepare_a)]
+        fn fn_a_nonnull(metadata: &i64, v: &Int) -> Result<Option<Int>> {
             assert_eq!(*metadata, 42);
             Ok(Some(v + *metadata))
         }
 
-        fn prepare_a<T: Evaluable>(_expr: &mut Expr) -> Result<i64> {
+        fn prepare_a(_expr: &mut Expr) -> Result<i64> {
             Ok(42)
         }
 
@@ -1136,7 +1133,7 @@ mod tests {
             // fn_b: CastIntAsReal
             // fn_c: CastIntAsString
             Ok(match expr.get_sig() {
-                ScalarFuncSig::CastIntAsInt => fn_a_nonnull_fn_meta::<Real>(),
+                ScalarFuncSig::CastIntAsInt => fn_a_nonnull_fn_meta(),
                 ScalarFuncSig::CastIntAsReal => fn_b_fn_meta::<Real>(),
                 ScalarFuncSig::CastIntAsString => fn_c_fn_meta::<Int>(),
                 _ => unreachable!(),

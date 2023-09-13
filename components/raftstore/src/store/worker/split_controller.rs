@@ -985,8 +985,8 @@ mod tests {
 
     #[test]
     fn test_prefix_sum() {
-        let v = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let expect = vec![1, 3, 6, 10, 15, 21, 28, 36, 45];
+        let v = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let expect = [1, 3, 6, 10, 15, 21, 28, 36, 45];
         let pre = prefix_sum(v.iter(), |x| *x);
         for i in 0..v.len() {
             assert_eq!(expect[i], pre[i]);
