@@ -306,6 +306,7 @@ struct WriteResFeed {
 unsafe impl Send for WriteResFeed {}
 
 impl WriteResFeed {
+    #[allow(clippy::arc_with_non_send_sync)]
     fn pair() -> (Self, WriteResSub) {
         let core = Arc::new(WriteResCore {
             ev: AtomicU8::new(0),

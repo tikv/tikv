@@ -1612,6 +1612,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         )
     }
 
+    #[allow(clippy::let_underscore_future)]
     pub fn merge_region(&mut self, source: u64, target: u64, _cb: Callback<RocksSnapshot>) {
         // FIXME: callback is ignored.
         let mut req = self.new_prepare_merge(source, target);

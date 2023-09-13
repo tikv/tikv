@@ -552,7 +552,7 @@ impl<E: Engine> GcRunner<E> {
         let mut keys = keys.into_iter().peekable();
         for region in regions {
             let mut raw_modifies = MvccRaw::new();
-            let mut snapshot = self.get_snapshot(self.store_id, &region)?;
+            let snapshot = self.get_snapshot(self.store_id, &region)?;
 
             let mut keys_in_region = get_keys_in_region(&mut keys, &region).into_iter();
             let mut next_gc_key = keys_in_region.next();
@@ -563,7 +563,7 @@ impl<E: Engine> GcRunner<E> {
                     &range_start_key,
                     &range_end_key,
                     &mut raw_modifies,
-                    &mut snapshot,
+                    &snapshot,
                     &mut gc_info,
                 ) {
                     GC_KEY_FAILURES.inc();
@@ -615,7 +615,7 @@ impl<E: Engine> GcRunner<E> {
         range_start_key: &Key,
         range_end_key: &Key,
         raw_modifies: &mut MvccRaw,
-        kv_snapshot: &mut <E as Engine>::Snap,
+        kv_snapshot: &<E as Engine>::Snap,
         gc_info: &mut GcInfo,
     ) -> Result<()> {
         let start_key = key.clone().append_ts(safe_point.prev());

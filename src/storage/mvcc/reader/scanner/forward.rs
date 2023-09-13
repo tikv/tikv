@@ -633,7 +633,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
 
 fn scan_latest_handle_lock<S: Snapshot, T>(
     current_user_key: Key,
-    cfg: &mut ScannerConfig<S>,
+    cfg: &ScannerConfig<S>,
     cursors: &mut Cursors<S>,
     statistics: &mut Statistics,
 ) -> Result<HandleRes<T>> {
