@@ -1304,7 +1304,7 @@ mod tests {
                     .await
                     .unwrap();
                 let resp_json = String::from_utf8_lossy(&v).to_string();
-                assert!(resp_json.find("\"region-split-size\":\"1GiB\"").is_some());
+                assert!(resp_json.contains("\"region-split-size\":\"1GiB\""));
             });
             block_on(handle2).unwrap();
             status_server.stop();
