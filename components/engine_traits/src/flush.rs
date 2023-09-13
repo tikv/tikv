@@ -18,13 +18,16 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock,
     },
+    time::Duration,
 };
 
 use kvproto::import_sstpb::SstMeta;
-use slog_global::info;
-use tikv_util::set_panic_mark;
+use slog_global::{info, warn};
+use tikv_util::{set_panic_mark, time::Instant};
 
 use crate::{data_cf_offset, RaftEngine, RaftLogBatch, DATA_CFS_LEN};
+
+const HEAVY_WORKER_THRESHOLD: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
 pub struct ApplyProgress {
@@ -203,7 +206,11 @@ impl PersistenceListener {
     /// Called when memtable is frozen.
     ///
     /// `smallest_seqno` should be the smallest seqno of the memtable.
-    pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64) {
+    ///
+    /// Note: After https://github.com/tikv/rocksdb/pull/347, rocksdb global lock will
+    /// be held during this method, so we should avoid do heavy things in it.
+    pub fn on_memtable_sealed(&self, cf: String, smallest_seqno: u64, largest_seqno: u64) {
+        let t = Instant::now_coarse();
         (|| {
             fail_point!("on_memtable_sealed", |t| {
                 assert_eq!(t.unwrap().as_str(), cf);
@@ -219,8 +226,9 @@ impl PersistenceListener {
         let flushed = prs.last_flushed[offset];
         if flushed > smallest_seqno {
             panic!(
-                "sealed seqno has been flushed {} {} {} <= {}",
-                cf, apply_index, smallest_seqno, flushed
+                "sealed seqno conflict with latest flushed index, cf {},
+                sealed smallest_seqno {}, sealed largest_seqno {}, last_flushed {}, apply_index {}",
+                cf, smallest_seqno, largest_seqno, flushed, apply_index,
             );
         }
         prs.prs.push_back(ApplyProgress {
@@ -228,13 +236,18 @@ impl PersistenceListener {
             apply_index,
             smallest_seqno,
         });
+        if t.saturating_elapsed() > HEAVY_WORKER_THRESHOLD {
+            warn!(
+                "heavy work in on_memtable_sealed, the code should be reviewed";
+            );
+        }
     }
 
     /// Called a memtable finished flushing.
     ///
     /// `largest_seqno` should be the largest seqno of the generated file.
     pub fn on_flush_completed(&self, cf: &str, largest_seqno: u64, file_no: u64) {
-        fail_point!("on_flush_completed");
+        fail_point!("on_flush_completed", |_| {});
         // Maybe we should hook the compaction to avoid the file is compacted before
         // being recorded.
         let offset = data_cf_offset(cf);
@@ -244,7 +257,13 @@ impl PersistenceListener {
             if flushed >= largest_seqno {
                 // According to facebook/rocksdb#11183, it's possible OnFlushCompleted can be
                 // called out of order. But it's guaranteed files are installed in order.
-                info!("flush complete reorder found"; "flushed" => flushed, "largest_seqno" => largest_seqno, "file_no" => file_no, "cf" => cf);
+                info!(
+                    "flush complete reorder found";
+                    "flushed" => flushed,
+                    "largest_seqno" => largest_seqno,
+                    "file_no" => file_no,
+                    "cf" => cf
+                );
                 return;
             }
             prs.last_flushed[offset] = largest_seqno;
