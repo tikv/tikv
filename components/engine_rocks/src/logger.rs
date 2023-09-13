@@ -44,7 +44,6 @@ impl Logger for TabletLogger {
     }
 }
 
-#[derive(Default)]
 pub struct RaftDbLogger;
 
 impl Logger for RaftDbLogger {

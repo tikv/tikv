@@ -671,7 +671,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
             expected
         );
 
-        for time in vec![0, i64::MAX].into_iter() {
+        for time in [0, i64::MAX].into_iter() {
             let log_iter = LogIterator::new(
                 &log_file,
                 timestamp("2019/08/23 18:09:53.387 +08:00"),
@@ -797,7 +797,6 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
                 .await
                 .into_iter()
                 .map(|mut resp| resp.take_messages().into_iter())
-                .into_iter()
                 .flatten()
                 .map(|msg| msg.get_time())
                 .collect::<Vec<i64>>()

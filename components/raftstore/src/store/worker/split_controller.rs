@@ -178,7 +178,7 @@ impl Samples {
     // evaluate the samples according to the given key range, it will update the
     // sample's left, right and contained counter.
     fn evaluate(&mut self, key_range: &KeyRange) {
-        for mut sample in self.0.iter_mut() {
+        for sample in self.0.iter_mut() {
             let order_start = if key_range.start_key.is_empty() {
                 Ordering::Greater
             } else {
@@ -496,10 +496,7 @@ pub struct WriteStats {
 
 impl WriteStats {
     pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
-        let query_stats = self
-            .region_infos
-            .entry(region_id)
-            .or_insert_with(QueryStats::default);
+        let query_stats = self.region_infos.entry(region_id).or_default();
         query_stats.add_query_num(kind, 1);
     }
 

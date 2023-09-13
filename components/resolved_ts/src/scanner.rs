@@ -78,7 +78,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         Self {
             workers,
             cdc_handle,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         }
     }
 

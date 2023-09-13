@@ -100,7 +100,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             failed_voters,
             target_index,
             demote_after_exit,
-        }) = self.unsafe_recovery_state() else { return };
+        }) = self.unsafe_recovery_state()
+        else {
+            return;
+        };
 
         if self.raft_group().raft.raft_log.applied < *target_index {
             return;

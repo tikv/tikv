@@ -223,7 +223,7 @@ impl From<Error> for errorpb::Error {
                     .mut_proposal_in_merging_mode()
                     .set_region_id(region_id);
             }
-            Error::Transport(reason) if reason == DiscardReason::Full => {
+            Error::Transport(DiscardReason::Full) => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);

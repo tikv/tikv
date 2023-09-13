@@ -158,7 +158,7 @@ where
 
 /// Like `errors.Annotate` in Go.
 /// Wrap an unknown error with [`Error::Other`].
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! annotate {
     ($inner: expr, $message: expr) => {
         {
