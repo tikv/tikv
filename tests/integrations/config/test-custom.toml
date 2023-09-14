@@ -644,6 +644,11 @@ sink-memory-quota = "7MB"
 enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
+<<<<<<< HEAD
+=======
+memory-quota = "1MB"
+incremental-scan-concurrency = 7
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 
 [split]
 detect-times = 10
