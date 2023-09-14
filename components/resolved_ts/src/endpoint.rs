@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -9,6 +10,20 @@ use std::time::Duration;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, Snapshot};
+=======
+use std::{
+    cmp::min,
+    collections::HashMap,
+    fmt,
+    marker::PhantomData,
+    sync::{Arc, Mutex, MutexGuard},
+    time::Duration,
+};
+
+use concurrency_manager::ConcurrencyManager;
+use engine_traits::KvEngine;
+use futures::channel::oneshot::{channel, Receiver, Sender};
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 use grpcio::Environment;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::AdminCmdType;
@@ -22,6 +37,7 @@ use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegistr
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
+<<<<<<< HEAD
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 
@@ -31,12 +47,39 @@ use crate::metrics::*;
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 use crate::sinker::{CmdSinker, SinkCmd};
+=======
+use tikv_util::{
+    memory::{HeapSize, MemoryQuota},
+    warn,
+    worker::{Runnable, RunnableWithTimer, Scheduler},
+};
+use tokio::sync::{Notify, Semaphore};
+use txn_types::{Key, TimeStamp};
+
+use crate::{
+    advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
+    cmd::{ChangeLog, ChangeRow},
+    metrics::*,
+    resolver::{LastAttempt, Resolver},
+    scanner::{ScanEntries, ScanTask, ScannerPool},
+    Error, Result, TsSource, ON_DROP_WARN_HEAP_SIZE,
+};
+
+/// grace period for identifying identifying slow resolved-ts and safe-ts.
+const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
+const MEMORY_QUOTA_EXCEEDED_BACKOFF: Duration = Duration::from_secs(30);
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 
 enum ResolverStatus {
     Pending {
         tracked_index: u64,
         locks: Vec<PendingLock>,
+<<<<<<< HEAD
         cancelled: Arc<AtomicBool>,
+=======
+        cancelled: Option<Sender<()>>,
+        memory_quota: Arc<MemoryQuota>,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
     },
     Ready,
 }
@@ -67,7 +110,16 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
+<<<<<<< HEAD
     fn new(meta: Region, rrp: Arc<RegionReadProgress>) -> Self {
+=======
+    fn new(
+        meta: Region,
+        rrp: Arc<RegionReadProgress>,
+        memory_quota: Arc<MemoryQuota>,
+        cancelled: Sender<()>,
+    ) -> Self {
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         ObserveRegion {
             resolver: Resolver::with_read_progress(meta.id, Some(rrp)),
             meta,
@@ -75,7 +127,12 @@ impl ObserveRegion {
             resolver_status: ResolverStatus::Pending {
                 tracked_index: 0,
                 locks: vec![],
+<<<<<<< HEAD
                 cancelled: Arc::new(AtomicBool::new(false)),
+=======
+                cancelled: Some(cancelled),
+                memory_quota,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
             },
         }
     }
@@ -190,6 +247,7 @@ impl ObserveRegion {
         Ok(())
     }
 
+<<<<<<< HEAD
     fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) {
         for es in entries {
             match es {
@@ -237,8 +295,48 @@ impl ObserveRegion {
                         "snapshot_index" => apply_index,
                         "pending_data_index" => pending_tracked_index,
                     );
+=======
+    /// Track locks in incoming scan entries.
+    fn track_scan_locks(&mut self, entries: ScanEntries, apply_index: u64) -> Result<()> {
+        match entries {
+            ScanEntries::Lock(locks) => {
+                if let ResolverStatus::Ready = self.resolver_status {
+                    panic!("region {:?} resolver has ready", self.meta.id)
                 }
-                ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
+                for (key, lock) in locks {
+                    self.resolver
+                        .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index))?;
+                }
+            }
+            ScanEntries::None => {
+                // Update the `tracked_index` to the snapshot's `apply_index`
+                self.resolver.update_tracked_index(apply_index);
+                let mut resolver_status =
+                    std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
+                let (pending_tracked_index, pending_locks) =
+                    resolver_status.drain_pending_locks(self.meta.id);
+                for lock in pending_locks {
+                    match lock {
+                        PendingLock::Track { key, start_ts } => {
+                            self.resolver.track_lock(
+                                start_ts,
+                                key.to_raw().unwrap(),
+                                Some(pending_tracked_index),
+                            )?;
+                        }
+                        PendingLock::Untrack { key, .. } => self
+                            .resolver
+                            .untrack_lock(&key.to_raw().unwrap(), Some(pending_tracked_index)),
+                    }
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
+                }
+                info!(
+                    "Resolver initialized";
+                    "region" => self.meta.id,
+                    "observe_id" => ?self.handle.id,
+                    "snapshot_index" => apply_index,
+                    "pending_data_index" => pending_tracked_index,
+                );
             }
         }
     }
@@ -251,9 +349,15 @@ pub struct Endpoint<T, E: KvEngine, C> {
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
+<<<<<<< HEAD
     scheduler: Scheduler<Task<E::Snapshot>>,
     sinker: C,
     advance_worker: AdvanceTsWorker<E>,
+=======
+    scan_concurrency_semaphore: Arc<Semaphore>,
+    scheduler: Scheduler<Task>,
+    advance_worker: AdvanceTsWorker,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
     _phantom: PhantomData<(T, E)>,
 }
 
@@ -261,7 +365,267 @@ impl<T, E, C> Endpoint<T, E, C>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
+<<<<<<< HEAD
     C: CmdSinker<E::Snapshot>,
+=======
+    S: StoreRegionMeta,
+{
+    fn is_leader(&self, store_id: Option<u64>, leader_store_id: Option<u64>) -> bool {
+        store_id.is_some() && store_id == leader_store_id
+    }
+
+    fn collect_stats(&mut self) -> Stats {
+        let store_id = self.get_or_init_store_id();
+        let mut stats = Stats::default();
+        self.region_read_progress.with(|registry| {
+            for (region_id, read_progress) in registry {
+                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
+                let core = read_progress.get_core();
+                let resolved_ts = leader_info.get_read_state().get_safe_ts();
+                let safe_ts = core.read_state().ts;
+
+                if resolved_ts == 0 {
+                    stats.zero_ts_count += 1;
+                    continue;
+                }
+
+                if self.is_leader(store_id, leader_store_id) {
+                    // leader resolved-ts
+                    if resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
+                        let resolver = self.regions.get(region_id).map(|x| &x.resolver);
+                        stats
+                            .min_leader_resolved_ts
+                            .set(*region_id, resolver, &core, &leader_info);
+                    }
+                } else {
+                    // follower safe-ts
+                    if safe_ts > 0 && safe_ts < stats.min_follower_safe_ts.safe_ts {
+                        stats.min_follower_safe_ts.set(*region_id, &core);
+                    }
+
+                    // follower resolved-ts
+                    if resolved_ts < stats.min_follower_resolved_ts.resolved_ts {
+                        stats.min_follower_resolved_ts.set(*region_id, &core);
+                    }
+                }
+            }
+        });
+
+        stats.resolver = self.collect_resolver_stats();
+        stats.cm_min_lock = self.advance_worker.concurrency_manager.global_min_lock();
+        stats
+    }
+
+    fn collect_resolver_stats(&mut self) -> ResolverStats {
+        let mut stats = ResolverStats::default();
+        for observed_region in self.regions.values() {
+            match &observed_region.resolver_status {
+                ResolverStatus::Pending { locks, .. } => {
+                    for l in locks {
+                        stats.heap_size += l.heap_size() as i64;
+                    }
+                    stats.unresolved_count += 1;
+                }
+                ResolverStatus::Ready { .. } => {
+                    stats.heap_size += observed_region.resolver.approximate_heap_bytes() as i64;
+                    stats.resolved_count += 1;
+                }
+            }
+        }
+        stats
+    }
+
+    fn update_metrics(&self, stats: &Stats) {
+        let now = self.approximate_now_tso();
+        // general
+        if stats.min_follower_resolved_ts.resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
+            RTS_MIN_RESOLVED_TS.set(stats.min_follower_resolved_ts.resolved_ts as i64);
+            RTS_MIN_RESOLVED_TS_GAP.set(now.saturating_sub(
+                TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+            RTS_MIN_RESOLVED_TS_REGION.set(stats.min_follower_resolved_ts.region_id as i64);
+        } else {
+            RTS_MIN_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
+            RTS_MIN_RESOLVED_TS_GAP.set(now.saturating_sub(
+                TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+            RTS_MIN_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
+        }
+        RTS_ZERO_RESOLVED_TS.set(stats.zero_ts_count);
+
+        RTS_LOCK_HEAP_BYTES_GAUGE.set(stats.resolver.heap_size);
+        RTS_LOCK_QUOTA_IN_USE_BYTES_GAUGE.set(self.memory_quota.in_use() as i64);
+        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["resolved"])
+            .set(stats.resolver.resolved_count);
+        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["unresolved"])
+            .set(stats.resolver.unresolved_count);
+
+        CONCURRENCY_MANAGER_MIN_LOCK_TS.set(
+            stats
+                .cm_min_lock
+                .clone()
+                .map(|(ts, _)| ts.into_inner())
+                .unwrap_or_default() as i64,
+        );
+
+        // min follower safe ts
+        RTS_MIN_FOLLOWER_SAFE_TS_REGION.set(stats.min_follower_safe_ts.region_id as i64);
+        RTS_MIN_FOLLOWER_SAFE_TS.set(stats.min_follower_safe_ts.safe_ts as i64);
+        RTS_MIN_FOLLOWER_SAFE_TS_GAP.set(
+            now.saturating_sub(TimeStamp::from(stats.min_follower_safe_ts.safe_ts).physical())
+                as i64,
+        );
+        RTS_MIN_FOLLOWER_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER.set(
+            stats
+                .min_follower_safe_ts
+                .duration_to_last_consume_leader
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+
+        // min leader resolved ts
+        RTS_MIN_LEADER_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
+        RTS_MIN_LEADER_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
+        RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS.set(
+            stats
+                .min_leader_resolved_ts
+                .min_lock
+                .as_ref()
+                .map(|(ts, _)| (*ts).into_inner() as i64)
+                .unwrap_or(-1),
+        );
+        RTS_MIN_LEADER_RESOLVED_TS_GAP
+            .set(now.saturating_sub(
+                TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+        RTS_MIN_LEADER_DUATION_TO_LAST_UPDATE_SAFE_TS.set(
+            stats
+                .min_leader_resolved_ts
+                .duration_to_last_update_ms
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+
+        // min follower resolved ts
+        RTS_MIN_FOLLOWER_RESOLVED_TS.set(stats.min_follower_resolved_ts.resolved_ts as i64);
+        RTS_MIN_FOLLOWER_RESOLVED_TS_REGION.set(stats.min_follower_resolved_ts.region_id as i64);
+        RTS_MIN_FOLLOWER_RESOLVED_TS_GAP.set(
+            now.saturating_sub(
+                TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
+            ) as i64,
+        );
+        RTS_MIN_FOLLOWER_RESOLVED_TS_DURATION_TO_LAST_CONSUME_LEADER.set(
+            stats
+                .min_follower_resolved_ts
+                .duration_to_last_consume_leader
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+    }
+
+    // Approximate a TSO from PD. It is better than local timestamp when clock skew
+    // exists.
+    // Returns the physical part.
+    fn approximate_now_tso(&self) -> u64 {
+        self.advance_worker
+            .last_pd_tso
+            .try_lock()
+            .map(|opt| {
+                opt.map(|(pd_ts, instant)| {
+                    pd_ts.physical() + instant.saturating_elapsed().as_millis() as u64
+                })
+                .unwrap_or_else(|| TimeStamp::physical_now())
+            })
+            .unwrap_or_else(|_| TimeStamp::physical_now())
+    }
+
+    fn log_slow_regions(&self, stats: &Stats) {
+        let expected_interval = min(
+            self.cfg.advance_ts_interval.as_millis(),
+            DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64,
+        ) + self.cfg.advance_ts_interval.as_millis();
+        let leader_threshold = expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
+        let follower_threshold = 2 * expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
+        let now = self.approximate_now_tso();
+
+        // min leader resolved ts
+        let min_leader_resolved_ts_gap = now
+            .saturating_sub(TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical());
+        if min_leader_resolved_ts_gap > leader_threshold {
+            info!(
+                "the max gap of leader resolved-ts is large";
+                "region_id" => stats.min_leader_resolved_ts.region_id,
+                "gap" => format!("{}ms", min_leader_resolved_ts_gap),
+                "read_state" => ?stats.min_leader_resolved_ts.read_state,
+                "applied_index" => stats.min_leader_resolved_ts.applied_index,
+                "min_lock" => ?stats.min_leader_resolved_ts.min_lock,
+                "lock_num" => stats.min_leader_resolved_ts.lock_num,
+                "txn_num" => stats.min_leader_resolved_ts.txn_num,
+                "min_memory_lock" => ?stats.cm_min_lock,
+                "duration_to_last_update_safe_ts" => match stats.min_leader_resolved_ts.duration_to_last_update_ms {
+                    Some(d) => format!("{}ms", d),
+                    None => "none".to_owned(),
+                },
+                "last_resolve_attempt" => &stats.min_leader_resolved_ts.last_resolve_attempt,
+            );
+        }
+
+        // min follower safe ts
+        let min_follower_safe_ts_gap =
+            now.saturating_sub(TimeStamp::from(stats.min_follower_safe_ts.safe_ts).physical());
+        if min_follower_safe_ts_gap > follower_threshold {
+            info!(
+                "the max gap of follower safe-ts is large";
+                "region_id" => stats.min_follower_safe_ts.region_id,
+                "gap" => format!("{}ms", min_follower_safe_ts_gap),
+                "safe_ts" => stats.min_follower_safe_ts.safe_ts,
+                "resolved_ts" => stats.min_follower_safe_ts.resolved_ts,
+                "duration_to_last_consume_leader" => match stats.min_follower_safe_ts.duration_to_last_consume_leader {
+                    Some(d) => format!("{}ms", d),
+                    None => "none".to_owned(),
+                },
+                "applied_index" => stats.min_follower_safe_ts.applied_index,
+                "latest_candidate" => ?stats.min_follower_safe_ts.latest_candidate,
+                "oldest_candidate" => ?stats.min_follower_safe_ts.oldest_candidate,
+            );
+        }
+
+        // min follower resolved ts
+        let min_follower_resolved_ts_gap = now
+            .saturating_sub(TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical());
+        if min_follower_resolved_ts_gap > follower_threshold {
+            if stats.min_follower_resolved_ts.region_id == stats.min_follower_safe_ts.region_id {
+                info!(
+                    "the max gap of follower resolved-ts is large; it's the same region that has the min safe-ts"
+                );
+            } else {
+                info!(
+                    "the max gap of follower resolved-ts is large";
+                    "region_id" => stats.min_follower_resolved_ts.region_id,
+                    "gap" => format!("{}ms", min_follower_resolved_ts_gap),
+                    "safe_ts" => stats.min_follower_resolved_ts.safe_ts,
+                    "resolved_ts" => stats.min_follower_resolved_ts.resolved_ts,
+                    "duration_to_last_consume_leader" => match stats.min_follower_resolved_ts.duration_to_last_consume_leader {
+                        Some(d) => format!("{}ms", d),
+                        None => "none".to_owned(),
+                    },
+                    "applied_index" => stats.min_follower_resolved_ts.applied_index,
+                    "latest_candidate" => ?stats.min_follower_resolved_ts.latest_candidate,
+                    "oldest_candidate" => ?stats.min_follower_resolved_ts.oldest_candidate,
+                );
+            }
+        }
+    }
+}
+
+impl<T, E, S> Endpoint<T, E, S>
+where
+    T: 'static + CdcHandle<E>,
+    E: KvEngine,
+    S: StoreRegionMeta,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 {
     pub fn new(
         cfg: &ResolvedTsConfig,
@@ -284,7 +648,11 @@ where
             env,
             security_mgr,
         );
+<<<<<<< HEAD
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
+=======
+        let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         let ep = Self {
             cfg: cfg.clone(),
             cfg_version: 0,
@@ -293,7 +661,11 @@ where
             region_read_progress,
             advance_worker,
             scanner_pool,
+<<<<<<< HEAD
             sinker,
+=======
+            scan_concurrency_semaphore,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
             regions: HashMap::default(),
             _phantom: PhantomData::default(),
         };
@@ -304,6 +676,7 @@ where
     fn register_region(&mut self, region: Region) {
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
+<<<<<<< HEAD
         let observe_region = {
             if let Some(read_progress) = self.region_read_progress.get(&region_id) {
                 info!(
@@ -318,8 +691,22 @@ where
                 );
                 return;
             }
+=======
+        let Some(read_progress) = self.region_read_progress.get(&region_id) else {
+            warn!("try register nonexistent region"; "region" => ?region);
+            return;
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         };
+        info!("register observe region"; "region" => ?region);
+        let (cancelled_tx, cancelled_rx) = channel();
+        let observe_region = ObserveRegion::new(
+            region.clone(),
+            read_progress,
+            self.memory_quota.clone(),
+            cancelled_tx,
+        );
         let observe_handle = observe_region.handle.clone();
+<<<<<<< HEAD
         let cancelled = match observe_region.resolver_status {
             ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
             ResolverStatus::Ready => panic!("resolved ts illeagal created observe region"),
@@ -328,6 +715,17 @@ where
 
         let scan_task = self.build_scan_task(region, observe_handle, cancelled);
         self.scanner_pool.spawn_task(scan_task);
+=======
+        observe_region
+            .read_progress()
+            .update_advance_resolved_ts_notify(self.advance_notify.clone());
+        self.regions.insert(region_id, observe_region);
+
+        let scan_task = self.build_scan_task(region, observe_handle, cancelled_rx, backoff);
+        let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        self.scanner_pool
+            .spawn_task(scan_task, concurrency_semaphore);
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         RTS_SCAN_TASKS.with_label_values(&["total"]).inc();
     }
 
@@ -335,18 +733,19 @@ where
         &self,
         region: Region,
         observe_handle: ObserveHandle,
+<<<<<<< HEAD
         cancelled: Arc<AtomicBool>,
+=======
+        cancelled: Receiver<()>,
+        backoff: Option<Duration>,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
     ) -> ScanTask {
         let scheduler = self.scheduler.clone();
-        let scheduler_error = self.scheduler.clone();
-        let region_id = region.id;
-        let observe_id = observe_handle.id;
         ScanTask {
             handle: observe_handle,
-            tag: String::new(),
-            mode: ScanMode::LockOnly,
             region,
             checkpoint_ts: TimeStamp::zero(),
+<<<<<<< HEAD
             is_cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
             send_entries: Box::new(move |entries, apply_index| {
                 scheduler
@@ -369,6 +768,11 @@ where
                     .unwrap();
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
+=======
+            backoff,
+            cancelled,
+            scheduler,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         }
     }
 
@@ -376,7 +780,7 @@ where
         if let Some(observe_region) = self.regions.remove(&region_id) {
             let ObserveRegion {
                 handle,
-                resolver_status,
+                mut resolver_status,
                 ..
             } = observe_region;
 
@@ -389,8 +793,16 @@ where
             // Stop observing data
             handle.stop_observing();
             // Stop scanning data
+<<<<<<< HEAD
             if let ResolverStatus::Pending { cancelled, .. } = resolver_status {
                 cancelled.store(true, Ordering::Release);
+=======
+            if let ResolverStatus::Pending {
+                ref mut cancelled, ..
+            } = resolver_status
+            {
+                let _ = cancelled.take();
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
             }
         } else {
             debug!("deregister unregister region"; "region_id" => region_id);
@@ -536,8 +948,13 @@ where
     fn handle_scan_locks(
         &mut self,
         region_id: u64,
+<<<<<<< HEAD
         observe_id: ObserveID,
         entries: Vec<ScanEntry>,
+=======
+        observe_id: ObserveId,
+        entries: ScanEntries,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         apply_index: u64,
     ) {
         match self.regions.get_mut(&region_id) {
@@ -565,6 +982,7 @@ where
 
     fn handle_change_config(&mut self, change: ConfigChange) {
         let prev = format!("{:?}", self.cfg);
+<<<<<<< HEAD
         let prev_advance_ts_interval = self.cfg.advance_ts_interval;
         self.cfg.update(change);
         if self.cfg.advance_ts_interval != prev_advance_ts_interval {
@@ -572,6 +990,52 @@ where
             self.cfg_version += 1;
             // Advance `resolved-ts` immediately after `advance_ts_interval` changed
             self.register_advance_event(self.cfg_version);
+=======
+        if let Err(e) = self.cfg.update(change) {
+            warn!("resolved-ts config fails"; "error" => ?e);
+        } else {
+            self.advance_notify.notify_waiters();
+            self.memory_quota
+                .set_capacity(self.cfg.memory_quota.0 as usize);
+            self.scan_concurrency_semaphore =
+                Arc::new(Semaphore::new(self.cfg.incremental_scan_concurrency));
+            info!(
+                "resolved-ts config changed";
+                "prev" => prev,
+                "current" => ?self.cfg,
+            );
+        }
+    }
+
+    fn get_or_init_store_id(&mut self) -> Option<u64> {
+        self.store_id.or_else(|| {
+            let meta = self.store_meta.lock().unwrap();
+            self.store_id = Some(meta.store_id());
+            self.store_id
+        })
+    }
+
+    fn handle_get_diagnosis_info(
+        &self,
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
+    ) {
+        if let Some(r) = self.regions.get(&region_id) {
+            if log_locks {
+                r.resolver.log_locks(min_start_ts);
+            }
+            callback(Some((
+                r.resolver.stopped(),
+                r.resolver.resolved_ts().into_inner(),
+                r.resolver.tracked_index(),
+                r.resolver.num_locks(),
+                r.resolver.num_transactions(),
+            )));
+        } else {
+            callback(None);
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         }
         info!(
             "resolved-ts config changed";
@@ -608,8 +1072,13 @@ pub enum Task<S: Snapshot> {
     },
     ScanLocks {
         region_id: u64,
+<<<<<<< HEAD
         observe_id: ObserveID,
         entries: Vec<ScanEntry>,
+=======
+        observe_id: ObserveId,
+        entries: ScanEntries,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         apply_index: u64,
     },
     ChangeConfig {

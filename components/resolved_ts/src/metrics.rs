@@ -64,6 +64,11 @@ lazy_static! {
         "Total bytes in memory of resolved-ts observe regions's lock heap"
     )
     .unwrap();
+    pub static ref RTS_LOCK_QUOTA_IN_USE_BYTES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_memory_quota_in_use_bytes",
+        "Total bytes in memory of resolved-ts observed regions's lock heap"
+    )
+    .unwrap();
     pub static ref RTS_REGION_RESOLVE_STATUS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resolved_ts_region_resolve_status",
         "The status of resolved-ts observe regions",
