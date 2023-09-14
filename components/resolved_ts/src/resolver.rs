@@ -17,7 +17,7 @@ pub const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
 #[derive(Clone)]
 pub enum TsSource {
     // A lock in LOCK CF
-    Lock(usize),
+    Lock(TxnLocks),
     // A memory lock in concurrency manager
     MemoryLock(Key),
     PdTso,
@@ -40,10 +40,35 @@ impl TsSource {
 
     pub fn key(&self) -> Option<Key> {
         match self {
-            TsSource::Lock(_) => None,
+            TsSource::Lock(locks) => locks
+                .sample_lock
+                .as_ref()
+                .map(|k| Key::from_encoded_slice(k)),
             TsSource::MemoryLock(k) => Some(k.clone()),
             _ => None,
         }
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq)]
+pub struct TxnLocks {
+    pub lock_count: usize,
+    // A sample key in a transaction.
+    pub sample_lock: Option<Arc<[u8]>>,
+}
+
+impl std::fmt::Debug for TxnLocks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TxnLocks")
+            .field("lock_count", &self.lock_count)
+            .field(
+                "sample_lock",
+                &self
+                    .sample_lock
+                    .as_ref()
+                    .map(|k| log_wrappers::Value::key(k)),
+            )
+            .finish()
     }
 }
 
@@ -54,7 +79,7 @@ pub struct Resolver {
     // key -> start_ts
     locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
-    lock_ts_heap: BTreeMap<TimeStamp, usize>,
+    lock_ts_heap: BTreeMap<TimeStamp, TxnLocks>,
     // The last shrink time.
     last_aggressive_shrink_time: Instant,
     // The timestamps that guarantees no more commit will happen before.
@@ -106,8 +131,15 @@ impl std::fmt::Debug for Resolver {
         let mut dt = f.debug_tuple("Resolver");
         dt.field(&format_args!("region={}", self.region_id));
 
-        if let Some((ts, count)) = far_lock {
-            dt.field(&format_args!("oldest_lock_count={:?}", count));
+        if let Some((ts, txn_locks)) = far_lock {
+            dt.field(&format_args!(
+                "oldest_lock_count={:?}",
+                txn_locks.lock_count
+            ));
+            dt.field(&format_args!(
+                "oldest_lock_sample={:?}",
+                txn_locks.sample_lock
+            ));
             dt.field(&format_args!("oldest_lock_ts={:?}", ts));
         }
 
@@ -173,7 +205,7 @@ impl Resolver {
         self.stopped
     }
 
-    pub fn locks(&self) -> &BTreeMap<TimeStamp, usize> {
+    pub fn locks(&self) -> &BTreeMap<TimeStamp, TxnLocks> {
         &self.lock_ts_heap
     }
 
@@ -262,8 +294,10 @@ impl Resolver {
         );
         self.memory_quota.alloc(bytes)?;
         let key: Arc<[u8]> = key.into_boxed_slice().into();
-        if self.locks_by_key.insert(key, start_ts).is_none() {
-            *self.lock_ts_heap.entry(start_ts).or_default() += 1;
+        if self.locks_by_key.insert(key.clone(), start_ts).is_none() {
+            let mut txn_locks = self.lock_ts_heap.entry(start_ts).or_default();
+            txn_locks.sample_lock = Some(key);
+            txn_locks.lock_count = 1;
         }
         Ok(())
     }
@@ -291,18 +325,19 @@ impl Resolver {
             "memory_in_use" => self.memory_quota.in_use(),
         );
 
-        let lock_count = match self.lock_ts_heap.get_mut(&start_ts) {
-            Some(0) | None => {
-                panic!(
-                    "lock ts {} must exist in lock_ts_heap, key: {:?}",
-                    start_ts,
-                    log_wrappers::Value::key(key),
-                )
-            }
-            Some(c) => c,
+        let txn_locks = if let Some(txn_locks) = self.lock_ts_heap.get_mut(&start_ts)
+            && txn_locks.lock_count != 0
+        {
+            txn_locks
+        } else {
+            panic!(
+                "lock ts {} must exist in lock_ts_heap, key: {:?}",
+                start_ts,
+                log_wrappers::Value::key(key),
+            )
         };
-        *lock_count -= 1;
-        if *lock_count == 0 {
+        txn_locks.lock_count -= 1;
+        if txn_locks.lock_count == 0 {
             self.lock_ts_heap.remove(&start_ts);
         }
         // Use a large ratio to amortize the cost of rehash.
@@ -335,15 +370,17 @@ impl Resolver {
         }
 
         // Find the min start ts.
-        let min_lock = self.oldest_transaction().map(|(ts, count)| (*ts, *count));
+        let min_lock = self.oldest_transaction();
         let has_lock = min_lock.is_some();
-        let min_start_ts = min_lock.map(|(ts, _)| ts).unwrap_or(min_ts);
+        let min_start_ts = min_lock.as_ref().map(|(ts, _)| **ts).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
         // reason is the min source of the new resolved ts.
         let reason = match (min_lock, min_ts) {
-            (Some(lock), min_ts) if lock.0 < min_ts => TsSource::Lock(lock.1),
+            (Some((lock_ts, txn_locks)), min_ts) if *lock_ts < min_ts => {
+                TsSource::Lock(txn_locks.clone())
+            }
             (Some(_), _) => source,
             (None, _) => source,
         };
@@ -389,7 +426,7 @@ impl Resolver {
 
     pub(crate) fn log_locks(&self, min_start_ts: u64) {
         // log lock with the minimum start_ts >= min_start_ts
-        if let Some((start_ts, lock_key_count)) = self
+        if let Some((start_ts, txn_locks)) = self
             .lock_ts_heap
             .range(TimeStamp::new(min_start_ts)..)
             .next()
@@ -398,7 +435,7 @@ impl Resolver {
                 "locks with the minimum start_ts in resolver";
                 "region_id" => self.region_id,
                 "start_ts" => start_ts,
-                "lock_key_count" => lock_key_count,
+                "txn_locks" => ?txn_locks,
             );
         }
     }
@@ -415,7 +452,7 @@ impl Resolver {
         self.read_progress.as_ref()
     }
 
-    pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &usize)> {
+    pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &TxnLocks)> {
         self.lock_ts_heap.iter().next()
     }
 

@@ -44,7 +44,7 @@ use crate::{
     metrics::*,
     resolver::{LastAttempt, Resolver},
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
-    Error, Result, TsSource, ON_DROP_WARN_HEAP_SIZE,
+    Error, Result, TsSource, TxnLocks, ON_DROP_WARN_HEAP_SIZE,
 };
 
 /// grace period for identifying identifying slow resolved-ts and safe-ts.
@@ -1216,7 +1216,7 @@ struct LeaderStats {
     last_resolve_attempt: Option<LastAttempt>,
     applied_index: u64,
     // min lock in LOCK CF
-    min_lock: Option<(TimeStamp, usize)>,
+    min_lock: Option<(TimeStamp, TxnLocks)>,
     lock_num: Option<u64>,
     txn_num: Option<u64>,
 }
@@ -1253,10 +1253,9 @@ impl LeaderStats {
                 .last_instant_of_update_ts()
                 .map(|i| i.saturating_elapsed().as_millis() as u64),
             last_resolve_attempt: resolver.as_mut().and_then(|r| r.take_last_attempt()),
-            min_lock: resolver.as_ref().and_then(|r| {
-                r.oldest_transaction()
-                    .map(|(ts, lock_count)| (*ts, *lock_count))
-            }),
+            min_lock: resolver
+                .as_ref()
+                .and_then(|r| r.oldest_transaction().map(|(t, tk)| (*t, tk.clone()))),
             applied_index: region_read_progress.applied_index(),
             lock_num: resolver.as_ref().map(|r| r.num_locks()),
             txn_num: resolver.as_ref().map(|r| r.num_transactions()),

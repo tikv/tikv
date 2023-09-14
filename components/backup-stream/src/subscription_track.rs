@@ -8,7 +8,7 @@ use dashmap::{
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
-use resolved_ts::{Resolver, TsSource};
+use resolved_ts::{Resolver, TsSource, TxnLocks};
 use tikv_util::{info, memory::MemoryQuota, warn};
 use txn_types::TimeStamp;
 
@@ -99,7 +99,7 @@ impl ActiveSubscription {
 pub enum CheckpointType {
     MinTs,
     StartTsOfInitialScan,
-    StartTsOfTxn(Option<(TimeStamp, usize)>),
+    StartTsOfTxn(Option<(TimeStamp, TxnLocks)>),
 }
 
 impl std::fmt::Debug for CheckpointType {
@@ -463,11 +463,11 @@ impl std::fmt::Debug for FutureLock {
 
 impl TwoPhaseResolver {
     /// try to get one of the key of the oldest lock in the resolver.
-    pub fn sample_far_lock(&self) -> Option<(TimeStamp, usize)> {
+    pub fn sample_far_lock(&self) -> Option<(TimeStamp, TxnLocks)> {
         self.resolver
             .locks()
             .first_key_value()
-            .map(|(ts, lock_count)| (*ts, *lock_count))
+            .map(|(ts, txn_locks)| (*ts, txn_locks.clone()))
     }
 
     pub fn in_phase_one(&self) -> bool {
@@ -567,8 +567,11 @@ impl std::fmt::Debug for TwoPhaseResolver {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use kvproto::metapb::{Region, RegionEpoch};
     use raftstore::coprocessor::ObserveHandle;
+    use resolved_ts::TxnLocks;
     use txn_types::TimeStamp;
 
     use super::{SubscriptionTracer, TwoPhaseResolver};
@@ -671,7 +674,13 @@ mod test {
                 (
                     region(4, 8, 1),
                     128.into(),
-                    StartTsOfTxn(Some((TimeStamp::new(128), 1)))
+                    StartTsOfTxn(Some((
+                        TimeStamp::new(128),
+                        TxnLocks {
+                            lock_count: 1,
+                            sample_lock: Some(Arc::from(b"Alpi".as_slice())),
+                        }
+                    )))
                 ),
             ]
         );
