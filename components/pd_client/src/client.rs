@@ -22,7 +22,7 @@ use futures::{
 use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
     meta_storagepb::{
-        self as mpb, GetRequest, GetResponse, PutRequest, WatchRequest, WatchResponse,
+        self as mpb, DeleteRequest, GetRequest, PutRequest, WatchRequest, WatchResponse,
     },
     metapb,
     pdpb::{self, Member},
@@ -38,7 +38,7 @@ use txn_types::TimeStamp;
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use super::{
-    meta_storage::{Get, MetaStorageClient, Put, Watch},
+    meta_storage::{Delete, Get, MetaStorageClient, Put, Watch},
     metrics::*,
     util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
     BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
@@ -1232,7 +1232,7 @@ impl RpcClient {
 }
 
 impl MetaStorageClient for RpcClient {
-    fn get(&self, mut req: Get) -> PdFuture<GetResponse> {
+    fn get(&self, mut req: Get) -> PdFuture<kvproto::meta_storagepb::GetResponse> {
         let timer = Instant::now();
         self.fill_cluster_id_for(req.inner.mut_header());
         let executor = move |client: &Client, req: GetRequest| {
@@ -1278,6 +1278,34 @@ impl MetaStorageClient for RpcClient {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .meta_storage_put
+                    .observe(timer.saturating_elapsed_secs());
+                Ok(resp)
+            }) as _
+        };
+
+        self.pd_client
+            .request(req.into(), executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn delete(&self, mut req: Delete) -> PdFuture<kvproto::meta_storagepb::DeleteResponse> {
+        let timer = Instant::now();
+        self.fill_cluster_id_for(req.inner.mut_header());
+        let executor = move |client: &Client, req: DeleteRequest| {
+            let handler = {
+                let inner = client.inner.rl();
+                let r = inner
+                    .meta_storage
+                    .delete_async_opt(&req, call_option_inner(&inner));
+                futures::future::ready(r).err_into().try_flatten()
+            };
+            Box::pin(async move {
+                // Migrated to 2021 migration. This let statement is probably not needed, see
+                //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+                let _ = &req;
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .meta_storage_delete
                     .observe(timer.saturating_elapsed_secs());
                 Ok(resp)
             }) as _

@@ -37,6 +37,7 @@ make_static_metric! {
 
         meta_storage_put,
         meta_storage_get,
+        meta_storage_delete,
         meta_storage_watch,
     }
 
