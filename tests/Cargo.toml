@@ -68,6 +68,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
+tikv-ctl = { path = "../cmd/tikv-ctl" }
 api_version = { workspace = true }
 async-trait = "0.1"
 batch-system = { workspace = true }

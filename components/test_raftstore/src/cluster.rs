@@ -23,7 +23,7 @@ use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, Str
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context, DiskFullOpt},
-    metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel},
+    metapb::{self, Buckets, PeerRole, Region, RegionEpoch, StoreLabel},
     pdpb::{self, CheckPolicy, StoreReport},
     raft_cmdpb::*,
     raft_serverpb::{
@@ -1133,6 +1133,12 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
             .unwrap()
             .take_region_epoch()
+    }
+
+    pub fn get_region_by_id(&self, region_id: u64) -> Region {
+        block_on(self.pd_client.get_region_by_id(region_id))
+            .unwrap()
+            .unwrap()
     }
 
     pub fn region_detail(&self, region_id: u64, store_id: u64) -> RegionDetailResponse {

@@ -1099,6 +1099,7 @@ async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFo
 
     // Means now is prepare flashback.
     if in_prepare_state {
+        println!("prepare flashback, start_ts: {}", start_ts);
         let mut req = kvrpcpb::PrepareFlashbackToVersionRequest::new();
         req.set_version(version);
         req.set_start_key(start_key.clone());
@@ -1116,6 +1117,7 @@ async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFo
             ));
         }
     } else {
+        println!("finish flashback, start_ts: {} commit_ts: {}", start_ts, commit_ts);
         let mut req = kvrpcpb::FlashbackToVersionRequest::new();
         req.set_version(version);
         req.set_start_key(start_key.clone());

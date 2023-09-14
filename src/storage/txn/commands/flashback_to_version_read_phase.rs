@@ -162,6 +162,10 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         let mut start_key = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
+                println!(
+                    "{} rollback locks next_lock_key is {:?}",
+                    tag, next_lock_key
+                );
                 let mut key_locks = flashback_to_version_read_lock(
                     &mut reader,
                     next_lock_key,
@@ -169,6 +173,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     self.start_ts,
                 )?;
                 if key_locks.is_empty() {
+                    println!("{} rollback locks key_locks is empty", tag);
                     // - No more locks to rollback, continue to the Prewrite Phase.
                     // - The start key from the client is actually a range which is used to limit
                     //   the upper bound of this flashback when scanning data, so it may not be a
@@ -192,6 +197,10 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     };
                     FlashbackToVersionState::Prewrite { key_to_lock }
                 } else {
+                    println!(
+                        "rollback locks key_locks is not empty, len is {}",
+                        key_locks.len()
+                    );
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
                     FlashbackToVersionState::RollbackLock {
                         next_lock_key: if key_locks.len() > 1 {

@@ -584,11 +584,11 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn scan_regions(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: ScanRegionsRequest,
-        _sink: UnarySink<ScanRegionsResponse>,
+        ctx: RpcContext<'_>,
+        req: ScanRegionsRequest,
+        sink: UnarySink<ScanRegionsResponse>,
     ) {
-        unimplemented!()
+        hijack_unary(self, ctx, sink, |c| c.scan_regions(&req))
     }
 
     fn update_service_gc_safe_point(

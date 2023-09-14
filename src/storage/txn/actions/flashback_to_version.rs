@@ -16,6 +16,10 @@ pub fn flashback_to_version_read_lock(
     end_key: Option<&Key>,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<Vec<(Key, Lock)>> {
+    println!(
+        "flashback_to_version_read_lock  next_lock_key {:?} end_key {:?}",
+        next_lock_key, end_key
+    );
     let result = reader.scan_locks(
         Some(&next_lock_key),
         end_key,
@@ -23,6 +27,7 @@ pub fn flashback_to_version_read_lock(
         |lock| lock.ts != flashback_start_ts,
         FLASHBACK_BATCH_SIZE,
     );
+    println!("flashback_to_version_read_lock  result {:?}", result);
     let (key_locks, _) = result?;
     Ok(key_locks)
 }
@@ -35,6 +40,10 @@ pub fn flashback_to_version_read_write(
     flashback_version: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<Vec<Key>> {
+    println!(
+        "flashback_to_version_read_write  next_write_key {:?} flashback_version {:?}",
+        next_write_key, flashback_version
+    );
     // To flashback the data, we need to get all the latest visible keys first by
     // scanning every unique key in `CF_WRITE`.
     let keys_result = reader.scan_latest_user_keys(
@@ -65,6 +74,7 @@ pub fn rollback_locks(
     snapshot: impl Snapshot,
     key_locks: Vec<(Key, Lock)>,
 ) -> TxnResult<Option<Key>> {
+    println!("rollback_locks key_locks {:?}", key_locks);
     let mut reader = SnapshotReader::new(txn.start_ts, snapshot, false);
     for (key, lock) in key_locks {
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
@@ -100,7 +110,12 @@ pub fn flashback_to_version_write(
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<Option<Key>> {
+    println!(
+        "flashback_to_version_write flashback_version {:?}",
+        flashback_version
+    );
     for key in keys {
+        println!("flashback_to_version_write key {:?}", key);
         #[cfg(feature = "failpoints")]
         {
             let should_skip = || {
@@ -149,6 +164,7 @@ pub fn prewrite_flashback_key(
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
+    println!("prewrite_flashback_key key_to_lock {:?}", key_to_lock);
     if reader.load_lock(key_to_lock)?.is_some() {
         return Ok(());
     }
@@ -199,6 +215,7 @@ pub fn commit_flashback_key(
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
+    println!("commit_flashback_key key_to_commit {:?}", key_to_commit);
     if let Some(mut lock) = reader.load_lock(key_to_commit)? {
         txn.put_write(
             key_to_commit.clone(),
@@ -281,6 +298,10 @@ pub fn get_first_user_key(
     end_key: Option<&Key>,
     flashback_version: TimeStamp,
 ) -> TxnResult<Option<Key>> {
+    println!(
+        "get_first_user_key start_key {:?}, end: {:?}",
+        start_key, end_key
+    );
     let (mut keys_result, _) = reader.scan_latest_user_keys(
         Some(start_key),
         end_key,
@@ -288,6 +309,7 @@ pub fn get_first_user_key(
         |_, latest_commit_ts| latest_commit_ts > flashback_version,
         1,
     )?;
+    println!("get_first_user_key keys_result {:?}", keys_result);
     Ok(keys_result.pop())
 }
 

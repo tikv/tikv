@@ -119,6 +119,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 ref mut next_write_key,
                 ref mut keys,
             } => {
+                println!("FlashbackToVersionState::FlashbackWrite");
                 if let Some(new_next_write_key) = flashback_to_version_write(
                     &mut txn,
                     &mut reader,
