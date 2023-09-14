@@ -53,7 +53,6 @@ impl ScanTask {
         if let Err(e) = self.scheduler.schedule(task) {
             warn!("resolved_ts scheduler send entries failed"; "err" => ?e);
         }
-        RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
     }
 
     fn is_cancelled(&mut self) -> bool {
@@ -108,6 +107,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
     pub fn spawn_task(&self, mut task: ScanTask, concurrency_semaphore: Arc<Semaphore>) {
         let cdc_handle = self.cdc_handle.clone();
         let fut = async move {
+            tikv_util::defer!({
+                RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
+            });
             if let Some(backoff) = task.backoff {
                 RTS_INITIAL_SCAN_BACKOFF_DURATION_HISTOGRAM.observe(backoff.as_secs_f64());
                 let mut backoff = GLOBAL_TIMER_HANDLE

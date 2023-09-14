@@ -697,7 +697,7 @@ where
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
         let Some(read_progress) = self.region_read_progress.get(&region_id) else {
-            warn!("try register unexit region"; "region" => ?region);
+            warn!("try register nonexistent region"; "region" => ?region);
             return;
         };
         info!("register observe region"; "region" => ?region);
