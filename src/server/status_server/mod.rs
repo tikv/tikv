@@ -285,6 +285,18 @@ where
         req: Request<Body>,
     ) -> hyper::Result<Response<Body>> {
         let mut body = Vec::new();
+        let mut persist = true;
+        if let Some(query) = req.uri().query() {
+            let query_pairs: HashMap<_, _> =
+                url::form_urlencoded::parse(query.as_bytes()).collect();
+            persist = match query_pairs.get("persist") {
+                Some(val) => match val.parse() {
+                    Ok(val) => val,
+                    Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
+                },
+                None => true,
+            };
+        }
         req.into_body()
             .try_for_each(|bytes| {
                 body.extend(bytes);
@@ -292,7 +304,11 @@ where
             })
             .await?;
         Ok(match decode_json(&body) {
-            Ok(change) => match cfg_controller.update(change) {
+            Ok(change) => match if persist {
+                cfg_controller.update(change)
+            } else {
+                cfg_controller.update_without_persist(change)
+            } {
                 Err(e) => {
                     if let Some(e) = e.downcast_ref::<std::io::Error>() {
                         make_response(
@@ -1100,6 +1116,76 @@ mod tests {
         });
         block_on(handle).unwrap();
         status_server.stop();
+    }
+
+    #[test]
+    fn test_update_config_endpoint() {
+        let test_config = |persist: bool| {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let mut config = TikvConfig::default();
+            config.cfg_path = temp_dir
+                .path()
+                .join("tikv.toml")
+                .to_str()
+                .unwrap()
+                .to_string();
+            let mut status_server = StatusServer::new(
+                1,
+                ConfigController::new(config),
+                Arc::new(SecurityConfig::default()),
+                MockRouter,
+                temp_dir.path().to_path_buf(),
+                None,
+                GrpcServiceManager::dummy(),
+            )
+            .unwrap();
+            let addr = "127.0.0.1:0".to_owned();
+            let _ = status_server.start(addr);
+            let client = Client::new();
+            let uri = if persist {
+                Uri::builder()
+                    .scheme("http")
+                    .authority(status_server.listening_addr().to_string().as_str())
+                    .path_and_query("/config")
+                    .build()
+                    .unwrap()
+            } else {
+                Uri::builder()
+                    .scheme("http")
+                    .authority(status_server.listening_addr().to_string().as_str())
+                    .path_and_query("/config?persist=false")
+                    .build()
+                    .unwrap()
+            };
+            let mut req = Request::new(Body::from("{\"coprocessor.region-split-size\": \"1GB\"}"));
+            *req.method_mut() = Method::POST;
+            *req.uri_mut() = uri.clone();
+            let handle = status_server.thread_pool.spawn(async move {
+                let resp = client.request(req).await.unwrap();
+                assert_eq!(resp.status(), StatusCode::OK);
+            });
+            block_on(handle).unwrap();
+
+            let client = Client::new();
+            let handle2 = status_server.thread_pool.spawn(async move {
+                let resp = client.get(uri).await.unwrap();
+                assert_eq!(resp.status(), StatusCode::OK);
+                let mut v = Vec::new();
+                resp.into_body()
+                    .try_for_each(|bytes| {
+                        v.extend(bytes);
+                        ok(())
+                    })
+                    .await
+                    .unwrap();
+                let resp_json = String::from_utf8_lossy(&v).to_string();
+                assert!(resp_json.contains("\"region-split-size\":\"1GiB\""));
+            });
+            block_on(handle2).unwrap();
+            status_server.stop();
+        };
+        test_config(true);
+        test_config(false);
     }
 
     #[cfg(feature = "failpoints")]
