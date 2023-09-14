@@ -325,21 +325,14 @@ impl Resolver {
             "memory_in_use" => self.memory_quota.in_use(),
         );
 
-        let txn_locks = if let Some(txn_locks) = self.lock_ts_heap.get_mut(&start_ts)
-            && txn_locks.lock_count != 0
-        {
-            txn_locks
-        } else {
-            panic!(
-                "lock ts {} must exist in lock_ts_heap, key: {:?}",
-                start_ts,
-                log_wrappers::Value::key(key),
-            )
+        if let Some(txn_locks) = self.lock_ts_heap.get_mut(&start_ts) {
+            if txn_locks.lock_count > 0 {
+                txn_locks.lock_count -= 1;
+            }
+            if txn_locks.lock_count == 0 {
+                self.lock_ts_heap.remove(&start_ts);
+            }
         };
-        txn_locks.lock_count -= 1;
-        if txn_locks.lock_count == 0 {
-            self.lock_ts_heap.remove(&start_ts);
-        }
         // Use a large ratio to amortize the cost of rehash.
         let shrink_ratio = 8;
         self.shrink_ratio(shrink_ratio);
