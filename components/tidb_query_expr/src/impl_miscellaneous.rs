@@ -501,8 +501,9 @@ mod tests {
             (Some(hex("00000000")), Some(b"0.0.0.0".to_vec())),
             (Some(hex("0A000509")), Some(b"10.0.5.9".to_vec())),
             (
+                // the output format has changed, see: https://github.com/rust-lang/rust/pull/112606
                 Some(hex("00000000000000000000000001020304")),
-                Some(b"::1.2.3.4".to_vec()),
+                Some(b"::102:304".to_vec()),
             ),
             (
                 Some(hex("00000000000000000000FFFF01020304")),
