@@ -555,3 +555,87 @@ fn test_duplicate_and_close() {
     req.set_mode(SwitchMode::Normal);
     import.switch_mode(&req).unwrap();
 }
+
+#[test]
+fn test_deny_import() {
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let sst_range = (0, 10);
+    let write = |sst_range: (u8, u8)| {
+        let mut meta = new_sst_meta(0, 0);
+        meta.set_region_id(ctx.get_region_id());
+        meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+        let mut keys = vec![];
+        let mut values = vec![];
+        for i in sst_range.0..sst_range.1 {
+            keys.push(vec![i]);
+            values.push(vec![i]);
+        }
+        send_write_sst(&import, &meta, keys, values, 1)
+    };
+    let ingest = |sst_meta: &SstMeta| {
+        let mut ingest = IngestRequest::default();
+        ingest.set_context(ctx.clone());
+        ingest.set_sst(sst_meta.clone());
+        import.ingest(&ingest)
+    };
+    let multi_ingest = |sst_metas: &[SstMeta]| {
+        let mut multi_ingest = MultiIngestRequest::default();
+        multi_ingest.set_context(ctx.clone());
+        multi_ingest.set_ssts(sst_metas.to_vec().into());
+        import.multi_ingest(&multi_ingest)
+    };
+    let denyctl = |for_time| {
+        let mut req = DenyImportRpcRequest::default();
+        req.set_caller("test_deny_import".to_owned());
+        if for_time == 0 {
+            req.set_should_deny_imports(false);
+        } else {
+            req.set_should_deny_imports(true);
+            req.set_duration_secs(for_time);
+        }
+        req
+    };
+
+    let write_res = write(sst_range).unwrap();
+    assert_eq!(write_res.metas.len(), 1);
+    let sst = write_res.metas[0].clone();
+
+    assert!(
+        !import
+            .deny_import_rpc(&denyctl(6000))
+            .unwrap()
+            .already_denied_imports
+    );
+    let write_res = write(sst_range);
+    assert_to_string_contains!(write_res.unwrap_err(), "Denied");
+    let ingest_res = ingest(&sst);
+    assert_to_string_contains!(ingest_res.unwrap_err(), "Denied");
+    let multi_ingest_res = multi_ingest(&[sst.clone()]);
+    assert_to_string_contains!(multi_ingest_res.unwrap_err(), "Denied");
+
+    assert!(
+        import
+            .deny_import_rpc(&denyctl(0))
+            .unwrap()
+            .already_denied_imports
+    );
+
+    let ingest_res = ingest(&sst);
+    assert!(ingest_res.is_ok(), "{:?} => {:?}", sst, ingest_res);
+
+    check_ingested_txn_kvs(&tikv, &ctx, sst_range, 2);
+
+    // test timeout.
+    assert!(
+        !import
+            .deny_import_rpc(&denyctl(1))
+            .unwrap()
+            .already_denied_imports
+    );
+    let sst_range = (10, 20);
+    let write_res = write(sst_range);
+    assert_to_string_contains!(write_res.unwrap_err(), "Denied");
+    std::thread::sleep(Duration::from_secs(1));
+    write(sst_range).unwrap();
+}

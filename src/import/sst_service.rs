@@ -5,7 +5,10 @@ use std::{
     convert::identity,
     future::Future,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -19,8 +22,9 @@ use kvproto::{
     encryptionpb::EncryptionMethod,
     errorpb,
     import_sstpb::{
-        Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk, SstMeta,
-        SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
+        DenyImportRpcRequest, DenyImportRpcResponse, Error as ImportPbError, ImportSst, Range,
+        RawWriteRequest_oneof_chunk as RawChunk, SstMeta, SwitchMode,
+        WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
 };
@@ -41,7 +45,7 @@ use tikv_util::{
     HandyRwLock,
 };
 use tokio::{runtime::Runtime, time::sleep};
-use txn_types::{Key, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use super::{
     make_rpc_error,
@@ -49,6 +53,7 @@ use super::{
 };
 use crate::{
     import::duplicate_detect::DuplicateDetector,
+    send_rpc_response,
     server::CONFIG_ROCKSDB_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
 };
@@ -121,6 +126,9 @@ pub struct ImportSstService<E: Engine> {
     // it's some iff multi-rocksdb is enabled
     store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+
+    // When less than now, don't accept any requests.
+    deny_req_until: Arc<AtomicU64>,
 }
 
 struct RequestCollector {
@@ -356,6 +364,7 @@ impl<E: Engine> ImportSstService<E> {
             writer,
             store_meta,
             resource_manager,
+            deny_req_until: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -619,6 +628,47 @@ impl<E: Engine> ImportSstService<E> {
 
         Ok(range)
     }
+
+    /// Check whether we should deny the current request.
+    fn check_deny(&self) -> Result<()> {
+        let now = TimeStamp::physical_now();
+        let deny_until = self.deny_req_until.load(Ordering::SeqCst);
+        if now < deny_until {
+            IMPORT_DENIED_REQUESTS.inc();
+            Err(Error::Denied {
+                time_to_lease_expire: Duration::from_millis(deny_until - now),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// deny requests for a period.
+    ///
+    /// # returns
+    ///
+    /// whether for now, the requests has already been denied.
+    pub fn deny_requests(&self, for_time: Duration) -> bool {
+        let now = TimeStamp::physical_now();
+        let last_deny_until = self.deny_req_until.load(Ordering::SeqCst);
+        let denied = now < last_deny_until;
+        let deny_until = TimeStamp::physical_now() + for_time.as_millis() as u64;
+        self.deny_req_until.store(deny_until, Ordering::SeqCst);
+        denied
+    }
+
+    /// allow all requests to enter.
+    ///
+    /// # returns
+    ///
+    /// whether requests has already been previously denied.
+    pub fn allow_requests(&self) -> bool {
+        let now = TimeStamp::physical_now();
+        let last_deny_until = self.deny_req_until.load(Ordering::SeqCst);
+        let denied = now < last_deny_until;
+        self.deny_req_until.store(0, Ordering::SeqCst);
+        denied
+    }
 }
 
 #[macro_export]
@@ -626,7 +676,7 @@ macro_rules! impl_write {
     ($fn:ident, $req_ty:ident, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident) => {
         fn $fn(
             &mut self,
-            _ctx: RpcContext<'_>,
+            ctx: RpcContext<'_>,
             stream: RequestStream<$req_ty>,
             sink: ClientStreamingSink<$resp_ty>,
         ) {
@@ -638,6 +688,10 @@ macro_rules! impl_write {
 
             let timer = Instant::now_coarse();
             let label = stringify!($fn);
+            if let Err(err) = self.check_deny() {
+                ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+                return;
+            }
             let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
                 let res = async move {
@@ -902,7 +956,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     /// Downloads the file and performs key-rewrite for later ingesting.
     fn download(
         &mut self,
-        _ctx: RpcContext<'_>,
+        ctx: RpcContext<'_>,
         req: DownloadRequest,
         sink: UnarySink<DownloadResponse>,
     ) {
@@ -921,6 +975,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 req.get_context().get_request_source(),
             )
         });
+        if let Err(err) = self.check_deny() {
+            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            return;
+        }
 
         let handle_task = async move {
             // Records how long the download task waits to be scheduled.
@@ -993,6 +1051,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
+        if let Err(err) = self.check_deny() {
+            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            return;
+        }
 
         let mut resp = IngestResponse::default();
         let region_id = req.get_context().get_region_id();
@@ -1036,6 +1098,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
+        if let Err(err) = self.check_deny() {
+            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            return;
+        }
 
         let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall(req.get_context().get_region_id()) {
@@ -1240,6 +1306,27 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         RawChunk,
         new_raw_writer
     );
+
+    fn deny_import_rpc(
+        &mut self,
+        ctx: RpcContext,
+        req: DenyImportRpcRequest,
+        sink: UnarySink<DenyImportRpcResponse>,
+    ) {
+        let label = "deny_import_rpc";
+        let timer = Instant::now_coarse();
+
+        let denied = if req.should_deny_imports {
+            info!("deny incoming import RPCs."; "for_second" => req.get_duration_secs(), "caller" => req.get_caller());
+            self.deny_requests(Duration::from_secs(req.get_duration_secs()))
+        } else {
+            info!("allow incoming import RPCs."; "caller" => req.get_caller());
+            self.allow_requests()
+        };
+        let mut resp = DenyImportRpcResponse::default();
+        resp.set_already_denied_imports(denied);
+        ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
+    }
 }
 
 // add error statistics from pb error response

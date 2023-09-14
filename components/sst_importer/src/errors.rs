@@ -2,6 +2,7 @@
 
 use std::{
     error::Error as StdError, io::Error as IoError, num::ParseIntError, path::PathBuf, result,
+    time::Duration,
 };
 
 use encryption::Error as EncryptionError;
@@ -125,6 +126,9 @@ pub enum Error {
 
     #[error("resource is not enough {0}")]
     ResourceNotEnough(String),
+
+    #[error("imports are denied for {time_to_lease_expire:?}")]
+    Denied { time_to_lease_expire: Duration },
 }
 
 impl Error {
@@ -158,6 +162,16 @@ impl From<Error> for import_sstpb::Error {
                 import_err.set_message(msg.clone());
                 import_err.set_server_is_busy(errorpb::ServerIsBusy::default());
                 err.set_store_error(import_err);
+                err.set_message(format!("{}", e));
+            }
+            Error::Denied {
+                time_to_lease_expire,
+            } => {
+                let mut store_err = errorpb::Error::default();
+                let mut server_is_busy = errorpb::ServerIsBusy::default();
+                server_is_busy.set_backoff_ms(time_to_lease_expire.as_millis() as _);
+                store_err.set_server_is_busy(server_is_busy);
+                err.set_store_error(store_err);
                 err.set_message(format!("{}", e));
             }
             _ => {
@@ -197,6 +211,7 @@ impl ErrorCodeExt for Error {
             Error::IncompatibleApiVersion => error_code::sst_importer::INCOMPATIBLE_API_VERSION,
             Error::InvalidKeyMode { .. } => error_code::sst_importer::INVALID_KEY_MODE,
             Error::ResourceNotEnough(_) => error_code::sst_importer::RESOURCE_NOT_ENOUTH,
+            Error::Denied { .. } => error_code::sst_importer::DENIED,
         }
     }
 }
