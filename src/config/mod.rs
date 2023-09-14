@@ -2873,6 +2873,11 @@ pub struct ResolvedTsConfig {
     pub advance_ts_interval: ReadableDuration,
     #[online_config(skip)]
     pub scan_lock_pool_size: usize,
+<<<<<<< HEAD
+=======
+    pub memory_quota: ReadableSize,
+    pub incremental_scan_concurrency: usize,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 }
 
 impl ResolvedTsConfig {
@@ -2893,6 +2898,11 @@ impl Default for ResolvedTsConfig {
             enable: true,
             advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
+<<<<<<< HEAD
+=======
+            memory_quota: ReadableSize::mb(256),
+            incremental_scan_concurrency: 6,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         }
     }
 }
