@@ -6,7 +6,7 @@ use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use txn_types::TimeStamp;
 
-use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
+use crate::metrics::*;
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -104,7 +104,67 @@ impl Resolver {
         self.tracked_index = index;
     }
 
+<<<<<<< HEAD
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
+=======
+    // Return an approximate heap memory usage in bytes.
+    pub fn approximate_heap_bytes(&self) -> usize {
+        if self.locks_by_key.is_empty() {
+            return 0;
+        }
+
+        const SAMPLE_COUNT: usize = 8;
+        let mut key_count = 0;
+        let mut key_bytes = 0;
+        for key in self.locks_by_key.keys() {
+            key_count += 1;
+            key_bytes += key.len();
+            if key_count >= SAMPLE_COUNT {
+                break;
+            }
+        }
+        self.locks_by_key.len() * (key_bytes / key_count + std::mem::size_of::<TimeStamp>())
+            + self.lock_ts_heap.len()
+                * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
+    }
+
+    fn lock_heap_size(&self, key: &[u8]) -> usize {
+        // A resolver has
+        // * locks_by_key: HashMap<Arc<[u8]>, TimeStamp>
+        // * lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>
+        //
+        // We only count memory used by locks_by_key. Because the majority of
+        // memory is consumed by keys, locks_by_key and lock_ts_heap shares
+        // the same Arc<[u8]>, so lock_ts_heap is negligible. Also, it's hard to
+        // track accurate memory usage of lock_ts_heap as a timestamp may have
+        // many keys.
+        key.heap_size() + std::mem::size_of::<TimeStamp>()
+    }
+
+    fn shrink_ratio(&mut self, ratio: usize, timestamp: Option<TimeStamp>) {
+        // HashMap load factor is 87% approximately, leave some margin to avoid
+        // frequent rehash.
+        //
+        // See https://github.com/rust-lang/hashbrown/blob/v0.14.0/src/raw/mod.rs#L208-L220
+        const MIN_SHRINK_RATIO: usize = 2;
+        if self.locks_by_key.capacity()
+            > self.locks_by_key.len() * cmp::max(MIN_SHRINK_RATIO, ratio)
+        {
+            self.locks_by_key.shrink_to_fit();
+        }
+        if let Some(ts) = timestamp && let Some(lock_set) = self.lock_ts_heap.get_mut(&ts)
+            && lock_set.capacity() > lock_set.len() * cmp::max(MIN_SHRINK_RATIO, ratio) {
+            lock_set.shrink_to_fit();
+        }
+    }
+
+    pub fn track_lock(
+        &mut self,
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        index: Option<u64>,
+    ) -> Result<(), MemoryQuotaExceeded> {
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         if let Some(index) = index {
             self.update_tracked_index(index);
         }

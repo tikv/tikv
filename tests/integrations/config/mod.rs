@@ -769,6 +769,11 @@ fn test_serde_custom_tikv_config() {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+<<<<<<< HEAD
+=======
+        memory_quota: ReadableSize::mb(1),
+        incremental_scan_concurrency: 7,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),
