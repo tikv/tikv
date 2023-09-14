@@ -517,7 +517,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 .token_cred
                 .get_token(&self.token_resource)
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e)))?;
             let blob_service = BlobServiceClient::new(
                 self.account_name.clone(),
                 StorageCredentials::BearerToken(token.token.secret().into()),

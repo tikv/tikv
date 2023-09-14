@@ -227,14 +227,65 @@ fn test_server_snap_gc() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_concurrent_snap() {
     let mut cluster = new_cluster(0, 3);
     // Test that the handling of snapshot is correct when there are multiple
     // snapshots which have overlapped region ranges arrive at the same
     // raftstore.
     cluster.cfg.rocksdb.titan.enabled = true;
+    // Disable raft log gc in this test case.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+    // For raftstore v2, after split, follower delays first messages (see
+    // is_first_message() for details), so leader does not send snapshot to
+    // follower and CollectSnapshotFilter holds parent region snapshot forever.
+    // We need to set a short wait duration so that leader can send snapshot
+    // in time and thus CollectSnapshotFilter can send parent region snapshot.
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::millis(100);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    // Force peer 2 to be followers all the way.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 2)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
+    cluster.must_put(b"k3", b"v3");
+    // Pile up snapshots of overlapped region ranges and deliver them all at once.
+    let (tx, rx) = mpsc::channel();
+    cluster.add_recv_filter_on_node(3, Box::new(CollectSnapshotFilter::new(tx)));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    let region = cluster.get_region(b"k1");
+    // Ensure the snapshot of range ("", "") is sent and piled in filter.
+    if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {
+        panic!("the snapshot is not sent before split, e: {:?}", e);
+    }
+    // Split the region range and then there should be another snapshot for the
+    // split ranges.
+    cluster.must_split(&region, b"k2");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    // Ensure the regions work after split.
+    cluster.must_put(b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_concurrent_snap_v2() {
+    let mut cluster = new_cluster(0, 3);
+    // TODO: v2 doesn't support titan.
+    // Test that the handling of snapshot is correct when there are multiple
+    // snapshots which have overlapped region ranges arrive at the same
+    // raftstore.
+    // cluster.cfg.rocksdb.titan.enabled = true;
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     // For raftstore v2, after split, follower delays first messages (see

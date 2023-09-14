@@ -110,6 +110,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(32);
 
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
@@ -311,6 +312,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: Option<ReadableSize>,
+            pub write_buffer_limit: Option<ReadableSize>,
             pub max_write_buffer_number: i32,
             #[online_config(skip)]
             pub min_write_buffer_number_to_merge: i32,
@@ -669,6 +671,7 @@ macro_rules! build_cf_opt {
 pub struct CfResources {
     pub cache: Cache,
     pub compaction_thread_limiters: HashMap<&'static str, ConcurrentTaskLimiter>,
+    pub write_buffer_managers: HashMap<&'static str, Arc<WriteBufferManager>>,
 }
 
 cf_config!(DefaultCfConfig);
@@ -735,6 +738,7 @@ impl Default for DefaultCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
+            write_buffer_limit: None,
         }
     }
 }
@@ -833,6 +837,9 @@ impl DefaultCfConfig {
             }
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_DEFAULT) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -907,6 +914,7 @@ impl Default for WriteCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -963,6 +971,9 @@ impl WriteCfConfig {
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_WRITE) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -1029,6 +1040,7 @@ impl Default for LockCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -1063,6 +1075,9 @@ impl LockCfConfig {
                 .unwrap();
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_LOCK) {
+            cf_opts.set_write_buffer_manager(write_buffer_manager);
+        }
         cf_opts
     }
 }
@@ -1128,6 +1143,7 @@ impl Default for RaftCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan,
+            write_buffer_limit: None,
         }
     }
 }
@@ -1386,9 +1402,12 @@ impl DbConfig {
                 // strategy is consistent with single RocksDB.
                 self.defaultcf.max_compactions.get_or_insert(1);
                 self.writecf.max_compactions.get_or_insert(1);
-                if self.lockcf.write_buffer_size.is_none() {
-                    self.lockcf.write_buffer_size = Some(ReadableSize::mb(4));
-                }
+                self.lockcf
+                    .write_buffer_size
+                    .get_or_insert(ReadableSize::mb(4));
+                self.lockcf
+                    .write_buffer_limit
+                    .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
             }
         }
     }
@@ -1511,9 +1530,29 @@ impl DbConfig {
                 ConcurrentTaskLimiter::new(CF_RAFT, n),
             );
         }
+        let mut write_buffer_managers = HashMap::default();
+        self.lockcf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_LOCK,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
+        self.defaultcf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_DEFAULT,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
+        self.writecf.write_buffer_limit.map(|limit| {
+            write_buffer_managers.insert(
+                CF_WRITE,
+                Arc::new(WriteBufferManager::new(limit.0 as usize, 0f32, true)),
+            )
+        });
         CfResources {
             cache,
             compaction_thread_limiters,
+            write_buffer_managers,
         }
     }
 
@@ -1557,6 +1596,9 @@ impl DbConfig {
         self.writecf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
+        if self.raftcf.write_buffer_limit.is_some() {
+            return Err("raftcf does not support cf based write buffer manager".into());
+        }
         if self.enable_unordered_write {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
@@ -1661,6 +1703,7 @@ impl Default for RaftDefaultCfConfig {
             ttl: None,
             periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
+            write_buffer_limit: None,
         }
     }
 }
@@ -1904,13 +1947,14 @@ pub enum DbType {
 }
 
 pub struct DbConfigManger<D> {
+    cfg: DbConfig,
     db: D,
     db_type: DbType,
 }
 
 impl<D> DbConfigManger<D> {
-    pub fn new(db: D, db_type: DbType) -> Self {
-        DbConfigManger { db, db_type }
+    pub fn new(cfg: DbConfig, db: D, db_type: DbType) -> Self {
+        DbConfigManger { cfg, db, db_type }
     }
 }
 
@@ -1945,10 +1989,31 @@ impl<D: ConfigurableDb> DbConfigManger<D> {
             _ => Err(format!("invalid cf {:?} for db {:?}", cf, self.db_type).into()),
         }
     }
+
+    fn update_background_cfg(
+        &self,
+        max_background_jobs: i32,
+        max_background_flushes: i32,
+    ) -> Result<(), Box<dyn Error>> {
+        assert!(max_background_jobs > 0 && max_background_flushes > 0);
+        let max_background_compacts =
+            std::cmp::max(max_background_jobs - max_background_flushes, 1);
+        self.db
+            .set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
+        self.db.set_db_config(&[(
+            "max_background_flushes",
+            &max_background_flushes.to_string(),
+        )])?;
+        self.db.set_db_config(&[(
+            "max_background_compactions",
+            &max_background_compacts.to_string(),
+        )])
+    }
 }
 
 impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        self.cfg.update(change.clone())?;
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
         let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
@@ -1997,7 +2062,8 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .drain_filter(|(name, _)| name == "write_buffer_limit")
             .next()
         {
-            self.db.set_flush_size(size.1.into())?;
+            let size: ReadableSize = size.1.into();
+            self.db.set_flush_size(size.0 as usize)?;
         }
 
         if let Some(f) = change
@@ -2012,8 +2078,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .next()
         {
             let max_background_jobs: i32 = background_jobs_config.1.into();
-            self.db
-                .set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
+            self.update_background_cfg(max_background_jobs, self.cfg.max_background_flushes)?;
         }
 
         if let Some(background_subcompactions_config) = change
@@ -2030,10 +2095,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
             .next()
         {
             let max_background_flushes: i32 = background_flushes_config.1.into();
-            self.db.set_db_config(&[(
-                "max_background_flushes",
-                &max_background_flushes.to_string(),
-            )])?;
+            self.update_background_cfg(self.cfg.max_background_jobs, max_background_flushes)?;
         }
 
         if !change.is_empty() {
@@ -2938,6 +3000,7 @@ pub struct ResolvedTsConfig {
     pub advance_ts_interval: ReadableDuration,
     #[online_config(skip)]
     pub scan_lock_pool_size: usize,
+    pub memory_quota: ReadableSize,
 }
 
 impl ResolvedTsConfig {
@@ -2958,6 +3021,7 @@ impl Default for ResolvedTsConfig {
             enable: true,
             advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
+            memory_quota: ReadableSize::mb(256),
         }
     }
 }
@@ -4959,7 +5023,11 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg);
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DbConfigManger::new(engine.clone(), DbType::Kv)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                engine.clone(),
+                DbType::Kv,
+            )),
         );
         let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(
@@ -5109,6 +5177,7 @@ mod tests {
             .update_config("rocksdb.max-background-jobs", "8")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
+        assert_eq!(db.get_db_options().get_max_background_compactions(), 6);
 
         // update max_background_flushes, set to a bigger value
         assert_eq!(db.get_db_options().get_max_background_flushes(), 2);
@@ -5117,6 +5186,7 @@ mod tests {
             .update_config("rocksdb.max-background-flushes", "5")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_flushes(), 5);
+        assert_eq!(db.get_db_options().get_max_background_compactions(), 3);
 
         // update rate_bytes_per_sec
         assert_eq!(
@@ -5131,6 +5201,12 @@ mod tests {
             db.get_db_options().get_rate_bytes_per_sec().unwrap(),
             ReadableSize::mb(128).0 as i64
         );
+
+        cfg_controller
+            .update_config("rocksdb.write-buffer-limit", "10MB")
+            .unwrap();
+        let flush_size = db.get_db_options().get_flush_size().unwrap();
+        assert_eq!(flush_size, ReadableSize::mb(10).0);
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
@@ -5967,6 +6043,9 @@ mod tests {
         default_cfg
             .server
             .optimize_for(default_cfg.coprocessor.region_split_size());
+        default_cfg
+            .raft_store
+            .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
@@ -6068,12 +6147,12 @@ mod tests {
         assert_eq!(default_cfg.coprocessor.region_split_size(), SPLIT_SIZE);
         assert!(!default_cfg.coprocessor.enable_region_bucket());
 
-        assert_eq!(default_cfg.split.qps_threshold, DEFAULT_QPS_THRESHOLD);
+        assert_eq!(default_cfg.split.qps_threshold(), DEFAULT_QPS_THRESHOLD);
         assert_eq!(
-            default_cfg.split.region_cpu_overload_threshold_ratio,
+            default_cfg.split.region_cpu_overload_threshold_ratio(),
             REGION_CPU_OVERLOAD_THRESHOLD_RATIO
         );
-        assert_eq!(default_cfg.split.byte_threshold, DEFAULT_BYTE_THRESHOLD);
+        assert_eq!(default_cfg.split.byte_threshold(), DEFAULT_BYTE_THRESHOLD);
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.storage.engine = EngineType::RaftKv2;
@@ -6083,15 +6162,15 @@ mod tests {
             RAFTSTORE_V2_SPLIT_SIZE
         );
         assert_eq!(
-            default_cfg.split.qps_threshold,
+            default_cfg.split.qps_threshold(),
             DEFAULT_BIG_REGION_QPS_THRESHOLD
         );
         assert_eq!(
-            default_cfg.split.region_cpu_overload_threshold_ratio,
+            default_cfg.split.region_cpu_overload_threshold_ratio(),
             BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO
         );
         assert_eq!(
-            default_cfg.split.byte_threshold,
+            default_cfg.split.byte_threshold(),
             DEFAULT_BIG_REGION_BYTE_THRESHOLD
         );
         assert!(default_cfg.coprocessor.enable_region_bucket());
@@ -6424,6 +6503,69 @@ mod tests {
         assert_eq!(
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(1))
+        );
+    }
+
+    #[test]
+    fn test_compact_check_default() {
+        let content = r#"
+            [raftstore]
+            region-compact-check-step = 50
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            100
+        );
+
+        let content = r#"
+            [raftstore]
+            region-compact-check-step = 50
+            [storage]
+            engine = "partitioned-raft-kv"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            20
+        );
+
+        let content = r#"
+            [raftstore]
+            region-compact-redundant-rows-percent = 50
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 100);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            50
+        );
+
+        let content = r#"
+            [raftstore]
+            region-compact-redundant-rows-percent = 50
+            [storage]
+            engine = "partitioned-raft-kv"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 5);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            50
         );
     }
 }
