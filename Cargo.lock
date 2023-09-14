@@ -2979,6 +2979,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+source = "git+https://github.com/overvenus/kvproto?branch=store-memory#97e0fdbbf76f2ce1021270ee8773406ff4034606"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
