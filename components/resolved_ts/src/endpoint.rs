@@ -5,15 +5,13 @@ use std::{
     collections::HashMap,
     fmt,
     marker::PhantomData,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex, MutexGuard,
-    },
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
+use futures::channel::oneshot::{channel, Receiver, Sender};
 use grpcio::Environment;
 use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
@@ -34,7 +32,7 @@ use tikv_util::{
     warn,
     worker::{Runnable, RunnableWithTimer, Scheduler},
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use txn_types::{Key, TimeStamp};
 
 use crate::{
@@ -42,8 +40,13 @@ use crate::{
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
     resolver::{LastAttempt, Resolver},
+<<<<<<< HEAD
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
     TsSource,
+=======
+    scanner::{ScanEntries, ScanTask, ScannerPool},
+    Error, Result, TsSource, ON_DROP_WARN_HEAP_SIZE,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 };
 
 /// grace period for identifying identifying slow resolved-ts and safe-ts.
@@ -53,7 +56,12 @@ enum ResolverStatus {
     Pending {
         tracked_index: u64,
         locks: Vec<PendingLock>,
+<<<<<<< HEAD
         cancelled: Arc<AtomicBool>,
+=======
+        cancelled: Option<Sender<()>>,
+        memory_quota: Arc<MemoryQuota>,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
     },
     Ready,
 }
@@ -84,7 +92,16 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
+<<<<<<< HEAD
     fn new(meta: Region, rrp: Arc<RegionReadProgress>) -> Self {
+=======
+    fn new(
+        meta: Region,
+        rrp: Arc<RegionReadProgress>,
+        memory_quota: Arc<MemoryQuota>,
+        cancelled: Sender<()>,
+    ) -> Self {
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         ObserveRegion {
             resolver: Resolver::with_read_progress(meta.id, Some(rrp)),
             meta,
@@ -92,7 +109,12 @@ impl ObserveRegion {
             resolver_status: ResolverStatus::Pending {
                 tracked_index: 0,
                 locks: vec![],
+<<<<<<< HEAD
                 cancelled: Arc::new(AtomicBool::new(false)),
+=======
+                cancelled: Some(cancelled),
+                memory_quota,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
             },
         }
     }
@@ -219,6 +241,7 @@ impl ObserveRegion {
         Ok(())
     }
 
+<<<<<<< HEAD
     fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) {
         for es in entries {
             match es {
@@ -266,8 +289,48 @@ impl ObserveRegion {
                         "snapshot_index" => apply_index,
                         "pending_data_index" => pending_tracked_index,
                     );
+=======
+    /// Track locks in incoming scan entries.
+    fn track_scan_locks(&mut self, entries: ScanEntries, apply_index: u64) -> Result<()> {
+        match entries {
+            ScanEntries::Lock(locks) => {
+                if let ResolverStatus::Ready = self.resolver_status {
+                    panic!("region {:?} resolver has ready", self.meta.id)
                 }
-                ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
+                for (key, lock) in locks {
+                    self.resolver
+                        .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index))?;
+                }
+            }
+            ScanEntries::None => {
+                // Update the `tracked_index` to the snapshot's `apply_index`
+                self.resolver.update_tracked_index(apply_index);
+                let mut resolver_status =
+                    std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
+                let (pending_tracked_index, pending_locks) =
+                    resolver_status.drain_pending_locks(self.meta.id);
+                for lock in pending_locks {
+                    match lock {
+                        PendingLock::Track { key, start_ts } => {
+                            self.resolver.track_lock(
+                                start_ts,
+                                key.to_raw().unwrap(),
+                                Some(pending_tracked_index),
+                            )?;
+                        }
+                        PendingLock::Untrack { key, .. } => self
+                            .resolver
+                            .untrack_lock(&key.to_raw().unwrap(), Some(pending_tracked_index)),
+                    }
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
+                }
+                info!(
+                    "Resolver initialized";
+                    "region" => self.meta.id,
+                    "observe_id" => ?self.handle.id,
+                    "snapshot_index" => apply_index,
+                    "pending_data_index" => pending_tracked_index,
+                );
             }
         }
     }
@@ -281,6 +344,7 @@ pub struct Endpoint<T, E: KvEngine> {
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
+    scan_concurrency_semaphore: Arc<Semaphore>,
     scheduler: Scheduler<Task>,
     advance_worker: AdvanceTsWorker,
     _phantom: PhantomData<(T, E)>,
@@ -344,10 +408,7 @@ where
             match &observed_region.resolver_status {
                 ResolverStatus::Pending { locks, .. } => {
                     for l in locks {
-                        match l {
-                            PendingLock::Track { key, .. } => stats.heap_size += key.len() as i64,
-                            PendingLock::Untrack { key, .. } => stats.heap_size += key.len() as i64,
-                        }
+                        stats.heap_size += l.heap_size() as i64;
                     }
                     stats.unresolved_count += 1;
                 }
@@ -379,6 +440,7 @@ where
         RTS_ZERO_RESOLVED_TS.set(stats.zero_ts_count);
 
         RTS_LOCK_HEAP_BYTES_GAUGE.set(stats.resolver.heap_size);
+        RTS_LOCK_QUOTA_IN_USE_BYTES_GAUGE.set(self.memory_quota.in_use() as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
             .with_label_values(&["resolved"])
             .set(stats.resolver.resolved_count);
@@ -579,6 +641,7 @@ where
             region_read_progress.clone(),
             store_resolver_gc_interval,
         );
+        let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
         let ep = Self {
             store_id,
             cfg: cfg.clone(),
@@ -588,6 +651,7 @@ where
             region_read_progress,
             advance_worker,
             scanner_pool,
+            scan_concurrency_semaphore,
             regions: HashMap::default(),
             _phantom: PhantomData::default(),
         };
@@ -598,6 +662,7 @@ where
     fn register_region(&mut self, region: Region) {
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
+<<<<<<< HEAD
         let observe_region = {
             if let Some(read_progress) = self.region_read_progress.get(&region_id) {
                 info!(
@@ -612,19 +677,35 @@ where
                 );
                 return;
             }
+=======
+        let Some(read_progress) = self.region_read_progress.get(&region_id) else {
+            warn!("try register nonexistent region"; "region" => ?region);
+            return;
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         };
+        info!("register observe region"; "region" => ?region);
+        let (cancelled_tx, cancelled_rx) = channel();
+        let observe_region = ObserveRegion::new(
+            region.clone(),
+            read_progress,
+            self.memory_quota.clone(),
+            cancelled_tx,
+        );
         let observe_handle = observe_region.handle.clone();
-        let cancelled = match observe_region.resolver_status {
-            ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
-            ResolverStatus::Ready => panic!("resolved ts illeagal created observe region"),
-        };
         observe_region
             .read_progress()
             .update_advance_resolved_ts_notify(self.advance_notify.clone());
         self.regions.insert(region_id, observe_region);
 
+<<<<<<< HEAD
         let scan_task = self.build_scan_task(region, observe_handle, cancelled);
         self.scanner_pool.spawn_task(scan_task);
+=======
+        let scan_task = self.build_scan_task(region, observe_handle, cancelled_rx, backoff);
+        let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        self.scanner_pool
+            .spawn_task(scan_task, concurrency_semaphore);
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         RTS_SCAN_TASKS.with_label_values(&["total"]).inc();
     }
 
@@ -632,18 +713,19 @@ where
         &self,
         region: Region,
         observe_handle: ObserveHandle,
+<<<<<<< HEAD
         cancelled: Arc<AtomicBool>,
+=======
+        cancelled: Receiver<()>,
+        backoff: Option<Duration>,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
     ) -> ScanTask {
         let scheduler = self.scheduler.clone();
-        let scheduler_error = self.scheduler.clone();
-        let region_id = region.id;
-        let observe_id = observe_handle.id;
         ScanTask {
             handle: observe_handle,
-            tag: String::new(),
-            mode: ScanMode::LockOnly,
             region,
             checkpoint_ts: TimeStamp::zero(),
+<<<<<<< HEAD
             is_cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
             send_entries: Box::new(move |entries, apply_index| {
                 scheduler
@@ -666,6 +748,11 @@ where
                     .unwrap_or_else(|schedule_err| warn!("schedule re-register task failed"; "err" => ?schedule_err, "re-register cause" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
+=======
+            backoff,
+            cancelled,
+            scheduler,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
         }
     }
 
@@ -673,7 +760,7 @@ where
         if let Some(observe_region) = self.regions.remove(&region_id) {
             let ObserveRegion {
                 handle,
-                resolver_status,
+                mut resolver_status,
                 ..
             } = observe_region;
 
@@ -686,8 +773,16 @@ where
             // Stop observing data
             handle.stop_observing();
             // Stop scanning data
+<<<<<<< HEAD
             if let ResolverStatus::Pending { cancelled, .. } = resolver_status {
                 cancelled.store(true, Ordering::Release);
+=======
+            if let ResolverStatus::Pending {
+                ref mut cancelled, ..
+            } = resolver_status
+            {
+                let _ = cancelled.take();
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
             }
         } else {
             debug!("deregister unregister region"; "region_id" => region_id);
@@ -823,7 +918,7 @@ where
         &mut self,
         region_id: u64,
         observe_id: ObserveId,
-        entries: Vec<ScanEntry>,
+        entries: ScanEntries,
         apply_index: u64,
     ) {
         match self.regions.get_mut(&region_id) {
@@ -854,6 +949,13 @@ where
             warn!("resolved-ts config fails"; "error" => ?e);
         } else {
             self.advance_notify.notify_waiters();
+<<<<<<< HEAD
+=======
+            self.memory_quota
+                .set_capacity(self.cfg.memory_quota.0 as usize);
+            self.scan_concurrency_semaphore =
+                Arc::new(Semaphore::new(self.cfg.incremental_scan_concurrency));
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
             info!(
                 "resolved-ts config changed";
                 "prev" => prev,
@@ -922,7 +1024,7 @@ pub enum Task {
     ScanLocks {
         region_id: u64,
         observe_id: ObserveId,
-        entries: Vec<ScanEntry>,
+        entries: ScanEntries,
         apply_index: u64,
     },
     ChangeConfig {

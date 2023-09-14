@@ -3,9 +3,10 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::KvEngine;
-use futures::compat::Future01CompatExt;
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region};
+use futures::{channel::oneshot::Receiver, compat::Future01CompatExt, FutureExt};
+use kvproto::metapb::Region;
 use raftstore::{
+<<<<<<< HEAD
     coprocessor::{ObserveHandle, ObserveId},
     router::RaftStoreRouter,
     store::{
@@ -13,50 +14,88 @@ use raftstore::{
         msg::{Callback, SignificantMsg},
         RegionSnapshot,
     },
+=======
+    coprocessor::ObserveHandle,
+    router::CdcHandle,
+    store::{fsm::ChangeObserver, msg::Callback, RegionSnapshot},
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 };
 use tikv::storage::{
     kv::{ScanMode as MvccScanMode, Snapshot},
-    mvcc::{DeltaScanner, MvccReader, ScannerBuilder},
-    txn::{TxnEntry, TxnEntryScanner},
+    mvcc::MvccReader,
 };
-use tikv_util::{sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE};
-use tokio::runtime::{Builder, Runtime};
+use tikv_util::{
+    sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler,
+};
+use tokio::{
+    runtime::{Builder, Runtime},
+    sync::Semaphore,
+};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{
     errors::{Error, Result},
+<<<<<<< HEAD
     metrics::RTS_SCAN_DURATION_HISTOGRAM,
+=======
+    metrics::*,
+    Task,
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 };
 
-const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
+const DEFAULT_SCAN_BATCH_SIZE: usize = 128;
 const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
 const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(25);
 
-pub type BeforeStartCallback = Box<dyn Fn() + Send>;
-pub type OnErrorCallback = Box<dyn Fn(ObserveId, Region, Error) + Send>;
-pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>, u64) + Send>;
-pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
-
-pub enum ScanMode {
-    LockOnly,
-    All,
-    AllWithOldValue,
-}
-
 pub struct ScanTask {
     pub handle: ObserveHandle,
-    pub tag: String,
-    pub mode: ScanMode,
     pub region: Region,
     pub checkpoint_ts: TimeStamp,
+<<<<<<< HEAD
     pub is_cancelled: IsCancelledCallback,
     pub send_entries: OnEntriesCallback,
     pub on_error: Option<OnErrorCallback>,
+=======
+    pub backoff: Option<Duration>,
+    pub cancelled: Receiver<()>,
+    pub scheduler: Scheduler<Task>,
+}
+
+impl ScanTask {
+    async fn send_entries(&self, entries: ScanEntries, apply_index: u64) {
+        let task = Task::ScanLocks {
+            region_id: self.region.get_id(),
+            observe_id: self.handle.id,
+            entries,
+            apply_index,
+        };
+        if let Err(e) = self.scheduler.schedule(task) {
+            warn!("resolved_ts scheduler send entries failed"; "err" => ?e);
+        }
+    }
+
+    fn is_cancelled(&mut self) -> bool {
+        matches!(self.cancelled.try_recv(), Err(_) | Ok(Some(_)))
+    }
+
+    fn on_error(&self, err: Error) {
+        if let Err(e) = self.scheduler.schedule(Task::ReRegisterRegion {
+            region_id: self.region.get_id(),
+            observe_id: self.handle.id,
+            cause: err,
+        }) {
+            warn!("schedule re-register task failed";
+                "region_id" => self.region.get_id(),
+                "observe_id" => ?self.handle.id,
+                "error" => ?e);
+        }
+        RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
+    }
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 }
 
 #[derive(Debug)]
-pub enum ScanEntry {
-    TxnEntry(Vec<TxnEntry>),
+pub enum ScanEntries {
     Lock(Vec<(Key, Lock)>),
     None,
 }
@@ -86,95 +125,72 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         }
     }
 
+<<<<<<< HEAD
     pub fn spawn_task(&self, mut task: ScanTask) {
         let raft_router = self.raft_router.clone();
         let fut = async move {
             let snap = match Self::get_snapshot(&mut task, raft_router).await {
+=======
+    pub fn spawn_task(&self, mut task: ScanTask, concurrency_semaphore: Arc<Semaphore>) {
+        let cdc_handle = self.cdc_handle.clone();
+        let fut = async move {
+            tikv_util::defer!({
+                RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
+            });
+            if let Some(backoff) = task.backoff {
+                RTS_INITIAL_SCAN_BACKOFF_DURATION_HISTOGRAM.observe(backoff.as_secs_f64());
+                let mut backoff = GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + backoff)
+                    .compat()
+                    .fuse();
+                futures::select! {
+                    res = backoff => if let Err(e) = res {
+                        error!("failed to backoff"; "err" => ?e);
+                    },
+                    _ = &mut task.cancelled => {}
+                }
+                if task.is_cancelled() {
+                    return;
+                }
+            }
+            let _permit = concurrency_semaphore.acquire().await;
+            if task.is_cancelled() {
+                return;
+            }
+            fail::fail_point!("resolved_ts_before_scanner_get_snapshot");
+            let snap = match Self::get_snapshot(&mut task, cdc_handle).await {
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
                 Ok(snap) => snap,
                 Err(e) => {
                     warn!("resolved_ts scan get snapshot failed"; "err" => ?e);
-                    let ScanTask {
-                        on_error,
-                        region,
-                        handle,
-                        ..
-                    } = task;
-                    if let Some(on_error) = on_error {
-                        on_error(handle.id, region, e);
-                    }
+                    task.on_error(e);
                     return;
                 }
             };
             let start = Instant::now();
             let apply_index = snap.get_apply_index().unwrap();
-            let mut entries = vec![];
-            match task.mode {
-                ScanMode::All | ScanMode::AllWithOldValue => {
-                    let txn_extra_op = if let ScanMode::AllWithOldValue = task.mode {
-                        TxnExtraOp::ReadOldValue
-                    } else {
-                        TxnExtraOp::Noop
-                    };
-                    let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
-                        .range(None, None)
-                        .build_delta_scanner(task.checkpoint_ts, txn_extra_op)
-                        .unwrap();
-                    let mut done = false;
-                    while !done && !(task.is_cancelled)() {
-                        let (es, has_remaining) = match Self::scan_delta(&mut scanner) {
-                            Ok(rs) => rs,
-                            Err(e) => {
-                                warn!("resolved_ts scan delta failed"; "err" => ?e);
-                                let ScanTask {
-                                    on_error,
-                                    region,
-                                    handle,
-                                    ..
-                                } = task;
-                                if let Some(on_error) = on_error {
-                                    on_error(handle.id, region, e);
-                                }
-                                return;
-                            }
-                        };
-                        done = !has_remaining;
-                        entries.push(ScanEntry::TxnEntry(es));
-                    }
-                }
-                ScanMode::LockOnly => {
-                    let mut reader = MvccReader::new(snap, Some(MvccScanMode::Forward), false);
-                    let mut done = false;
-                    let mut start = None;
-                    while !done && !(task.is_cancelled)() {
-                        let (locks, has_remaining) =
-                            match Self::scan_locks(&mut reader, start.as_ref(), task.checkpoint_ts)
-                            {
-                                Ok(rs) => rs,
-                                Err(e) => {
-                                    warn!("resolved_ts scan lock failed"; "err" => ?e);
-                                    let ScanTask {
-                                        on_error,
-                                        region,
-                                        handle,
-                                        ..
-                                    } = task;
-                                    if let Some(on_error) = on_error {
-                                        on_error(handle.id, region, e);
-                                    }
-                                    return;
-                                }
-                            };
-                        done = !has_remaining;
-                        if has_remaining {
-                            start = Some(locks.last().unwrap().0.clone())
+            let mut reader = MvccReader::new(snap, Some(MvccScanMode::Forward), false);
+            let mut done = false;
+            let mut start_key = None;
+            while !done && !task.is_cancelled() {
+                let (locks, has_remaining) =
+                    match Self::scan_locks(&mut reader, start_key.as_ref(), task.checkpoint_ts) {
+                        Ok(rs) => rs,
+                        Err(e) => {
+                            warn!("resolved_ts scan lock failed"; "err" => ?e);
+                            task.on_error(e);
+                            return;
                         }
-                        entries.push(ScanEntry::Lock(locks));
-                    }
+                    };
+                done = !has_remaining;
+                if has_remaining {
+                    start_key = Some(locks.last().unwrap().0.clone())
                 }
+                task.send_entries(ScanEntries::Lock(locks), apply_index)
+                    .await;
             }
-            entries.push(ScanEntry::None);
             RTS_SCAN_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
-            (task.send_entries)(entries, apply_index);
+            task.send_entries(ScanEntries::None, apply_index).await;
         };
         self.workers.spawn(fut);
     }
@@ -186,17 +202,25 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         let mut last_err = None;
         for retry_times in 0..=GET_SNAPSHOT_RETRY_TIME {
             if retry_times != 0 {
-                if let Err(e) = GLOBAL_TIMER_HANDLE
+                let mut backoff = GLOBAL_TIMER_HANDLE
                     .delay(
                         std::time::Instant::now() + retry_times * GET_SNAPSHOT_RETRY_BACKOFF_STEP,
                     )
                     .compat()
-                    .await
-                {
-                    error!("failed to backoff"; "err" => ?e);
+                    .fuse();
+                futures::select! {
+                    res = backoff => if let Err(e) = res {
+                        error!("failed to backoff"; "err" => ?e);
+                    },
+                    _ = &mut task.cancelled => {}
                 }
+<<<<<<< HEAD
                 if (task.is_cancelled)() {
                     return Err(Error::Other("scan task cancelled".into()));
+=======
+                if task.is_cancelled() {
+                    return Err(box_err!("scan task cancelled"));
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
                 }
             }
             let (cb, fut) = tikv_util::future::paired_future_callback();
@@ -245,6 +269,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         )?;
         Ok((locks, has_remaining))
     }
+<<<<<<< HEAD
 
     fn scan_delta<S: Snapshot>(scanner: &mut DeltaScanner<S>) -> Result<(Vec<TxnEntry>, bool)> {
         let mut entries = Vec::with_capacity(DEFAULT_SCAN_BATCH_SIZE);
@@ -262,4 +287,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         }
         Ok((entries, has_remaining))
     }
+=======
+>>>>>>> e43a157c4a (resolved_ts: limit scanner memory usage (#15523))
 }
