@@ -694,6 +694,7 @@ enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
 memory-quota = "1MB"
+incremental-scan-concurrency = 7
 
 [split]
 detect-times = 10
