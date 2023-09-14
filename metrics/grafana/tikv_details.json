@@ -422,7 +422,7 @@
               "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"used\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}--used",
+              "legendFormat": "{{instance}}-used",
               "refId": "A",
               "step": 10
             },
@@ -430,7 +430,7 @@
               "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"kv_size\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}--kv_size",
+              "legendFormat": "{{instance}}-kv_size",
               "refId": "B",
               "step": 10,
               "hide": true
@@ -439,7 +439,7 @@
               "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"raft_size\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}--raft_size",
+              "legendFormat": "{{instance}}-raft_size",
               "refId": "C",
               "step": 10,
               "hide": true
@@ -448,7 +448,7 @@
               "expr": "sum(tikv_store_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"import_size\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}--raft_size",
+              "legendFormat": "{{instance}}-import_size",
               "refId": "D",
               "step": 10,
               "hide": true

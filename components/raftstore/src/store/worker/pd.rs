@@ -2601,7 +2601,6 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
         .expect("kv engine used size");
 
     STORE_SIZE_EVENT_INT_VEC.raft_size.set(engine_size as i64);
-
     STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_mgr_size as i64);
     STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
 

@@ -472,7 +472,7 @@ where
             .get_engine_size()
             .expect("engine used size");
 
-        STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_size as i64);
+        STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
         STORE_SIZE_EVENT_INT_VEC.raft_size.set(engine_size as i64);
         STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_size as i64);
 
