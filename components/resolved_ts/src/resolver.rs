@@ -10,7 +10,7 @@ use tikv_util::{
 };
 use txn_types::{Key, TimeStamp};
 
-use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
+use crate::metrics::*;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
 pub const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
@@ -220,16 +220,23 @@ impl Resolver {
 
     // Return an approximate heap memory usage in bytes.
     pub fn approximate_heap_bytes(&self) -> usize {
-        // memory used by locks_by_key.
-        let memory_quota_in_use = self.memory_quota.in_use();
+        if self.locks_by_key.is_empty() {
+            return 0;
+        }
 
-        // memory used by lock_ts_heap.
-        let memory_lock_ts_heap = self.lock_ts_heap.len()
-            * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
-            // memory used by HashSet<Arc<u8>>
-            + self.locks_by_key.len() * std::mem::size_of::<Arc<[u8]>>();
-
-        memory_quota_in_use + memory_lock_ts_heap
+        const SAMPLE_COUNT: usize = 8;
+        let mut key_count = 0;
+        let mut key_bytes = 0;
+        for key in self.locks_by_key.keys() {
+            key_count += 1;
+            key_bytes += key.len();
+            if key_count >= SAMPLE_COUNT {
+                break;
+            }
+        }
+        self.locks_by_key.len() * (key_bytes / key_count + std::mem::size_of::<TimeStamp>())
+            + self.lock_ts_heap.len()
+                * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
     }
 
     fn lock_heap_size(&self, key: &[u8]) -> usize {
