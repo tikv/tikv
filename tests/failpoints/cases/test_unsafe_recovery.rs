@@ -452,7 +452,7 @@ fn test_unsafe_recovery_create_destroy_reentrancy() {
 
 #[test]
 fn test_unsafe_recovery_rollback_merge() {
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(20);
     cluster.run();
