@@ -31,7 +31,7 @@ use std::{
     time::Instant,
 };
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, DATA_CFS};
 use error_code::ErrorCodeExt;
 use kvproto::{
     raft_cmdpb::AdminCmdType,
@@ -896,6 +896,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
+        if let Some(idx) = self
+            .storage_mut()
+            .apply_trace_mut()
+            .take_flush_index(ready_number)
+        {
+            let apply_index = self.flush_state().applied_index();
+            self.cleanup_stale_ssts(ctx, DATA_CFS, idx, apply_index);
+        }
 
         if self.is_in_force_leader() {
             // forward commit index, the committed entries will be applied in
