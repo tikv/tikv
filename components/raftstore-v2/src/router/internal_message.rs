@@ -25,4 +25,11 @@ pub struct ApplyRes {
     pub modifications: DataTrace,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<BucketStat>,
+    pub sst_applied_index: Vec<SstApplyIndex>,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct SstApplyIndex {
+    pub cf_index: usize,
+    pub index: u64,
 }

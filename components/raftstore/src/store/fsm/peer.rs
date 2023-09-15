@@ -1015,10 +1015,10 @@ where
             // in snapshot recovery after we stopped all conf changes from PD.
             // if the follower slow than leader and has the pending conf change.
             // that's means
-            // 1. if the follower didn't finished the conf change
-            //    => it cannot be chosen to be leader during recovery.
-            // 2. if the follower has been chosen to be leader
-            //    => it already apply the pending conf change already.
+            // 1. if the follower didn't finished the conf change => it cannot be chosen to
+            //    be leader during recovery.
+            // 2. if the follower has been chosen to be leader => it already apply the
+            //    pending conf change already.
             return;
         }
         debug!(
@@ -4434,6 +4434,9 @@ where
 
     fn schedule_merge(&mut self) -> Result<()> {
         fail_point!("on_schedule_merge", |_| Ok(()));
+        fail_point!("on_schedule_merge_ret_err", |_| Err(Error::RegionNotFound(
+            1
+        )));
         let (request, target_id) = {
             let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
             let expect_region = state.get_target();
@@ -4551,6 +4554,17 @@ where
                 {
                     info!(
                         "failed to schedule merge, rollback";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                        "error_code" => %e.error_code(),
+                    );
+                    self.rollback_merge();
+                } else if let Some(ForceLeaderState::ForceLeader { .. }) =
+                    &self.fsm.peer.force_leader
+                {
+                    info!(
+                        "failed to schedule merge, rollback in force leader state";
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
                         "err" => %e,
@@ -5228,7 +5242,8 @@ where
             // error-prone
             if !(msg.has_admin_request()
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
-                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2))
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::RollbackMerge))
             {
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
