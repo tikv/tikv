@@ -7,10 +7,10 @@ use std::{
 
 use file_system::calc_crc32;
 use futures::{executor::block_on, stream, SinkExt};
-use grpcio::{Result, WriteFlags};
-use kvproto::import_sstpb::*;
+use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
+use kvproto::{import_sstpb::*, tikvpb_grpc::TikvClient};
 use tempfile::{Builder, TempDir};
-use test_raftstore::Simulator;
+use test_raftstore::{must_raw_put, Simulator};
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
 use tikv_util::{config::ReadableSize, HandyRwLock};
@@ -454,4 +454,74 @@ fn sst_file_count(paths: &Vec<TempDir>) -> u64 {
         }
     }
     count
+}
+
+#[test]
+fn test_flushed_applied_index_after_ingset() {
+    // disable data flushed
+    fail::cfg("on_flush_completed", "return()").unwrap();
+    // disable data flushed
+    let (mut cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client_v2(None);
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+
+    // Create clients.
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(1));
+    let client = TikvClient::new(channel);
+
+    for i in 0..5 {
+        let sst_range = (i * 20, (i + 1) * 20);
+        let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
+        // No region id and epoch.
+        send_upload_sst(&import, &meta, &data).unwrap();
+        let mut ingest = IngestRequest::default();
+        ingest.set_context(ctx.clone());
+        ingest.set_sst(meta.clone());
+        meta.set_region_id(ctx.get_region_id());
+        meta.set_region_epoch(ctx.get_region_epoch().clone());
+        send_upload_sst(&import, &meta, &data).unwrap();
+        ingest.set_sst(meta.clone());
+        let resp = import.ingest(&ingest).unwrap();
+        assert!(!resp.has_error(), "{:?}", resp.get_error());
+    }
+
+    // only 1 sst left because there is no more event to trigger a raft ready flush.
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(1, count);
+
+    for i in 5..8 {
+        let sst_range = (i * 20, (i + 1) * 20);
+        let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
+        // No region id and epoch.
+        send_upload_sst(&import, &meta, &data).unwrap();
+        let mut ingest = IngestRequest::default();
+        ingest.set_context(ctx.clone());
+        ingest.set_sst(meta.clone());
+        meta.set_region_id(ctx.get_region_id());
+        meta.set_region_epoch(ctx.get_region_epoch().clone());
+        send_upload_sst(&import, &meta, &data).unwrap();
+        ingest.set_sst(meta.clone());
+        let resp = import.ingest(&ingest).unwrap();
+        assert!(!resp.has_error(), "{:?}", resp.get_error());
+    }
+
+    // ingest more sst files, unflushed index still be 1.
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(1, count);
+
+    // file a write to trigger ready flush, even if the write is not flushed.
+    must_raw_put(&client, ctx, b"key1".to_vec(), b"value1".to_vec());
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(0, count);
+
+    // restart node, should not tirgger any ingest
+    fail::cfg("on_apply_ingest", "panic").unwrap();
+    cluster.stop_node(1);
+    cluster.start().unwrap();
+    let count = sst_file_count(&cluster.paths);
+    assert_eq!(0, count);
+
+    fail::remove("on_apply_ingest");
+    fail::remove("on_flush_completed");
 }
