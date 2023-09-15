@@ -602,6 +602,13 @@ impl<EK: KvEngine> Runner<EK> {
     }
 }
 
+#[cfg(test)]
+impl<EK: KvEngine> Runner<EK> {
+    pub fn get_running_task_count(&self) -> usize {
+        self.low_pri_pool.get_running_task_count()
+    }
+}
+
 impl<EK> Runnable for Runner<EK>
 where
     EK: KvEngine,
@@ -822,6 +829,13 @@ mod tests {
         runner.run(Task::destroy(r_1, 100));
         assert!(path.exists());
         registry.remove(r_1);
+        // waiting for async `pause_background_work` to be finished,
+        // this task can block tablet's destroy.
+        for _i in 0..100 {
+            if runner.get_running_task_count() > 0 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
         runner.on_timeout();
         assert!(!path.exists());
         assert!(runner.pending_destroy_tasks.is_empty());
