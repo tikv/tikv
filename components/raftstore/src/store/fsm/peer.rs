@@ -2847,6 +2847,11 @@ where
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
+        debug!(
+            "reset raft tick to {:?}", state;
+            "region_id"=> self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
         self.fsm.reset_hibernate_state(state);
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;
