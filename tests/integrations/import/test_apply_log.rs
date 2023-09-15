@@ -67,6 +67,6 @@ fn test_apply_twice() {
         &tikv,
         &ctx,
         CF_DEFAULT,
-        default_fst.into_iter().chain(default_snd.into_iter()),
+        default_fst.into_iter().chain(default_snd),
     );
 }

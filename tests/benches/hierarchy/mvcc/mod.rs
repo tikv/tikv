@@ -61,7 +61,7 @@ where
         .unwrap();
     }
     let write_data = WriteData::from_modifies(txn.into_modifies());
-    let _ = tikv_kv::write(engine, &ctx, write_data, None);
+    let _ = futures::executor::block_on(tikv_kv::write(engine, &ctx, write_data, None));
     let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(k)).collect();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     (snapshot, keys)

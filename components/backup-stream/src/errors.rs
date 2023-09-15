@@ -158,7 +158,7 @@ where
 
 /// Like `errors.Annotate` in Go.
 /// Wrap an unknown error with [`Error::Other`].
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! annotate {
     ($inner: expr, $message: expr) => {
         {
@@ -242,6 +242,7 @@ mod test {
 
     #[bench]
     // 2,685 ns/iter (+/- 194)
+    #[allow(clippy::unnecessary_literal_unwrap)]
     fn contextual_add_format_strings_directly(b: &mut test::Bencher) {
         b.iter(|| {
             let err = Error::Io(io::Error::new(
@@ -305,6 +306,7 @@ mod test {
 
     #[bench]
     // 773 ns/iter (+/- 8)
+    #[allow(clippy::unnecessary_literal_unwrap)]
     fn baseline(b: &mut test::Bencher) {
         b.iter(|| {
             let err = Error::Io(io::Error::new(

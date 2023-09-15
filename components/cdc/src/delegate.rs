@@ -1437,7 +1437,7 @@ mod tests {
 
     #[test]
     fn test_observed_range() {
-        for case in vec![
+        for case in [
             (b"".as_slice(), b"".as_slice(), false),
             (b"a", b"", false),
             (b"", b"b", false),
