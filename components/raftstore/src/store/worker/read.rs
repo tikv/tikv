@@ -829,10 +829,21 @@ where
             return Ok(None);
         }
 
-        // Check witness
-        if find_peer_by_id(&delegate.region, delegate.peer_id).map_or(true, |p| p.is_witness) {
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
-            return Err(Error::IsWitness(region_id));
+        match find_peer_by_id(&delegate.region, delegate.peer_id) {
+            // Check witness
+            Some(peer) => {
+                if peer.is_witness {
+                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
+                    return Err(Error::IsWitness(region_id));
+                }
+            }
+            // This (rarely) happen in witness disabled clusters while the conf change applied but
+            // region not removed. We shouldn't return `IsWitness` here because our client back off
+            // for a long time while encountering that.
+            None => {
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
+                return Err(Error::RegionNotFound(region_id));
+            }
         }
 
         // Check non-witness hasn't finish applying snapshot yet.
@@ -2169,11 +2180,12 @@ mod tests {
         let (notify_tx, notify_rx) = channel();
         let (wait_spawn_tx, wait_spawn_rx) = channel();
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let _ = runtime.spawn(async move {
+        let handler = runtime.spawn(async move {
             wait_spawn_tx.send(()).unwrap();
             notify.notified().await;
             notify_tx.send(()).unwrap();
         });
+        drop(handler);
         wait_spawn_rx.recv().unwrap();
         thread::sleep(std::time::Duration::from_millis(500)); // Prevent lost notify.
         must_not_redirect(&mut reader, &rx, task);

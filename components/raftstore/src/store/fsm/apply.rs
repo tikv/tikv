@@ -272,6 +272,7 @@ pub enum ExecResult<S> {
         regions: Vec<Region>,
         derived: Region,
         new_split_regions: HashMap<u64, NewSplitPeer>,
+        share_source_region_size: bool,
     },
     PrepareMerge {
         region: Region,
@@ -1261,9 +1262,9 @@ where
             apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
             // 1. When a peer become leader, it will send an empty entry.
-            // 2. When a leader tries to read index during transferring leader,
-            //    it will also propose an empty entry. But that entry will not contain
-            //    any associated callback. So no need to clear callback.
+            // 2. When a leader tries to read index during transferring leader, it will also
+            //    propose an empty entry. But that entry will not contain any associated
+            //    callback. So no need to clear callback.
             while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
                 if let Some(cb) = cmd.cb.take() {
                     apply_ctx
@@ -2516,6 +2517,9 @@ where
         admin_req
             .mut_splits()
             .set_right_derive(split.get_right_derive());
+        admin_req
+            .mut_split()
+            .set_share_source_region_size(split.get_share_source_region_size());
         admin_req.mut_splits().mut_requests().push(split);
         // This method is executed only when there are unapplied entries after being
         // restarted. So there will be no callback, it's OK to return a response
@@ -2560,6 +2564,7 @@ where
         derived.mut_region_epoch().set_version(new_version);
 
         let right_derive = split_reqs.get_right_derive();
+        let share_source_region_size = split_reqs.get_share_source_region_size();
         let mut regions = Vec::with_capacity(new_region_cnt + 1);
         // Note that the split requests only contain ids for new regions, so we need
         // to handle new regions and old region separately.
@@ -2724,6 +2729,7 @@ where
                 regions,
                 derived,
                 new_split_regions,
+                share_source_region_size,
             }),
         ))
     }
@@ -4781,12 +4787,12 @@ where
                     // command may not read the writes of previous commands and break ACID. If
                     // it's still leader, there are two possibility that mailbox is closed:
                     // 1. The process is shutting down.
-                    // 2. The leader is destroyed. A leader won't propose to destroy itself, so
-                    //     it should either destroyed by older leaders or newer leaders. Leader
-                    //     won't respond to read until it has applied to current term, so no
-                    //     command will be proposed until command from older leaders have applied,
-                    //     which will then stop it from accepting proposals. If the command is
-                    //     proposed by new leader, then it won't be able to propose new proposals.
+                    // 2. The leader is destroyed. A leader won't propose to destroy itself, so it
+                    //    should either destroyed by older leaders or newer leaders. Leader won't
+                    //    respond to read until it has applied to current term, so no command will
+                    //    be proposed until command from older leaders have applied, which will then
+                    //    stop it from accepting proposals. If the command is proposed by new
+                    //    leader, then it won't be able to propose new proposals.
                     // So only shutdown needs to be checked here.
                     if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         for p in apply.cbs.drain(..) {
@@ -7088,6 +7094,7 @@ mod tests {
             regions,
             derived: _,
             new_split_regions: _,
+            share_source_region_size: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();

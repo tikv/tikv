@@ -51,7 +51,7 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
     check_raft_cmd_request, is_error_response, new_admin_request, new_delete_cmd,
-    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd,
+    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd, new_put_cmd,
     new_region_detail_cmd, new_region_leader_cmd, new_request, new_status_request, new_store,
     new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
     PartitionFilterFactory, RawEngine,
@@ -220,7 +220,7 @@ pub trait Simulator<EK: KvEngine> {
             None => {
                 error!("call_query_on_node receives none response"; "request" => ?request);
                 // Do not unwrap here, sometimes raftstore v2 may return none.
-                return Err(box_err!("receives none response {:?}", request));
+                Err(box_err!("receives none response {:?}", request))
             }
         }
     }
@@ -1263,6 +1263,29 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
+    pub fn async_request(
+        &mut self,
+        mut req: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
+        let region_id = req.get_header().get_region_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .wl()
+            .async_command_on_node(leader.get_store_id(), req)
+    }
+
+    pub fn async_put(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let mut region = self.get_region(key);
+        let reqs = vec![new_put_cmd(key, value)];
+        let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
+        Ok(self.async_request(put))
+    }
+
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
         self.must_put_cf(CF_DEFAULT, key, value);
     }
@@ -1589,6 +1612,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         )
     }
 
+    #[allow(clippy::let_underscore_future)]
     pub fn merge_region(&mut self, source: u64, target: u64, _cb: Callback<RocksSnapshot>) {
         // FIXME: callback is ignored.
         let mut req = self.new_prepare_merge(source, target);

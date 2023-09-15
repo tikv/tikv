@@ -254,7 +254,7 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     let mut keys_in_region = Vec::new();
 
     loop {
-        let Some(key) = keys.peek() else {break};
+        let Some(key) = keys.peek() else { break };
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -552,7 +552,7 @@ impl<E: Engine> GcRunner<E> {
         let mut keys = keys.into_iter().peekable();
         for region in regions {
             let mut raw_modifies = MvccRaw::new();
-            let mut snapshot = self.get_snapshot(self.store_id, &region)?;
+            let snapshot = self.get_snapshot(self.store_id, &region)?;
 
             let mut keys_in_region = get_keys_in_region(&mut keys, &region).into_iter();
             let mut next_gc_key = keys_in_region.next();
@@ -563,7 +563,7 @@ impl<E: Engine> GcRunner<E> {
                     &range_start_key,
                     &range_end_key,
                     &mut raw_modifies,
-                    &mut snapshot,
+                    &snapshot,
                     &mut gc_info,
                 ) {
                     GC_KEY_FAILURES.inc();
@@ -615,7 +615,7 @@ impl<E: Engine> GcRunner<E> {
         range_start_key: &Key,
         range_end_key: &Key,
         raw_modifies: &mut MvccRaw,
-        kv_snapshot: &mut <E as Engine>::Snap,
+        kv_snapshot: &<E as Engine>::Snap,
         gc_info: &mut GcInfo,
     ) -> Result<()> {
         let start_key = key.clone().append_ts(safe_point.prev());
@@ -669,10 +669,7 @@ impl<E: Engine> GcRunner<E> {
     }
 
     pub fn mut_stats(&mut self, key_mode: GcKeyMode) -> &mut Statistics {
-        let stats = self
-            .stats_map
-            .entry(key_mode)
-            .or_insert_with(Default::default);
+        let stats = self.stats_map.entry(key_mode).or_default();
         stats
     }
 
@@ -2269,7 +2266,6 @@ mod tests {
 
         fn generate_keys(start: u64, end: u64) -> Vec<Key> {
             (start..end)
-                .into_iter()
                 .map(|i| {
                     let key = format!("k{:02}", i);
                     Key::from_raw(key.as_bytes())

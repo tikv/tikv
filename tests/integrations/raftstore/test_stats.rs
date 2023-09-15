@@ -420,6 +420,7 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     fail::remove("mock_collect_tick_interval");
 }
 
+#[allow(clippy::extra_unused_type_parameters)]
 fn raw_put<F: KvFormat>(
     _cluster: &Cluster<ServerCluster>,
     client: &TikvClient,
@@ -575,7 +576,7 @@ pub fn test_rollback() {
 fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
     let (mut cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-        cluster.cfg.split.qps_threshold = 0;
+        cluster.cfg.split.qps_threshold = Some(0);
         cluster.cfg.split.split_balance_score = 2.0;
         cluster.cfg.split.split_contained_score = 2.0;
         cluster.cfg.split.detect_times = 1;

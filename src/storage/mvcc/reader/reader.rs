@@ -418,11 +418,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                 estimated_versions_to_last_change,
                             } if estimated_versions_to_last_change >= SEEK_BOUND => {
                                 let key_with_ts = key.clone().append_ts(commit_ts);
-                                let Some(value) = self
-                                        .snapshot
-                                        .get_cf(CF_WRITE, &key_with_ts)? else {
-                                        return Ok(None);
-                                    };
+                                let Some(value) = self.snapshot.get_cf(CF_WRITE, &key_with_ts)?
+                                else {
+                                    return Ok(None);
+                                };
                                 self.statistics.write.get += 1;
                                 let write = WriteRef::parse(&value)?.to_owned();
                                 assert!(
@@ -2421,7 +2420,7 @@ pub mod tests {
         engine.commit(k, 1, 2);
 
         // Write enough LOCK recrods
-        for start_ts in (6..30).into_iter().step_by(2) {
+        for start_ts in (6..30).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2430,7 +2429,7 @@ pub mod tests {
         engine.commit(k, 45, 46);
 
         // Write enough LOCK recrods
-        for start_ts in (50..80).into_iter().step_by(2) {
+        for start_ts in (50..80).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2485,7 +2484,7 @@ pub mod tests {
         let k = b"k";
 
         // Write enough LOCK recrods
-        for start_ts in (6..30).into_iter().step_by(2) {
+        for start_ts in (6..30).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2522,7 +2521,7 @@ pub mod tests {
 
         engine.put(k, 1, 2);
         // 10 locks were put
-        for start_ts in (6..30).into_iter().step_by(2) {
+        for start_ts in (6..30).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2549,7 +2548,7 @@ pub mod tests {
         feature_gate.set_version("6.1.0").unwrap();
         set_tls_feature_gate(feature_gate);
         engine.delete(k, 51, 52);
-        for start_ts in (56..80).into_iter().step_by(2) {
+        for start_ts in (56..80).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
         let feature_gate = FeatureGate::default();
@@ -2581,7 +2580,7 @@ pub mod tests {
         let k = b"k";
         engine.put(k, 1, 2);
 
-        for start_ts in (6..30).into_iter().step_by(2) {
+        for start_ts in (6..30).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
         engine.rollback(k, 30);

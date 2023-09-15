@@ -9,7 +9,7 @@ use crate::{
         localstorage::{LocalStorage, SharedTagInfos},
         SubRecorder,
     },
-    RawRecord, RawRecords,
+    RawRecords,
 };
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.
@@ -37,7 +37,7 @@ impl SubRecorder for CpuRecorder {
                     if *last_stat != cur_stat {
                         let delta_ms =
                             (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
-                        let record = records.entry(cur_tag).or_insert_with(RawRecord::default);
+                        let record = records.entry(cur_tag).or_default();
                         record.cpu_time += delta_ms as u32;
                     }
                     thread_stat.stat = cur_stat;

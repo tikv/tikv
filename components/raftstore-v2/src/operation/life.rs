@@ -637,8 +637,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let check_peer_id = check.get_check_peer().get_id();
         let records = self.storage().region_state().get_merged_records();
         let Some(record) = records.iter().find(|r| {
-            r.get_source_peers().iter().any(|p| p.get_id() == check_peer_id)
-        }) else { return };
+            r.get_source_peers()
+                .iter()
+                .any(|p| p.get_id() == check_peer_id)
+        }) else {
+            return;
+        };
         let source_index = record.get_source_index();
         forward_destroy_to_source_peer(msg, |m| {
             let source_checkpoint = super::merge_source_path(
@@ -797,11 +801,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.has_pending_tombstone_tablets() {
             let applied_index = self.entry_storage().applied_index();
             let last_index = self.entry_storage().last_index();
+            let persisted = self
+                .remember_persisted_tablet_index()
+                .load(std::sync::atomic::Ordering::Relaxed);
             info!(
                 self.logger,
                 "postpone destroy because there're pending tombstone tablets";
                 "applied_index" => applied_index,
                 "last_index" => last_index,
+                "persisted_applied" => persisted,
             );
             return true;
         }

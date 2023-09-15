@@ -35,7 +35,7 @@ fn get_fp(usage: DiskUsage, store_id: u64) -> String {
 
 // check the region new leader is elected.
 fn assert_region_leader_changed<T: Simulator>(
-    cluster: &mut Cluster<T>,
+    cluster: &Cluster<T>,
     region_id: u64,
     original_leader: u64,
 ) {
@@ -86,12 +86,12 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
 
     // Test new normal proposals won't be allowed when disk is full.
     let old_last_index = cluster.raft_local_state(1, 1).last_index;
-    let mut rx = cluster.async_put(b"k2", b"v2").unwrap();
-    assert_disk_full(&rx.recv_timeout(Duration::from_secs(2)).unwrap());
+    let rx = cluster.async_put(b"k2", b"v2").unwrap();
+    assert_disk_full(&block_on_timeout(rx, Duration::from_secs(2)).unwrap());
     let new_last_index = cluster.raft_local_state(1, 1).last_index;
     assert_eq!(old_last_index, new_last_index);
 
-    assert_region_leader_changed(&mut cluster, 1, 1);
+    assert_region_leader_changed(&cluster, 1, 1);
     fail::remove(get_fp(usage, 1));
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg(get_fp(usage, 1), "return").unwrap();
@@ -199,7 +199,7 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
         DiskFullOpt::NotAllowedOnFull,
     );
     assert!(res.get_region_error().has_disk_full());
-    assert_region_leader_changed(&mut cluster, 1, 1);
+    assert_region_leader_changed(&cluster, 1, 1);
 
     fail::remove(get_fp(usage, 1));
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -299,8 +299,8 @@ fn test_majority_disk_full() {
     }
 
     // Normal proposals will be rejected because of majority peers' disk full.
-    let mut ch = cluster.async_put(b"k2", b"v2").unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    let ch = cluster.async_put(b"k2", b"v2").unwrap();
+    let resp = block_on_timeout(ch, Duration::from_secs(1)).unwrap();
     assert_eq!(disk_full_stores(&resp), vec![2, 3]);
 
     // Proposals with special `DiskFullOpt`s can be accepted even if all peers are
@@ -310,8 +310,8 @@ fn test_majority_disk_full() {
     let put = new_request(1, epoch.clone(), reqs, false);
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
-    let mut ch = cluster.async_request_with_opts(put, opts).unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = block_on_timeout(ch, Duration::from_secs(1)).unwrap();
     assert!(!resp.get_header().has_error());
 
     // Reset disk full status for peer 2 and 3. 2 follower reads must success
@@ -335,8 +335,8 @@ fn test_majority_disk_full() {
     let put = new_request(1, epoch.clone(), reqs, false);
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
-    let mut ch = cluster.async_request_with_opts(put, opts).unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(10)).unwrap();
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = block_on_timeout(ch, Duration::from_secs(10)).unwrap();
     assert_eq!(disk_full_stores(&resp), vec![2, 3]);
 
     // Peer 2 disk usage changes from already full to almost full.
@@ -354,8 +354,8 @@ fn test_majority_disk_full() {
     let put = new_request(1, epoch, reqs, false);
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
-    let mut ch = cluster.async_request_with_opts(put, opts).unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = block_on_timeout(ch, Duration::from_secs(1)).unwrap();
     assert_eq!(disk_full_stores(&resp), vec![3]);
 
     for i in 0..3 {
@@ -393,7 +393,7 @@ fn test_disk_full_followers_with_hibernate_regions() {
 
 // check the region new leader is elected.
 fn assert_region_merged<T: Simulator>(
-    cluster: &mut Cluster<T>,
+    cluster: &Cluster<T>,
     left_region_key: &[u8],
     right_region_key: &[u8],
 ) {

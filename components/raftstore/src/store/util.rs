@@ -124,8 +124,7 @@ pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
 /// peer or not.
 // There could be two cases:
 // 1. Target peer already exists but has not established communication with leader yet
-// 2. Target peer is added newly due to member change or region split, but it's not
-//    created yet
+// 2. Target peer is added newly due to member change or region split, but it's not created yet
 // For both cases the region start key and end key are attached in RequestVote and
 // Heartbeat message for the store of that peer to check whether to create a new peer
 // when receiving these messages, or just to wait for a pending region split to perform
@@ -1439,7 +1438,6 @@ impl RegionReadProgress {
         self.safe_ts()
     }
 
-    // Dump the `LeaderInfo` and the peer list
     pub fn get_core(&self) -> MutexGuard<'_, RegionReadProgressCore> {
         self.core.lock().unwrap()
     }

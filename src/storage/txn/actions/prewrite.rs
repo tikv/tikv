@@ -239,6 +239,7 @@ impl LockStatus {
 }
 
 /// A single mutation to be prewritten.
+#[derive(Debug)]
 struct PrewriteMutation<'a> {
     key: Key,
     value: Option<Value>,
@@ -677,6 +678,12 @@ impl<'a> PrewriteMutation<'a> {
             if self.skip_constraint_check() {
                 self.check_for_newer_version(reader)?;
             }
+            let (write, commit_ts) = write
+                .as_ref()
+                .map(|(w, ts)| (Some(w), Some(ts)))
+                .unwrap_or((None, None));
+            error!("assertion failure"; "assertion" => ?self.assertion, "write" => ?write,
+            "commit_ts" => commit_ts, "mutation" => ?self);
             assertion_err?;
         }
 
@@ -759,7 +766,6 @@ fn async_commit_timestamps(
         #[cfg(not(feature = "failpoints"))]
         let injected_fallback = false;
 
-        let max_commit_ts = max_commit_ts;
         if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || injected_fallback {
             warn!("commit_ts is too large, fallback to normal 2PC";
                 "key" => log_wrappers::Value::key(key.as_encoded()),
@@ -1868,7 +1874,6 @@ pub mod tests {
             // At most 12 ops per-case.
             let ops_count = rg.gen::<u8>() % 12;
             let ops = (0..ops_count)
-                .into_iter()
                 .enumerate()
                 .map(|(i, _)| {
                     if i == 0 {

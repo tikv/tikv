@@ -252,13 +252,43 @@ fn test_flush_before_stop() {
         .unwrap();
 }
 
+// test flush_before_close will not flush forever
+#[test]
+fn test_flush_before_stop2() {
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+    fail::cfg("on_flush_completed", "return").unwrap();
+
+    for i in 0..20 {
+        let key = format!("k{:03}", i);
+        cluster.must_put_cf(CF_WRITE, key.as_bytes(), b"val");
+        cluster.must_put_cf(CF_LOCK, key.as_bytes(), b"val");
+    }
+
+    let router = cluster.get_router(1).unwrap();
+    let raft_engine = cluster.get_raft_engine(1);
+
+    let (tx, rx) = sync_channel(1);
+    let msg = PeerMsg::FlushBeforeClose { tx };
+    router.force_send(1, msg).unwrap();
+
+    rx.recv().unwrap();
+
+    let admin_flush = raft_engine.get_flushed_index(1, CF_RAFT).unwrap().unwrap();
+    assert!(admin_flush < 10);
+}
+
 // We cannot use a flushed index to call `maybe_advance_admin_flushed`
 // consider a case:
 // 1. lock `k` with index 6
 // 2. on_applied_res => lockcf's last_modified = 6
 // 3. flush lock cf => lockcf's flushed_index = 6
-// 4. batch {unlock `k`, write `k`} with index 7
-//    (last_modified is updated in store but RocksDB is modified in apply. So,
+// 4. batch {unlock `k`, write `k`} with index 7 (last_modified is updated in
+//    store but RocksDB is modified in apply. So,
 // before on_apply_res, the last_modified is not updated.)
 //
 // flush-before-close:

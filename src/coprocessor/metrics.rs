@@ -208,6 +208,12 @@ impl CopLocalMetrics {
     pub fn local_read_stats(&self) -> &ReadStats {
         &self.local_read_stats
     }
+
+    #[cfg(test)]
+    pub fn clear(&mut self) {
+        self.local_read_stats.region_infos.clear();
+        self.local_read_stats.region_buckets.clear();
+    }
 }
 
 thread_local! {
@@ -279,7 +285,7 @@ pub fn tls_collect_scan_details(cmd: ReqTag, stats: &Statistics) {
         m.borrow_mut()
             .local_scan_details
             .entry(cmd)
-            .or_insert_with(Default::default)
+            .or_default()
             .add(stats);
     });
 }

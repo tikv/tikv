@@ -29,6 +29,7 @@
 
 use std::{
     cmp,
+    collections::VecDeque,
     path::Path,
     sync::{atomic::Ordering, mpsc::SyncSender, Mutex},
 };
@@ -46,7 +47,7 @@ use kvproto::{
 use raftstore::store::{
     util, ReadTask, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use slog::{info, trace, Logger};
+use slog::{info, trace, warn, Logger};
 use tikv_util::{box_err, slog_panic, worker::Scheduler};
 
 use crate::{
@@ -56,7 +57,7 @@ use crate::{
         ready::snapshot::{install_tablet, recv_snap_path},
     },
     raft::{Peer, Storage},
-    router::PeerMsg,
+    router::{PeerMsg, SstApplyIndex},
     worker::tablet,
     Result, StoreRouter,
 };
@@ -138,7 +139,7 @@ impl<EK: KvEngine, ER: RaftEngine> engine_traits::StateStorage for StateStorage<
 /// Mapping from data cf to an u64 index.
 pub type DataTrace = [u64; DATA_CFS_LEN];
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Default, Debug)]
 struct Progress {
     flushed: u64,
     /// The index of last entry that has modification to the CF. The value
@@ -146,6 +147,20 @@ struct Progress {
     ///
     /// If `flushed` == `last_modified`, then all data in the CF is persisted.
     last_modified: u64,
+    // applied indexes ranges that represent sst is ingested but not flushed indexes.
+    pending_sst_ranges: VecDeque<IndexRange>,
+}
+
+// A range representing [start, end], upper bound inclusive for handling
+// convenience.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IndexRange(u64, u64);
+
+#[derive(Debug)]
+// track the global flushed index related to the write task.
+struct ReadyFlushedIndex {
+    ready_number: u64,
+    flushed_index: u64,
 }
 
 /// `ApplyTrace` is used to track the indexes of modifications and flushes.
@@ -178,6 +193,9 @@ pub struct ApplyTrace {
     last_flush_trigger: u64,
     /// `true` means the raft cf record should be persisted in next ready.
     try_persist: bool,
+    // Because we persist the global flushed in the write task, so we should track
+    // the task and handle sst cleanup after the write task finished.
+    flushed_index_queue: VecDeque<ReadyFlushedIndex>,
 }
 
 impl ApplyTrace {
@@ -228,6 +246,25 @@ impl ApplyTrace {
 
     pub fn on_admin_modify(&mut self, index: u64) {
         self.admin.last_modified = index;
+    }
+
+    pub fn on_sst_ingested(&mut self, sst_applied_index: &[SstApplyIndex]) {
+        use std::cmp::Ordering;
+        for &SstApplyIndex { cf_index, index } in sst_applied_index {
+            let p = &mut self.data_cfs[cf_index];
+            if p.flushed < index {
+                let max_idx = p.pending_sst_ranges.iter().last().map(|r| r.1).unwrap_or(0) + 1;
+                match max_idx.cmp(&index) {
+                    Ordering::Less => {
+                        p.pending_sst_ranges.push_back(IndexRange(index, index));
+                    }
+                    Ordering::Equal => {
+                        p.pending_sst_ranges.iter_mut().last().unwrap().1 = index;
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     pub fn persisted_apply_index(&self) -> u64 {
@@ -283,15 +320,43 @@ impl ApplyTrace {
                 }
             })
             .min();
+
         // At best effort, we can only advance the index to `mem_index`.
         let candidate = cmp::min(mem_index, min_flushed.unwrap_or(u64::MAX));
+        // try advance the index if there are any sst ingestion next to the flushed
+        // index, and always trigger a flush if there is any sst ingestion.
+        let (candidate, has_ingested_sst) = self.advance_flushed_index_for_ingest(candidate);
         if candidate > self.admin.flushed {
             self.admin.flushed = candidate;
-            if self.admin.flushed > self.persisted_applied + 100 {
+            if has_ingested_sst || (self.admin.flushed > self.persisted_applied + 100) {
                 self.try_persist = true;
             }
         }
         // TODO: persist admin.flushed every 10 minutes.
+    }
+
+    fn advance_flushed_index_for_ingest(&mut self, mut max_index: u64) -> (u64, bool) {
+        let mut has_ingest = false;
+        loop {
+            let mut has_change = false;
+            for p in self.data_cfs.iter_mut() {
+                while let Some(r) = p.pending_sst_ranges.front_mut() {
+                    if r.0 > max_index + 1 {
+                        break;
+                    } else if r.1 > max_index {
+                        max_index = r.1;
+                        has_change = true;
+                    }
+                    p.pending_sst_ranges.pop_front();
+                    has_ingest = true;
+                }
+            }
+            if !has_change {
+                break;
+            }
+        }
+
+        (max_index, has_ingest)
     }
 
     /// Get the flushed indexes of all data CF that is needed when recoverying
@@ -347,6 +412,38 @@ impl ApplyTrace {
     pub fn should_persist(&self) -> bool {
         fail_point!("should_persist_apply_trace", |_| true);
         self.try_persist
+    }
+
+    #[inline]
+    pub fn register_flush_task(&mut self, ready_number: u64, flushed_index: u64) {
+        assert!(
+            self.flushed_index_queue
+                .iter()
+                .last()
+                .map(|f| f.ready_number)
+                .unwrap_or(0)
+                < ready_number
+        );
+        self.flushed_index_queue.push_back(ReadyFlushedIndex {
+            ready_number,
+            flushed_index,
+        });
+    }
+
+    #[inline]
+    pub fn take_flush_index(&mut self, ready_number: u64) -> Option<u64> {
+        use std::cmp::Ordering;
+        while let Some(r) = self.flushed_index_queue.pop_front() {
+            match r.ready_number.cmp(&ready_number) {
+                Ordering::Equal => return Some(r.flushed_index),
+                Ordering::Greater => {
+                    self.flushed_index_queue.push_front(r);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        None
     }
 }
 
@@ -546,6 +643,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             .unwrap();
         trace.try_persist = false;
         trace.persisted_applied = trace.admin.flushed;
+        trace.register_flush_task(write_task.ready_number(), trace.admin.flushed);
     }
 }
 
@@ -566,24 +664,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let apply_trace = self.storage_mut().apply_trace_mut();
         apply_trace.on_flush(cf, index);
         apply_trace.maybe_advance_admin_flushed(apply_index);
-        let stale_ssts = self.sst_apply_state().stale_ssts(cf, index);
-        if stale_ssts.is_empty() {
-            return;
-        }
-        info!(
-            self.logger,
-            "schedule delete stale ssts after flush";
-            "stale_ssts" => ?stale_ssts,
-            "apply_index" => apply_index,
-            "cf" => cf,
-            "flushed_index" => index,
-        );
-        let _ = ctx
-            .schedulers
-            .tablet
-            .schedule(tablet::Task::CleanupImportSst(
-                stale_ssts.into_boxed_slice(),
-            ));
+        self.cleanup_stale_ssts(ctx, &[cf], index, apply_index);
     }
 
     pub fn on_data_modified(&mut self, modification: DataTrace) {
@@ -596,6 +677,38 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         apply_trace.maybe_advance_admin_flushed(apply_index);
+    }
+
+    pub fn cleanup_stale_ssts<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        cfs: &[&str],
+        index: u64,
+        apply_index: u64,
+    ) {
+        let mut stale_ssts = vec![];
+        for cf in cfs {
+            let ssts = self.sst_apply_state().stale_ssts(cf, index);
+            if !ssts.is_empty() {
+                info!(
+                    self.logger,
+                    "schedule delete stale ssts after flush";
+                    "stale_ssts" => ?stale_ssts,
+                    "apply_index" => apply_index,
+                    "cf" => cf,
+                    "flushed_index" => index,
+                );
+                stale_ssts.extend(ssts);
+            }
+        }
+        if !stale_ssts.is_empty() {
+            _ = ctx
+                .schedulers
+                .tablet
+                .schedule(tablet::Task::CleanupImportSst(
+                    stale_ssts.into_boxed_slice(),
+                ));
+        }
     }
 
     pub fn flush_before_close<T>(&mut self, ctx: &StoreContext<EK, ER, T>, tx: SyncSender<()>) {
@@ -619,7 +732,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // flush the oldest cf one by one until we are under the replay count threshold
             loop {
                 let replay_count = self.storage().estimate_replay_count();
-                if replay_count < flush_threshold {
+                if replay_count < flush_threshold || tried_count == 3 {
+                    // Ideally, the replay count should be 0 after three flush_oldest_cf. If not,
+                    // there may exist bug, but it's not desireable to block here, so we at most try
+                    // three times.
+                    if replay_count >= flush_threshold && tried_count == 3 {
+                        warn!(
+                            self.logger,
+                            "after three flush_oldest_cf, the expected replay count still exceeds the threshold";
+                            "replay_count" => replay_count,
+                            "threshold" => flush_threshold,
+                        );
+                    }
                     if flushed {
                         let admin_flush = self.storage_mut().apply_trace_mut().admin.flushed;
                         let (_, _, tablet_index) = ctx
@@ -650,7 +774,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 flushed = true;
 
                 let flush_state = self.flush_state().clone();
-                let mut apply_trace = self.storage_mut().apply_trace_mut();
+                let apply_trace = self.storage_mut().apply_trace_mut();
 
                 let flushed_indexes = flush_state.as_ref().flushed_index();
                 for i in 0..flushed_indexes.len() {
@@ -678,7 +802,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::RaftEngineReadOnly;
+    use engine_traits::{CfName, RaftEngineReadOnly};
     use kvproto::metapb::Peer;
     use tempfile::TempDir;
 
@@ -798,6 +922,93 @@ mod tests {
         // Because modify is recorded, so we know there should be no admin
         // modification and index can be advanced.
         assert_eq!(5, trace.admin.flushed);
+
+        fn range_equals(trace: &ApplyTrace, cf: &str, expected: Vec<IndexRange>) {
+            let pending_ranges = &trace.data_cfs[data_cf_offset(cf)].pending_sst_ranges;
+            assert_eq!(
+                pending_ranges.len(),
+                expected.len(),
+                "actual: {:?}, expected: {:?}",
+                pending_ranges,
+                &expected
+            );
+            pending_ranges
+                .iter()
+                .zip(expected.iter())
+                .for_each(|(r, e)| {
+                    assert_eq!(r, e);
+                });
+        }
+
+        trace.on_modify(CF_DEFAULT, 8);
+        let ingested_ssts_idx =
+            make_sst_apply_index(vec![(CF_DEFAULT, 6), (CF_WRITE, 6), (CF_WRITE, 7)]);
+        trace.on_sst_ingested(&ingested_ssts_idx);
+        range_equals(&trace, CF_DEFAULT, vec![IndexRange(6, 6)]);
+        range_equals(&trace, CF_WRITE, vec![IndexRange(6, 7)]);
+        trace.maybe_advance_admin_flushed(8);
+        assert_eq!(7, trace.admin.flushed);
+        for cf in [CF_DEFAULT, CF_WRITE] {
+            assert_eq!(
+                trace.data_cfs[data_cf_offset(cf)].pending_sst_ranges.len(),
+                0
+            );
+        }
+        trace.on_modify(CF_DEFAULT, 10);
+        let ingested_ssts_idx = make_sst_apply_index(vec![(CF_DEFAULT, 10)]);
+        trace.on_sst_ingested(&ingested_ssts_idx);
+        trace.on_flush(CF_DEFAULT, 8);
+        trace.maybe_advance_admin_flushed(10);
+        assert_eq!(8, trace.admin.flushed);
+        range_equals(&trace, CF_DEFAULT, vec![IndexRange(10, 10)]);
+
+        trace.on_modify(CF_DEFAULT, 16);
+        let ingested_ssts_idx = make_sst_apply_index(vec![
+            (CF_DEFAULT, 11),
+            (CF_WRITE, 12),
+            (CF_LOCK, 13),
+            (CF_DEFAULT, 14),
+            (CF_WRITE, 14),
+            (CF_WRITE, 15),
+            (CF_LOCK, 16),
+        ]);
+        trace.on_sst_ingested(&ingested_ssts_idx);
+        range_equals(
+            &trace,
+            CF_DEFAULT,
+            vec![IndexRange(10, 11), IndexRange(14, 14)],
+        );
+        range_equals(
+            &trace,
+            CF_WRITE,
+            vec![IndexRange(12, 12), IndexRange(14, 15)],
+        );
+        range_equals(
+            &trace,
+            CF_LOCK,
+            vec![IndexRange(13, 13), IndexRange(16, 16)],
+        );
+        trace.maybe_advance_admin_flushed(16);
+        assert_eq!(8, trace.admin.flushed);
+
+        trace.on_flush(CF_DEFAULT, 9);
+        trace.maybe_advance_admin_flushed(16);
+        assert_eq!(16, trace.admin.flushed);
+        for cf in DATA_CFS {
+            assert_eq!(
+                trace.data_cfs[data_cf_offset(cf)].pending_sst_ranges.len(),
+                0
+            );
+        }
+    }
+
+    fn make_sst_apply_index(data: Vec<(CfName, u64)>) -> Vec<SstApplyIndex> {
+        data.into_iter()
+            .map(|d| SstApplyIndex {
+                cf_index: data_cf_offset(d.0),
+                index: d.1,
+            })
+            .collect()
     }
 
     #[test]

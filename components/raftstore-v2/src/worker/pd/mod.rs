@@ -70,6 +70,7 @@ pub enum Task {
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+        share_source_region_size: bool,
         ch: CmdResChannel,
     },
     ReportBatchSplit {
@@ -324,7 +325,15 @@ where
                 peer,
                 right_derive,
                 ch,
-            } => self.handle_ask_batch_split(region, split_keys, peer, right_derive, ch),
+                share_source_region_size,
+            } => self.handle_ask_batch_split(
+                region,
+                split_keys,
+                peer,
+                right_derive,
+                share_source_region_size,
+                ch,
+            ),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::AutoSplit { split_infos } => self.handle_auto_split(split_infos),
             Task::UpdateMaxTimestamp {
