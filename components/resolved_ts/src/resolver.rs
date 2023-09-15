@@ -2,7 +2,7 @@
 
 use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 
-use collections::{HashMap, HashSet};
+use collections::{HashMap, HashMapEntry};
 use raftstore::store::RegionReadProgress;
 use tikv_util::{
     memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded},
@@ -244,13 +244,13 @@ impl Resolver {
         }
         self.locks_by_key.len() * (key_bytes / key_count + std::mem::size_of::<TimeStamp>())
             + self.lock_ts_heap.len()
-                * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
+                * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<TxnLocks>())
     }
 
     fn lock_heap_size(&self, key: &[u8]) -> usize {
         // A resolver has
         // * locks_by_key: HashMap<Arc<[u8]>, TimeStamp>
-        // * lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>
+        // * lock_ts_heap: BTreeMap<TimeStamp, TxnLocks>
         //
         // We only count memory used by locks_by_key. Because the majority of
         // memory is consumed by keys, locks_by_key and lock_ts_heap shares
@@ -294,11 +294,23 @@ impl Resolver {
         );
         self.memory_quota.alloc(bytes)?;
         let key: Arc<[u8]> = key.into_boxed_slice().into();
-        if self.locks_by_key.insert(key.clone(), start_ts).is_none() {
-            let mut txn_locks = self.lock_ts_heap.entry(start_ts).or_default();
-            txn_locks.sample_lock = Some(key);
-            txn_locks.lock_count = 1;
-        }
+        match self.locks_by_key.entry(key) {
+            HashMapEntry::Occupied(_) => {
+                // Free memory quota because it's already in the map.
+                self.memory_quota.free(bytes);
+            }
+            HashMapEntry::Vacant(entry) => {
+                // Add lock count for the start ts.
+                let mut txn_locks = self.lock_ts_heap.entry(start_ts).or_insert_with(|| {
+                    let mut txn_locks = TxnLocks::default();
+                    txn_locks.sample_lock = Some(entry.key().clone());
+                    txn_locks
+                });
+                txn_locks.lock_count += 1;
+
+                entry.insert(start_ts);
+            }
+        };
         Ok(())
     }
 
@@ -623,5 +635,79 @@ mod tests {
             resolver.locks_by_key.capacity(),
             resolver.locks_by_key.len(),
         );
+    }
+
+    #[test]
+    fn test_idempotent_track_and_untrack_lock() {
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let mut resolver = Resolver::new(1, memory_quota);
+        let mut key = vec![0; 16];
+
+        // track_lock
+        let mut ts = TimeStamp::default();
+        for c in 0..10 {
+            ts.incr();
+            for k in 0..100u64 {
+                key[0..8].copy_from_slice(&k.to_be_bytes());
+                key[8..16].copy_from_slice(&ts.into_inner().to_be_bytes());
+                let _ = resolver.track_lock(ts, key.clone(), None);
+            }
+            let in_use1 = resolver.memory_quota.in_use();
+            let key_count1 = resolver.locks_by_key.len();
+            let txn_count1 = resolver.lock_ts_heap.len();
+            let txn_lock_count1 = resolver.lock_ts_heap[&ts].lock_count;
+            assert!(in_use1 > 0);
+            assert_eq!(key_count1, (c + 1) * 100);
+            assert_eq!(txn_count1, c + 1);
+
+            // Put same keys again, resolver internal state must be idempotent.
+            for k in 0..100u64 {
+                key[0..8].copy_from_slice(&k.to_be_bytes());
+                key[8..16].copy_from_slice(&ts.into_inner().to_be_bytes());
+                let _ = resolver.track_lock(ts, key.clone(), None);
+            }
+            let in_use2 = resolver.memory_quota.in_use();
+            let key_count2 = resolver.locks_by_key.len();
+            let txn_count2 = resolver.lock_ts_heap.len();
+            let txn_lock_count2 = resolver.lock_ts_heap[&ts].lock_count;
+            assert_eq!(in_use1, in_use2);
+            assert_eq!(key_count1, key_count2);
+            assert_eq!(txn_count1, txn_count2);
+            assert_eq!(txn_lock_count1, txn_lock_count2);
+        }
+        assert_eq!(resolver.resolve(ts, None, TsSource::PdTso), 1.into());
+
+        // untrack_lock
+        let mut ts = TimeStamp::default();
+        for _ in 0..10 {
+            ts.incr();
+            for k in 0..100u64 {
+                key[0..8].copy_from_slice(&k.to_be_bytes());
+                key[8..16].copy_from_slice(&ts.into_inner().to_be_bytes());
+                resolver.untrack_lock(&key, None);
+            }
+            let in_use1 = resolver.memory_quota.in_use();
+            let key_count1 = resolver.locks_by_key.len();
+            let txn_count1 = resolver.lock_ts_heap.len();
+
+            // Unlock same keys again, resolver internal state must be idempotent.
+            for k in 0..100u64 {
+                key[0..8].copy_from_slice(&k.to_be_bytes());
+                key[8..16].copy_from_slice(&ts.into_inner().to_be_bytes());
+                resolver.untrack_lock(&key, None);
+            }
+            let in_use2 = resolver.memory_quota.in_use();
+            let key_count2 = resolver.locks_by_key.len();
+            let txn_count2 = resolver.lock_ts_heap.len();
+            assert_eq!(in_use1, in_use2);
+            assert_eq!(key_count1, key_count2);
+            assert_eq!(txn_count1, txn_count2);
+
+            assert_eq!(resolver.resolve(ts, None, TsSource::PdTso), ts);
+        }
+
+        assert_eq!(resolver.memory_quota.in_use(), 0);
+        assert_eq!(resolver.locks_by_key.len(), 0);
+        assert_eq!(resolver.lock_ts_heap.len(), 0);
     }
 }
