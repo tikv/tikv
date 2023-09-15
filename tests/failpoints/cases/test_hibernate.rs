@@ -101,11 +101,16 @@ fn test_store_disconnect_with_hibernate() {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
     cluster.cfg.raft_store.unreachable_backoff = ReadableDuration::millis(500);
     cluster.cfg.server.raft_client_max_backoff = ReadableDuration::millis(200);
-    // So the random election timeout will always be 10, which makes the case more
-    // stable.
+    // Use a small range but still random election timeouts, which makes the case
+    // more stable.
     cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
+<<<<<<< HEAD
     cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
     configure_for_hibernate(&mut cluster);
+=======
+    cluster.cfg.raft_store.raft_max_election_timeout_ticks = 13;
+    configure_for_hibernate(&mut cluster.cfg);
+>>>>>>> 058336850c (stablize case test_store_disconnect_with_hibernate (#15596))
     cluster.pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     cluster.pd_client.must_add_peer(r, new_peer(2, 2));
@@ -116,7 +121,7 @@ fn test_store_disconnect_with_hibernate() {
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
     // Wait until all peers of region 1 hibernate.
-    thread::sleep(Duration::from_millis(base_tick_ms * 30));
+    thread::sleep(Duration::from_millis(base_tick_ms * 40));
 
     // Stop the region leader.
     fail::cfg("receive_raft_message_from_outside", "pause").unwrap();
@@ -128,7 +133,7 @@ fn test_store_disconnect_with_hibernate() {
     fail::remove("receive_raft_message_from_outside");
 
     // Wait for a while. Peers of region 1 shouldn't hibernate.
-    thread::sleep(Duration::from_millis(base_tick_ms * 30));
+    thread::sleep(Duration::from_millis(base_tick_ms * 40));
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
 }
