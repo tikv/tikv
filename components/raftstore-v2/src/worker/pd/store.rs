@@ -467,16 +467,16 @@ where
             true
         });
         let snap_size = self.snap_mgr.total_snap_size().unwrap();
-        let engine_size = self
+        let raft_size = self
             .raft_engine
             .get_engine_size()
             .expect("engine used size");
 
         STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
-        STORE_SIZE_EVENT_INT_VEC.raft_size.set(engine_size as i64);
+        STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
         STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_size as i64);
 
-        let used_size = snap_size + kv_size + engine_size;
+        let used_size = snap_size + kv_size + raft_size;
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available
         // here.

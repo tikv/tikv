@@ -2590,7 +2590,7 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     } else {
         store_info.capacity
     };
-    let engine_size = store_info
+    let raft_size = store_info
         .raft_engine
         .get_engine_size()
         .expect("raft engine used size");
@@ -2600,11 +2600,11 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
         .get_engine_used_size()
         .expect("kv engine used size");
 
-    STORE_SIZE_EVENT_INT_VEC.raft_size.set(engine_size as i64);
+    STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
     STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_mgr_size as i64);
     STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
 
-    let used_size = snap_mgr_size + kv_size + engine_size;
+    let used_size = snap_mgr_size + kv_size + raft_size;
     let mut available = capacity.checked_sub(used_size).unwrap_or_default();
     // We only care about rocksdb SST file size, so we should check disk available
     // here.
