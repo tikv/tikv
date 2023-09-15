@@ -2,10 +2,12 @@
 
 use std::{
     collections::BTreeMap,
+    fmt,
     ops::Bound::{Excluded, Unbounded},
     time::{Duration, SystemTime},
 };
 
+use backtrace::{Backtrace, BacktraceFmt, BytesOrWideString, PrintFmt};
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
@@ -29,6 +31,40 @@ use crate::{
     operation::ReadDelegatePair,
     router::{StoreMsg, StoreTick},
 };
+
+pub struct BacktraceWrap(Backtrace);
+
+impl fmt::Debug for BacktraceWrap {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let full = fmt.alternate();
+        let (frames, style) = (&self.0.frames()[1..2], PrintFmt::Short);
+
+        // When printing paths we try to strip the cwd if it exists, otherwise
+        // we just print the path as-is. Note that we also only do this for the
+        // short format, because if it's full we presumably want to print
+        // everything.
+        let cwd = std::env::current_dir();
+        let mut print_path = move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
+            let path = path.into_path_buf();
+            if !full {
+                if let Ok(cwd) = &cwd {
+                    if let Ok(suffix) = path.strip_prefix(cwd) {
+                        return fmt::Display::fmt(&suffix.display(), fmt);
+                    }
+                }
+            }
+            fmt::Display::fmt(&path.display(), fmt)
+        };
+
+        let mut f = BacktraceFmt::new(fmt, style, &mut print_path);
+        f.add_context()?;
+        for frame in frames {
+            f.frame().backtrace_frame(frame)?;
+        }
+        f.finish()?;
+        Ok(())
+    }
+}
 
 pub struct StoreMeta<EK> {
     pub store_id: u64,
@@ -57,6 +93,14 @@ impl<EK> StoreMeta<EK> {
     }
 
     pub fn set_region(&mut self, region: &Region, initialized: bool, logger: &Logger) {
+        let caller = BacktraceWrap(Backtrace::new());
+        info!(
+            logger,
+            "set region";
+            "end_key" => log_wrappers::Value(region.get_end_key()),
+            "region_epoch" => ?region.get_region_epoch(),
+            "caller" => ?caller,
+        );
         let region_id = region.get_id();
         let version = region.get_region_epoch().get_version();
         let prev = self
@@ -74,13 +118,18 @@ impl<EK> StoreMeta<EK> {
             }
         }
         if initialized {
-            assert!(
-                self.region_ranges
-                    .insert((data_end_key(region.get_end_key()), version), region_id)
-                    .is_none(),
-                "{} region corrupted",
-                SlogFormat(logger)
-            );
+            let prev_range = self
+                .region_ranges
+                .insert((data_end_key(region.get_end_key()), version), region_id);
+            if let Some(prev_range) = prev_range {
+                slog_panic!(
+                    logger,
+                    "region corrupted";
+                    "region_epoch" => ?region.get_region_epoch(),
+                    "end_key" => log_wrappers::Value(region.get_end_key()),
+                    "corrupt_region_id" => prev_range,
+                );
+            }
         }
     }
 

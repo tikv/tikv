@@ -207,7 +207,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8]) -> Result<()> {
+    pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8], start_ts: u64) -> Result<()> {
+        info!(
+            self.logger,
+            "handle delete";
+            "cf" => ?cf,
+            "start_ts" => ?start_ts,
+            "key" => log_wrappers::hex_encode_upper(key),
+            "index" => index,
+        );
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let off = data_cf_offset(cf);
         if self.should_skip(off, index) {

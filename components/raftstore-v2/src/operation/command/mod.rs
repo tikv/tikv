@@ -538,7 +538,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     let _ = self.apply_put(put.cf, u64::MAX, put.key, put.value, 0);
                 }
                 SimpleWrite::Delete(delete) => {
-                    let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
+                    let _ = self.apply_delete(delete.cf, u64::MAX, delete.key, 0);
                 }
                 SimpleWrite::DeleteRange(dr) => {
                     let _ = self
@@ -668,7 +668,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                 self.apply_put(put.cf, log_index, put.key, put.value, start_ts)?;
                             }
                             SimpleWrite::Delete(delete) => {
-                                self.apply_delete(delete.cf, log_index, delete.key)?;
+                                self.apply_delete(delete.cf, log_index, delete.key, start_ts)?;
                             }
                             SimpleWrite::DeleteRange(dr) => {
                                 self.apply_delete_range(
@@ -780,7 +780,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     }
                     CmdType::Delete => {
                         let delete = r.get_delete();
-                        self.apply_delete(delete.get_cf(), log_index, delete.get_key())?;
+                        self.apply_delete(delete.get_cf(), log_index, delete.get_key(), start_ts)?;
                     }
                     CmdType::DeleteRange => {
                         let dr = r.get_delete_range();
