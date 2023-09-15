@@ -1309,7 +1309,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
     fn deny_import_rpc(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: DenyImportRpcRequest,
         sink: UnarySink<DenyImportRpcResponse>,
     ) {
