@@ -93,6 +93,7 @@ fn test_break_leadership_on_restart() {
 // received, and become `GroupState::Ordered` after the proposal is received.
 // But they should keep wakeful for a while.
 #[test]
+#[allow(clippy::let_underscore_future)]
 fn test_store_disconnect_with_hibernate() {
     let mut cluster = new_server_cluster(0, 3);
     let base_tick_ms = 50;

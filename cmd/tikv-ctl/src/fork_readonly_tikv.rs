@@ -265,6 +265,7 @@ where
         .map_err(|e| format!("copy({}, {}): {}", src.display(), dst.display(), e))
 }
 
+#[allow(clippy::permissions_set_readonly_false)]
 fn add_write_permission<P: AsRef<Path>>(path: P) -> Result<(), String> {
     let path = path.as_ref();
     let mut pmt = std::fs::metadata(path)

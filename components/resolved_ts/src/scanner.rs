@@ -100,7 +100,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         Self {
             workers,
             cdc_handle,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         }
     }
 
@@ -168,6 +168,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
         self.workers.spawn(fut);
     }
 
+    #[allow(clippy::needless_pass_by_ref_mut)]
     async fn get_snapshot(
         task: &mut ScanTask,
         cdc_handle: T,
