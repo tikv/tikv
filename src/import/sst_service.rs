@@ -66,9 +66,9 @@ const REQUEST_WRITE_CONCURRENCY: usize = 16;
 /// bytes. In detail, they are:
 /// - 2 bytes for the request type (Tag+Value).
 /// - 2 bytes for every string or bytes field (Tag+Length), they are:
-/// .  + the key field
-/// .  + the value field
-/// .  + the CF field (None for CF_DEFAULT)
+/// . + the key field
+/// . + the value field
+/// . + the CF field (None for CF_DEFAULT)
 /// - 2 bytes for the embedded message field `PutRequest` (Tag+Length).
 /// - 2 bytes for the request itself (which would be embedded into a
 ///   [`RaftCmdRequest`].)
@@ -165,6 +165,9 @@ impl RequestCollector {
     }
 
     fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
+        debug!("Accepting KV."; "cf" => %cf, 
+            "key" => %log_wrappers::Value::key(&k), 
+            "value" => %log_wrappers::Value::key(&v));
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
         if k.is_empty() || (!is_delete && v.is_empty()) {
@@ -567,7 +570,6 @@ impl<E: Engine> ImportSstService<E> {
             let buff = importer
                 .read_from_kv_file(
                     meta,
-                    rule,
                     ext_storage.clone(),
                     req.get_storage_backend(),
                     &limiter,
@@ -579,6 +581,7 @@ impl<E: Engine> ImportSstService<E> {
                 meta.get_start_ts(),
                 meta.get_restore_ts(),
                 buff,
+                rule,
                 |k, v| collector.accept_kv(meta.get_cf(), meta.get_is_delete(), k, v),
             )? {
                 if let Some(range) = range.as_mut() {

@@ -356,7 +356,7 @@ mod tests {
         let mut collector =
             MvccPropertiesCollector::new(CStr::from_bytes_with_nul(b"\0").unwrap(), KeyMode::Txn);
         b.iter(|| {
-            for &(ref k, ref v) in &entries {
+            for (k, v) in &entries {
                 collector.add(k, v, EntryType::kEntryPut, 0, 0).unwrap();
             }
         });

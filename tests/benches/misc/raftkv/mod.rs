@@ -171,6 +171,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
 }
 
 #[bench]
+#[allow(clippy::let_underscore_future)]
 fn bench_async_snapshot(b: &mut test::Bencher) {
     let leader = new_peer(2, 3);
     let mut region = Region::default();
@@ -205,6 +206,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
 }
 
 #[bench]
+#[allow(clippy::let_underscore_future)]
 fn bench_async_write(b: &mut test::Bencher) {
     let leader = new_peer(2, 3);
     let mut region = Region::default();
