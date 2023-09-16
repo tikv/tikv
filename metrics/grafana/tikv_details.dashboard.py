@@ -35,10 +35,10 @@ DATASOURCE = f"${{{DATASOURCE_INPUT.name}}}"
 
 
 def template(
-    name, query, dataSource, hide, regex=None, includeAll=False, allValue=None
+    name, query, data_source, hide, regex=None, include_all=False, all_value=None
 ) -> Template:
     return Template(
-        dataSource=dataSource,
+        dataSource=data_source,
         hide=hide,
         label=name,
         multi=False,
@@ -49,8 +49,8 @@ def template(
         type="query",
         useTags=False,
         regex=regex,
-        includeAll=includeAll,
-        allValue=allValue,
+        includeAll=include_all,
+        allValue=all_value,
     )
 
 
@@ -93,32 +93,32 @@ class Layout:
 def timeseries_panel(
     title,
     targets,
-    legendCalcs=["max", "last"],
+    legend_calcs=["max", "last"],
     unit="s",
-    drawStyle="line",
-    lineWidth=1,
-    fillOpacity=10,
-    gradientMode="opacity",
-    tooltipMode="multi",
-    legendDisplayMode="table",
-    legendPlacement="right",
+    draw_style="line",
+    line_width=1,
+    fill_opacity=10,
+    gradient_mode="opacity",
+    tooltip_mode="multi",
+    legend_display_mode="table",
+    legend_placement="right",
     description=None,
-    dataSource=DATASOURCE,
+    data_source=DATASOURCE,
 ) -> TimeSeries:
     return TimeSeries(
         title=title,
-        dataSource=dataSource,
+        dataSource=data_source,
         description=description,
         targets=targets,
-        legendCalcs=legendCalcs,
-        drawStyle=drawStyle,
-        lineWidth=lineWidth,
-        fillOpacity=fillOpacity,
-        gradientMode=gradientMode,
+        legendCalcs=legend_calcs,
+        drawStyle=draw_style,
+        lineWidth=line_width,
+        fillOpacity=fill_opacity,
+        gradientMode=gradient_mode,
         unit=unit,
-        tooltipMode=tooltipMode,
-        legendDisplayMode=legendDisplayMode,
-        legendPlacement=legendPlacement,
+        tooltipMode=tooltip_mode,
+        legendDisplayMode=legend_display_mode,
+        legendPlacement=legend_placement,
     )
 
 
@@ -129,12 +129,12 @@ def graph_legend(
     min=False,
     show=True,
     total=False,
-    alignAsTable=True,
-    hideEmpty=True,
-    hideZero=True,
-    rightSide=True,
-    sideWidth=None,
-    sortDesc=True,
+    align_as_table=True,
+    hide_empty=True,
+    hide_zero=True,
+    right_side=True,
+    side_width=None,
+    sort_desc=True,
 ) -> Legend:
     sort = "max" if max else "current"
     return Legend(
@@ -144,13 +144,13 @@ def graph_legend(
         min=min,
         show=show,
         total=total,
-        alignAsTable=alignAsTable,
-        hideEmpty=hideEmpty,
-        hideZero=hideZero,
-        rightSide=rightSide,
-        sideWidth=sideWidth,
+        alignAsTable=align_as_table,
+        hideEmpty=hide_empty,
+        hideZero=hide_zero,
+        rightSide=right_side,
+        sideWidth=side_width,
         sort=sort,
-        sortDesc=sortDesc,
+        sortDesc=sort_desc,
     )
 
 
@@ -162,15 +162,15 @@ def graph_panel(
     legend=None,
     tooltip=Tooltip(shared=True, valueType="individual"),
     lines=True,
-    lineWidth=1,
+    line_width=1,
     fill=0,
-    fillGradient=0,
+    fill_gradient=0,
     stack=False,
-    dataSource=DATASOURCE,
+    data_source=DATASOURCE,
 ) -> Panel:
     # extraJson add patches grafanalib result.
     extraJson = {}
-    if fillGradient != 0:
+    if fill_gradient != 0:
         # fillGradient is only valid when fill is 1.
         if fill == 0:
             fill = 1
@@ -181,16 +181,16 @@ def graph_panel(
 
     return Graph(
         title=title,
-        dataSource=dataSource,
+        dataSource=data_source,
         description=description,
         targets=targets,
         yAxes=yaxes,
         legend=legend if legend else graph_legend(),
         lines=lines,
         bars=not lines,
-        lineWidth=lineWidth,
+        lineWidth=line_width,
         fill=fill,
-        fillGradient=fillGradient,
+        fillGradient=fill_gradient,
         stack=stack,
         tooltip=tooltip,
         # Do not specify max max data points, let Grafana decide.
@@ -502,7 +502,9 @@ def expr_histogram_quantile(
 
 
 def target(
-    expr: Union[Expr, str], legend_format: Optional[str] = None, hide=False
+    expr: Union[Expr, str],
+    legend_format: Optional[str] = None,
+    hide=False,
 ) -> Target:
     if legend_format is None and isinstance(expr, Expr) and expr.by_labels:
         legend_format = "-".join(map(lambda x: "{{" + f"{x}" + "}}", expr.by_labels))
@@ -525,40 +527,40 @@ def Templats() -> Templating:
             template(
                 name="k8s_cluster",
                 query="label_values(tikv_engine_block_cache_size_bytes, k8s_cluster)",
-                dataSource=DATASOURCE,
+                data_source=DATASOURCE,
                 hide=HIDE_VARIABLE,
             ),
             template(
                 name="tidb_cluster",
                 query='label_values(tikv_engine_block_cache_size_bytes{k8s_cluster ="$k8s_cluster"}, tidb_cluster)',
-                dataSource=DATASOURCE,
+                data_source=DATASOURCE,
                 hide=HIDE_VARIABLE,
             ),
             template(
                 name="db",
                 query='label_values(tikv_engine_block_cache_size_bytes{k8s_cluster="$k8s_cluster", tidb_cluster="$tidb_cluster"}, db)',
-                dataSource=DATASOURCE,
+                data_source=DATASOURCE,
                 hide=SHOW,
             ),
             template(
                 name="command",
                 query='query_result(tikv_storage_command_total{k8s_cluster="$k8s_cluster", tidb_cluster="$tidb_cluster"} != 0)',
-                dataSource=DATASOURCE,
+                data_source=DATASOURCE,
                 hide=SHOW,
                 regex='/type="([^"]+)"/',
-                includeAll=True,
+                include_all=True,
             ),
             template(
                 name="instance",
                 query='label_values(tikv_engine_size_bytes{k8s_cluster ="$k8s_cluster", tidb_cluster="$tidb_cluster"}, instance)',
-                dataSource=DATASOURCE,
+                data_source=DATASOURCE,
                 hide=SHOW,
-                includeAll=True,
+                include_all=True,
             ),
             template(
                 name="titan_db",
                 query='label_values(tikv_engine_titandb_num_live_blob_file{k8s_cluster="$k8s_cluster", tidb_cluster="$tidb_cluster"}, db)',
-                dataSource=DATASOURCE,
+                data_source=DATASOURCE,
                 hide=HIDE_VARIABLE,
             ),
         ]
@@ -848,7 +850,7 @@ def Cluster() -> RowPanel:
                 description="TiKV uptime since the last restart",
                 yaxes=YAxes(left=YAxis(format=UNITS.SECONDS)),
                 fill=1,
-                fillGradient=1,
+                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_opeator(
@@ -872,7 +874,7 @@ def Errors() -> RowPanel:
                 description="TiKV uptime since the last restart",
                 yaxes=YAxes(left=YAxis(format=UNITS.SECONDS)),
                 fill=1,
-                fillGradient=1,
+                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_sum_rate(
