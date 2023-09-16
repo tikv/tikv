@@ -8,9 +8,11 @@ from grafanalib.core import (
     HIDE_VARIABLE,
     SHOW,
     TIME_SERIES_TARGET_FORMAT,
+    NULL_AS_NULL,
     Dashboard,
     DataSourceInput,
     Graph,
+    GraphThreshold,
     GridPos,
     Heatmap,
     HeatmapColor,
@@ -169,6 +171,7 @@ def graph_panel(
     fill=0,
     fill_gradient=0,
     stack=False,
+    thresholds: list[GraphThreshold] = [],
     data_source=DATASOURCE,
 ) -> Panel:
     # extraJson add patches grafanalib result.
@@ -198,6 +201,8 @@ def graph_panel(
         fill=fill,
         fillGradient=fill_gradient,
         stack=stack,
+        nullPointMode=NULL_AS_NULL,
+        thresholds=thresholds,
         tooltip=tooltip,
         # Do not specify max max data points, let Grafana decide.
         maxDataPoints=None,
@@ -205,15 +210,14 @@ def graph_panel(
     )
 
 
-def yaxis(format: str) -> YAxis:
-    # Set decimal precision to 1.
-    return YAxis(format=format, decimals=1)
+def yaxis(format: str, log_base=1) -> YAxis:
+    return YAxis(format=format, logBase=log_base)
 
 
-def yaxes(left_format: str, right_format: Optional[str] = None) -> YAxes:
-    ya = YAxes(left=yaxis(left_format))
+def yaxes(left_format: str, right_format: Optional[str] = None, log_base=1) -> YAxes:
+    ya = YAxes(left=yaxis(left_format, log_base=log_base))
     if right_format is not None:
-        ya.right = yaxis(right_format)
+        ya.right = yaxis(right_format, log_base=log_base)
     return ya
 
 
@@ -553,6 +557,7 @@ def expr_histogram_quantile(
     quantile: float,
     metrics: str,
     labels_selectors: list[str] = [],
+    by_labels: list[str] = [],
 ) -> Expr:
     """
     Query an instant vector of a metric.
@@ -566,10 +571,11 @@ def expr_histogram_quantile(
     )) by (le))
     """
     # sum(rate(metrics_bucket{label_selectors}[$__rate_interval])) by (le)
+    by_labels = list(filter(lambda label: label != "le", by_labels))
     sum_rate_of_buckets = expr_sum_rate(
         metrics + "_bucket",
         labels_selectors=labels_selectors,
-        by_labels=["le"],
+        by_labels=by_labels + ["le"],
     )
     # histogram_quantile({quantile}, {sum_rate_of_buckets})
     return expr_aggr(
@@ -968,6 +974,7 @@ def Errors() -> RowPanel:
                         ),
                     ),
                 ],
+                thresholds=[GraphThreshold(value=0.0)],
             )
         ]
     )
@@ -1223,11 +1230,26 @@ def Server() -> RowPanel:
     layout.row(
         [
             heatmap_panel(
-                title="Approximate Region size Histogram",
+                title="Approximate region size",
                 targets=[
                     target(
                         expr=expr_sum_rate(
                             "tikv_raftstore_region_size_bucket", by_labels=["le"]
+                        ),
+                    ),
+                ],
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Region written bytes",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_region_written_bytes_bucket", by_labels=["le"]
                         ),
                     ),
                 ],
@@ -1245,6 +1267,226 @@ def Server() -> RowPanel:
                             expr_sum_rate("tikv_region_written_bytes_count"),
                         ),
                         legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Region written keys",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_region_written_keys_bucket", by_labels=["le"]
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Region average written keys",
+                description="The average rate of written keys to Regions per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate("tikv_region_written_keys_sum"),
+                            "/",
+                            expr_sum_rate("tikv_region_written_keys_count"),
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Hibernate Peers",
+                description="The number of peers in hibernated state",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_hibernated_peer_state",
+                            by_labels=["instance", "state"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Memory trace",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_server_mem_trace_sum",
+                            labels_selectors=['name=~"raftstore-.*"'],
+                        ),
+                        legend_format="{{instance}}-{{name}}",
+                    ),
+                    target(
+                        expr=expr_simple(
+                            "raft_engine_memory_usage",
+                        ),
+                        legend_format="{{instance}}-raft-engine",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Raft Entry Cache Evicts",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raft_entries_evict_bytes",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Resolve address duration",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_server_address_resolve_duration_secs",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="99% Thread Pool Schedule Wait Duration",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_yatp_pool_schedule_wait_duration",
+                            by_labels=["name"],
+                        ),
+                        legend_format="{{name}}",
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=1.0)],
+            ),
+            graph_panel(
+                title="Average Thread Pool Schedule Wait Duration",
+                description="The average rate of written keys to Regions per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_yatp_pool_schedule_wait_duration_sum",
+                                by_labels=["name"],
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_yatp_pool_schedule_wait_duration_count",
+                                by_labels=["name"],
+                            ),
+                        ),
+                        legend_format="{{name}}",
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=1.0)],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Disk IO time per second",
+                yaxes=yaxes(left_format=UNITS.NANO_SECONDS),
+                lines=False,
+                stack=True,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_rocksdb_perf",
+                            labels_selectors=['metric="block_read_time"'],
+                            by_labels=["req"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            labels_selectors=['metric="block_read_time"'],
+                            by_labels=["req"],
+                        ),
+                        legend_format="copr-{{req}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Disk IO bytes per second",
+                yaxes=yaxes(left_format=UNITS.NANO_SECONDS),
+                lines=False,
+                stack=True,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_rocksdb_perf",
+                            labels_selectors=['metric="block_read_byte"'],
+                            by_labels=["req"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            labels_selectors=['metric="block_read_byte"'],
+                            by_labels=["req"],
+                        ),
+                        legend_format="copr-{{req}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def gRPC() -> RowPanel:
+    layout = Layout(title="gRPC")
+    layout.row(
+        [
+            graph_panel(
+                title="Request batch input",
+                description="The size of requests into request batch per TiKV instance",
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_server_request_batch_size_sum", by_labels=["type"]
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_server_request_batch_size_count",
+                                by_labels=["type"],
+                            ),
+                        ),
+                        legend_format="{{type}}-avg",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_server_request_batch_size",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}-99%",
                     ),
                 ],
             ),
@@ -1270,5 +1512,6 @@ dashboard = Dashboard(
         Cluster(),
         Errors(),
         Server(),
+        gRPC(),
     ],
 ).auto_panel_ids()
