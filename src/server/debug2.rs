@@ -698,8 +698,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
                 let Some(tablet) = tablet_cache.latest() else {
                     return Err(Error::NotFound(format!(
                         "tablet not found, region_id={:?}, peer_state={:?}",
-                        region_id,
-                        state
+                        region_id, state
                     )));
                 };
                 for cf in cfs {
@@ -869,8 +868,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         let Some(tablet) = tablet_cache.latest() else {
             return Err(Error::NotFound(format!(
                 "tablet not found, region_id={:?}, peer_state={:?}",
-                region_id,
-                state
+                region_id, state
             )));
         };
         let mut res = dump_write_cf_properties(tablet, &start, &end)?;
