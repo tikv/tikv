@@ -123,7 +123,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile(0.99, sum(rate(\n    tikv_raftstore_append_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le))",
               "format": "time_series",
               "hide": false,
@@ -138,7 +138,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile(0.99, sum(rate(\n    tikv_raftstore_request_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le))",
               "format": "time_series",
               "hide": false,
@@ -153,7 +153,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile(0.99, sum(rate(\n    tikv_raftstore_apply_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le))",
               "format": "time_series",
               "hide": false,
@@ -168,7 +168,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile(0.99, sum(rate(\n    tikv_raftstore_commit_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le))",
               "format": "time_series",
               "hide": false,
@@ -183,7 +183,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile(0.99, sum(rate(\n    tikv_raftstore_apply_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le))",
               "format": "time_series",
               "hide": false,
@@ -315,7 +315,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile(0.99, sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le))",
               "format": "time_series",
               "hide": false,
@@ -330,7 +330,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile(0.99, sum(rate(\n    tikv_coprocessor_request_wait_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le))",
               "format": "time_series",
               "hide": false,
@@ -345,7 +345,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "histogram_quantile(0.95, sum(rate(\n    tikv_coprocessor_request_handle_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le))",
               "format": "time_series",
               "hide": false,
@@ -519,7 +519,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    tikv_store_size_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type = \"used\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -651,7 +651,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    tikv_store_size_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"available\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -783,7 +783,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    tikv_store_size_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"capacity\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -915,7 +915,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    process_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1047,7 +1047,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    process_resident_memory_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1179,7 +1179,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    node_disk_io_time_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1311,7 +1311,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_engine_flow_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wal_file_bytes\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1326,7 +1326,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_engine_flow_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"bytes_read|iter_bytes_read\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1458,7 +1458,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_grpc_msg_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type!=\"kv_gc\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1590,7 +1590,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_grpc_msg_fail_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type!=\"kv_gc\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1605,7 +1605,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(delta(\n    tikv_pd_heartbeat_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"noop\"}\n    [$__rate_interval]\n)) by (instance) < 1",
               "format": "time_series",
               "hide": false,
@@ -1620,7 +1620,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_critical_error_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "format": "time_series",
               "hide": false,
@@ -1752,7 +1752,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    tikv_raftstore_region_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"leader\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1884,7 +1884,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    tikv_raftstore_region_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"region\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -1899,7 +1899,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    tikv_raftstore_region_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"buckets\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -2032,7 +2032,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "(time() - ((\n    process_start_time_seconds\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  )",
               "format": "time_series",
               "hide": false,
@@ -2207,7 +2207,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_critical_error_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "format": "time_series",
               "hide": false,
@@ -2339,7 +2339,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_scheduler_too_busy_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -2354,7 +2354,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_channel_full_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "format": "time_series",
               "hide": false,
@@ -2369,7 +2369,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_coprocessor_request_error\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"full\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -2384,7 +2384,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "avg((\n    tikv_engine_write_stall\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"write_stall_percentile99\",db=~\"$db\"}\n    \n)) by (instance, db) ",
               "format": "time_series",
               "hide": false,
@@ -2399,7 +2399,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_raftstore_store_write_msg_block_wait_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -2531,7 +2531,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_server_report_failure_msg_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, instance, store_id) ",
               "format": "time_series",
               "hide": false,
@@ -2663,7 +2663,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_storage_engine_async_request_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status!~\"success|all\"}\n    [$__rate_interval]\n)) by (instance, status) ",
               "format": "time_series",
               "hide": false,
@@ -2795,7 +2795,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_scheduler_stage_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"snapshot_err|prepare_write_err\"}\n    [$__rate_interval]\n)) by (instance, stage) ",
               "format": "time_series",
               "hide": false,
@@ -2927,7 +2927,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_coprocessor_request_error\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, reason) ",
               "format": "time_series",
               "hide": false,
@@ -3059,7 +3059,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_grpc_msg_fail_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "format": "time_series",
               "hide": false,
@@ -3191,7 +3191,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(delta(\n    tikv_raftstore_region_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"leader\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -3323,7 +3323,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    tikv_raftstore_leader_missing\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
@@ -3455,7 +3455,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "((\n    tikv_rocksdb_damaged_files\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
@@ -3470,7 +3470,7 @@
               "target": ""
             },
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "((\n    tikv_rocksdb_damaged_files_deleted\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
@@ -3602,7 +3602,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "datasource": null,
+              "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum(rate(\n    tikv_server_raft_append_rejects\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,

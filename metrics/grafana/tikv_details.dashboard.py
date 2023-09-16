@@ -505,6 +505,7 @@ def target(
     expr: Union[Expr, str],
     legend_format: Optional[str] = None,
     hide=False,
+    data_source=DATASOURCE,
 ) -> Target:
     if legend_format is None and isinstance(expr, Expr) and expr.by_labels:
         legend_format = "-".join(map(lambda x: "{{" + f"{x}" + "}}", expr.by_labels))
@@ -513,6 +514,7 @@ def target(
         hide=hide,
         legendFormat=legend_format,
         intervalFactor=1,  # Prefer "high" resolution
+        datasource=data_source,
     )
 
 
