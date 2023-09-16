@@ -7,10 +7,13 @@ from grafanalib.core import (
     GRAPH_TOOLTIP_MODE_SHARED_TOOLTIP,
     HIDE_VARIABLE,
     SHOW,
+    TIME_SERIES_TARGET_FORMAT,
     Dashboard,
     DataSourceInput,
     Graph,
     GridPos,
+    Heatmap,
+    HeatmapColor,
     Legend,
     Panel,
     RowPanel,
@@ -178,6 +181,9 @@ def graph_panel(
         # set it manually.
         # TODO: remove it when grafanalib fix this.
         extraJson["fillGradient"] = 1
+    for target in targets:
+        # Make sure traget is in time_series format.
+        target.format = TIME_SERIES_TARGET_FORMAT
 
     return Graph(
         title=title,
@@ -196,6 +202,63 @@ def graph_panel(
         # Do not specify max max data points, let Grafana decide.
         maxDataPoints=None,
         extraJson=extraJson,
+    )
+
+
+def yaxis(format: str) -> YAxis:
+    # Set decimal precision to 1.
+    return YAxis(format=format, decimals=1)
+
+
+def yaxes(left_format: str, right_format: Optional[str] = None) -> YAxes:
+    ya = YAxes(left=yaxis(left_format))
+    if right_format is not None:
+        ya.right = yaxis(right_format)
+    return ya
+
+
+def heatmap_color() -> HeatmapColor:
+    return HeatmapColor(
+        cardColor="#b4ff00",
+        colorScale="sqrt",
+        colorScheme="interpolateSpectral",
+        exponent=0.5,
+        mode="spectrum",
+        max=None,
+        min=None,
+    )
+
+
+def heatmap_panel(
+    title: str,
+    targets: list[Target],
+    description=None,
+    yaxis=yaxis(UNITS.NO_FORMAT),
+    tooltip=Tooltip(shared=True, valueType="individual"),
+    color=heatmap_color(),
+    data_source=DATASOURCE,
+) -> Panel:
+    for target in targets:
+        assert (
+            target.legendFormat == "{{le}}"
+        ), f"Heatmap target must have legendFormat=le, got {target.legendFormat}"
+        # Make sure targets are in heatmap format.
+        target.format = "heatmap"
+
+    return Heatmap(
+        title=title,
+        dataSource=data_source,
+        description=description,
+        targets=targets,
+        yAxis=yaxis,
+        color=color,
+        dataFormat="tsbuckets",
+        yBucketBound="upper",
+        tooltip=tooltip,
+        extraJson={"tooltip": {"showHistogram": True}},
+        hideZeroBuckets=True,
+        # Do not specify max max data points, let Grafana decide.
+        maxDataPoints=None,
     )
 
 
@@ -596,7 +659,7 @@ def Duration() -> RowPanel:
             graph_panel(
                 title="Write Pipeline Duration",
                 description="Write Pipeline Composition",
-                yaxes=YAxes(left=YAxis(format=UNITS.SECONDS)),
+                yaxes=yaxes(left_format=UNITS.SECONDS),
                 lines=False,
                 stack=True,
                 targets=[
@@ -636,7 +699,7 @@ def Duration() -> RowPanel:
             graph_panel(
                 title="Cop Read Duration",
                 description="Read Duration Composition",
-                yaxes=YAxes(left=YAxis(format=UNITS.SECONDS)),
+                yaxes=yaxes(left_format=UNITS.SECONDS),
                 lines=False,
                 stack=True,
                 targets=[
@@ -674,7 +737,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="Store size",
                 description="The storage size per TiKV instance",
-                yaxes=YAxes(left=YAxis(format=UNITS.BYTES)),
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 fill=1,
                 stack=True,
                 legend=graph_legend(max=False),
@@ -690,7 +753,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="Available size",
                 description="The available capacity size of each TiKV instance",
-                yaxes=YAxes(left=YAxis(format=UNITS.BYTES)),
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 fill=1,
                 stack=True,
                 legend=graph_legend(max=False),
@@ -706,7 +769,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="Capacity size",
                 description="The capacity size per TiKV instance",
-                yaxes=YAxes(left=YAxis(format=UNITS.BYTES)),
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 fill=1,
                 stack=True,
                 legend=graph_legend(max=False),
@@ -726,7 +789,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="CPU",
                 description="The CPU usage of each TiKV instance",
-                yaxes=YAxes(left=YAxis(format=UNITS.PERCENT_UNIT)),
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -738,7 +801,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="Memory",
                 description="The memory usage per TiKV instance",
-                yaxes=YAxes(left=YAxis(format=UNITS.BYTES)),
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
                         expr=expr_sum("process_resident_memory_bytes"),
@@ -752,7 +815,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="IO utilization",
                 description="The I/O utilization per TiKV instance",
-                yaxes=YAxes(left=YAxis(format=UNITS.PERCENT_UNIT)),
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -765,7 +828,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="MBps",
                 description="The total bytes of read and write in each TiKV instance",
-                yaxes=YAxes(left=YAxis(format=UNITS.BYTES)),
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -790,7 +853,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="QPS",
                 description="The number of leaders on each TiKV instance",
-                yaxes=YAxes(left=YAxis(format=UNITS.OPS_PER_SEC)),
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -804,7 +867,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="Errps",
                 description="The total number of the gRPC message failures",
-                yaxes=YAxes(left=YAxis(format=UNITS.OPS_PER_SEC)),
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -870,7 +933,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="Uptime",
                 description="TiKV uptime since the last restart",
-                yaxes=YAxes(left=YAxis(format=UNITS.SECONDS)),
+                yaxes=yaxes(left_format=UNITS.SECONDS),
                 fill=1,
                 fill_gradient=1,
                 targets=[
@@ -894,7 +957,7 @@ def Errors() -> RowPanel:
             graph_panel(
                 title="Critical error",
                 description="TiKV uptime since the last restart",
-                yaxes=YAxes(left=YAxis(format=UNITS.SECONDS)),
+                yaxes=yaxes(left_format=UNITS.SECONDS),
                 fill=1,
                 fill_gradient=1,
                 targets=[
@@ -1152,6 +1215,36 @@ def Server() -> RowPanel:
                             expr_sum_rate("tikv_raftstore_region_size_count"),
                         ),
                         legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Approximate Region size Histogram",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_region_size_bucket", by_labels=["le"]
+                        ),
+                    ),
+                ],
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+            ),
+            graph_panel(
+                title="Region average written bytes",
+                description="The average rate of writing bytes to Regions per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate("tikv_region_written_bytes_sum"),
+                            "/",
+                            expr_sum_rate("tikv_region_written_bytes_count"),
+                        ),
+                        legend_format="{{instance}}",
                     ),
                 ],
             ),

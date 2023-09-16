@@ -219,7 +219,7 @@
           },
           "yaxes": [
             {
-              "decimals": null,
+              "decimals": 1,
               "format": "s",
               "label": null,
               "logBase": 1,
@@ -381,7 +381,7 @@
           },
           "yaxes": [
             {
-              "decimals": null,
+              "decimals": 1,
               "format": "s",
               "label": null,
               "logBase": 1,
@@ -555,8 +555,8 @@
           },
           "yaxes": [
             {
-              "decimals": null,
-              "format": "decbytes",
+              "decimals": 1,
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -687,8 +687,8 @@
           },
           "yaxes": [
             {
-              "decimals": null,
-              "format": "decbytes",
+              "decimals": 1,
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -819,8 +819,8 @@
           },
           "yaxes": [
             {
-              "decimals": null,
-              "format": "decbytes",
+              "decimals": 1,
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -951,7 +951,7 @@
           },
           "yaxes": [
             {
-              "decimals": null,
+              "decimals": 1,
               "format": "percentunit",
               "label": null,
               "logBase": 1,
@@ -1083,8 +1083,8 @@
           },
           "yaxes": [
             {
-              "decimals": null,
-              "format": "decbytes",
+              "decimals": 1,
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -1215,7 +1215,7 @@
           },
           "yaxes": [
             {
-              "decimals": null,
+              "decimals": 1,
               "format": "percentunit",
               "label": null,
               "logBase": 1,
@@ -1362,8 +1362,8 @@
           },
           "yaxes": [
             {
-              "decimals": null,
-              "format": "decbytes",
+              "decimals": 1,
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -1494,7 +1494,7 @@
           },
           "yaxes": [
             {
-              "decimals": null,
+              "decimals": 1,
               "format": "ops",
               "label": null,
               "logBase": 1,
@@ -1656,7 +1656,7 @@
           },
           "yaxes": [
             {
-              "decimals": null,
+              "decimals": 1,
               "format": "ops",
               "label": null,
               "logBase": 1,
@@ -2068,7 +2068,7 @@
           },
           "yaxes": [
             {
-              "decimals": null,
+              "decimals": 1,
               "format": "s",
               "label": null,
               "logBase": 1,
@@ -2243,7 +2243,7 @@
           },
           "yaxes": [
             {
-              "decimals": null,
+              "decimals": 1,
               "format": "s",
               "label": null,
               "logBase": 1,
@@ -4240,6 +4240,242 @@
             {
               "decimals": null,
               "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "cacheTimeout": null,
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": null,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "heatmap": {},
+          "height": null,
+          "hideTimeOverride": false,
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 34,
+          "interval": null,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": null,
+          "repeat": null,
+          "repeatDirection": null,
+          "reverseYBuckets": false,
+          "span": null,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_raftstore_region_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "format": "heatmap",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{le}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_region_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Approximate Region size Histogram",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "showHistogram": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "heatmap",
+          "xAxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "bytes",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The average rate of writing bytes to Regions per TiKV instance",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 0,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 35,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "connected",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_region_written_bytes_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance)  / sum(rate(\n    tikv_region_written_bytes_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_region_written_bytes_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance)  / sum(rate(\n    tikv_region_written_bytes_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Region average written bytes",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 1,
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
