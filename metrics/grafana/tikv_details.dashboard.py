@@ -257,8 +257,9 @@ class Expr(object):
             "by ({})".format(", ".join(self.by_labels)) if self.by_labels else ""
         )
         func = self.func if self.func else ""
-        instant_selectors = "{{{}}}".format(
-            ",".join(self.default_labels_selectors + self.labels_selectors)
+        label_selectors = self.default_labels_selectors + self.labels_selectors
+        instant_selectors = (
+            "{{{}}}".format(",".join(label_selectors)) if label_selectors else ""
         )
         range_selector = f"[{self.range_selector}]" if self.range_selector else ""
         extra_expr = self.extra_expr if self.extra_expr else ""
@@ -481,7 +482,7 @@ def expr_simple(
     return expr
 
 
-def expr_opeator(lhs: Union[Expr, str], operator: str, rhs: Union[Expr, str]) -> str:
+def expr_operator(lhs: Union[Expr, str], operator: str, rhs: Union[Expr, str]) -> str:
     return f"""({lhs} {operator} {rhs})"""
 
 
@@ -489,16 +490,35 @@ def expr_histogram_quantile(
     quantile: float,
     metrics: str,
     labels_selectors: list[str] = [],
-    k8s_cluster="$k8s_cluster",
-    tidb_cluster="$tidb_cluster",
-    instance="$instance",
-) -> str:
-    mlabels = (", " + ",".join(labels_selectors)) if labels_selectors else ""
-    return f"""histogram_quantile({quantile}, sum(rate(
-    {metrics}
-    {{k8s_cluster="{k8s_cluster}", tidb_cluster="{tidb_cluster}", instance=~"{instance}"{mlabels}}}
-    [$__rate_interval]
-)) by (le))"""
+) -> Expr:
+    """
+    Query an instant vector of a metric.
+
+    Example:
+
+    histogram_quantile(0.99, sum(rate(
+        tikv_grpc_msg_duration_seconds_bucket
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        [$__rate_interval]
+    )) by (le))
+    """
+    # sum(rate(metrics_bucket{label_selectors}[$__rate_interval])) by (le)
+    sum_rate_of_buckets = expr_sum_rate(
+        metrics + "_bucket",
+        labels_selectors=labels_selectors,
+        by_labels=["le"],
+    )
+    # histogram_quantile({quantile}, {sum_rate_of_buckets})
+    return expr_aggr(
+        metric=f"{sum_rate_of_buckets}",
+        aggr_op="histogram_quantile",
+        aggr_param=f"{quantile}",
+        labels_selectors=[],
+        by_labels=[],
+    ).extra(
+        # Do not attach default label selector again.
+        default_labels_selectors=[]
+    )
 
 
 def target(
@@ -582,32 +602,32 @@ def Duration() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_append_log_duration_seconds_bucket"
+                            0.99, "tikv_raftstore_append_log_duration_seconds"
                         ),
                         legend_format="Write Raft Log .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_raftstore_request_wait_time_duration_secs_bucket",
+                            "tikv_raftstore_request_wait_time_duration_secs",
                         ),
                         legend_format="Propose Wait .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_apply_wait_time_duration_secs_bucket"
+                            0.99, "tikv_raftstore_apply_wait_time_duration_secs"
                         ),
                         legend_format="Apply Wait .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_commit_log_duration_seconds_bucket"
+                            0.99, "tikv_raftstore_commit_log_duration_seconds"
                         ),
                         legend_format="Replicate Raft Log .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_apply_log_duration_seconds_bucket"
+                            0.99, "tikv_raftstore_apply_log_duration_seconds"
                         ),
                         legend_format="Apply Duration .99",
                     ),
@@ -623,20 +643,20 @@ def Duration() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_storage_engine_async_request_duration_seconds_bucket",
+                            "tikv_storage_engine_async_request_duration_seconds",
                             ['type="snapshot"'],
                         ),
                         legend_format="Get Snapshot .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_coprocessor_request_wait_seconds_bucket"
+                            0.99, "tikv_coprocessor_request_wait_seconds"
                         ),
                         legend_format="Cop Wait .99",
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.95, "tikv_coprocessor_request_handle_seconds_bucket"
+                            0.95, "tikv_coprocessor_request_handle_seconds"
                         ),
                         legend_format="Cop Handle .99",
                     ),
@@ -855,7 +875,7 @@ def Cluster() -> RowPanel:
                 fill_gradient=1,
                 targets=[
                     target(
-                        expr=expr_opeator(
+                        expr=expr_operator(
                             "time()", "-", expr_simple("process_start_time_seconds")
                         ),
                         legend_format=r"{{instance}}",
@@ -1070,6 +1090,76 @@ Full""",
     return layout.row_panel
 
 
+def Server() -> RowPanel:
+    layout = Layout(title="Server")
+    layout.row(
+        [
+            graph_panel(
+                title="CF size",
+                description="The size of each column family",
+                targets=[
+                    target(
+                        expr=expr_sum("tikv_engine_size_bytes", by_labels=["type"]),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Channel full",
+                description="The total number of channel full errors on each TiKV instance",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_channel_full_total", by_labels=["instance", "type"]
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Active written leaders",
+                description="The number of leaders being written on each TiKV instance",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_region_written_keys_count",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Approximate Region size",
+                description="The approximate Region size",
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99, "tikv_raftstore_region_size"
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.95, "tikv_raftstore_region_size"
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate("tikv_raftstore_region_size_sum"),
+                            "/",
+                            expr_sum_rate("tikv_raftstore_region_size_count"),
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -1086,5 +1176,6 @@ dashboard = Dashboard(
         Duration(),
         Cluster(),
         Errors(),
+        Server(),
     ],
 ).auto_panel_ids()
