@@ -1008,7 +1008,6 @@ def Errors() -> RowPanel:
             graph_panel(
                 title="Critical error",
                 description="TiKV uptime since the last restart",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -1208,6 +1207,7 @@ def Server() -> RowPanel:
             graph_panel(
                 title="CF size",
                 description="The size of each column family",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
                         expr=expr_sum("tikv_engine_size_bytes", by_labels=["type"]),
@@ -1240,8 +1240,23 @@ def Server() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Approximate region size",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_region_size_bucket", by_labels=["le"]
+                        ),
+                    ),
+                ],
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+            ),
             graph_panel(
-                title="Approximate Region size",
+                title="Approximate region size",
                 description="The approximate Region size",
                 targets=[
                     target(
@@ -1271,21 +1286,6 @@ def Server() -> RowPanel:
                         legend_format="avg",
                     ),
                 ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            heatmap_panel(
-                title="Approximate region size",
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_raftstore_region_size_bucket", by_labels=["le"]
-                        ),
-                    ),
-                ],
-                yaxis=yaxis(format=UNITS.BYTES_IEC),
             ),
         ]
     )
