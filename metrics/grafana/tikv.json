@@ -66,7 +66,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -258,7 +259,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -463,6 +465,7 @@
             }
           },
           "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -595,6 +598,7 @@
             }
           },
           "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -727,6 +731,7 @@
             }
           },
           "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -858,7 +863,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -990,7 +996,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -1122,7 +1129,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -1254,7 +1262,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -1401,7 +1410,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -1533,7 +1543,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -1695,7 +1706,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -1827,7 +1839,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -2300,7 +2313,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -2492,7 +2506,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -2624,7 +2639,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -2756,7 +2772,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -2888,7 +2905,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -3020,7 +3038,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -3152,7 +3171,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -3284,7 +3304,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -3416,7 +3437,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -3563,7 +3585,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -3737,7 +3760,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -3869,7 +3893,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -4001,7 +4026,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -4133,7 +4159,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -4503,7 +4530,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -4739,7 +4767,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -4871,7 +4900,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -5003,7 +5033,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -5150,7 +5181,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -5282,7 +5314,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -5423,7 +5456,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -5573,7 +5607,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -5714,7 +5749,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -5861,7 +5897,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -6701,7 +6738,7 @@
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_request_batch_size_bucket_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_request_batch_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -6709,7 +6746,7 @@
               "intervalFactor": 1,
               "legendFormat": "99% kv get batch",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_request_batch_size_bucket_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_request_batch_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -7071,7 +7108,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -7203,7 +7241,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -7377,7 +7416,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -7509,7 +7549,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -7650,7 +7691,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -7791,7 +7833,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -7932,7 +7975,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -8082,7 +8126,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -8262,7 +8307,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -8403,7 +8449,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -8544,7 +8591,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -8715,7 +8763,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -8847,7 +8896,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -8979,7 +9029,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -9111,7 +9162,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -9243,7 +9295,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -9375,7 +9428,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -9537,7 +9591,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -9711,7 +9766,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -9843,7 +9899,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -9975,7 +10032,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -10269,7 +10327,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -10401,7 +10460,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -10533,7 +10593,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -10680,7 +10741,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -10812,7 +10874,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -10944,7 +11007,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -11076,7 +11140,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -11208,7 +11273,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",
@@ -11340,7 +11406,8 @@
               }
             }
           },
-          "fill": 0,
+          "fill": 1,
+          "fillGradient": 1,
           "grid": {
             "threshold1": null,
             "threshold1Color": "rgba(216, 200, 27, 0.27)",

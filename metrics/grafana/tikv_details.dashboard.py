@@ -169,8 +169,8 @@ def graph_panel(
     tooltip=Tooltip(shared=True, valueType="individual"),
     lines=True,
     line_width=1,
-    fill=0,
-    fill_gradient=0,
+    fill=1,
+    fill_gradient=1,
     stack=False,
     thresholds: list[GraphThreshold] = [],
     data_source=DATASOURCE,
@@ -275,6 +275,9 @@ def stat_panel(
     graph_mode="none",
     data_source=DATASOURCE,
 ) -> Panel:
+    for target in targets:
+        # Make sure traget is in time_series format.
+        target.format = TIME_SERIES_TARGET_FORMAT
     return Stat(
         title=title,
         dataSource=data_source,
@@ -612,6 +615,9 @@ def expr_histogram_quantile(
     )) by (le))
     """
     # sum(rate(metrics_bucket{label_selectors}[$__rate_interval])) by (le)
+    assert not metrics.endswith(
+        "_bucket"
+    ), f"'{metrics}' should not specify '_bucket' suffix manually"
     by_labels = list(filter(lambda label: label != "le", by_labels))
     sum_rate_of_buckets = expr_sum_rate(
         metrics + "_bucket",
@@ -981,8 +987,6 @@ def Cluster() -> RowPanel:
                 title="Uptime",
                 description="TiKV uptime since the last restart",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                fill=1,
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_operator(
@@ -1005,8 +1009,6 @@ def Errors() -> RowPanel:
                 title="Critical error",
                 description="TiKV uptime since the last restart",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                fill=1,
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -1512,7 +1514,6 @@ def gRPC() -> RowPanel:
                 title="gRPC message count",
                 description="The count of different kinds of gRPC message",
                 yaxes=yaxes(left_format=UNITS.REQUESTS_PER_SEC),
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -1527,7 +1528,6 @@ def gRPC() -> RowPanel:
                 title="gRPC message failed",
                 description="The count of different kinds of gRPC message which is failed",
                 yaxes=yaxes(left_format=UNITS.REQUESTS_PER_SEC),
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -1546,7 +1546,6 @@ def gRPC() -> RowPanel:
                 title=r"99% gRPC message duration",
                 description=r"The 99% percentile of execution time of gRPC message",
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
@@ -1563,7 +1562,6 @@ def gRPC() -> RowPanel:
                 title="Average gRPC message duration",
                 description="The average execution time of gRPC message",
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_operator(
@@ -1588,7 +1586,6 @@ def gRPC() -> RowPanel:
             graph_panel(
                 title="gRPC batch size",
                 description=r"The 99% percentile of execution time of gRPC message",
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
@@ -1635,7 +1632,7 @@ def gRPC() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_server_request_batch_size_bucket",
+                            "tikv_server_request_batch_size",
                         ),
                         legend_format=r"99% kv get batch",
                     ),
@@ -1657,7 +1654,6 @@ def gRPC() -> RowPanel:
             ),
             graph_panel(
                 title="raft message batch size",
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
@@ -1690,7 +1686,6 @@ def gRPC() -> RowPanel:
                 title="gRPC request sources QPS",
                 description="The QPS of different sources of gRPC request",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
-                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_sum_rate(
