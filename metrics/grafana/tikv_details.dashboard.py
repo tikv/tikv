@@ -212,6 +212,21 @@ def graph_panel(
 
 
 def yaxis(format: str, log_base=1) -> YAxis:
+    assert format not in [
+        UNITS.BYTES,
+        UNITS.BITS,
+        UNITS.KILO_BYTES,
+        UNITS.MEGA_BYTES,
+        UNITS.GIGA_BYTES,
+        UNITS.TERA_BYTES,
+        UNITS.PETA_BYTES,
+        UNITS.BYTES_SEC,
+        UNITS.KILO_BYTES_SEC,
+        UNITS.MEGA_BYTES_SEC,
+        UNITS.GIGA_BYTES_SEC,
+        UNITS.TERA_BYTES_SEC,
+        UNITS.PETA_BYTES_SEC,
+    ], "Must not use SI bytes"
     return YAxis(format=format, logBase=log_base)
 
 
@@ -2274,6 +2289,185 @@ def PD() -> RowPanel:
     return layout.row_panel
 
 
+def IOBreakdown() -> RowPanel:
+    layout = Layout(title="IO Breakdown")
+    layout.row(
+        [
+            graph_panel(
+                title="Write IO bytes",
+                description="The throughput of disk write per IO type",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_io_bytes",
+                            label_selectors=['op="write"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_io_bytes",
+                            label_selectors=['op="write"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="total",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Read IO bytes",
+                description="The throughput of disk read per IO type",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_io_bytes",
+                            label_selectors=['op="read"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_io_bytes",
+                            label_selectors=['op="read"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="total",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="IO threshold",
+                description="The threshold of disk IOs per priority",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_rate_limiter_max_bytes_per_sec",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Rate Limiter Request Wait Duration",
+                description="IO rate limiter request wait duration.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_rate_limiter_request_wait_duration_seconds",
+                            by_labels=["type"],
+                        ),
+                        legend_format=r" {{type}}-99%",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_rate_limiter_request_wait_duration_seconds_sum",
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_rate_limiter_request_wait_duration_seconds_count",
+                                by_labels=[],  # override default by instance.
+                            ),
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def RaftWaterfall() -> RowPanel:
+    layout = Layout(title="Raft Waterfall")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def RaftIO() -> RowPanel:
+    layout = Layout(title="Raft IO")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def RaftPropose() -> RowPanel:
+    layout = Layout(title="Raft Propose")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def RaftProcess() -> RowPanel:
+    layout = Layout(title="Raft Process")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def RaftMessage() -> RowPanel:
+    layout = Layout(title="Raft Message")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def RaftAdmin() -> RowPanel:
+    layout = Layout(title="Raft Admin")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def RaftLog() -> RowPanel:
+    layout = Layout(title="Raft Log")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def LocalReader() -> RowPanel:
+    layout = Layout(title="Local Reader")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -2295,5 +2489,14 @@ dashboard = Dashboard(
         ThreadCPU(),
         TTL(),
         PD(),
+        IOBreakdown(),
+        RaftWaterfall(),
+        RaftIO(),
+        RaftPropose(),
+        RaftProcess(),
+        RaftMessage(),
+        RaftAdmin(),
+        RaftLog(),
+        LocalReader(),
     ],
 ).auto_panel_ids()
