@@ -6,9 +6,9 @@ from grafanalib import formatunits as UNITS
 from grafanalib.core import (
     GRAPH_TOOLTIP_MODE_SHARED_TOOLTIP,
     HIDE_VARIABLE,
+    NULL_AS_NULL,
     SHOW,
     TIME_SERIES_TARGET_FORMAT,
-    NULL_AS_NULL,
     Dashboard,
     DataSourceInput,
     Graph,
@@ -19,6 +19,7 @@ from grafanalib.core import (
     Legend,
     Panel,
     RowPanel,
+    Stat,
     Target,
     Template,
     Templating,
@@ -266,6 +267,25 @@ def heatmap_panel(
     )
 
 
+def stat_panel(
+    title: str,
+    targets: list[Target],
+    description=None,
+    format=UNITS.NONE_FORMAT,
+    graph_mode="none",
+    data_source=DATASOURCE,
+) -> Panel:
+    return Stat(
+        title=title,
+        dataSource=data_source,
+        description=description,
+        targets=targets,
+        format=format,
+        graphMode=graph_mode,
+        reduceCalc="lastNotNull",
+    )
+
+
 @attr.s
 class Expr(object):
     """
@@ -436,6 +456,26 @@ def expr_avg(
     """
     return expr_aggr(
         metric, "avg", label_selectors=label_selectors, by_labels=by_labels
+    )
+
+
+def expr_max(
+    metric: str,
+    label_selectors: list[str] = [],
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the max of a metric.
+
+    Example:
+
+        max((
+            tikv_store_size_bytes
+            {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        )) by (instance)
+    """
+    return expr_aggr(
+        metric, "max", label_selectors=label_selectors, by_labels=by_labels
     )
 
 
@@ -1985,6 +2025,104 @@ def ThreadCPU() -> RowPanel:
     return layout.row_panel
 
 
+def TTL() -> RowPanel:
+    layout = Layout(title="TTL")
+    layout.row(
+        [
+            graph_panel(
+                title="TTL check progress",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_ttl_checker_processed_regions",
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_raftstore_region_count",
+                                label_selectors=['type="region"'],
+                            ),
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="TTL checker actions",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_ttl_checker_actions", by_labels=["type"]
+                        )
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="TTL checker compact duration",
+                description="The time consumed when executing GC tasks",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            1.0,
+                            "tikv_ttl_checker_compact_duration",
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_ttl_checker_compact_duration",
+                        ),
+                        legend_format=r"99%",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.95,
+                            "tikv_ttl_checker_compact_duration",
+                        ),
+                        legend_format=r"95%",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_ttl_checker_compact_duration_sum",
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_ttl_checker_compact_duration_count",
+                                by_labels=[],  # override default by instance.
+                            ),
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+            stat_panel(
+                title="TTL checker poll interval",
+                format=UNITS.MILLI_SECONDS,
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_ttl_checker_poll_interval",
+                            label_selectors=['type="tikv_gc_run_interval"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -2004,5 +2142,6 @@ dashboard = Dashboard(
         Server(),
         gRPC(),
         ThreadCPU(),
+        TTL(),
     ],
 ).auto_panel_ids()
