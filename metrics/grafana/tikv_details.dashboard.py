@@ -612,7 +612,7 @@ def target(
 #### Metrics Definition Start ####
 
 
-def Templats() -> Templating:
+def Templates() -> Templating:
     return Templating(
         [
             template(
@@ -1694,6 +1694,297 @@ def gRPC() -> RowPanel:
     return layout.row_panel
 
 
+def ThreadCPU() -> RowPanel:
+    layout = Layout(title="Thread CPU")
+    layout.row(
+        [
+            graph_panel(
+                title="Raft store CPU",
+                description="The CPU utilization of raftstore thread",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"(raftstore|rs)_.*"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Async apply CPU",
+                description="The CPU utilization of async apply",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"apply_[0-9]+"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Store writer CPU",
+                description="The CPU utilization of store writer thread",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"store_write.*"'],
+                        ),
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=0.8)],
+            ),
+            graph_panel(
+                title="gRPC poll CPU",
+                description="The CPU utilization of gRPC",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"grpc.*"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Scheduler worker CPU",
+                description="The CPU utilization of scheduler worker",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"sched_.*"'],
+                        ),
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=3.6)],
+            ),
+            graph_panel(
+                title="Storage ReadPool CPU",
+                description="The CPU utilization of readpool",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"store_read_norm.*"'],
+                        ),
+                        legend_format="{{instance}}-normal",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"store_read_high.*"'],
+                        ),
+                        legend_format="{{instance}}-high",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"store_read_low.*"'],
+                        ),
+                        legend_format="{{instance}}-low",
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=3.6)],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Unified read pool CPU",
+                description="The CPU utilization of the unified read pool",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"unified_read_po.*"'],
+                        ),
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=7.2)],
+            ),
+            graph_panel(
+                title="RocksDB CPU",
+                description="The CPU utilization of RocksDB",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"rocksdb.*"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Coprocessor CPU",
+                description="The CPU utilization of coprocessor",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"cop_normal.*"'],
+                        ),
+                        legend_format="{{instance}}-normal",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"cop_high.*"'],
+                        ),
+                        legend_format="{{instance}}-high",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"cop_low.*"'],
+                        ),
+                        legend_format="{{instance}}-low",
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=7.2)],
+            ),
+            graph_panel(
+                title="GC worker CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"gc_worker.*"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Background Worker CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"background.*"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raftlog fetch Worker CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"raftlog_fetch.*"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Import CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"sst_.*"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Backup CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=[
+                                'name=~"(backup-worker|bkwkr|backup_endpoint).*"'
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="CDC worker CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"cdcwkr.*"'],
+                        ),
+                        legend_format="{{instance}}-worker",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"tso"'],
+                        ),
+                        legend_format="{{instance}}-tso",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"cdc_.*"'],
+                        ),
+                        legend_format="{{instance}}-endpoint",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="TSO Worker CPU",
+                description="The CPU utilization of raftstore thread",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"tso_worker"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -1705,12 +1996,13 @@ dashboard = Dashboard(
     inputs=[DATASOURCE_INPUT],
     editable=True,
     graphTooltip=GRAPH_TOOLTIP_MODE_SHARED_TOOLTIP,
-    templating=Templats(),
+    templating=Templates(),
     panels=[
         Duration(),
         Cluster(),
         Errors(),
         Server(),
         gRPC(),
+        ThreadCPU(),
     ],
 ).auto_panel_ids()
