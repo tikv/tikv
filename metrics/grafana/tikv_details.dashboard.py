@@ -1217,9 +1217,15 @@ def Server() -> RowPanel:
                     ),
                     target(
                         expr=expr_operator(
-                            expr_sum_rate("tikv_raftstore_region_size_sum"),
+                            expr_sum_rate(
+                                "tikv_raftstore_region_size_sum",
+                                by_labels=[],  # override default by instance.
+                            ),
                             "/",
-                            expr_sum_rate("tikv_raftstore_region_size_count"),
+                            expr_sum_rate(
+                                "tikv_raftstore_region_size_count",
+                                by_labels=[],  # override default by instance.
+                            ),
                         ),
                         legend_format="avg",
                     ),
@@ -1464,29 +1470,224 @@ def gRPC() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Request batch input",
-                description="The size of requests into request batch per TiKV instance",
+                title="gRPC message count",
+                description="The count of different kinds of gRPC message",
+                yaxes=yaxes(left_format=UNITS.REQUESTS_PER_SEC),
+                fill_gradient=1,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_msg_duration_seconds_count",
+                            labels_selectors=['type!="kv_gc"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="gRPC message failed",
+                description="The count of different kinds of gRPC message which is failed",
+                yaxes=yaxes(left_format=UNITS.REQUESTS_PER_SEC),
+                fill_gradient=1,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_msg_fail_total",
+                            labels_selectors=['type!="kv_gc"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title=r"99% gRPC message duration",
+                description=r"The 99% percentile of execution time of gRPC message",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                fill_gradient=1,
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_grpc_msg_duration_seconds",
+                            labels_selectors=['type!="kv_gc"'],
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Average gRPC message duration",
+                description="The average execution time of gRPC message",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                fill_gradient=1,
                 targets=[
                     target(
                         expr=expr_operator(
                             expr_sum_rate(
-                                "tikv_server_request_batch_size_sum", by_labels=["type"]
+                                "tikv_grpc_msg_duration_seconds_sum",
+                                by_labels=["type"],
                             ),
                             "/",
                             expr_sum_rate(
-                                "tikv_server_request_batch_size_count",
+                                "tikv_grpc_msg_duration_seconds_count",
                                 by_labels=["type"],
                             ),
                         ),
-                        legend_format="{{type}}-avg",
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="gRPC batch size",
+                description=r"The 99% percentile of execution time of gRPC message",
+                fill_gradient=1,
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_server_grpc_req_batch_size",
+                        ),
+                        legend_format=r"99% request",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_server_request_batch_size",
-                            by_labels=["type"],
+                            "tikv_server_grpc_resp_batch_size",
                         ),
-                        legend_format="{{type}}-99%",
+                        legend_format=r"99% response",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_server_grpc_req_batch_size_sum",
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_server_grpc_req_batch_size_count",
+                                by_labels=[],  # override default by instance.
+                            ),
+                        ),
+                        legend_format="avg request",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_server_grpc_resp_batch_size_sum",
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_server_grpc_resp_batch_size_count",
+                                by_labels=[],  # override default by instance.
+                            ),
+                        ),
+                        legend_format="avg response",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_server_request_batch_size_bucket",
+                        ),
+                        legend_format=r"99% kv get batch",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_server_request_batch_size_sum",
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_server_request_batch_size_count",
+                                by_labels=[],  # override default by instance.
+                            ),
+                        ),
+                        legend_format="avg kv batch",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="raft message batch size",
+                fill_gradient=1,
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_server_raft_message_batch_size",
+                        ),
+                        legend_format=r"99%",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_server_raft_message_batch_size_sum",
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_server_raft_message_batch_size_count",
+                                by_labels=[],  # override default by instance.
+                            ),
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="gRPC request sources QPS",
+                description="The QPS of different sources of gRPC request",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                fill_gradient=1,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_request_source_counter_vec",
+                            by_labels=["source"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="gRPC request sources duration",
+                description="The duration of different sources of gRPC request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                lines=False,
+                stack=True,
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_request_source_duration_vec",
+                            by_labels=["source"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="gRPC resource group QPS",
+                description="The QPS of different resource groups of gRPC request",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_resource_group_total", by_labels=["name"]
+                        ),
                     ),
                 ],
             ),
