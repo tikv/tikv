@@ -549,6 +549,7 @@ def expr_sum_rate(
 def expr_sum_delta(
     metric: str,
     label_selectors: list[str] = [],
+    range_selector: str = "$__rate_interval",
     by_labels: list[str] = ["instance"],
 ) -> Expr:
     """
@@ -567,7 +568,7 @@ def expr_sum_delta(
         aggr_op="sum",
         func="delta",
         label_selectors=label_selectors,
-        range_selector="$__rate_interval",
+        range_selector=range_selector,
         by_labels=by_labels,
     )
 
@@ -2123,6 +2124,161 @@ def TTL() -> RowPanel:
     return layout.row_panel
 
 
+def PD() -> RowPanel:
+    layout = Layout(title="PD")
+    layout.row(
+        [
+            graph_panel(
+                title="PD requests",
+                description="The count of requests that TiKV sends to PD",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_pd_request_duration_seconds_count",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="PD request duration (average)",
+                description="The time consumed by requests that TiKV sends to PD",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_pd_request_duration_seconds_sum",
+                                by_labels=["type"],
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_pd_request_duration_seconds_count",
+                                by_labels=["type"],
+                            ),
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="PD heartbeats",
+                description="The total number of PD heartbeat messages",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_pd_heartbeat_message_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_pd_pending_heartbeat_total",
+                        ),
+                        legend_format="{{instance}}-pending",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="PD validate peers",
+                description="The total number of peers validated by the PD worker",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_pd_validate_peer_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="PD reconnection",
+                description="The count of reconnection between TiKV and PD",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_pd_reconnect_total",
+                            range_selector="$__rate_interval",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="PD forward status",
+                description="The forward status of PD client",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_pd_request_forwarded",
+                        ),
+                        legend_format="{{instance}}-{{host}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Pending TSO Requests",
+                description="The number of TSO requests waiting in the queue.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_pd_pending_tso_request_total",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Store Slow Score",
+                description="The slow score of stores",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_slow_score",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Inspected duration per server",
+                description="The duration that recorded by inspecting messages.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_inspect_duration_seconds",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{instance}}-{{type}}",
+                    ),
+                ],
+            )
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -2143,5 +2299,6 @@ dashboard = Dashboard(
         gRPC(),
         ThreadCPU(),
         TTL(),
+        PD(),
     ],
 ).auto_panel_ids()
