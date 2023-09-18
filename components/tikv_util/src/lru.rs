@@ -247,7 +247,7 @@ where
             HashMapEntry::Occupied(mut e) => {
                 self.size_policy.on_remove(e.key(), &e.get().value);
                 self.size_policy.on_insert(e.key(), &value);
-                let mut entry = e.get_mut();
+                let entry = e.get_mut();
                 self.trace.promote(entry.record);
                 entry.value = value;
             }
