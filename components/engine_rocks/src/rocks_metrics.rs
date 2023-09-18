@@ -920,6 +920,7 @@ struct CfStats {
     blob_cache_size: Option<u64>,
     readers_mem: Option<u64>,
     mem_tables: Option<u64>,
+    mem_tables_all: Option<u64>,
     num_keys: Option<u64>,
     pending_compaction_bytes: Option<u64>,
     num_immutable_mem_table: Option<u64>,
@@ -977,6 +978,9 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             }
             if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
                 *cf_stats.mem_tables.get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_SIZE_ALL_MEM_TABLES) {
+                *cf_stats.mem_tables_all.get_or_insert_default() += v;
             }
             // TODO: add cache usage and pinned usage.
             if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
@@ -1117,6 +1121,11 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             if let Some(v) = cf_stats.mem_tables {
                 STORE_ENGINE_MEMORY_GAUGE_VEC
                     .with_label_values(&[&self.name, cf, "mem-tables"])
+                    .set(v as i64);
+            }
+            if let Some(v) = cf_stats.mem_tables_all {
+                STORE_ENGINE_MEMORY_GAUGE_VEC
+                    .with_label_values(&[&self.name, cf, "mem-tables-all"])
                     .set(v as i64);
             }
             if let Some(v) = cf_stats.num_keys {
@@ -1538,9 +1547,9 @@ lazy_static! {
         "Number of times titan blob file sync is done",
         &["db"]
     ).unwrap();
-    pub static ref STORE_ENGINE_BLOB_FILE_SYNCED: SimpleEngineTickerMetrics = 
-        auto_flush_from!(STORE_ENGINE_BLOB_FILE_SYNCED_VEC, SimpleEngineTickerMetrics); 
-    
+    pub static ref STORE_ENGINE_BLOB_FILE_SYNCED: SimpleEngineTickerMetrics =
+        auto_flush_from!(STORE_ENGINE_BLOB_FILE_SYNCED_VEC, SimpleEngineTickerMetrics);
+
     pub static ref STORE_ENGINE_BLOB_CACHE_EFFICIENCY_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_blob_cache_efficiency",
         "Efficiency of titan's blob cache",

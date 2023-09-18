@@ -244,7 +244,7 @@ impl PeerPessimisticLocks {
         // Locks that are marked deleted still need to be moved to the new regions,
         // and the deleted mark should also be cleared.
         // Refer to the comment in `PeerPessimisticLocks` for details.
-        let removed_locks = self.map.drain_filter(|key, _| {
+        let removed_locks = self.map.extract_if(|key, _| {
             let key = &**key.as_encoded();
             let (start_key, end_key) = (derived.get_start_key(), derived.get_end_key());
             key < start_key || (!end_key.is_empty() && key >= end_key)

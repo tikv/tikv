@@ -5,12 +5,12 @@ use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use tikv_util::{
-    memory::{HeapSize, MemoryQuota},
+    memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
 };
 use txn_types::{Key, TimeStamp};
 
-use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
+use crate::metrics::*;
 
 const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
 pub const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
@@ -203,16 +203,23 @@ impl Resolver {
 
     // Return an approximate heap memory usage in bytes.
     pub fn approximate_heap_bytes(&self) -> usize {
-        // memory used by locks_by_key.
-        let memory_quota_in_use = self.memory_quota.in_use();
+        if self.locks_by_key.is_empty() {
+            return 0;
+        }
 
-        // memory used by lock_ts_heap.
-        let memory_lock_ts_heap = self.lock_ts_heap.len()
-            * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
-            // memory used by HashSet<Arc<u8>>
-            + self.locks_by_key.len() * std::mem::size_of::<Arc<[u8]>>();
-
-        memory_quota_in_use + memory_lock_ts_heap
+        const SAMPLE_COUNT: usize = 8;
+        let mut key_count = 0;
+        let mut key_bytes = 0;
+        for key in self.locks_by_key.keys() {
+            key_count += 1;
+            key_bytes += key.len();
+            if key_count >= SAMPLE_COUNT {
+                break;
+            }
+        }
+        self.locks_by_key.len() * (key_bytes / key_count + std::mem::size_of::<TimeStamp>())
+            + self.lock_ts_heap.len()
+                * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<HashSet<Arc<[u8]>>>())
     }
 
     fn lock_heap_size(&self, key: &[u8]) -> usize {
@@ -245,8 +252,12 @@ impl Resolver {
         }
     }
 
-    #[must_use]
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) -> bool {
+    pub fn track_lock(
+        &mut self,
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        index: Option<u64>,
+    ) -> Result<(), MemoryQuotaExceeded> {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
@@ -260,13 +271,11 @@ impl Resolver {
             "memory_capacity" => self.memory_quota.capacity(),
             "key_heap_size" => bytes,
         );
-        if !self.memory_quota.alloc(bytes) {
-            return false;
-        }
+        self.memory_quota.alloc(bytes)?;
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         self.locks_by_key.insert(key.clone(), start_ts);
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
-        true
+        Ok(())
     }
 
     pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
@@ -500,11 +509,9 @@ mod tests {
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        assert!(resolver.track_lock(
-                            start_ts.into(),
-                            key.into_raw().unwrap(),
-                            None
-                        ));
+                        resolver
+                            .track_lock(start_ts.into(), key.into_raw().unwrap(), None)
+                            .unwrap();
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
@@ -527,7 +534,7 @@ mod tests {
         let mut key = vec![0; 77];
         let lock_size = resolver.lock_heap_size(&key);
         let mut ts = TimeStamp::default();
-        while resolver.track_lock(ts, key.clone(), None) {
+        while resolver.track_lock(ts, key.clone(), None).is_ok() {
             ts.incr();
             key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
         }

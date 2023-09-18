@@ -309,7 +309,7 @@ impl SubscriptionTracer {
             }
         };
 
-        let mut subscription = sub.value_mut();
+        let subscription = sub.value_mut();
 
         let old_epoch = subscription.meta.get_region_epoch();
         let new_epoch = new_region.get_region_epoch();
@@ -480,7 +480,7 @@ impl TwoPhaseResolver {
             warn!("backup stream tracking lock as if in phase one"; "start_ts" => %start_ts, "key" => %utils::redact(&key))
         }
         // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-        assert!(self.resolver.track_lock(start_ts, key, None));
+        self.resolver.track_lock(start_ts, key, None).unwrap();
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
@@ -489,7 +489,7 @@ impl TwoPhaseResolver {
             return;
         }
         // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-        assert!(self.resolver.track_lock(start_ts, key, None));
+        self.resolver.track_lock(start_ts, key, None).unwrap();
     }
 
     pub fn untrack_lock(&mut self, key: &[u8]) {
@@ -505,7 +505,7 @@ impl TwoPhaseResolver {
         match lock {
             FutureLock::Lock(key, ts) => {
                 // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-                assert!(self.resolver.track_lock(ts, key, None));
+                self.resolver.track_lock(ts, key, None).unwrap();
             }
             FutureLock::Unlock(key) => self.resolver.untrack_lock(&key, None),
         }

@@ -1015,10 +1015,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
                     multiplexing
                         .entry((conn_id, downstream.get_req_id()))
-                        .or_insert_with(Default::default)
+                        .or_default()
                         .push(*region_id);
                 } else {
-                    let x = one_way.entry(conn_id).or_insert_with(Default::default);
+                    let x = one_way.entry(conn_id).or_default();
                     x.0.push(downstream.get_req_id());
                     x.1.push(*region_id);
                 }
@@ -2324,7 +2324,7 @@ mod tests {
         // region 3 to conn b.
         let mut conn_rxs = vec![];
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        for region_ids in vec![vec![1, 2], vec![3]] {
+        for region_ids in [vec![1, 2], vec![3]] {
             let (tx, rx) = channel::channel(1, quota.clone());
             conn_rxs.push(rx);
             let conn = Conn::new(tx, String::new());
@@ -2644,7 +2644,9 @@ mod tests {
 
             let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
             let mut resolver = Resolver::new(id, memory_quota);
-            assert!(resolver.track_lock(TimeStamp::compose(0, id), vec![], None));
+            resolver
+                .track_lock(TimeStamp::compose(0, id), vec![], None)
+                .unwrap();
             let mut region = Region::default();
             region.id = id;
             region.set_region_epoch(region_epoch);
