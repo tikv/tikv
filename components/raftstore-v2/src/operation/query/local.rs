@@ -29,6 +29,7 @@ use tikv_util::{
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::WriteBatchFlags;
 
 use crate::{
@@ -166,9 +167,57 @@ where
             return Ok(snap);
         }
 
+<<<<<<< HEAD
         if let Some(query_res) = self.try_to_renew_lease(region_id, &req).await? {
             // If query successful, try again.
             if query_res.read().is_some() {
+=======
+        worker_metrics::maybe_tls_local_read_metrics_flush();
+
+        async move {
+            let (mut fut, mut reader) = match res {
+                Either::Left(Ok(snap)) => {
+                    GLOBAL_TRACKERS.with_tracker(get_tls_tracker_token(), |t| {
+                        t.metrics.local_read = true;
+                    });
+                    return Ok(snap);
+                }
+                Either::Left(Err(e)) => return Err(e),
+                Either::Right((fut, reader)) => (fut, reader),
+            };
+
+            let mut tried_cnt = 0;
+            loop {
+                match fut.await? {
+                    Some(query_res) => {
+                        if query_res.read().is_none() {
+                            let QueryResult::Response(res) = query_res else {
+                                unreachable!()
+                            };
+                            // Get an error explicitly in header,
+                            // or leader reports KeyIsLocked error via read index.
+                            assert!(
+                                res.get_header().has_error()
+                                    || res
+                                        .get_responses()
+                                        .get(0)
+                                        .map_or(false, |r| r.get_read_index().has_locked()),
+                                "{:?}",
+                                res
+                            );
+                            return Err(res);
+                        }
+                    }
+                    None => {
+                        return Err(fail_resp(format!(
+                            "internal error: failed to extend lease: canceled: {}",
+                            region_id
+                        )));
+                    }
+                }
+
+                // If query successful, try again.
+>>>>>>> 086965358f (raftstore-v2: report async snapshot metrics to prometheus (#15562))
                 req.mut_header().set_read_quorum(false);
                 if let Some(snap) = self.try_get_snapshot(req)? {
                     return Ok(snap);
