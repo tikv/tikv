@@ -161,7 +161,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // Match v1::on_check_merge.
     pub fn on_check_merge<T: Transport>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
         if !self.serving() || self.applied_merge_state().is_none() {
-            info!(self.logger, "exit on_check_merge",);
             return;
         }
         self.add_pending_tick(PeerTick::CheckMerge);

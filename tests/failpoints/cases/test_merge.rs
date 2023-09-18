@@ -1784,7 +1784,8 @@ fn test_concurrent_between_transfer_leader_and_merge() {
 
     // Source region: 1, Target Region: 1000
     // Let target region in leader_transfering status by interceptting MsgTimeoutNow
-    // msg by using Filter
+    // msg by using Filter. So we make node-1-1000 be in leader_transferring status
+    // for some time.
     let (tx, rx_msg) = channel();
     let filter = MsgTimeoutFilter { tx };
     cluster.add_send_filter_on_node(1, Box::new(filter));
@@ -1801,6 +1802,10 @@ fn test_concurrent_between_transfer_leader_and_merge() {
     );
 
     let msg = rx_msg.recv().unwrap();
+
+    // Now, node-1-1000 is in leader_transferring status. After it reject proposing
+    // commit merge, make node-1-1 block before proposing rollback merge until
+    // node-2-1000 propose commit merge.
 
     fail::cfg("on_reject_commit_merge_1", "pause").unwrap();
 
