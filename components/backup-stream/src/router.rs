@@ -976,7 +976,7 @@ impl StreamTaskInfo {
     pub async fn move_to_flushing_files(&self) -> Result<&Self> {
         // if flushing_files is not empty, which represents this flush is a retry
         // operation.
-        if !self.flushing_files.read().await.is_empty() {
+        if !self.flushing_files.read().await.is_empty() || !self.flushing_meta_files.read().await.is_empty() {
             return Ok(self);
         }
 
