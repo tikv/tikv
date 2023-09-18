@@ -839,8 +839,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        info!("write command finished";
-            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
+        info!(
+            "write command finished";
+            "cid" => cid,
+            "pipelined" => pipelined,
+            "async_apply_prewrite" => async_apply_prewrite,
+            "result" => ?result
+        );
+
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
@@ -1575,6 +1581,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
         });
 
+        to_be_write.cid = Some(cid);
         let async_write_start = Instant::now_coarse();
         let mut res = unsafe {
             with_tls_engine(|e: &mut E| {

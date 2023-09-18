@@ -266,6 +266,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         write.header,
                         write.data,
                         write.ch,
+                        write.cid,
                     );
                 }
                 PeerMsg::UnsafeWrite(write) => {

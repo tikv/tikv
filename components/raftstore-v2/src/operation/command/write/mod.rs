@@ -42,13 +42,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
         ch: CmdResChannel,
+        cid: Option<u64>,
     ) {
         if !self.serving() {
             apply::notify_req_region_removed(self.region_id(), ch);
             return;
         }
         if let Some(encoder) = self.simple_write_encoder_mut() {
-            if encoder.amend(&header, &data) {
+            if encoder.amend(&header, &data, cid.clone()) {
                 encoder.add_response_channel(ch);
                 self.set_has_ready();
                 return;
@@ -80,6 +81,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
             call_proposed_on_success,
         );
+        if let Some(cid) = cid {
+            encoder.cids.push(cid);
+        }
         encoder.add_response_channel(ch);
         self.set_has_ready();
         self.simple_write_encoder_mut().replace(encoder);
@@ -132,9 +136,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 // Only when it applies to current term, the epoch check can be reliable.
                 self.applied_to_current_term()
             };
+            let cids = encoder.cids.clone();
             let (data, chs) = encoder.encode();
             let res = self.propose(ctx, data);
             fail_point!("after_propose_pending_writes");
+
+            for cid in cids {
+                info!(
+                    "propose write";
+                    "cid" => cid,
+                    "propose_res" => ?res,
+                );
+            }
 
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);
         }

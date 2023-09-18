@@ -50,6 +50,7 @@ where
     size_limit: usize,
     write_type: WriteType,
     notify_proposed: bool,
+    pub cids: Vec<u64>,
 }
 
 impl<C> SimpleWriteReqEncoder<C>
@@ -78,6 +79,7 @@ where
             size_limit,
             write_type: bin.write_type,
             notify_proposed,
+            cids: vec![],
         }
     }
 
@@ -86,7 +88,12 @@ where
     /// Return false if the buffer limit is reached or the binary type not
     /// match.
     #[inline]
-    pub fn amend(&mut self, header: &RaftRequestHeader, bin: &SimpleWriteBinary) -> bool {
+    pub fn amend(
+        &mut self,
+        header: &RaftRequestHeader,
+        bin: &SimpleWriteBinary,
+        cid: Option<u64>,
+    ) -> bool {
         if *self.header != *header {
             return false;
         }
@@ -94,6 +101,9 @@ where
             && bin.write_type != WriteType::Unspecified
             && self.buf.len() + bin.buf.len() < self.size_limit
         {
+            if let Some(cid) = cid {
+                self.cids.push(cid);
+            }
             self.buf.extend_from_slice(&bin.buf);
             true
         } else {
@@ -565,7 +575,7 @@ mod tests {
         encoder.delete_range(CF_LOCK, b"key", b"key", true);
         encoder.delete_range("cf", b"key", b"key", false);
         let bin = encoder.encode();
-        assert!(!req_encoder.amend(&header, &bin));
+        assert!(!req_encoder.amend(&header, &bin, None));
         let req_encoder2 = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
             header.clone(),
             bin,
@@ -699,12 +709,12 @@ mod tests {
         let mut header2 = Box::<RaftRequestHeader>::default();
         header2.set_term(4);
         // Only simple write command with same header can be batched.
-        assert!(!req_encoder.amend(&header2, &bin));
+        assert!(!req_encoder.amend(&header2, &bin, None));
 
         let mut bin2 = bin.clone();
         bin2.freeze();
         // Frozen bin can't be merged with other bin.
-        assert!(!req_encoder.amend(&header, &bin2));
+        assert!(!req_encoder.amend(&header, &bin2, None));
         let mut req_encoder2: SimpleWriteReqEncoder<Callback<engine_rocks::RocksSnapshot>> =
             SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
                 header.clone(),
@@ -712,13 +722,13 @@ mod tests {
                 512,
                 false,
             );
-        assert!(!req_encoder2.amend(&header, &bin));
+        assert!(!req_encoder2.amend(&header, &bin, None));
 
         // Batch should not excceed max size limit.
         let large_value = vec![0; 512];
         let mut encoder = SimpleWriteEncoder::with_capacity(512);
         encoder.put(CF_DEFAULT, b"key", &large_value);
-        assert!(!req_encoder.amend(&header, &encoder.encode()));
+        assert!(!req_encoder.amend(&header, &encoder.encode(), None));
 
         let (bytes, _) = req_encoder.encode();
         let mut decoder =
