@@ -689,7 +689,7 @@ macro_rules! impl_write {
             let timer = Instant::now_coarse();
             let label = stringify!($fn);
             if let Err(err) = self.check_deny() {
-                ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+                ctx.spawn(async move { $crate::send_rpc_response!(Err(err), sink, label, timer) });
                 return;
             }
             let resource_manager = self.resource_manager.clone();
