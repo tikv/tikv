@@ -1015,10 +1015,10 @@ where
             // in snapshot recovery after we stopped all conf changes from PD.
             // if the follower slow than leader and has the pending conf change.
             // that's means
-            // 1. if the follower didn't finished the conf change
-            //    => it cannot be chosen to be leader during recovery.
-            // 2. if the follower has been chosen to be leader
-            //    => it already apply the pending conf change already.
+            // 1. if the follower didn't finished the conf change => it cannot be chosen to
+            //    be leader during recovery.
+            // 2. if the follower has been chosen to be leader => it already apply the
+            //    pending conf change already.
             return;
         }
         debug!(
@@ -2859,6 +2859,11 @@ where
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
+        debug!(
+            "reset raft tick to {:?}", state;
+            "region_id"=> self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
         self.fsm.reset_hibernate_state(state);
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;

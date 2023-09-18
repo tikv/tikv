@@ -178,7 +178,7 @@ impl Samples {
     // evaluate the samples according to the given key range, it will update the
     // sample's left, right and contained counter.
     fn evaluate(&mut self, key_range: &KeyRange) {
-        for mut sample in self.0.iter_mut() {
+        for sample in self.0.iter_mut() {
             let order_start = if key_range.start_key.is_empty() {
                 Ordering::Greater
             } else {
@@ -496,10 +496,7 @@ pub struct WriteStats {
 
 impl WriteStats {
     pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
-        let query_stats = self
-            .region_infos
-            .entry(region_id)
-            .or_insert_with(QueryStats::default);
+        let query_stats = self.region_infos.entry(region_id).or_default();
         query_stats.add_query_num(kind, 1);
     }
 
@@ -988,8 +985,8 @@ mod tests {
 
     #[test]
     fn test_prefix_sum() {
-        let v = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let expect = vec![1, 3, 6, 10, 15, 21, 28, 36, 45];
+        let v = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let expect = [1, 3, 6, 10, 15, 21, 28, 36, 45];
         let pre = prefix_sum(v.iter(), |x| *x);
         for i in 0..v.len() {
             assert_eq!(expect[i], pre[i]);

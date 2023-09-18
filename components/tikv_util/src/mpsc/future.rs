@@ -302,6 +302,8 @@ mod tests {
 
     use super::*;
 
+    // the JoinHandler is useless here, so just ignore this warning.
+    #[allow(clippy::let_underscore_future)]
     fn spawn_and_wait<S: Stream + Send + 'static>(
         rx_builder: impl FnOnce() -> S,
     ) -> (Runtime, Arc<AtomicUsize>) {

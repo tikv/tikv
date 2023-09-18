@@ -128,12 +128,8 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
 }
 
 #[allow(unused_mut)]
-fn hijack_unary<F, R, C: PdMocker>(
-    mock: &mut PdMock<C>,
-    ctx: RpcContext<'_>,
-    sink: UnarySink<R>,
-    f: F,
-) where
+fn hijack_unary<F, R, C: PdMocker>(mock: &PdMock<C>, ctx: RpcContext<'_>, sink: UnarySink<R>, f: F)
+where
     R: Send + 'static,
     F: Fn(&dyn PdMocker) -> Option<Result<R>>,
 {

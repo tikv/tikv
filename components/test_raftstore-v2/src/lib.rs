@@ -3,6 +3,8 @@
 #![feature(type_alias_impl_trait)]
 #![feature(return_position_impl_trait_in_trait)]
 #![feature(let_chains)]
+#![allow(clippy::needless_pass_by_ref_mut)]
+#![allow(clippy::arc_with_non_send_sync)]
 
 mod cluster;
 mod node;
