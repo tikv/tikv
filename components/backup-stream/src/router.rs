@@ -720,7 +720,6 @@ impl TempFileKey {
             TimeStamp::physical_now()
         })();
         let uuid = uuid::Uuid::new_v4();
-        //let uuid = "k".to_string();
         if self.is_meta {
             format!(
                 "meta_{:08}_{}_{:?}_{:?}_{}.temp.log",
@@ -1104,7 +1103,6 @@ impl StreamTaskInfo {
             .await?;
         self.merge_log(metadata, storage.clone(), &self.flushing_meta_files, true)
             .await?;
-
         Ok(())
     }
 
@@ -1198,15 +1196,15 @@ impl StreamTaskInfo {
                 .await?
                 .generate_metadata(store_id)
                 .await?;
+
+            fail::fail_point!("after_moving_to_flushing_files");
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["generate_metadata"])
                 .observe(sw.lap().as_secs_f64());
 
-            fail::fail_point!("finish_move_to_flushing_files");
             // flush log file to storage.
             self.flush_log(&mut metadata_info).await
                 .context(format_args!("flushing log"))?;
-
             // the field `min_resolved_ts` of metadata will be updated
             // only after flush is done.
             metadata_info.min_resolved_ts = metadata_info
@@ -1229,7 +1227,6 @@ impl StreamTaskInfo {
                 .observe(sw.lap().as_secs_f64());
 
             // clear flushing files
-            fail::fail_point!("clean_temp_files");
             self.clear_flushing_files().await;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["clear_temp_files"])
@@ -2426,7 +2423,7 @@ mod tests {
         assert!(r.is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_flush_on_events_race() -> Result<()> {
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
@@ -2434,7 +2431,8 @@ mod tests {
             tx,
             Config {
                 prefix: tmp.clone(),
-                temp_file_size_limit: 1,
+                // disable auto flush.
+                temp_file_size_limit: 1000,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
             },
@@ -2456,23 +2454,43 @@ mod tests {
 
         // make timestamp precision to 1 seconds.
         fail::cfg("temp_file_name_timestamp", "return(1000)").unwrap();
+
+        let (trigger_tx, trigger_rx) = std::sync::mpsc::sync_channel(0);
+        let trigger_rx = std::sync::Mutex::new(trigger_rx);
+
         let t = router.get_task_info("race").await.unwrap();
         let _ = router.on_events(events_before_flush).await;
 
-        // do flush in another thread
-        tokio::join!(
-            router.do_flush("race", 42, TimeStamp::max()),
-            router.on_events(events_after_flush)
-        );
+        // make generate temp files ***happen after*** moving files to flushing_files in do_flush
+        fail::cfg_callback("before_generate_temp_file", move || {
+            trigger_rx.lock().unwrap().recv().unwrap();
+        }).unwrap();
 
-        // wait until files move to flush_files
-        let _ = router.do_flush("race", 42, TimeStamp::max()).await;
+        fail::cfg_callback("after_moving_to_flushing_files", move || {
+            trigger_tx.send(()).unwrap();
+        }).unwrap();
+
+        // set flush status to true, because we disabled the auto flush.
+        t.set_flushing_status(true);
+        let router_clone = router.clone();
+        let _ = tokio::join!(
+            // do flush in another thread
+            tokio::spawn(async move {router_clone.do_flush("race", 42, TimeStamp::max()).await;}),
+            router.on_events(events_after_flush),
+        );
+        fail::remove("before_generate_temp_file");
+        fail::remove("after_moving_to_flushing_files");
+        fail::remove("temp_file_name_timestamp");
+
+        // set flush status to true, because we disabled the auto flush.
+        t.set_flushing_status(true);
+        let res = router.do_flush("race", 42, TimeStamp::max()).await;
         // this time flush should success.
+        assert!(res.is_some());
         assert_eq!(
             t.files.read().await.len(),
             0,
         );
-        fail::remove("temp_file_name_timestamp");
         Ok(())
     }
 }
