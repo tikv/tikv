@@ -102,7 +102,15 @@ pub struct CompactionGuardGenerator<P: RegionInfoProvider> {
     use_guard: bool,
     // The boundary keys are exclusive.
     boundaries: Vec<Vec<u8>>,
+    /// The SST boundaries overlapped with the compaction input at the next
+    /// level of output level (let we call it L+2). When the output level is the
+    /// bottom-most level(usually L6), this will be empty. The boundaries
+    /// are the first key of the first sst concatenating with all ssts' end key.
     next_level_boundaries: Vec<Vec<u8>>,
+    /// The size of each "segment" of L+2. If the `next_level_boundaries`(let we
+    /// call it NLB) isn't empty, `next_level_size` will have length
+    /// `NLB.len() - 1`, and at the position `N` stores the size of range
+    /// `[NLB[N], NLB[N+1]]` in L+2.
     next_level_size: Vec<usize>,
     pos: usize,
     next_level_pos: usize,
