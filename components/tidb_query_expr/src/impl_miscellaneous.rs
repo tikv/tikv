@@ -58,7 +58,7 @@ pub fn inet_aton(addr: BytesRef) -> Result<Option<Int>> {
     }
     let (mut byte_result, mut result, mut dot_count): (u64, u64, usize) = (0, 0, 0);
     for c in addr.chars() {
-        if ('0'..='9').contains(&c) {
+        if c.is_ascii_digit() {
             let digit = c as u64 - '0' as u64;
             byte_result = byte_result * 10 + digit;
             if byte_result > 255 {
@@ -501,8 +501,9 @@ mod tests {
             (Some(hex("00000000")), Some(b"0.0.0.0".to_vec())),
             (Some(hex("0A000509")), Some(b"10.0.5.9".to_vec())),
             (
+                // the output format has changed, see: https://github.com/rust-lang/rust/pull/112606
                 Some(hex("00000000000000000000000001020304")),
-                Some(b"::1.2.3.4".to_vec()),
+                Some(b"::102:304".to_vec()),
             ),
             (
                 Some(hex("00000000000000000000FFFF01020304")),
