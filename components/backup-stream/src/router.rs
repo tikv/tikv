@@ -712,11 +712,9 @@ impl TempFileKey {
             fail::fail_point!("temp_file_name_timestamp", |t| t
                 .and_then(|v| {
                     // reduce the precision of timestamp
-                    v.parse::<u64>().ok().map(|u|{
-                        TimeStamp::physical_now() / u
-                    })
-                }).unwrap_or(0)
-            );
+                    v.parse::<u64>().ok().map(|u| TimeStamp::physical_now() / u)
+                })
+                .unwrap_or(0));
             TimeStamp::physical_now()
         })();
         let uuid = uuid::Uuid::new_v4();
@@ -976,7 +974,9 @@ impl StreamTaskInfo {
     pub async fn move_to_flushing_files(&self) -> Result<&Self> {
         // if flushing_files is not empty, which represents this flush is a retry
         // operation.
-        if !self.flushing_files.read().await.is_empty() || !self.flushing_meta_files.read().await.is_empty() {
+        if !self.flushing_files.read().await.is_empty()
+            || !self.flushing_meta_files.read().await.is_empty()
+        {
             return Ok(self);
         }
 
@@ -1203,7 +1203,8 @@ impl StreamTaskInfo {
                 .observe(sw.lap().as_secs_f64());
 
             // flush log file to storage.
-            self.flush_log(&mut metadata_info).await
+            self.flush_log(&mut metadata_info)
+                .await
                 .context(format_args!("flushing log"))?;
             // the field `min_resolved_ts` of metadata will be updated
             // only after flush is done.
@@ -1220,7 +1221,8 @@ impl StreamTaskInfo {
                 .collect::<Vec<_>>();
             // flush meta file to storage.
 
-            self.flush_meta(metadata_info).await
+            self.flush_meta(metadata_info)
+                .await
                 .context(format_args!("flushing meta"))?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
@@ -1519,7 +1521,7 @@ mod tests {
     use std::{ffi::OsStr, io, time::Duration};
 
     use external_storage::{ExternalData, NoopStorage};
-    use futures::{AsyncReadExt, join};
+    use futures::AsyncReadExt;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use online_config::{ConfigManager, OnlineConfig};
     use tempdir::TempDir;
@@ -2461,21 +2463,26 @@ mod tests {
         let t = router.get_task_info("race").await.unwrap();
         let _ = router.on_events(events_before_flush).await;
 
-        // make generate temp files ***happen after*** moving files to flushing_files in do_flush
+        // make generate temp files ***happen after*** moving files to flushing_files in
+        // do_flush
         fail::cfg_callback("before_generate_temp_file", move || {
             trigger_rx.lock().unwrap().recv().unwrap();
-        }).unwrap();
+        })
+        .unwrap();
 
         fail::cfg_callback("after_moving_to_flushing_files", move || {
             trigger_tx.send(()).unwrap();
-        }).unwrap();
+        })
+        .unwrap();
 
         // set flush status to true, because we disabled the auto flush.
         t.set_flushing_status(true);
         let router_clone = router.clone();
         let _ = tokio::join!(
             // do flush in another thread
-            tokio::spawn(async move {router_clone.do_flush("race", 42, TimeStamp::max()).await;}),
+            tokio::spawn(async move {
+                router_clone.do_flush("race", 42, TimeStamp::max()).await;
+            }),
             router.on_events(events_after_flush),
         );
         fail::remove("before_generate_temp_file");
@@ -2487,10 +2494,7 @@ mod tests {
         let res = router.do_flush("race", 42, TimeStamp::max()).await;
         // this time flush should success.
         assert!(res.is_some());
-        assert_eq!(
-            t.files.read().await.len(),
-            0,
-        );
+        assert_eq!(t.files.read().await.len(), 0,);
         Ok(())
     }
 }
