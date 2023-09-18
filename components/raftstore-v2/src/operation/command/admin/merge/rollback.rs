@@ -38,6 +38,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         index: u64,
     ) {
+        fail::fail_point!("on_reject_commit_merge_1", store_ctx.store_id == 1, |_| {});
         let self_index = self.merge_context().and_then(|c| c.prepare_merge_index());
         if self_index != Some(index) {
             info!(

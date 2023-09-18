@@ -863,6 +863,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn leader_transferring(&self) -> bool {
+        self.leader_transferee != raft::INVALID_ID
+    }
+
+    #[inline]
     pub fn long_uncommitted_threshold(&self) -> Duration {
         Duration::from_secs(self.long_uncommitted_threshold)
     }
