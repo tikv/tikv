@@ -269,7 +269,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let PeerMsg::SimpleWrite(write) = PeerMsg::simple_write(header, encoder.encode()).0 else {
             unreachable!()
         };
-        self.on_simple_write(ctx, write.header, write.data, write.ch);
+        self.on_simple_write(ctx, write.header, write.data, write.ch, None);
         true
     }
 }

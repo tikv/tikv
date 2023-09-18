@@ -49,7 +49,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         if let Some(encoder) = self.simple_write_encoder_mut() {
-            if encoder.amend(&header, &data, cid.clone()) {
+            if encoder.amend(&header, &data, cid) {
                 encoder.add_response_channel(ch);
                 self.set_has_ready();
                 return;
@@ -142,11 +142,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             fail_point!("after_propose_pending_writes");
 
             for cid in cids {
-                info!(
-                    "propose write";
-                    "cid" => cid,
-                    "propose_res" => ?res,
-                );
+                match res {
+                    Ok(index) => {
+                        info!(
+                            self.logger,
+                            "propose write";
+                            "cid" => cid,
+                            "index" => index,
+                        );
+                    }
+                    Err(ref e) => {
+                        info!(
+                            self.logger,
+                            "propose write failed";
+                            "cid" => cid,
+                            "err" => ?e,
+                        );
+                    }
+                }
             }
 
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);
