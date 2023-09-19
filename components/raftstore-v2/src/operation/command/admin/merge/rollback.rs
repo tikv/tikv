@@ -76,7 +76,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_rollback_merge(
         &mut self,
         req: &AdminRequest,
-        _index: u64,
+        index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         fail::fail_point!("apply_rollback_merge");
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
@@ -96,6 +96,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 "state" => ?merge_state,
             );
         }
+
+        let prepare_merge_commit = rollback.commit;
+        info!(
+            self.logger,
+            "execute RollbackMerge";
+            "commit" => prepare_merge_commit,
+            "index" => index,
+        );
+
         let mut region = self.region().clone();
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
