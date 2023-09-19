@@ -632,27 +632,27 @@ fn check_local_region_stale(
     epoch: &RegionEpoch,
     region_info_accessor: Arc<dyn RegionInfoProvider>,
 ) -> Result<()> {
-    let (tx2, rx2) = paired_future_callback();
+    let (cb, f) = paired_future_callback();
     region_info_accessor
         .find_region_by_id(
             region_id,
-            Box::new(move |item| {
-                tx2.send(item).unwrap();
-            }),
+            cb,
         )
         .map_err(|e| {
             Error::Engine(format!("failed to find region {} err {:?}", region_id, e).into())
         })?;
 
-    let result = rx2.recv().map_err(|e| {
-        Error::Engine(
-            format!(
-                "failed to receive from newly created channel {:?} for region {}",
-                e, region_id
+    let result = async move {
+        f.await.map_err(|e| {
+            Error::Engine(
+                format!(
+                    "failed to receive from newly created channel {:?} for region {}",
+                    e, region_id
+                )
+                .into(),
             )
-            .into(),
-        )
-    })?;
+        })?
+    };
     match result {
         Some(local_region_info) => {
             let local_region_epoch = local_region_info.region.region_epoch.unwrap();
