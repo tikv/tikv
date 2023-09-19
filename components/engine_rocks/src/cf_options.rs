@@ -40,6 +40,23 @@ impl RocksCfOptions {
     pub fn into_raw(self) -> RawCfOptions {
         self.0
     }
+
+    pub fn set_flush_size(&mut self, f: usize) -> Result<()> {
+        if let Some(m) = self.0.get_write_buffer_manager() {
+            m.set_flush_size(f);
+        } else {
+            return Err(box_err!("write buffer manager not found"));
+        }
+        Ok(())
+    }
+
+    pub fn get_flush_size(&mut self) -> Result<u64> {
+        if let Some(m) = self.0.get_write_buffer_manager() {
+            return Ok(m.flush_size() as u64);
+        }
+
+        Err(box_err!("write buffer manager not found"))
+    }
 }
 
 impl Deref for RocksCfOptions {
