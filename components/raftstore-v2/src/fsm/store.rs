@@ -246,10 +246,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
 
         // self.on_pd_store_heartbeat();
         // Delay first heartbeat to coordinate with raft peers' bootstrapping.
-        self.schedule_tick(
-            StoreTick::PdStoreHeartbeat,
-            self.store_ctx.cfg.pd_store_heartbeat_tick_interval.0,
-        );
+        // self.schedule_tick(
+        //     StoreTick::PdStoreHeartbeat,
+        //     self.store_ctx.cfg.pd_store_heartbeat_tick_interval.0,
+        // );
         self.schedule_tick(
             StoreTick::CleanupImportSst,
             self.store_ctx.cfg.cleanup_import_sst_interval.0,
