@@ -382,10 +382,8 @@ grpcio-health = { version = "0.10.4", default-features = false, features = ["pro
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-7.1" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-# tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
-# TODO: after the `upgrade_crossbeam_utils` has been merged, the `tokio-timer` should revert to the original.
-tokio-timer = { git = "https://github.com/LykxSassinator/tokio-timer", branch = "upgrade_crossbeam_utils" }
-tokio-executor = { git = "https://github.com/LykxSassinator/tokio-timer", branch = "upgrade_crossbeam_utils" }
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 
