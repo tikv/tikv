@@ -42,7 +42,7 @@ use raftstore::{
 use resource_control::ResourceController;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
-use slog::{warn, Logger};
+use slog::{info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
     box_err,
@@ -923,7 +923,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router.register_all(mailboxes);
 
         let router_for_cb = Mutex::new(router.router.control_mailbox());
+        let cb_logger = self.logger.clone();
         let replay_finished_cb = Arc::new(InvokeClosureOnDrop(Some(Box::new(move || {
+            info!(cb_logger, "scheduling store heartbeat");
             router_for_cb
                 .lock()
                 .unwrap()
