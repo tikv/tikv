@@ -1039,7 +1039,12 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
-                let file = shared_pool.open_raw_for_read(data_file.inner.path())?;
+                let file = shared_pool
+                    .open_raw_for_read(data_file.inner.path())
+                    .context(format_args!(
+                        "open raw for read {:?}",
+                        data_file.inner.path()
+                    ))?;
                 let compress_length = file.len().await?;
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
@@ -1163,7 +1168,8 @@ impl StreamTaskInfo {
                     UnpinReader(Box::new(Cursor::new(meta_buff))),
                     buflen as _,
                 )
-                .await?;
+                .await
+                .context(format_args!("flush meta {:?}", meta_path))?;
         }
         Ok(())
     }
@@ -1204,9 +1210,7 @@ impl StreamTaskInfo {
                 .observe(sw.lap().as_secs_f64());
 
             // flush log file to storage.
-            self.flush_log(&mut metadata_info)
-                .await
-                .context(format_args!("flushing log {:?}", metadata_info.file_groups))?;
+            self.flush_log(&mut metadata_info).await?;
             // the field `min_resolved_ts` of metadata will be updated
             // only after flush is done.
             metadata_info.min_resolved_ts = metadata_info
@@ -1222,10 +1226,7 @@ impl StreamTaskInfo {
                 .collect::<Vec<_>>();
             // flush meta file to storage.
 
-            self.flush_meta(metadata_info).await.context(format_args!(
-                "flushing meta {:?}",
-                metadata_info.file_groups
-            ))?;
+            self.flush_meta(metadata_info).await?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
                 .observe(sw.lap().as_secs_f64());
