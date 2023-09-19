@@ -71,13 +71,30 @@ use crate::{
     worker::tablet,
 };
 
-const PAUSE_FOR_REPLAY_GAP: u64 = 128;
+const PAUSE_FOR_REPLAY_GAP: u64 = 5;
+
+pub struct InvokeClosureOnDrop(pub Option<Box<dyn FnOnce() + Send + Sync>>);
+
+impl fmt::Debug for InvokeClosureOnDrop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "InvokeClosureOnDrop")
+    }
+}
+
+impl Drop for InvokeClosureOnDrop {
+    fn drop(&mut self) {
+        if let Some(on_drop) = self.0.take() {
+            on_drop();
+        }
+    }
+}
 
 pub struct ReplayWatch {
     normal_peers: AtomicUsize,
     paused_peers: AtomicUsize,
     logger: Logger,
     timer: Instant,
+    _replay_finished_cb: Arc<InvokeClosureOnDrop>,
 }
 
 impl Debug for ReplayWatch {
@@ -92,12 +109,13 @@ impl Debug for ReplayWatch {
 }
 
 impl ReplayWatch {
-    pub fn new(logger: Logger) -> Self {
+    pub fn new(logger: Logger, replay_finished_cb: Arc<InvokeClosureOnDrop>) -> Self {
         Self {
             normal_peers: AtomicUsize::new(0),
             paused_peers: AtomicUsize::new(0),
             logger,
             timer: Instant::now(),
+            _replay_finished_cb: replay_finished_cb,
         }
     }
 

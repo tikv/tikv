@@ -26,7 +26,9 @@ use super::response_channel::{
     QueryResSubscriber,
 };
 use crate::{
-    operation::{CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit},
+    operation::{
+        CatchUpLogs, InvokeClosureOnDrop, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit,
+    },
     router::ApplyRes,
 };
 
@@ -360,7 +362,7 @@ pub enum StoreMsg {
     RaftMessage(Box<RaftMessage>),
     SplitInit(Box<SplitInit>),
     Tick(StoreTick),
-    Start,
+    Start(Arc<InvokeClosureOnDrop>),
     StoreUnreachable {
         to_store_id: u64,
     },

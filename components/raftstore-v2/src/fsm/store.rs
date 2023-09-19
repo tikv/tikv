@@ -300,7 +300,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     {
         for msg in store_msg_buf.drain(..) {
             match msg {
-                StoreMsg::Start => self.on_start(),
+                StoreMsg::Start(_) => self.on_start(),
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     self.fsm.store.on_raft_message(self.store_ctx, msg);

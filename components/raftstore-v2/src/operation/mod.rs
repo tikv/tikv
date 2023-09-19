@@ -19,8 +19,8 @@ pub use command::{
 };
 pub use life::{AbnormalPeerContext, DestroyProgress, GcPeerContext};
 pub use ready::{
-    write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, ReplayWatch, SnapState,
-    StateStorage,
+    write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, InvokeClosureOnDrop,
+    ReplayWatch, SnapState, StateStorage,
 };
 
 pub(crate) use self::{

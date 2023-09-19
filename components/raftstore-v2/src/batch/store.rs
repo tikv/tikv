@@ -60,10 +60,11 @@ use time::Timespec;
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     operation::{
-        ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+        InvokeClosureOnDrop, ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX,
+        MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
     },
     raft::Storage,
-    router::{PeerMsg, PeerTick, StoreMsg},
+    router::{PeerMsg, PeerTick, StoreMsg, StoreTick},
     worker::{cleanup, pd, refresh_config, tablet},
     Error, Result,
 };
@@ -921,14 +922,28 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         router.register_all(mailboxes);
 
+        let router_for_cb = Mutex::new(router.router.control_mailbox());
+        let replay_finished_cb = Arc::new(InvokeClosureOnDrop(Some(Box::new(move || {
+            router_for_cb
+                .lock()
+                .unwrap()
+                .force_send(StoreMsg::Tick(StoreTick::PdStoreHeartbeat))
+                .unwrap();
+        }))));
+
         // Make sure Msg::Start is the first message each FSM received.
-        let watch = Arc::new(ReplayWatch::new(self.logger.clone()));
+        let watch = Arc::new(ReplayWatch::new(
+            self.logger.clone(),
+            replay_finished_cb.clone(),
+        ));
         for addr in address {
             router
                 .force_send(addr, PeerMsg::Start(Some(watch.clone())))
                 .unwrap();
         }
-        router.send_control(StoreMsg::Start).unwrap();
+        router
+            .send_control(StoreMsg::Start(replay_finished_cb))
+            .unwrap();
         Ok(())
     }
 
