@@ -1042,7 +1042,7 @@ impl StreamTaskInfo {
                 let file = shared_pool
                     .open_raw_for_read(data_file.inner.path())
                     .context(format_args!(
-                        "open raw for read {:?}",
+                        "failed to open read file {:?}",
                         data_file.inner.path()
                     ))?;
                 let compress_length = file.len().await?;
@@ -1225,7 +1225,6 @@ impl StreamTaskInfo {
                 .map(|d| (d.length, d.data_files_info.len()))
                 .collect::<Vec<_>>();
             // flush meta file to storage.
-
             self.flush_meta(metadata_info).await?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
@@ -2499,7 +2498,7 @@ mod tests {
             tokio::spawn(async move {
                 router_clone.do_flush("race", 42, TimeStamp::max()).await;
             }),
-            router.on_events(events_after_flush).await;
+            router.on_events(events_after_flush)
         );
         fail::remove("after_write_to_file");
         fail::remove("before_generate_temp_file");
