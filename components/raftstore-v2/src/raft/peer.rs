@@ -863,6 +863,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn leader_transferee(&self) -> u64 {
+        self.leader_transferee
+    }
+
+    #[inline]
     pub fn leader_transferring(&self) -> bool {
         self.leader_transferee != raft::INVALID_ID
     }

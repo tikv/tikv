@@ -348,6 +348,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let _ = store_ctx
                     .router
                     .force_send(source_id, PeerMsg::RejectCommitMerge { index });
+            } else if self.leader_transferring() {
+                info!(
+                    self.logger,
+                    "not to propose commit merge when transferring leader";
+                    "transferee" => self.leader_transferee(),
+                );
             }
         } else {
             info!(
