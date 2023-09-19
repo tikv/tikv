@@ -643,15 +643,7 @@ fn check_local_region_stale(
         })?;
 
     let result = async move {
-        f.await.map_err(|e| {
-            Error::Engine(
-                format!(
-                    "failed to receive from newly created channel {:?} for region {}",
-                    e, region_id
-                )
-                .into(),
-            )
-        })?
+        f.await
     };
     match result {
         Some(local_region_info) => {
