@@ -29,18 +29,18 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<E, R, C, S>
+pub struct Runner<E, R, S>
 where
     E: KvEngine,
     R: RaftEngine,
     S: StoreRouter<E>,
 {
     compact: CompactRunner<E>,
-    cleanup_sst: CleanupSstRunner<E, C, S>,
+    cleanup_sst: CleanupSstRunner,
     gc_snapshot: GcSnapshotRunner<E, R>,
 }
 
-impl<E, R, C, S> Runner<E, R, C, S>
+impl<E, R, C, S> Runner<E, R, S>
 where
     E: KvEngine,
     R: RaftEngine,
@@ -49,9 +49,9 @@ where
 {
     pub fn new(
         compact: CompactRunner<E>,
-        cleanup_sst: CleanupSstRunner<E, C, S>,
+        cleanup_sst: CleanupSstRunner,
         gc_snapshot: GcSnapshotRunner<E, R>,
-    ) -> Runner<E, R, C, S> {
+    ) -> Runner<E, R, S> {
         Runner {
             compact,
             cleanup_sst,
@@ -60,7 +60,7 @@ where
     }
 }
 
-impl<E, R, C, S> Runnable for Runner<E, R, C, S>
+impl<E, R, C, S> Runnable for Runner<E, R, S>
 where
     E: KvEngine,
     R: RaftEngine,
