@@ -50,7 +50,7 @@ impl RocksCfOptions {
         Ok(())
     }
 
-    pub fn get_flush_size(&mut self) -> Result<u64> {
+    pub fn get_flush_size(&self) -> Result<u64> {
         if let Some(m) = self.0.get_write_buffer_manager() {
             return Ok(m.flush_size() as u64);
         }
