@@ -224,8 +224,11 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
             .dec();
         #[cfg(feature = "failpoints")]
         {
-            let sleep = || { fail::fail_point!("execute_scan_command_sleep_100", |_| { 100 }); 0  }();
-            tokio::time::sleep(std::time::Duration::from_secs).await;
+            let sleep = (|| {
+                fail::fail_point!("execute_scan_command_sleep_100", |_| { 100 });
+                0
+            })();
+            tokio::time::sleep(std::time::Duration::from_secs(sleep)).await;
         }
 
         let init = init.clone();
