@@ -19,6 +19,7 @@ mod all {
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use futures::executor::block_on;
+    use raftstore::coprocessor::ObserveHandle;
     use tikv_util::defer;
 
     use super::{
@@ -75,6 +76,7 @@ mod all {
         suite.run(|| {
             Task::ModifyObserve(backup_stream::ObserveOp::Start {
                 region: suite.cluster.get_region(&make_record_key(1, 886)),
+                handle: ObserveHandle::new(),
             })
         });
         fail::cfg("scan_after_get_snapshot", "off").unwrap();
@@ -174,6 +176,8 @@ mod all {
     }
     #[test]
     fn test_retry_abort() {
+        test_util::init_log_for_test();
+
         let mut suite = SuiteBuilder::new_named("retry_abort").nodes(1).build();
         defer! {
             fail::list().into_iter().for_each(|(name, _)| fail::remove(name))

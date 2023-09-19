@@ -12,7 +12,7 @@ use resolved_ts::{Resolver, TsSource, TxnLocks};
 use tikv_util::{info, memory::MemoryQuota, warn};
 use txn_types::TimeStamp;
 
-use crate::{debug, metrics::TRACK_REGION, utils};
+use crate::{debug, errors::Result, metrics::TRACK_REGION, utils};
 
 /// A utility to tracing the regions being subscripted.
 #[derive(Clone, Default, Debug)]
@@ -476,21 +476,21 @@ impl TwoPhaseResolver {
         self.stable_ts.is_some()
     }
 
-    pub fn track_phase_one_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
+    pub fn track_phase_one_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) -> Result<()> {
         if !self.in_phase_one() {
             warn!("backup stream tracking lock as if in phase one"; "start_ts" => %start_ts, "key" => %utils::redact(&key))
         }
-        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-        self.resolver.track_lock(start_ts, key, None).unwrap();
+        self.resolver.track_lock(start_ts, key, None)?;
+        Ok(())
     }
 
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
+    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) -> Result<()> {
         if self.in_phase_one() {
             self.future_locks.push(FutureLock::Lock(key, start_ts));
-            return;
+            return Ok(());
         }
-        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-        self.resolver.track_lock(start_ts, key, None).unwrap();
+        self.resolver.track_lock(start_ts, key, None)?;
+        Ok(())
     }
 
     pub fn untrack_lock(&mut self, key: &[u8]) {

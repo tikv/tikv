@@ -5,6 +5,7 @@ use std::{
     collections::HashSet,
     fmt,
     marker::PhantomData,
+    panic::Location,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -38,7 +39,7 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::{oneshot, Semaphore},
+    sync::{mpsc::Sender, oneshot, Semaphore},
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
@@ -50,7 +51,7 @@ use crate::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
         GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
-    errors::{Error, Result},
+    errors::{Error, ReportableResult, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
     future,
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
@@ -85,7 +86,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     pub range_router: Router,
     observer: BackupStreamObserver,
     pool: Runtime,
-    region_operator: RegionSubscriptionManager<S, R, PDC>,
+    region_operator: Sender<ObserveOp>,
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
     // however probably it would be useful in the future.
@@ -577,6 +578,7 @@ where
                         .try_for_each(|r| {
                             tx.blocking_send(ObserveOp::Start {
                                 region: r.region.clone(),
+                                handle: ObserveHandle::new(),
                             })
                         });
                 }),
@@ -591,9 +593,24 @@ where
         // Don't reschedule this command: or once the endpoint's mailbox gets
         // full, the system might deadlock.
         while let Some(cmd) = rx.recv().await {
-            self.region_operator.request(cmd).await;
+            self.region_op(cmd).await;
         }
         Ok(())
+    }
+
+    /// send an operation request to the manager.
+    /// the returned future would be resolved after send is success.
+    /// the opeartion would be executed asynchronously.
+    async fn region_op(&self, cmd: ObserveOp) {
+        self.region_operator
+            .send(cmd)
+            .await
+            .map_err(|err| {
+                Error::Other(
+                    format!("cannot send to region operator, are we shutting down? ({err})").into(),
+                )
+            })
+            .report_if_err("")
     }
 
     // register task ranges
@@ -760,7 +777,10 @@ where
                 }),
                 min_ts,
             };
-            op.request(req).await;
+            if let Err(err) = op.send(req).await {
+                annotate!(err, "BUG: region operator channel closed.")
+                    .report("when executing region op");
+            }
             rx.await
                 .map_err(|err| annotate!(err, "failed to send request for resolve regions"))
         }
@@ -904,7 +924,14 @@ where
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
-        self.pool.block_on(self.region_operator.request(op));
+        self.pool
+            .block_on(self.region_operator.send(op))
+            .map_err(|err| {
+                Error::Other(
+                    format!("cannot send to region operator, are we shutting down? ({err})").into(),
+                )
+            })
+            .report_if_err("during on_modify_observe");
     }
 
     fn update_semaphore_capacity(&self, sema: &Arc<Semaphore>, diff: isize) {
@@ -1195,6 +1222,7 @@ type ResolveRegionsCallback = Box<dyn FnOnce(ResolvedRegions) + 'static + Send>;
 pub enum ObserveOp {
     Start {
         region: Region,
+        handle: ObserveHandle,
     },
     Stop {
         region: Region,
@@ -1209,11 +1237,10 @@ pub enum ObserveOp {
     RefreshResolver {
         region: Region,
     },
-    NotifyFailToStartObserve {
+    NotifyStartObserveResult {
         region: Region,
         handle: ObserveHandle,
-        err: Box<Error>,
-        has_failed_for: u8,
+        err: Option<Box<Error>>,
     },
     ResolveRegions {
         callback: ResolveRegionsCallback,
@@ -1224,9 +1251,10 @@ pub enum ObserveOp {
 impl std::fmt::Debug for ObserveOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start { region } => f
+            Self::Start { region, handle } => f
                 .debug_struct("Start")
                 .field("region", &utils::debug_region(region))
+                .field("handle", &handle)
                 .finish(),
             Self::Stop { region } => f
                 .debug_struct("Stop")
@@ -1240,17 +1268,15 @@ impl std::fmt::Debug for ObserveOp {
                 .debug_struct("RefreshResolver")
                 .field("region", &utils::debug_region(region))
                 .finish(),
-            Self::NotifyFailToStartObserve {
+            Self::NotifyStartObserveResult {
                 region,
                 handle,
                 err,
-                has_failed_for,
             } => f
                 .debug_struct("NotifyFailToStartObserve")
                 .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
-                .field("has_failed_for", has_failed_for)
                 .finish(),
             Self::ResolveRegions { min_ts, .. } => f
                 .debug_struct("ResolveRegions")
@@ -1317,7 +1343,7 @@ impl Task {
                 ObserveOp::Stop { .. } => "modify_observe.stop",
                 ObserveOp::Destroy { .. } => "modify_observe.destroy",
                 ObserveOp::RefreshResolver { .. } => "modify_observe.refresh_resolver",
-                ObserveOp::NotifyFailToStartObserve { .. } => "modify_observe.retry",
+                ObserveOp::NotifyStartObserveResult { .. } => "modify_observe.retry",
                 ObserveOp::ResolveRegions { .. } => "modify_observe.resolve",
             },
             Task::ForceFlush(..) => "force_flush",

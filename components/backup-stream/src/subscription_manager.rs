@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
@@ -9,7 +9,7 @@ use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::{
-    coprocessor::{ObserveHandle, RegionInfoProvider},
+    coprocessor::{ObserveHandle, ObserveId, RegionInfoProvider},
     router::CdcHandle,
     store::fsm::ChangeObserver,
 };
@@ -23,7 +23,7 @@ use txn_types::TimeStamp;
 use crate::{
     annotate,
     endpoint::{BackupStreamResolver, ObserveOp},
-    errors::{Error, Result},
+    errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
     future,
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
@@ -38,8 +38,6 @@ use crate::{
 
 type ScanPool = tokio::runtime::Runtime;
 
-const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
-
 // The retry parameters for failed to get last checkpoint ts.
 // When PD is temporarily disconnected, we may need this retry.
 // The total duration of retrying is about 345s ( 20 * 16 + 15 ),
@@ -49,10 +47,16 @@ const RETRY_AWAIT_BASIC_DURATION: Duration = Duration::from_secs(1);
 const RETRY_AWAIT_MAX_DURATION: Duration = Duration::from_secs(16);
 
 fn backoff_for_start_observe(failed_for: u8) -> Duration {
-    Ord::min(
+    let res = Ord::min(
         RETRY_AWAIT_BASIC_DURATION * (1 << failed_for),
         RETRY_AWAIT_MAX_DURATION,
-    )
+    );
+    fail::fail_point!("subscribe_mgr_retry_start_observe_delay", |v| {
+        v.and_then(|x| x.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(res)
+    });
+    res
 }
 
 /// a request for doing initial scanning.
@@ -193,30 +197,13 @@ impl ScanCmd {
         utils::record_cf_stat("default", &stat.data);
         Ok(())
     }
-
-    /// execute the command, when meeting error, retrying.
-    async fn exec_by_with_retry(self, init: impl InitialScan) {
-        let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
-        loop {
-            match self.exec_by(init.clone()).await {
-                Err(err) if should_retry(&err) && retry_time > 0 => {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    warn!("meet retryable error"; "err" => %err, "retry_time" => retry_time);
-                    retry_time -= 1;
-                    continue;
-                }
-                Err(err) if retry_time == 0 => {
-                    init.handle_fatal_error(&self.region, err.context("retry time exceeds"));
-                    break;
-                }
-                // Errors which `should_retry` returns false means they can be ignored.
-                Err(_) | Ok(_) => break,
-            }
-        }
-    }
 }
 
-async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>) {
+async fn scan_executor_loop(
+    init: impl InitialScan,
+    mut cmds: Receiver<ScanCmd>,
+    self_channel: Sender<ObserveOp>,
+) {
     while let Some(cmd) = cmds.recv().await {
         debug!("handling initial scan request"; "region_id" => %cmd.region.get_id());
         metrics::PENDING_INITIAL_SCAN_LEN
@@ -232,11 +219,25 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
         }
 
         let init = init.clone();
+        let tx = self_channel.clone();
         tokio::task::spawn(async move {
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .inc();
-            cmd.exec_by_with_retry(init).await;
+            let res = cmd.exec_by(init).await;
+            tx.send(ObserveOp::NotifyStartObserveResult {
+                region: cmd.region,
+                handle: cmd.handle,
+                err: res.map_err(Box::new).err(),
+            })
+            .await
+            .map_err(|err| {
+                Error::Other(box_err!(
+                    "failed to send result, are we shutting down? {}",
+                    err
+                ))
+            })
+            .report_if_err("");
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .dec();
@@ -248,11 +249,12 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
 fn spawn_executors(
     init: impl InitialScan + Send + Sync + 'static,
     number: usize,
+    self_channel: Sender<ObserveOp>,
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
     pool.spawn(async move {
-        scan_executor_loop(init, rx).await;
+        scan_executor_loop(init, rx, self_channel).await;
     });
     ScanPoolHandle { tx, _pool: pool }
 }
@@ -293,32 +295,11 @@ pub struct RegionSubscriptionManager<S, R, PDC> {
     observer: BackupStreamObserver,
     subs: SubscriptionTracer,
 
-    messenger: Sender<ObserveOp>,
-    scan_pool_handle: Arc<ScanPoolHandle>,
-    scans: Arc<CallbackWaitGroup>,
-}
+    failure_count: HashMap<ObserveId, u8>,
 
-impl<S, R, PDC> Clone for RegionSubscriptionManager<S, R, PDC>
-where
-    S: MetaStore + 'static,
-    R: RegionInfoProvider + Clone + 'static,
-    PDC: PdClient + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            regions: self.regions.clone(),
-            meta_cli: self.meta_cli.clone(),
-            // We should manually call Arc::clone here or rustc complains that `PDC` isn't `Clone`.
-            pd_client: Arc::clone(&self.pd_client),
-            range_router: self.range_router.clone(),
-            scheduler: self.scheduler.clone(),
-            observer: self.observer.clone(),
-            subs: self.subs.clone(),
-            messenger: self.messenger.clone(),
-            scan_pool_handle: self.scan_pool_handle.clone(),
-            scans: CallbackWaitGroup::new(),
-        }
-    }
+    messenger: Sender<ObserveOp>,
+    scan_pool_handle: ScanPoolHandle,
+    scans: Arc<CallbackWaitGroup>,
 }
 
 /// Create a pool for doing initial scanning.
@@ -357,14 +338,14 @@ where
         pd_client: Arc<PDC>,
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
-    ) -> (Self, future![()])
+    ) -> (Sender<ObserveOp>, future![()])
     where
         E: KvEngine,
         HInit: CdcHandle<E> + Sync + 'static,
         HChkLd: CdcHandle<E> + 'static,
     {
         let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
-        let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);
+        let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size, tx.clone());
         let op = Self {
             regions,
             meta_cli,
@@ -373,22 +354,13 @@ where
             scheduler: initial_loader.scheduler.clone(),
             observer,
             subs: initial_loader.tracing,
-            messenger: tx,
-            scan_pool_handle: Arc::new(scan_pool_handle),
+            messenger: tx.clone(),
+            scan_pool_handle,
             scans: CallbackWaitGroup::new(),
+            failure_count: HashMap::new(),
         };
-        let fut = op.clone().region_operator_loop(rx, resolver);
-        (op, fut)
-    }
-
-    /// send an operation request to the manager.
-    /// the returned future would be resolved after send is success.
-    /// the opeartion would be executed asynchronously.
-    pub async fn request(&self, op: ObserveOp) {
-        if let Err(err) = self.messenger.send(op).await {
-            annotate!(err, "BUG: region operator channel closed.")
-                .report("when executing region op");
-        }
+        let fut = op.region_operator_loop(rx, resolver);
+        (tx, fut)
     }
 
     /// wait initial scanning get finished.
@@ -398,7 +370,7 @@ where
 
     /// the handler loop.
     async fn region_operator_loop<E, RT>(
-        self,
+        mut self,
         mut message_box: Receiver<ObserveOp>,
         mut resolver: BackupStreamResolver<RT, E>,
     ) where
@@ -411,9 +383,9 @@ where
                 info!("backup stream: on_modify_observe"; "op" => ?op);
             }
             match op {
-                ObserveOp::Start { region } => {
+                ObserveOp::Start { region, handle } => {
                     fail::fail_point!("delay_on_start_observe");
-                    self.start_observe(region).await;
+                    self.start_observe(region, handle).await;
                     metrics::INITIAL_SCAN_REASON
                         .with_label_values(&["leader-changed"])
                         .inc();
@@ -435,23 +407,36 @@ where
                     });
                 }
                 ObserveOp::RefreshResolver { ref region } => self.refresh_resolver(region).await,
-                ObserveOp::NotifyFailToStartObserve {
+                ObserveOp::NotifyStartObserveResult {
                     region,
                     handle,
                     err,
-                    has_failed_for,
                 } => {
-                    info!("retry observe region"; "region" => %region.get_id(), "err" => %err);
-                    // No need for retrying observe canceled.
-                    if err.error_code() == error_code::backup_stream::OBSERVE_CANCELED {
-                        return;
-                    }
+                    let err = match err {
+                        None => {
+                            self.failure_count.remove(&handle.id);
+                            continue;
+                        }
+                        Some(err) => {
+                            if !should_retry(&err) {
+                                self.failure_count.remove(&handle.id);
+                                continue;
+                            }
+                            err
+                        }
+                    };
                     let (start, end) = (
                         region.get_start_key().to_owned(),
                         region.get_end_key().to_owned(),
                     );
-                    match self.retry_observe(region, handle, has_failed_for).await {
-                        Ok(()) => {}
+                    let hnd_id = handle.id;
+                    *self.failure_count.entry(hnd_id).or_insert(0) += 1;
+                    match self.retry_observe(region, handle).await {
+                        Ok(has_resent_req) => {
+                            if !has_resent_req {
+                                self.failure_count.remove(&hnd_id);
+                            }
+                        }
                         Err(e) => {
                             let msg = Task::FatalError(
                                 TaskSelector::ByRange(start, end),
@@ -514,11 +499,10 @@ where
                     if let Err(e) = r {
                         try_send!(
                             self.scheduler,
-                            Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
+                            Task::ModifyObserve(ObserveOp::NotifyStartObserveResult {
                                 region: region.clone(),
                                 handle,
-                                err: Box::new(e),
-                                has_failed_for: 0,
+                                err: Some(Box::new(e)),
                             })
                         );
                     }
@@ -559,50 +543,32 @@ where
         Ok(())
     }
 
-    async fn start_observe(&self, region: Region) {
-        self.start_observe_with_failure_count(region, 0).await
-    }
-
-    async fn start_observe_with_failure_count(&self, region: Region, has_failed_for: u8) {
-        let handle = ObserveHandle::new();
+    async fn start_observe(&self, region: Region, handle: ObserveHandle) {
         let schd = self.scheduler.clone();
         self.subs.add_pending_region(&region);
-        if let Err(err) = self.try_start_observe(&region, handle.clone()).await {
+        let res = self.try_start_observe(&region, handle.clone()).await;
+        if let Err(ref err) = &res {
             warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
-            tokio::spawn(async move {
-                #[cfg(not(feature = "failpoints"))]
-                let delay = backoff_for_start_observe(has_failed_for);
-                #[cfg(feature = "failpoints")]
-                let delay = (|| {
-                    fail::fail_point!("subscribe_mgr_retry_start_observe_delay", |v| {
-                        let dur = v
-                            .expect("should provide delay time (in ms)")
-                            .parse::<u64>()
-                            .expect("should be number (in ms)");
-                        Duration::from_millis(dur)
-                    });
-                    backoff_for_start_observe(has_failed_for)
-                })();
-                tokio::time::sleep(delay).await;
-                try_send!(
-                    schd,
-                    Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
-                        region,
-                        handle,
-                        err: Box::new(err),
-                        has_failed_for: has_failed_for + 1
-                    })
-                )
-            });
         }
+        try_send!(
+            schd,
+            Task::ModifyObserve(ObserveOp::NotifyStartObserveResult {
+                region,
+                handle,
+                err: res.map_err(Box::new).err(),
+            })
+        );
     }
 
-    async fn retry_observe(
-        &self,
-        region: Region,
-        handle: ObserveHandle,
-        failure_count: u8,
-    ) -> Result<()> {
+    async fn retry_observe(&self, region: Region, handle: ObserveHandle) -> Result<bool> {
+        let failure_count = *self.failure_count.get(&handle.id).unwrap_or_else(|| {
+            panic!(
+                "the handle {:?} for region {:?} should be retry, but not and failure record.",
+                handle,
+                utils::debug_region(&region),
+            )
+        });
+        info!("retry observe region"; "region" => %region.get_id(), "failure_count" => %failure_count, "handle" => ?handle.id);
         if failure_count > TRY_START_OBSERVE_MAX_RETRY_TIME {
             return Err(Error::Other(
                 format!(
@@ -636,12 +602,12 @@ where
             metrics::SKIP_RETRY
                 .with_label_values(&["region-absent"])
                 .inc();
-            return Ok(());
+            return Ok(false);
         }
         let new_region_info = new_region_info.unwrap();
         if new_region_info.role != StateRole::Leader {
             metrics::SKIP_RETRY.with_label_values(&["not-leader"]).inc();
-            return Ok(());
+            return Ok(false);
         }
         // Note: we may fail before we insert the region info to the subscription map.
         // At that time, the command isn't steal and we should retry it.
@@ -658,14 +624,22 @@ where
             metrics::SKIP_RETRY
                 .with_label_values(&["stale-command"])
                 .inc();
-            return Ok(());
+            return Ok(false);
         }
+        let tx = self.messenger.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(backoff_for_start_observe(failure_count)).await;
+            let res = tx.send(ObserveOp::Start { region, handle }).await;
+            if res.is_err() {
+                metrics::SKIP_RETRY
+                    .with_label_values(&["channel-close"])
+                    .inc();
+            }
+        });
         metrics::INITIAL_SCAN_REASON
             .with_label_values(&["retry"])
             .inc();
-        self.start_observe_with_failure_count(region, failure_count)
-            .await;
-        Ok(())
+        Ok(true)
     }
 
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {

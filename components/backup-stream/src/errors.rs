@@ -14,12 +14,22 @@ use protobuf::ProtobufError;
 use raftstore::Error as RaftStoreError;
 use thiserror::Error as ThisError;
 use tikv::storage::txn::Error as TxnError;
-use tikv_util::{error, warn, worker::ScheduleError};
+use tikv_util::{error, memory::MemoryQuotaExceeded, warn, worker::ScheduleError};
 
 use crate::{endpoint::Task, metrics};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
+    #[error("No such task {task_name:?}")]
+    NoSuchTask { task_name: String },
+    #[error("Observe have already canceled for region {0} (version = {1:?})")]
+    ObserveCanceled(u64, RegionEpoch),
+    #[error("Malformed metadata {0}")]
+    MalformedMetadata(String),
+
+    #[error("Out of quota {0}")]
+    OutOfQuota(#[from] MemoryQuotaExceeded),
+
     #[error("gRPC meet error {0}")]
     Grpc(#[from] GrpcError),
     #[cfg(feature = "metasotre-etcd")]
@@ -27,12 +37,6 @@ pub enum Error {
     Etcd(#[from] EtcdErrorExt),
     #[error("Protobuf meet error {0}")]
     Protobuf(#[from] ProtobufError),
-    #[error("No such task {task_name:?}")]
-    NoSuchTask { task_name: String },
-    #[error("Observe have already canceled for region {0} (version = {1:?})")]
-    ObserveCanceled(u64, RegionEpoch),
-    #[error("Malformed metadata {0}")]
-    MalformedMetadata(String),
     #[error("I/O Error: {0}")]
     Io(#[from] IoError),
     #[error("Txn error: {0}")]
@@ -45,6 +49,7 @@ pub enum Error {
     RaftRequest(StoreError),
     #[error("Error from raftstore: {0}")]
     RaftStore(#[from] RaftStoreError),
+
     #[error("{context}: {inner_error}")]
     Contextual {
         context: String,
@@ -90,6 +95,7 @@ impl ErrorCodeExt for Error {
             Error::Other(_) => OTHER,
             Error::RaftStore(_) => RAFTSTORE,
             Error::ObserveCanceled(..) => OBSERVE_CANCELED,
+            Error::OutOfQuota(_) => OUT_OF_QUOTA,
             Error::Grpc(_) => GRPC,
         }
     }
