@@ -301,7 +301,7 @@ impl Resolver {
             }
             HashMapEntry::Vacant(entry) => {
                 // Add lock count for the start ts.
-                let mut txn_locks = self.lock_ts_heap.entry(start_ts).or_insert_with(|| {
+                let txn_locks = self.lock_ts_heap.entry(start_ts).or_insert_with(|| {
                     let mut txn_locks = TxnLocks::default();
                     txn_locks.sample_lock = Some(entry.key().clone());
                     txn_locks
@@ -310,7 +310,7 @@ impl Resolver {
 
                 entry.insert(start_ts);
             }
-        };
+        }
         Ok(())
     }
 
