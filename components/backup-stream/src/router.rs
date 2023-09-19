@@ -890,6 +890,7 @@ impl StreamTaskInfo {
         let f = w.get(&key).unwrap();
         self.total_size
             .fetch_add(f.lock().await.on_events(events).await?, Ordering::SeqCst);
+        fail::fail_point!("after_write_to_file");
         Ok(())
     }
 
@@ -2460,11 +2461,22 @@ mod tests {
         let (trigger_tx, trigger_rx) = std::sync::mpsc::sync_channel(0);
         let trigger_rx = std::sync::Mutex::new(trigger_rx);
 
+        let (fp_tx, fp_rx) = std::sync::mpsc::sync_channel(0);
+        let fp_rx = std::sync::Mutex::new(fp_rx);
+
         let t = router.get_task_info("race").await.unwrap();
         let _ = router.on_events(events_before_flush).await;
 
         // make generate temp files ***happen after*** moving files to flushing_files in
-        // do_flush
+        // and read flush file ***happen between*** genenrate file name and write kv to
+        // file
+        // [T1] generate file name -> [T2] moving files to flushing_files -> [T1] write
+        // kv to file -> [T2] read flush file.
+        fail::cfg_callback("after_write_to_file", move || {
+            fp_tx.send(()).unwrap();
+        })
+        .unwrap();
+
         fail::cfg_callback("before_generate_temp_file", move || {
             trigger_rx.lock().unwrap().recv().unwrap();
         })
@@ -2472,6 +2484,7 @@ mod tests {
 
         fail::cfg_callback("after_moving_to_flushing_files", move || {
             trigger_tx.send(()).unwrap();
+            fp_rx.lock().unwrap().recv().unwrap();
         })
         .unwrap();
 
@@ -2483,8 +2496,9 @@ mod tests {
             tokio::spawn(async move {
                 router_clone.do_flush("race", 42, TimeStamp::max()).await;
             }),
-            router.on_events(events_after_flush),
+            router.on_events(events_after_flush).await;
         );
+        fail::remove("after_write_to_file");
         fail::remove("before_generate_temp_file");
         fail::remove("after_moving_to_flushing_files");
         fail::remove("temp_file_name_timestamp");
