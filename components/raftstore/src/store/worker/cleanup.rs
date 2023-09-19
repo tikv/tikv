@@ -40,11 +40,10 @@ where
     gc_snapshot: GcSnapshotRunner<E, R>,
 }
 
-impl<E, R, C, S> Runner<E, R, S>
+impl<E, R, S> Runner<E, R, S>
 where
     E: KvEngine,
     R: RaftEngine,
-    C: PdClient,
     S: StoreRouter<E>,
 {
     pub fn new(
@@ -60,11 +59,10 @@ where
     }
 }
 
-impl<E, R, C, S> Runnable for Runner<E, R, S>
+impl<E, R, S> Runnable for Runner<E, R, S>
 where
     E: KvEngine,
     R: RaftEngine,
-    C: PdClient,
     S: StoreRouter<E>,
 {
     type Task = Task;
