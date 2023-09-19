@@ -1731,3 +1731,85 @@ fn test_prepare_merge_with_5_nodes_snapshot() {
     // Now leader should replicate more logs and figure out a safe index.
     pd_client.must_merge(left.get_id(), right.get_id());
 }
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_gc_peer_after_merge() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let left_peer_on_store1 = find_peer(&left, 1).unwrap().clone();
+    cluster.must_transfer_leader(left.get_id(), left_peer_on_store1);
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    let left_peer_on_store3 = find_peer(&left, 3).unwrap().clone();
+    pd_client.must_remove_peer(left.get_id(), left_peer_on_store3);
+    must_get_none(&cluster.get_engine(3), b"k1");
+
+    let right_peer_on_store1 = find_peer(&right, 1).unwrap().clone();
+    cluster.must_transfer_leader(right.get_id(), right_peer_on_store1);
+    let right_peer_on_store3 = find_peer(&right, 3).unwrap().clone();
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    pd_client.must_remove_peer(right.get_id(), right_peer_on_store3.clone());
+
+    // So cluster becomes
+    //  left region: 1(leader) 2 |
+    // right region: 1(leader) 2 | 3 (removed but not yet destroyed)
+    // | means isolation.
+
+    // Merge right to left.
+    pd_client.must_merge(right.get_id(), left.get_id());
+    let region_state = cluster.region_local_state(left.get_id(), 1);
+    assert!(
+        !region_state.get_merged_records()[0]
+            .get_source_removed_records()
+            .is_empty(),
+        "{:?}",
+        region_state
+    );
+    assert!(
+        region_state
+            .get_removed_records()
+            .iter()
+            .find(|p| p.get_id() == right_peer_on_store3.get_id())
+            .is_none(),
+        "{:?}",
+        region_state
+    );
+
+    // Cluster filters and wait for gc peer ticks.
+    cluster.clear_send_filters();
+    sleep_ms(3 * cluster.cfg.raft_store.gc_peer_check_interval.as_millis());
+
+    // Right region replica on store 3 must be removed.
+    cluster.must_region_not_exist(right.get_id(), 3);
+
+    let start = Instant::now();
+    loop {
+        sleep_ms(cluster.cfg.raft_store.gc_peer_check_interval.as_millis());
+        let region_state = cluster.region_local_state(left.get_id(), 1);
+        if (region_state.get_merged_records().is_empty()
+            || region_state.get_merged_records()[0]
+                .get_source_removed_records()
+                .is_empty())
+            && region_state.get_removed_records().is_empty()
+        {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(5) {
+            panic!(
+                "source removed records and removed records must be empty, {:?}",
+                region_state
+            );
+        }
+    }
+}
