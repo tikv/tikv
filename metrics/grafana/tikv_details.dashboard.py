@@ -19,6 +19,7 @@ from grafanalib.core import (
     Legend,
     Panel,
     RowPanel,
+    SeriesOverride,
     Stat,
     Target,
     Template,
@@ -173,6 +174,7 @@ def graph_panel(
     fill_gradient=1,
     stack=False,
     thresholds: list[GraphThreshold] = [],
+    series_overrides: list[SeriesOverride] = [],
     data_source=DATASOURCE,
 ) -> Panel:
     # extraJson add patches grafanalib result.
@@ -205,9 +207,72 @@ def graph_panel(
         nullPointMode=NULL_AS_NULL,
         thresholds=thresholds,
         tooltip=tooltip,
+        seriesOverrides=series_overrides,
         # Do not specify max max data points, let Grafana decide.
         maxDataPoints=None,
         extraJson=extraJson,
+    )
+
+
+def series_override(
+    alias: str,
+    bars: bool = False,
+    lines: bool = True,
+    yaxis: int = 1,
+    fill: int = 1,
+    zindex: int = 0,
+    dashes: Optional[bool] = None,
+    dash_length: Optional[int] = None,
+    space_length: Optional[int] = None,
+    transform_negative_y: bool = False,
+) -> SeriesOverride:
+    class SeriesOverridePatch(SeriesOverride):
+        dashes_override: Optional[bool]
+        dash_length_override: Optional[int]
+        space_length_override: Optional[int]
+        transform_negative_y: bool
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.dashes_override = kwargs["dashes"]
+            if self.dashes_override is None:
+                del kwargs["dashes"]
+            self.dash_length_override = kwargs["dashLength"]
+            if self.dash_length_override is None:
+                del kwargs["dashLength"]
+            self.space_length_override = kwargs["spaceLength"]
+            if self.space_length_override is None:
+                del kwargs["spaceLength"]
+            self.transform_negative_y = kwargs["transform_negative_y"]
+            del kwargs["transform_negative_y"]
+            super().__init__(*args, **kwargs)
+
+        def to_json_data(self):
+            data = super().to_json_data()
+            # The default 'null' color makes it transparent, remove it.
+            del data["color"]
+            # The default 'null' makes it a transparent line, remove it.
+            if self.dashes_override is None:
+                del data["dashes"]
+            if self.dash_length_override is None:
+                del data["dashLength"]
+            if self.space_length_override is None:
+                del data["spaceLength"]
+            # Add missing transform.
+            if self.transform_negative_y:
+                data["transform"] = "negative-Y"
+            return data
+
+    return SeriesOverridePatch(
+        alias=alias,
+        bars=bars,
+        lines=lines,
+        yaxis=yaxis,
+        fill=fill,
+        zindex=zindex,
+        dashes=dashes,
+        dashLength=dash_length,
+        spaceLength=space_length,
+        transform_negative_y=transform_negative_y,
     )
 
 
@@ -363,6 +428,9 @@ class Expr(object):
         )
         func = self.func if self.func else ""
         label_selectors = self.default_label_selectors + self.label_selectors
+        assert all(
+            ("=" in item or "~" in item) for item in label_selectors
+        ), f"Not all items contain '=' or '~', invalid {self.label_selectors}"
         instant_selectors = (
             "{{{}}}".format(",".join(label_selectors)) if label_selectors else ""
         )
@@ -666,6 +734,89 @@ def target(
         legendFormat=legend_format,
         intervalFactor=1,  # Prefer "high" resolution
         datasource=data_source,
+    )
+
+
+def graph_panel_histogram_quantiles(
+    title: str,
+    description: str,
+    yaxes: YAxes,
+    metric: str,
+    label_selectors: list[str] = [],
+    hide_count=False,
+) -> Panel:
+    """
+    Return a graph panel that shows histogram quantiles of a metric.
+
+    Targets:
+        - 99.99% quantile
+        - 99% quantile
+        - avg
+        - count
+    """
+    return graph_panel(
+        title=title,
+        description=description,
+        yaxes=yaxes,
+        targets=[
+            target(
+                expr=expr_histogram_quantile(
+                    0.9999,
+                    f"{metric}",
+                    label_selectors=label_selectors,
+                ),
+                legend_format=r"99.99%",
+            ),
+            target(
+                expr=expr_histogram_quantile(
+                    0.99,
+                    f"{metric}",
+                    label_selectors=label_selectors,
+                ),
+                legend_format=r"99%",
+            ),
+            target(
+                expr=expr_operator(
+                    expr_sum_rate(
+                        f"{metric}_sum",
+                        label_selectors=label_selectors,
+                        by_labels=[],  # override default by instance.
+                    ),
+                    "/",
+                    expr_sum_rate(
+                        f"{metric}_count",
+                        label_selectors=label_selectors,
+                        by_labels=[],  # override default by instance.
+                    ),
+                ),
+                legend_format="avg",
+            ),
+            target(
+                expr=expr_sum_rate(
+                    f"{metric}_count",
+                    label_selectors=label_selectors,
+                    by_labels=[],  # override default by instance.
+                ),
+                legend_format="count",
+                hide=hide_count,
+            ),
+        ],
+        series_overrides=[
+            series_override(
+                alias="count",
+                fill=2,
+                yaxis=2,
+                zindex=-3,
+                dashes=True,
+                dash_length=1,
+                space_length=1,
+                transform_negative_y=True,
+            ),
+            series_override(
+                alias="avg",
+                fill=7,
+            ),
+        ],
     )
 
 
@@ -1270,37 +1421,12 @@ def Server() -> RowPanel:
                 ],
                 yaxis=yaxis(format=UNITS.BYTES_IEC),
             ),
-            graph_panel(
+            graph_panel_histogram_quantiles(
                 title="Approximate region size",
                 description="The approximate Region size",
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_region_size"
-                        ),
-                        legend_format="99%",
-                    ),
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.95, "tikv_raftstore_region_size"
-                        ),
-                        legend_format="95%",
-                    ),
-                    target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_raftstore_region_size_sum",
-                                by_labels=[],  # override default by instance.
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_raftstore_region_size_count",
-                                by_labels=[],  # override default by instance.
-                            ),
-                        ),
-                        legend_format="avg",
-                    ),
-                ],
+                metric="tikv_raftstore_region_size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                hide_count=True,
             ),
         ]
     )
@@ -2074,47 +2200,11 @@ def TTL() -> RowPanel:
     )
     layout.row(
         [
-            graph_panel(
+            graph_panel_histogram_quantiles(
                 title="TTL checker compact duration",
                 description="The time consumed when executing GC tasks",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            1.0,
-                            "tikv_ttl_checker_compact_duration",
-                        ),
-                        legend_format="max",
-                    ),
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            "tikv_ttl_checker_compact_duration",
-                        ),
-                        legend_format=r"99%",
-                    ),
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.95,
-                            "tikv_ttl_checker_compact_duration",
-                        ),
-                        legend_format=r"95%",
-                    ),
-                    target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_ttl_checker_compact_duration_sum",
-                                by_labels=[],  # override default by instance.
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_ttl_checker_compact_duration_count",
-                                by_labels=[],  # override default by instance.
-                            ),
-                        ),
-                        legend_format="avg",
-                    ),
-                ],
+                metric="tikv_ttl_checker_compact_duration",
             ),
             stat_panel(
                 title="TTL checker poll interval",
@@ -2365,7 +2455,7 @@ def IOBreakdown() -> RowPanel:
                             "tikv_rate_limiter_request_wait_duration_seconds",
                             by_labels=["type"],
                         ),
-                        legend_format=r" {{type}}-99%",
+                        legend_format=r"{{type}}-99%",
                     ),
                     target(
                         expr=expr_operator(
@@ -2392,7 +2482,109 @@ def RaftWaterfall() -> RowPanel:
     layout = Layout(title="Raft Waterfall")
     layout.row(
         [
-            # graph_panel()
+            graph_panel_histogram_quantiles(
+                title="Storage async write duration",
+                description="The time consumed by processing asynchronous write requests",
+                yaxes=yaxes(left_format=UNITS.SECONDS, right_format=UNITS.NONE_FORMAT),
+                metric="tikv_storage_engine_async_request_duration_seconds",
+                label_selectors=['type="write"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Store duration",
+                description="The store time duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_duration_secs",
+            ),
+            graph_panel_histogram_quantiles(
+                title="Apply duration",
+                description="The apply time duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_apply_duration_secs",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Store propose wait duration",
+                description="The propose wait time duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_request_wait_time_duration_secs",
+            ),
+            graph_panel_histogram_quantiles(
+                title="Store batch wait duration",
+                description="The batch wait time duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_batch_wait_duration_seconds",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Store send to write queue duration",
+                description="The send-to-write-queue time duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_send_to_queue_duration_seconds",
+            ),
+            graph_panel_histogram_quantiles(
+                title="Store send proposal duration",
+                description="The send raft message of the proposal duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_send_proposal_duration_seconds",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Store write kv db end duration",
+                description="The write kv db end duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_write_kvdb_end_duration_seconds",
+            ),
+            graph_panel_histogram_quantiles(
+                title="Store before write duration",
+                description="The before write time duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_before_write_duration_seconds",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Store persist duration",
+                description="The persist duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_persist_duration_seconds",
+            ),
+            graph_panel_histogram_quantiles(
+                title="Store write end duration",
+                description="The write end duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_write_end_duration_seconds",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Store commit but not persist duration",
+                description="The commit but not persist duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
+            ),
+            graph_panel_histogram_quantiles(
+                title="Store commit and persist duration",
+                description="The commit and persist duration of each request",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_commit_log_duration_seconds",
+            ),
         ]
     )
     return layout.row_panel
