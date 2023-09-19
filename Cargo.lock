@@ -7126,7 +7126,7 @@ dependencies = [
 [[package]]
 name = "tokio-executor"
 version = "0.1.9"
-source = "git+https://github.com/LykxSassinator/tokio-timer?branch=upgrade_crossbeam_utils#4418bdf6d3cf78651acd4f1a8053298b14820130"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
  "crossbeam-utils",
  "futures 0.1.31",
@@ -7189,7 +7189,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "git+https://github.com/LykxSassinator/tokio-timer?branch=upgrade_crossbeam_utils#4418bdf6d3cf78651acd4f1a8053298b14820130"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
  "crossbeam-utils",
  "futures 0.1.31",
