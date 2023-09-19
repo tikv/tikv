@@ -71,7 +71,7 @@ use crate::{
     worker::tablet,
 };
 
-const PAUSE_FOR_REPLAY_GAP: u64 = 5;
+const PAUSE_FOR_REPLAY_GAP: u64 = 0;
 
 pub struct InvokeClosureOnDrop(pub Option<Box<dyn FnOnce() + Send + Sync>>);
 
