@@ -141,6 +141,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let res = self.propose(ctx, data);
             fail_point!("after_propose_pending_writes");
 
+            if let Ok(index) = res && cids.is_empty() {
+                info!(
+                    self.logger,
+                    "propose write";
+                    "index" => index,
+                );
+            }
+
             for cid in cids {
                 match res {
                     Ok(index) => {
