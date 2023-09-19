@@ -709,12 +709,12 @@ impl TempFileKey {
     /// The full name of the file owns the key.
     fn temp_file_name(&self) -> String {
         let timestamp = (|| {
-            fail::fail_point!("temp_file_name_timestamp", |t| t
-                .and_then(|v| {
+            fail::fail_point!("temp_file_name_timestamp", |t| t.map_or_else(
+                || TimeStamp::physical_now(),
+                |v|
                     // reduce the precision of timestamp
-                    v.parse::<u64>().ok().map(|u| TimeStamp::physical_now() / u)
-                })
-                .unwrap_or(0));
+                    v.parse::<u64>().ok().map_or(0, |u| TimeStamp::physical_now() / u)
+            ));
             TimeStamp::physical_now()
         })();
         let uuid = uuid::Uuid::new_v4();
@@ -1206,7 +1206,7 @@ impl StreamTaskInfo {
             // flush log file to storage.
             self.flush_log(&mut metadata_info)
                 .await
-                .context(format_args!("flushing log"))?;
+                .context(format_args!("flushing log {:?}", metadata_info.file_groups))?;
             // the field `min_resolved_ts` of metadata will be updated
             // only after flush is done.
             metadata_info.min_resolved_ts = metadata_info
@@ -1222,9 +1222,10 @@ impl StreamTaskInfo {
                 .collect::<Vec<_>>();
             // flush meta file to storage.
 
-            self.flush_meta(metadata_info)
-                .await
-                .context(format_args!("flushing meta"))?;
+            self.flush_meta(metadata_info).await.context(format_args!(
+                "flushing meta {:?}",
+                metadata_info.file_groups
+            ))?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])
                 .observe(sw.lap().as_secs_f64());
@@ -2449,10 +2450,10 @@ mod tests {
             })
             .await;
         let mut b = KvEventsBuilder::new(42, 0);
-        b.put_table(CF_DEFAULT, 1, "k1".as_bytes(), "v1".as_bytes());
+        b.put_table(CF_DEFAULT, 1, b"k1", b"v1");
         let events_before_flush = b.finish();
 
-        b.put_table(CF_DEFAULT, 1, "k1".as_bytes(), "v1".as_bytes());
+        b.put_table(CF_DEFAULT, 1, b"k1", b"v1");
         let events_after_flush = b.finish();
 
         // make timestamp precision to 1 seconds.
@@ -2467,9 +2468,10 @@ mod tests {
         let t = router.get_task_info("race").await.unwrap();
         let _ = router.on_events(events_before_flush).await;
 
-        // make generate temp files ***happen after*** moving files to flushing_files in
-        // and read flush file ***happen between*** genenrate file name and write kv to
-        // file
+        // make generate temp files ***happen after*** moving files to flushing_files
+        // and read flush file ***happen between*** genenrate file name and
+        // write kv to file. T1 is write thread. T2 is flush thread
+        // The order likes
         // [T1] generate file name -> [T2] moving files to flushing_files -> [T1] write
         // kv to file -> [T2] read flush file.
         fail::cfg_callback("after_write_to_file", move || {
