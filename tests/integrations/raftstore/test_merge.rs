@@ -1267,6 +1267,8 @@ fn test_sync_max_ts_after_region_merge() {
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_merge_snapshot_demote() {
+    test_util::init_log_for_test();
+
     let mut cluster = new_cluster(0, 4);
     configure_for_merge(&mut cluster.cfg);
     configure_for_snapshot(&mut cluster.cfg);
@@ -1324,6 +1326,8 @@ fn test_merge_snapshot_demote() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_propose_in_memory_pessimistic_locks() {
+    test_util::init_log_for_test();
+
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.run();
@@ -1455,6 +1459,8 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_merge_pessimistic_locks_repeated_merge() {
+    test_util::init_log_for_test();
+
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1472,6 +1478,9 @@ fn test_merge_pessimistic_locks_repeated_merge() {
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k2");
     let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    cluster.must_split(&right, b"k8");
     let right = cluster.get_region(b"k3");
 
     let snapshot = cluster.must_get_snapshot_of_region(left.id);
@@ -1586,6 +1595,8 @@ fn test_node_merge_long_isolated() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_stale_message_after_merge() {
+    test_util::init_log_for_test();
+
     let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
     cluster.run();
