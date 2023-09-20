@@ -244,12 +244,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 .map_or(0, |d| d.as_secs()),
         );
 
-        // self.on_pd_store_heartbeat();
-        // Delay first heartbeat to coordinate with raft peers' bootstrapping.
-        // self.schedule_tick(
-        //     StoreTick::PdStoreHeartbeat,
-        //     self.store_ctx.cfg.pd_store_heartbeat_tick_interval.0,
-        // );
         self.schedule_tick(
             StoreTick::CleanupImportSst,
             self.store_ctx.cfg.cleanup_import_sst_interval.0,
@@ -300,7 +294,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     {
         for msg in store_msg_buf.drain(..) {
             match msg {
-                StoreMsg::Start(_) => self.on_start(),
+                // _store_start_msg_processed_cb acts as a join handle for the StoreMsg::Start
+                // processing and peers' raft log replaying. It is only invoked once
+                // StoreMsg::Start is processed and all replay works are done.
+                StoreMsg::Start(_store_start_msg_processed_cb) => self.on_start(),
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     self.fsm.store.on_raft_message(self.store_ctx, msg);

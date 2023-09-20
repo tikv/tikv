@@ -924,6 +924,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let router_for_cb = Mutex::new(router.router.control_mailbox());
         let cb_logger = self.logger.clone();
+        // The callback will be called once all the references are dropped. It is
+        // referenced by all the peers that have unfinished replay work and
+        // store state machine before the StoreMsg::Start message is handled.
+        // This is to guarantee that the first store heartbeat to PD is sent after
+        // store state machine and all the peers are ready.
         let replay_finished_cb = Arc::new(InvokeClosureOnDrop(Some(Box::new(move || {
             info!(cb_logger, "scheduling store heartbeat");
             router_for_cb

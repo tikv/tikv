@@ -94,6 +94,9 @@ pub struct ReplayWatch {
     paused_peers: AtomicUsize,
     logger: Logger,
     timer: Instant,
+    // Holds a reference to the InvokeClosureOnDrop until the replay is finished.
+    // All the peers who have replay works to do reference the same object, it acts like a join
+    // handle.
     _replay_finished_cb: Arc<InvokeClosureOnDrop>,
 }
 
