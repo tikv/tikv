@@ -643,7 +643,7 @@ fn check_local_region_stale(
         })?;
 
     let result = async move {
-        f.await
+        f.await?
     };
     match result {
         Some(local_region_info) => {
