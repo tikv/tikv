@@ -48,7 +48,7 @@ futures-io = "0.3"
 grpcio = { workspace = true }
 hex = "0.4"
 # Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
-indexmap = "=1.6.2"
+indexmap = "=1.9.3"
 kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
