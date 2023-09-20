@@ -1,6 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(let_chains)]
+#![allow(clippy::needless_pass_by_ref_mut)]
+#![allow(clippy::arc_with_non_send_sync)]
 
 #[macro_use]
 extern crate lazy_static;

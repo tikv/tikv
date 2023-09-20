@@ -306,6 +306,7 @@ struct WriteResFeed {
 unsafe impl Send for WriteResFeed {}
 
 impl WriteResFeed {
+    #[allow(clippy::arc_with_non_send_sync)]
     fn pair() -> (Self, WriteResSub) {
         let core = Arc::new(WriteResCore {
             ev: AtomicU8::new(0),
@@ -581,7 +582,9 @@ where
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else { return };
+            let WriteEvent::Finished(res) = ev else {
+                return;
+            };
             match res {
                 Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -683,7 +686,7 @@ where
                                     tracker.metrics.read_index_propose_wait_nanos as f64
                                         / 1_000_000_000.0,
                                 );
-                            // snapshot may be hanlded by lease read in raftstore
+                            // snapshot may be handled by lease read in raftstore
                             if tracker.metrics.read_index_confirm_wait_nanos > 0 {
                                 ASYNC_REQUESTS_DURATIONS_VEC
                                     .snapshot_read_index_confirm

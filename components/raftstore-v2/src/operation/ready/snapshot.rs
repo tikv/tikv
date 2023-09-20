@@ -570,10 +570,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     pub fn cancel_generating_snap_due_to_compacted(&self, compact_to: u64) {
         let mut states = self.snap_states.borrow_mut();
         states.retain(|id, state| {
-            let SnapState::Generating {
-                ref index,
-                ..
-            } = *state else { return true; };
+            let SnapState::Generating { ref index, .. } = *state else {
+                return true;
+            };
             let snap_index = index.load(Ordering::SeqCst);
             if snap_index == 0 || compact_to <= snap_index + 1 {
                 return true;
@@ -600,10 +599,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
         let (mut snapshot, to_peer_id) = *res.unwrap();
         if let Some(state) = self.snap_states.borrow_mut().get_mut(&to_peer_id) {
-            let SnapState::Generating {
-                ref index,
-                ..
-            } = *state else { return false };
+            let SnapState::Generating { ref index, .. } = *state else {
+                return false;
+            };
             if snapshot.get_metadata().get_index() < index.load(Ordering::SeqCst) {
                 warn!(
                     self.logger(),

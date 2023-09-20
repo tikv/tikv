@@ -668,7 +668,7 @@ impl Datum {
                     Datum::F64(res)
                 }
             }
-            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
+            (Datum::Dec(l), Datum::Dec(r)) => {
                 let dec: Result<Decimal> = (l + r).into();
                 return dec.map(Datum::Dec);
             }
@@ -700,7 +700,7 @@ impl Datum {
             }
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_sub(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l - r)),
-            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
+            (Datum::Dec(l), Datum::Dec(r)) => {
                 let dec: Result<Decimal> = (l - r).into();
                 return dec.map(Datum::Dec);
             }
@@ -724,7 +724,7 @@ impl Datum {
             }
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_mul(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l * r)),
-            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => return Ok(Datum::Dec((l * r).unwrap())),
+            (Datum::Dec(l), Datum::Dec(r)) => return Ok(Datum::Dec((l * r).unwrap())),
             (l, r) => return Err(invalid_type!("{} can't multiply {}", l, r)),
         };
 
@@ -1179,7 +1179,7 @@ mod tests {
             | (&Datum::Null, &Datum::Null)
             | (&Datum::Time(_), &Datum::Time(_))
             | (&Datum::Json(_), &Datum::Json(_)) => true,
-            (&Datum::Dec(ref d1), &Datum::Dec(ref d2)) => d1.prec_and_frac() == d2.prec_and_frac(),
+            (Datum::Dec(d1), Datum::Dec(d2)) => d1.prec_and_frac() == d2.prec_and_frac(),
             _ => false,
         }
     }
