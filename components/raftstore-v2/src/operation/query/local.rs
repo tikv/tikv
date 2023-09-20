@@ -28,6 +28,7 @@ use raftstore::{
 use slog::{debug, Logger};
 use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
 use time::Timespec;
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::WriteBatchFlags;
 
 use crate::{
@@ -335,7 +336,12 @@ where
 
         async move {
             let (mut fut, mut reader) = match res {
-                Either::Left(Ok(snap)) => return Ok(snap),
+                Either::Left(Ok(snap)) => {
+                    GLOBAL_TRACKERS.with_tracker(get_tls_tracker_token(), |t| {
+                        t.metrics.local_read = true;
+                    });
+                    return Ok(snap);
+                }
                 Either::Left(Err(e)) => return Err(e),
                 Either::Right((fut, reader)) => (fut, reader),
             };
@@ -345,7 +351,9 @@ where
                 match fut.await? {
                     Some(query_res) => {
                         if query_res.read().is_none() {
-                            let QueryResult::Response(res) = query_res else { unreachable!() };
+                            let QueryResult::Response(res) = query_res else {
+                                unreachable!()
+                            };
                             // Get an error explicitly in header,
                             // or leader reports KeyIsLocked error via read index.
                             assert!(

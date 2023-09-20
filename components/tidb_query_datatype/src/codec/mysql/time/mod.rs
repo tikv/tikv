@@ -1094,7 +1094,7 @@ impl Time {
         )
     }
 
-    fn try_into_chrono_datetime(self, ctx: &mut EvalContext) -> Result<DateTime<Tz>> {
+    fn try_into_chrono_datetime(self, ctx: &EvalContext) -> Result<DateTime<Tz>> {
         chrono_datetime(
             &ctx.cfg.tz,
             self.year(),
@@ -1342,6 +1342,7 @@ impl Time {
         Ok((((ymd << 17) | hms) << 24) | u64::from(self.micro()))
     }
 
+    #[allow(deprecated)]
     pub fn from_duration(
         ctx: &mut EvalContext,
         duration: Duration,
@@ -1415,6 +1416,7 @@ impl Time {
             .ok_or_else(|| Error::incorrect_datetime_value(self))
     }
 
+    #[allow(deprecated)]
     pub fn normalized(self, ctx: &mut EvalContext) -> Result<Self> {
         if self.get_time_type() == TimeType::Timestamp {
             return Ok(self);
@@ -1500,6 +1502,7 @@ impl Time {
             + self.day()) as i32
     }
 
+    #[allow(deprecated)]
     pub fn weekday(self) -> Weekday {
         let date = if self.month() == 0 {
             NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
@@ -2670,9 +2673,9 @@ mod tests {
 
     #[test]
     fn test_no_zero_in_date() -> Result<()> {
-        let cases = vec!["2019-01-00", "2019-00-01"];
+        let cases = ["2019-01-00", "2019-00-01"];
 
-        for &case in cases.iter() {
+        for case in cases {
             // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is
             // produced.
             let mut ctx = EvalContext::from(TimeEnv {
@@ -2817,7 +2820,7 @@ mod tests {
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             let today = actual
-                .try_into_chrono_datetime(&mut ctx)?
+                .try_into_chrono_datetime(&ctx)?
                 .checked_sub_signed(chrono::Duration::nanoseconds(duration.to_nanos()))
                 .unwrap();
 
@@ -2837,7 +2840,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for i in 2..10 {
             let actual = Time::from_local_time(&mut ctx, TimeType::DateTime, i % MAX_FSP)?;
-            let c_datetime = actual.try_into_chrono_datetime(&mut ctx)?;
+            let c_datetime = actual.try_into_chrono_datetime(&ctx)?;
 
             let now0 = c_datetime.timestamp_millis() as u64;
             let now1 = Utc::now().timestamp_millis() as u64;
