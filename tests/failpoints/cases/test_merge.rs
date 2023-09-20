@@ -3,14 +3,14 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{channel, Sender},
+        mpsc::{channel, sync_channel, Sender},
         *,
     },
     thread,
     time::Duration,
 };
 
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -1852,4 +1852,124 @@ fn test_concurrent_between_transfer_leader_and_merge() {
     assert_eq!(region.get_end_key(), left.get_end_key());
 
     cluster.must_put(b"k4", b"v4");
+}
+
+struct MsgVoteFilter {}
+
+impl Filter for MsgVoteFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> raftstore::Result<()> {
+        msgs.retain(|m| {
+            let msg_type = m.get_message().msg_type;
+            msg_type != MessageType::MsgRequestPreVote && msg_type != MessageType::MsgRequestVote
+        });
+        check_messages(msgs)
+    }
+}
+
+// Before this fix, after prepare merge, raft cmd can still be proposed if
+// restart is involved. If the proposed raft cmd is CompactLog, panic can occur
+// during fetch entries: see issue https://github.com/tikv/tikv/issues/15633.
+// Consider the case:
+// 1. node-1 apply PrepareMerge (assume log index 30), so it's in is_merging
+//    status which reject all proposals except for Rollback Merge
+// 2. node-1 advance persisted_apply to 30
+// 3. node-1 restart and became leader. Now, it's not in is_merging status, so
+//    proposals can be proposed
+// 4. node-1 propose CompactLog, replicate it to other nodes, and commit
+// 5. node-0 apply PrepareMerge
+// 6. node-0 apply CompactLog
+// 6. node-0 fetches raft log entries which is required by
+//    AdminCmdType::CommitMerge and panic (due to compacted)
+#[test]
+fn test_restart_may_lose_merging_state() {
+    use test_raftstore_v2::*;
+    let mut cluster = new_node_cluster(0, 2);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(10);
+
+    cluster.run();
+    fail::cfg("maybe_propose_compact_log", "return").unwrap();
+    fail::cfg("flush_before_cluse_threshold", "return(0)").unwrap();
+
+    let (tx, rx) = channel();
+    fail::cfg_callback("on_apply_res_prepare_merge", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k20");
+
+    let source = cluster.get_region(b"k05");
+    let target = cluster.get_region(b"k25");
+
+    cluster.add_send_filter_on_node(2, Box::new(MsgVoteFilter {}));
+
+    cluster.must_transfer_leader(
+        source.id,
+        source
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == 1)
+            .cloned()
+            .unwrap(),
+    );
+    cluster.must_transfer_leader(
+        target.id,
+        target
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == 1)
+            .cloned()
+            .unwrap(),
+    );
+
+    for i in 0..20 {
+        let k = format!("k{:02}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+
+    cluster.merge_region(source.id, target.id, Callback::None);
+
+    rx.recv().unwrap();
+    let router = cluster.get_router(1).unwrap();
+    let (tx2, rx2) = sync_channel(1);
+    let msg = PeerMsg::FlushBeforeClose { tx: tx2 };
+    router.force_send(source.id, msg).unwrap();
+    rx2.recv().unwrap();
+
+    cluster.stop_node(1);
+    std::thread::sleep(Duration::from_secs(1));
+    cluster.run_node(1).unwrap();
+    fail::remove("maybe_propose_compact_log");
+
+    // wait node 2 to complete merge
+    let timer = Instant::now();
+    let raft_engine_2 = cluster.get_raft_engine(2);
+    loop {
+        let state = raft_engine_2
+            .get_region_state(target.get_id(), u64::MAX)
+            .unwrap()
+            .unwrap();
+        if target.get_region_epoch().get_version()
+            == state.get_region().get_region_epoch().get_version()
+        {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!("region {:?} is still not merged.", target);
+            }
+        } else {
+            break;
+        }
+        sleep_ms(10);
+    }
+
+    let region = cluster.get_region(b"k1");
+    assert_eq!(region.get_id(), target.get_id());
+    assert_eq!(region.get_start_key(), source.get_start_key());
+    assert_eq!(region.get_end_key(), target.get_end_key());
+
+    cluster.must_put(b"k400", b"v400");
 }
