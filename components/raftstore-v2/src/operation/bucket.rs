@@ -38,22 +38,22 @@ impl BucketStatsInfo {
     /// diff_size_threshold.
     pub fn gen_bucket_range_for_update(
         &self,
-        diff_size_threshold: u64,
+        region_bucket_max_size: u64,
     ) -> Option<Vec<BucketRange>> {
         let region_buckets = self.bucket_stat.as_ref()?;
         let stats = &region_buckets.stats;
         let keys = &region_buckets.meta.keys;
         let sizes = &region_buckets.meta.sizes;
 
-        let mut bucket_ranges = vec![];
+        let mut suspect_bucket_ranges = vec![];
         assert_eq!(keys.len(), stats.write_bytes.len() + 1);
         for i in 0..stats.write_bytes.len() {
-            let diff_in_bytes = stats.write_bytes[i] + sizes[i];
-            if diff_in_bytes >= diff_size_threshold {
-                bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
+            let estimated_bucket_size = stats.write_bytes[i] + sizes[i];
+            if estimated_bucket_size >= region_bucket_max_size {
+                suspect_bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
             }
         }
-        Some(bucket_ranges)
+        Some(suspect_bucket_ranges)
     }
 
     #[inline]
@@ -82,7 +82,7 @@ impl BucketStatsInfo {
         if let Some(new_buckets) = buckets {
             let mut new_report_buckets = BucketStat::from_meta(new_buckets.meta);
             if let Some(old) = &mut self.report_bucket_stat {
-                new_report_buckets.merge(&old);
+                new_report_buckets.merge(old);
                 *old = new_report_buckets;
             } else {
                 self.report_bucket_stat = Some(new_report_buckets);
@@ -127,7 +127,7 @@ impl BucketStatsInfo {
             change_bucket_version = true;
             // when the region buckets is none, the exclusive buckets includes all the
             // bucket keys.
-           self.init_buckets(&cfg, next_bucket_version, buckets, region_epoch, region);
+           self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
         }
         change_bucket_version
     }
@@ -388,9 +388,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !ctx.coprocessor_host.cfg.enable_region_bucket() {
             return None;
         }
-        let bucket_update_diff_size_threshold = ctx.coprocessor_host.cfg.region_bucket_size.0 / 2;
+        let region_bucket_max_size = ctx.coprocessor_host.cfg.region_bucket_size.0 * 2;
         self.region_buckets_info()
-            .gen_bucket_range_for_update(bucket_update_diff_size_threshold)
+            .gen_bucket_range_for_update(region_bucket_max_size)
     }
 }
 
