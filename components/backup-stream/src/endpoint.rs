@@ -888,13 +888,14 @@ where
     }
 
     fn on_update_change_config(&mut self, cfg: BackupStreamConfig) {
+        let concurrency_diff =
+            cfg.initial_scan_concurrency as isize - self.config.initial_scan_concurrency as isize;
         info!(
             "update log backup config";
              "config" => ?cfg,
+             "concurrency_diff" => concurrency_diff,
         );
         self.range_router.udpate_config(&cfg);
-        let concurrency_diff =
-            cfg.initial_scan_concurrency as isize - self.config.initial_scan_concurrency as isize;
         self.update_semaphore_capacity(&self.initial_scan_semaphore, concurrency_diff);
 
         self.config = cfg;
