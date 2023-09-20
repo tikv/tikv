@@ -6814,7 +6814,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
  "crossbeam-utils 0.8.8",
  "futures 0.1.31",
