@@ -557,7 +557,7 @@ fn test_duplicate_and_close() {
 }
 
 #[test]
-fn test_deny_import() {
+fn test_suspend_import() {
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
     let sst_range = (0, 10);
     let write = |sst_range: (u8, u8)| {
@@ -585,14 +585,14 @@ fn test_deny_import() {
         multi_ingest.set_ssts(sst_metas.to_vec().into());
         import.multi_ingest(&multi_ingest)
     };
-    let denyctl = |for_time| {
-        let mut req = DenyImportRpcRequest::default();
-        req.set_caller("test_deny_import".to_owned());
+    let suspendctl = |for_time| {
+        let mut req = SuspendImportRpcRequest::default();
+        req.set_caller("test_suspend_import".to_owned());
         if for_time == 0 {
-            req.set_should_deny_imports(false);
+            req.set_should_suspend_imports(false);
         } else {
-            req.set_should_deny_imports(true);
-            req.set_duration_secs(for_time);
+            req.set_should_suspend_imports(true);
+            req.set_duration_in_secs(for_time);
         }
         req
     };
@@ -603,9 +603,9 @@ fn test_deny_import() {
 
     assert!(
         !import
-            .deny_import_rpc(&denyctl(6000))
+            .suspend_import_rpc(&suspendctl(6000))
             .unwrap()
-            .already_denied_imports
+            .already_suspended
     );
     let write_res = write(sst_range);
     assert_to_string_contains!(write_res.unwrap_err(), "Denied");
@@ -616,9 +616,9 @@ fn test_deny_import() {
 
     assert!(
         import
-            .deny_import_rpc(&denyctl(0))
+            .suspend_import_rpc(&suspendctl(0))
             .unwrap()
-            .already_denied_imports
+            .already_suspended
     );
 
     let ingest_res = ingest(&sst);
@@ -629,9 +629,9 @@ fn test_deny_import() {
     // test timeout.
     assert!(
         !import
-            .deny_import_rpc(&denyctl(1))
+            .suspend_import_rpc(&suspendctl(1))
             .unwrap()
-            .already_denied_imports
+            .already_suspended
     );
     let sst_range = (10, 20);
     let write_res = write(sst_range);

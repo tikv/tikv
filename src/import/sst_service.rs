@@ -22,8 +22,8 @@ use kvproto::{
     encryptionpb::EncryptionMethod,
     errorpb,
     import_sstpb::{
-        DenyImportRpcRequest, DenyImportRpcResponse, Error as ImportPbError, ImportSst, Range,
-        RawWriteRequest_oneof_chunk as RawChunk, SstMeta, SwitchMode,
+        Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk, SstMeta,
+        SuspendImportRpcRequest, SuspendImportRpcResponse, SwitchMode,
         WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
@@ -128,7 +128,7 @@ pub struct ImportSstService<E: Engine> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
 
     // When less than now, don't accept any requests.
-    deny_req_until: Arc<AtomicU64>,
+    suspend_req_until: Arc<AtomicU64>,
 }
 
 struct RequestCollector {
@@ -364,7 +364,7 @@ impl<E: Engine> ImportSstService<E> {
             writer,
             store_meta,
             resource_manager,
-            deny_req_until: Arc::new(AtomicU64::new(0)),
+            suspend_req_until: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -629,45 +629,46 @@ impl<E: Engine> ImportSstService<E> {
         Ok(range)
     }
 
-    /// Check whether we should deny the current request.
-    fn check_deny(&self) -> Result<()> {
+    /// Check whether we should suspend the current request.
+    fn check_suspend(&self) -> Result<()> {
         let now = TimeStamp::physical_now();
-        let deny_until = self.deny_req_until.load(Ordering::SeqCst);
-        if now < deny_until {
+        let suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        if now < suspend_until {
             IMPORT_DENIED_REQUESTS.inc();
             Err(Error::Denied {
-                time_to_lease_expire: Duration::from_millis(deny_until - now),
+                time_to_lease_expire: Duration::from_millis(suspend_until - now),
             })
         } else {
             Ok(())
         }
     }
 
-    /// deny requests for a period.
+    /// suspend requests for a period.
     ///
     /// # returns
     ///
-    /// whether for now, the requests has already been denied.
-    pub fn deny_requests(&self, for_time: Duration) -> bool {
+    /// whether for now, the requests has already been suspended.
+    pub fn suspend_requests(&self, for_time: Duration) -> bool {
         let now = TimeStamp::physical_now();
-        let last_deny_until = self.deny_req_until.load(Ordering::SeqCst);
-        let denied = now < last_deny_until;
-        let deny_until = TimeStamp::physical_now() + for_time.as_millis() as u64;
-        self.deny_req_until.store(deny_until, Ordering::SeqCst);
-        denied
+        let last_suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        let suspended = now < last_suspend_until;
+        let suspend_until = TimeStamp::physical_now() + for_time.as_millis() as u64;
+        self.suspend_req_until
+            .store(suspend_until, Ordering::SeqCst);
+        suspended
     }
 
     /// allow all requests to enter.
     ///
     /// # returns
     ///
-    /// whether requests has already been previously denied.
+    /// whether requests has already been previously suspended.
     pub fn allow_requests(&self) -> bool {
         let now = TimeStamp::physical_now();
-        let last_deny_until = self.deny_req_until.load(Ordering::SeqCst);
-        let denied = now < last_deny_until;
-        self.deny_req_until.store(0, Ordering::SeqCst);
-        denied
+        let last_suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        let suspended = now < last_suspend_until;
+        self.suspend_req_until.store(0, Ordering::SeqCst);
+        suspended
     }
 }
 
@@ -688,7 +689,7 @@ macro_rules! impl_write {
 
             let timer = Instant::now_coarse();
             let label = stringify!($fn);
-            if let Err(err) = self.check_deny() {
+            if let Err(err) = self.check_suspend() {
                 ctx.spawn(async move { $crate::send_rpc_response!(Err(err), sink, label, timer) });
                 return;
             }
@@ -975,7 +976,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 req.get_context().get_request_source(),
             )
         });
-        if let Err(err) = self.check_deny() {
+        if let Err(err) = self.check_suspend() {
             ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
             return;
         }
@@ -1051,7 +1052,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
-        if let Err(err) = self.check_deny() {
+        if let Err(err) = self.check_suspend() {
             ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
             return;
         }
@@ -1098,7 +1099,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
-        if let Err(err) = self.check_deny() {
+        if let Err(err) = self.check_suspend() {
             ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
             return;
         }
@@ -1307,24 +1308,24 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         new_raw_writer
     );
 
-    fn deny_import_rpc(
+    fn suspend_import_rpc(
         &mut self,
         ctx: RpcContext<'_>,
-        req: DenyImportRpcRequest,
-        sink: UnarySink<DenyImportRpcResponse>,
+        req: SuspendImportRpcRequest,
+        sink: UnarySink<SuspendImportRpcResponse>,
     ) {
-        let label = "deny_import_rpc";
+        let label = "suspend_import_rpc";
         let timer = Instant::now_coarse();
 
-        let denied = if req.should_deny_imports {
-            info!("deny incoming import RPCs."; "for_second" => req.get_duration_secs(), "caller" => req.get_caller());
-            self.deny_requests(Duration::from_secs(req.get_duration_secs()))
+        let suspended = if req.should_suspend_imports {
+            info!("suspend incoming import RPCs."; "for_second" => req.get_duration_in_secs(), "caller" => req.get_caller());
+            self.suspend_requests(Duration::from_secs(req.get_duration_in_secs()))
         } else {
             info!("allow incoming import RPCs."; "caller" => req.get_caller());
             self.allow_requests()
         };
-        let mut resp = DenyImportRpcResponse::default();
-        resp.set_already_denied_imports(denied);
+        let mut resp = SuspendImportRpcResponse::default();
+        resp.set_already_suspended(suspended);
         ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
     }
 }

@@ -127,7 +127,7 @@ pub enum Error {
     #[error("resource is not enough {0}")]
     ResourceNotEnough(String),
 
-    #[error("imports are denied for {time_to_lease_expire:?}")]
+    #[error("imports are suspended for {time_to_lease_expire:?}")]
     Denied { time_to_lease_expire: Duration },
 }
 
