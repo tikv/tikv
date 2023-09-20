@@ -1130,6 +1130,9 @@ pub enum BackupStreamResolver<RT, EK> {
     V1(LeadershipResolver),
     // for raftstore-v2, it has less regions. we use CDCHandler to check leadership of a region.
     V2(RT, PhantomData<EK>),
+    #[cfg(test)]
+    // for some test cases, it is OK to don't check leader.
+    Nop,
 }
 
 impl<RT, EK> BackupStreamResolver<RT, EK>
@@ -1144,6 +1147,8 @@ where
                 let x = x.clone();
                 resolve_by_raft(regions, min_ts, x).await
             }
+            #[cfg(test)]
+            BackupStreamResolver::Nop => regions,
         }
     }
 }

@@ -30,7 +30,6 @@ use crate::{
     future,
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
     metrics,
-    observer::BackupStreamObserver,
     router::{Router, TaskSelector},
     subscription_track::{CheckpointType, ResolveResult, SubscriptionTracer},
     try_send,
@@ -735,10 +734,37 @@ where
 
 #[cfg(test)]
 mod test {
-    use kvproto::metapb::Region;
-    use tikv::storage::Statistics;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
-    use super::InitialScan;
+    use engine_test::kv::KvTestEngine;
+    use kvproto::{
+        brpb::{Noop, StorageBackend, StreamBackupTaskInfo},
+        metapb::{Region, RegionEpoch},
+    };
+    use raftstore::{
+        coprocessor::{region_info_accessor::MockRegionInfoProvider, ObserveHandle},
+        router::CdcRaftRouter,
+    };
+    use test_raftstore::MockRaftStoreRouter;
+    use tikv::{config::BackupStreamConfig, storage::Statistics};
+    use tikv_util::{
+        memory::MemoryQuota,
+        worker::{dummy_future_scheduler, dummy_scheduler},
+    };
+    use tokio::{sync::mpsc::Sender, task::JoinHandle};
+
+    use super::{spawn_executors, InitialScan, RegionSubscriptionManager};
+    use crate::{
+        checkpoint_manager::SubscriptionManager,
+        metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
+        router::{Router, RouterInner},
+        subscription_track::SubscriptionTracer,
+        utils::CallbackWaitGroup,
+        BackupStreamResolver, ObserveOp,
+    };
 
     #[derive(Clone, Copy)]
     struct NoopInitialScan;
@@ -828,5 +854,112 @@ mod test {
             super::backoff_for_start_observe(5),
             super::RETRY_AWAIT_MAX_DURATION
         );
+    }
+
+    struct Suite {
+        rt: tokio::runtime::Runtime,
+
+        events: Arc<Mutex<Vec<String>>>,
+        handle: Sender<ObserveOp>,
+        wait: JoinHandle<()>,
+    }
+
+    impl Suite {
+        fn new() -> Self {
+            let pool = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .unwrap();
+            let regions = MockRegionInfoProvider::new(vec![]);
+            let meta_cli = SlashEtcStore::default();
+            let (scheduler, recv) = dummy_scheduler();
+            let subs = SubscriptionTracer::default();
+            let memory_manager = Arc::new(MemoryQuota::new(1024));
+            let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+            let init = NoopInitialScan;
+            let router = RouterInner::new(scheduler.clone(), BackupStreamConfig::default().into());
+            let mut task = StreamBackupTaskInfo::new();
+            task.set_name("test".to_owned());
+            task.set_storage({
+                let nop = Noop::new();
+                let mut backend = StorageBackend::default();
+                backend.set_noop(nop);
+                backend
+            });
+            let mut task_wrapped = StreamTask::default();
+            task_wrapped.info = task;
+            router.register_task(task_wrapped, vec![(vec![], vec![0xff, 0xff])], 1024 * 1024);
+            let subs_mgr = RegionSubscriptionManager {
+                regions,
+                meta_cli: MetadataClient::new(meta_cli, 1),
+                range_router: Router(Arc::new(router)),
+                scheduler,
+                subs,
+                failure_count: Default::default(),
+                memory_manager,
+                messenger: tx.clone(),
+                scan_pool_handle: spawn_executors(init, 2, tx.clone()),
+                scans: CallbackWaitGroup::new(),
+            };
+            let events = Arc::new(Mutex::new(vec![]));
+            let ob_events = Arc::clone(&events);
+            let (ob_tx, ob_rx) = tokio::sync::mpsc::channel(1);
+            pool.spawn(async move {
+                while let Some(item) = rx.recv().await {
+                    ob_events.lock().unwrap().push(format!("{:?}", item));
+                    ob_tx.send(item).await.unwrap();
+                }
+            });
+            let h = pool.spawn(
+                subs_mgr.region_operator_loop::<KvTestEngine, CdcRaftRouter<MockRaftStoreRouter>>(
+                    ob_rx,
+                    BackupStreamResolver::Nop,
+                ),
+            );
+
+            Self {
+                rt: pool,
+                events,
+                wait: h,
+                handle: tx,
+            }
+        }
+
+        fn run(&self, op: ObserveOp) {
+            self.rt.block_on(self.handle.send(op)).unwrap()
+        }
+
+        fn region(
+            &self,
+            id: u64,
+            version: u64,
+            conf_ver: u64,
+            start_key: &[u8],
+            end_key: &[u8],
+        ) -> Region {
+            let mut region = Region::default();
+            region.set_id(id);
+            region.set_region_epoch({
+                let mut rp = RegionEpoch::new();
+                rp.set_conf_ver(conf_ver);
+                rp.set_version(version);
+                rp
+            });
+            region.set_start_key(start_key.to_vec());
+            region.set_end_key(end_key.to_vec());
+            region
+        }
+    }
+
+    #[test]
+    fn test_oom() {
+        let suite = Suite::new();
+        suite.run(ObserveOp::Start {
+            region: suite.region(1, 1, 1, b"a", b"b"),
+            handle: ObserveHandle::new(),
+        });
+        std::thread::sleep(Duration::from_secs(1));
+        println!("{:?}", suite.events);
     }
 }

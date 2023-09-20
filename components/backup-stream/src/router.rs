@@ -293,7 +293,7 @@ impl ApplyEvent {
 
 /// The shared version of router.
 #[derive(Debug, Clone)]
-pub struct Router(Arc<RouterInner>);
+pub struct Router(pub(crate) Arc<RouterInner>);
 
 pub struct Config {
     pub prefix: PathBuf,
