@@ -1038,18 +1038,13 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
-<<<<<<< HEAD
-                let file = File::open(data_file.local_path.clone()).await?;
-                let compress_length = file.metadata().await?.len();
-=======
-                let file = shared_pool
-                    .open_raw_for_read(data_file.inner.path())
+                let file = File::open(data_file.local_path.clone())
+                    .await
                     .context(format_args!(
                         "failed to open read file {:?}",
-                        data_file.inner.path()
+                        data_file.local_path.clone()
                     ))?;
-                let compress_length = file.len().await?;
->>>>>>> 76df17e2c6 (log backup: fix the race of on events and do flush (#15618))
+                let compress_length = file.metadata().await?.len();
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
                 file
