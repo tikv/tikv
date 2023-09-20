@@ -38,6 +38,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         index: u64,
     ) {
+        fail::fail_point!("on_reject_commit_merge_1", store_ctx.store_id == 1, |_| {});
         let self_index = self.merge_context().and_then(|c| c.prepare_merge_index());
         if self_index != Some(index) {
             info!(
@@ -75,7 +76,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_rollback_merge(
         &mut self,
         req: &AdminRequest,
-        _index: u64,
+        index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         fail::fail_point!("apply_rollback_merge");
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
@@ -95,6 +96,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 "state" => ?merge_state,
             );
         }
+
+        let prepare_merge_commit = rollback.commit;
+        info!(
+            self.logger,
+            "execute RollbackMerge";
+            "commit" => prepare_merge_commit,
+            "index" => index,
+        );
+
         let mut region = self.region().clone();
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
