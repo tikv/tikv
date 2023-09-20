@@ -561,7 +561,6 @@ mod tests {
         time::Duration,
     };
 
-    use collections::HashSet;
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
@@ -570,6 +569,7 @@ mod tests {
         errorpb::Error as ErrorHeader,
     };
     use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
+    use resolved_ts::TxnLocks;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::storage::{
         kv::Engine,
@@ -670,7 +670,7 @@ mod tests {
     fn test_initializer_build_resolver() {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
-        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
+        let mut expected_locks = BTreeMap::<TimeStamp, TxnLocks>::new();
 
         // Only observe ["", "b\0x90"]
         let observed_range = ObservedRange::new(
@@ -693,10 +693,12 @@ mod tests {
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&mut engine, k, v, k, ts);
-            expected_locks
-                .entry(ts)
-                .or_default()
-                .insert(k.to_vec().into());
+            let txn_locks = expected_locks.entry(ts).or_insert_with(|| {
+                let mut txn_locks = TxnLocks::default();
+                txn_locks.sample_lock = Some(k.to_vec().into());
+                txn_locks
+            });
+            txn_locks.lock_count += 1;
         }
 
         let region = Region::default();
