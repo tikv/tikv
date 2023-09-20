@@ -1690,6 +1690,50 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn must_empty_region_removed_records(&mut self, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            thread::sleep(Duration::from_millis(100));
+
+            let leader = match self.leader_of_region(region_id) {
+                None => continue,
+                Some(l) => l,
+            };
+            let region_state = self.region_local_state(region_id, leader.get_store_id());
+            if region_state.get_removed_records().is_empty() {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!(
+                    "merged records and removed records must be empty, {:?}",
+                    region_state
+                );
+            }
+        }
+    }
+
+    pub fn must_empty_region_merged_records(&mut self, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            thread::sleep(Duration::from_millis(100));
+
+            let leader = match self.leader_of_region(region_id) {
+                None => continue,
+                Some(l) => l,
+            };
+            let region_state = self.region_local_state(region_id, leader.get_store_id());
+            if region_state.get_merged_records().is_empty() {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!(
+                    "merged records and removed records must be empty, {:?}",
+                    region_state
+                );
+            }
+        }
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
