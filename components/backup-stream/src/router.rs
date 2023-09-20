@@ -1032,18 +1032,13 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
-<<<<<<< HEAD
-                let file = File::open(data_file.local_path.clone()).await?;
-                let compress_length = file.metadata().await?.len();
-=======
-                let file = shared_pool
-                    .open_raw_for_read(data_file.inner.path())
+                let file = File::open(data_file.local_path.clone())
+                    .await
                     .context(format_args!(
                         "failed to open read file {:?}",
-                        data_file.inner.path()
+                        data_file.local_path.clone()
                     ))?;
-                let compress_length = file.len().await?;
->>>>>>> 76df17e2c6 (log backup: fix the race of on events and do flush (#15618))
+                let compress_length = file.metadata().await?.len();
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
                 file
@@ -2326,64 +2321,7 @@ mod tests {
         assert_eq!(result.is_ok(), true);
         Ok(())
     }
-<<<<<<< HEAD
-=======
-
-    #[test]
-    fn test_update_config() {
-        let (sched, rx) = dummy_scheduler();
-        let cfg = BackupStreamConfig::default();
-        let router = Arc::new(RouterInner::new(
-            sched.clone(),
-            Config {
-                prefix: PathBuf::new(),
-                temp_file_size_limit: 1,
-                temp_file_memory_quota: 2,
-                max_flush_interval: cfg.max_flush_interval.0,
-            },
-        ));
-
-        let mut cfg_manager = BackupStreamConfigManager::new(sched, cfg.clone());
-
-        let _new_cfg = BackupStreamConfig {
-            max_flush_interval: ReadableDuration::minutes(2),
-            ..Default::default()
-        };
-
-        let changed = cfg.diff(&_new_cfg);
-        cfg_manager.dispatch(changed).unwrap();
-
-        let cmds = collect_recv(rx);
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0] {
-            Task::ChangeConfig(cfg) => {
-                assert!(matches!(cfg, _new_cfg));
-                router.udpate_config(cfg);
-                assert_eq!(
-                    router.max_flush_interval.rl().to_owned(),
-                    _new_cfg.max_flush_interval.0
-                );
-            }
-            _ => panic!("unexpected cmd!"),
-        }
-    }
-
-    #[test]
-    fn test_udpate_invalid_config() {
-        let cfg = BackupStreamConfig::default();
-        let (sched, _) = dummy_scheduler();
-        let mut cfg_manager = BackupStreamConfigManager::new(sched, cfg.clone());
-
-        let new_cfg = BackupStreamConfig {
-            max_flush_interval: ReadableDuration::secs(0),
-            ..Default::default()
-        };
-
-        let changed = cfg.diff(&new_cfg);
-        let r = cfg_manager.dispatch(changed);
-        assert!(r.is_err());
-    }
-
+    
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_flush_on_events_race() -> Result<()> {
         let (tx, _rx) = dummy_scheduler();
@@ -2470,5 +2408,4 @@ mod tests {
         assert_eq!(t.files.read().await.len(), 0,);
         Ok(())
     }
->>>>>>> 76df17e2c6 (log backup: fix the race of on events and do flush (#15618))
 }
