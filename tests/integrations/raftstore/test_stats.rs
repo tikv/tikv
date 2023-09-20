@@ -407,6 +407,7 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
+    fail::cfg("check_source_task_name", "return(test_stats)").unwrap();
     test_query_num::<F>(get, false);
     test_query_num::<F>(batch_get, false);
     test_query_num::<F>(scan, false);
@@ -418,6 +419,7 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
     fail::remove("mock_collect_tick_interval");
+    fail::remove("check_source_task_name");
 }
 
 #[allow(clippy::extra_unused_type_parameters)]
@@ -584,6 +586,7 @@ fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
         cluster.cfg.storage.set_api_version(F::TAG);
     });
     ctx.set_api_version(F::CLIENT_TAG);
+    ctx.set_request_source("test_stats".to_owned());
 
     let mut k = b"key".to_vec();
     // When a peer becomes leader, it can't read before committing to current term.
