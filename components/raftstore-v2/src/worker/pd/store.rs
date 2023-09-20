@@ -9,7 +9,7 @@ use kvproto::pdpb;
 use pd_client::{
     metrics::{
         REGION_READ_BYTES_HISTOGRAM, REGION_READ_KEYS_HISTOGRAM, REGION_WRITTEN_BYTES_HISTOGRAM,
-        REGION_WRITTEN_KEYS_HISTOGRAM, STORE_SIZE_GAUGE_VEC,
+        REGION_WRITTEN_KEYS_HISTOGRAM, STORE_SIZE_EVENT_INT_VEC,
     },
     PdClient,
 };
@@ -263,15 +263,9 @@ where
         self.store_stat.region_bytes_read.flush();
         self.store_stat.region_keys_read.flush();
 
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["capacity"])
-            .set(capacity as i64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["available"])
-            .set(available as i64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["used"])
-            .set(used_size as i64);
+        STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
+        STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
+        STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
 
         // Update slowness statistics
         self.update_slowness_in_store_stats(&mut stats, last_query_sum);
@@ -473,12 +467,16 @@ where
             true
         });
         let snap_size = self.snap_mgr.total_snap_size().unwrap();
-        let used_size = snap_size
-            + kv_size
-            + self
-                .raft_engine
-                .get_engine_size()
-                .expect("raft engine used size");
+        let raft_size = self
+            .raft_engine
+            .get_engine_size()
+            .expect("engine used size");
+
+        STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
+        STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
+        STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_size as i64);
+
+        let used_size = snap_size + kv_size + raft_size;
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available
         // here.
