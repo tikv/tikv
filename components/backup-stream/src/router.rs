@@ -2321,7 +2321,7 @@ mod tests {
         assert_eq!(result.is_ok(), true);
         Ok(())
     }
-    
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_flush_on_events_race() -> Result<()> {
         let (tx, _rx) = dummy_scheduler();
