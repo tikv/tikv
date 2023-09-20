@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_report_buckets(){
+    pub fn test_report_buckets() {
         let mut bucket_stats_info = mock_bucket_stats_info();
         let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
         let mut delta_bucket_stats = bucket_stats.clone();
