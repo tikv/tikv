@@ -16,7 +16,7 @@ use error_code::ErrorCodeExt;
 use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
-    metapb::Region,
+    metapb::{Region, RegionEpoch},
 };
 use pd_client::PdClient;
 use raft::StateRole;
@@ -30,6 +30,7 @@ use tikv_util::{
     box_err,
     config::ReadableDuration,
     debug, defer, info,
+    memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     warn,
@@ -140,8 +141,9 @@ where
 
         pool.spawn(Self::starts_flush_ticks(range_router.clone()));
 
-        let initial_scan_memory_quota =
-            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
+        let initial_scan_memory_quota = Arc::new(MemoryQuota::new(
+            config.initial_scan_pending_memory_quota.0 as _,
+        ));
         let limit = if config.initial_scan_rate_limit.0 > 0 {
             config.initial_scan_rate_limit.0 as f64
         } else {
@@ -166,9 +168,7 @@ where
                 Arc::clone(&initial_scan_semaphore),
             ),
             accessor.clone(),
-            observer.clone(),
             meta_client.clone(),
-            pd_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
             resolver,
         );
@@ -436,13 +436,15 @@ where
 
     /// Convert a batch of events to the cmd batch, and update the resolver
     /// status.
-    fn record_batch(subs: SubscriptionTracer, batch: CmdBatch) -> Option<ApplyEvents> {
+    fn record_batch(subs: SubscriptionTracer, batch: CmdBatch) -> Result<ApplyEvents> {
         let region_id = batch.region_id;
         let mut resolver = match subs.get_subscription_of(region_id) {
             Some(rts) => rts,
             None => {
                 debug!("the region isn't registered (no resolver found) but sent to backup_batch, maybe stale."; "region_id" => %region_id);
-                return None;
+                // Sadly, we know nothing about the epoch in this context. Thankfully this is a
+                // local error and won't be sent to outside.
+                return Err(Error::ObserveCanceled(region_id, RegionEpoch::new()));
             }
         };
         // Stale data is acceptable, while stale locks may block the checkpoint
@@ -459,11 +461,11 @@ where
         // ```
         if batch.pitr_id != resolver.value().handle.id {
             debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
-            return None;
+            return Err(Error::ObserveCanceled(region_id, RegionEpoch::new()));
         }
 
-        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
-        Some(kvs)
+        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver())?;
+        Ok(kvs)
     }
 
     fn backup_batch(&self, batch: CmdBatch, work: Work) {
@@ -472,13 +474,31 @@ where
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
         let subs = self.subs.clone();
+        let region_op = self.region_operator.clone();
         self.pool.spawn(async move {
             let region_id = batch.region_id;
             let kvs = Self::record_batch(subs, batch);
-            if kvs.as_ref().map(|x| x.is_empty()).unwrap_or(true) {
-                return;
-            }
-            let kvs = kvs.unwrap();
+            let kvs = match kvs {
+                Err(Error::OutOfQuota { region_id }) => {
+                    region_op.send(ObserveOp::HighMemUsageWarning { inconsistent_region_id: region_id }).await
+                        .map_err(|err| Error::Other(box_err!("failed to send, are we shutting down? {}", err)))
+                        .report_if_err("");
+                    return
+                }
+                Err(Error::ObserveCanceled(..)) => {
+                    return;
+                }
+                Err(err) => {
+                    err.report(format_args!("unexpected error during handing region event for {}.", region_id));
+                    return;
+                }
+                Ok(batch) => {
+                    if batch.is_empty() {
+                        return
+                    }
+                    batch
+                }
+            };
 
             HANDLE_EVENT_DURATION_HISTOGRAM
                 .with_label_values(&["to_stream_event"])
@@ -1246,6 +1266,9 @@ pub enum ObserveOp {
         callback: ResolveRegionsCallback,
         min_ts: TimeStamp,
     },
+    HighMemUsageWarning {
+        inconsistent_region_id: u64,
+    },
 }
 
 impl std::fmt::Debug for ObserveOp {
@@ -1282,6 +1305,12 @@ impl std::fmt::Debug for ObserveOp {
                 .debug_struct("ResolveRegions")
                 .field("min_ts", min_ts)
                 .field("callback", &format_args!("fn {{ .. }}"))
+                .finish(),
+            Self::HighMemUsageWarning {
+                inconsistent_region_id,
+            } => f
+                .debug_struct("HighMemUsageWarning")
+                .field("inconsistent_region", &inconsistent_region_id)
                 .finish(),
         }
     }
@@ -1345,6 +1374,7 @@ impl Task {
                 ObserveOp::RefreshResolver { .. } => "modify_observe.refresh_resolver",
                 ObserveOp::NotifyStartObserveResult { .. } => "modify_observe.retry",
                 ObserveOp::ResolveRegions { .. } => "modify_observe.resolve",
+                ObserveOp::HighMemUsageWarning { .. } => "modify_observe.high_mem",
             },
             Task::ForceFlush(..) => "force_flush",
             Task::FatalError(..) => "fatal_error",

@@ -13,9 +13,11 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::ChangeObserver,
 };
+use rand::Rng;
 use tikv::storage::Statistics;
 use tikv_util::{
-    box_err, debug, info, sys::thread::ThreadBuildWrapper, time::Instant, warn, worker::Scheduler,
+    box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
+    warn, worker::Scheduler,
 };
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
 use txn_types::TimeStamp;
@@ -45,6 +47,8 @@ type ScanPool = tokio::runtime::Runtime;
 const TRY_START_OBSERVE_MAX_RETRY_TIME: u8 = 24;
 const RETRY_AWAIT_BASIC_DURATION: Duration = Duration::from_secs(1);
 const RETRY_AWAIT_MAX_DURATION: Duration = Duration::from_secs(16);
+const OOM_BACKOFF_BASE: Duration = Duration::from_secs(60);
+const OOM_BACKOFF_JITTER_SECS: u64 = 60;
 
 fn backoff_for_start_observe(failed_for: u8) -> Duration {
     let res = Ord::min(
@@ -285,17 +289,16 @@ const MESSAGE_BUFFER_SIZE: usize = 32768;
 /// we should only modify the `SubscriptionTracer` itself (i.e. insert records,
 /// remove records) at here. So the order subscription / desubscription won't be
 /// broken.
-pub struct RegionSubscriptionManager<S, R, PDC> {
+pub struct RegionSubscriptionManager<S, R> {
     // Note: these fields appear everywhere, maybe make them a `context` type?
     regions: R,
     meta_cli: MetadataClient<S>,
-    pd_client: Arc<PDC>,
     range_router: Router,
     scheduler: Scheduler<Task>,
-    observer: BackupStreamObserver,
     subs: SubscriptionTracer,
 
     failure_count: HashMap<ObserveId, u8>,
+    memory_manager: Arc<MemoryQuota>,
 
     messenger: Sender<ObserveOp>,
     scan_pool_handle: ScanPoolHandle,
@@ -318,11 +321,10 @@ fn create_scan_pool(num_threads: usize) -> ScanPool {
         .unwrap()
 }
 
-impl<S, R, PDC> RegionSubscriptionManager<S, R, PDC>
+impl<S, R> RegionSubscriptionManager<S, R>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
-    PDC: PdClient + 'static,
 {
     /// create a [`RegionSubscriptionManager`].
     ///
@@ -333,9 +335,7 @@ where
     pub fn start<E, HInit, HChkLd>(
         initial_loader: InitialDataLoader<E, HInit>,
         regions: R,
-        observer: BackupStreamObserver,
         meta_cli: MetadataClient<S>,
-        pd_client: Arc<PDC>,
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
     ) -> (Sender<ObserveOp>, future![()])
@@ -349,15 +349,14 @@ where
         let op = Self {
             regions,
             meta_cli,
-            pd_client,
             range_router: initial_loader.sink.clone(),
             scheduler: initial_loader.scheduler.clone(),
-            observer,
             subs: initial_loader.tracing,
             messenger: tx.clone(),
             scan_pool_handle,
             scans: CallbackWaitGroup::new(),
             failure_count: HashMap::new(),
+            memory_manager: Arc::clone(&initial_loader.quota),
         };
         let fut = op.region_operator_loop(rx, resolver);
         (tx, fut)
@@ -470,8 +469,48 @@ where
                     }
                     callback(ResolvedRegions::new(rts, cps));
                 }
+                ObserveOp::HighMemUsageWarning {
+                    inconsistent_region_id,
+                } => {
+                    self.on_high_memory_usage(inconsistent_region_id).await;
+                }
             }
         }
+    }
+
+    async fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
+        let mut lame_region = Region::new();
+        lame_region.set_id(inconsistent_region_id);
+        let mut act_region = None;
+        self.subs.deregister_region_if(&lame_region, |act, _| {
+            act_region = Some(act.meta.clone());
+            true
+        });
+        let delay = OOM_BACKOFF_BASE
+            + Duration::from_secs(rand::thread_rng().gen_range(0..OOM_BACKOFF_JITTER_SECS));
+        info!("log backup triggering high memory usage."; 
+            "region" => %inconsistent_region_id, 
+            "mem_usage" => %self.memory_manager.used_ratio(), 
+            "mem_max" => %self.memory_manager.capacity());
+        if let Some(region) = act_region {
+            self.schedule_start_observe(delay, region, None);
+        }
+    }
+
+    fn schedule_start_observe(
+        &self,
+        after: Duration,
+        region: Region,
+        handle: Option<ObserveHandle>,
+    ) {
+        let tx = self.messenger.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            let handle = handle.unwrap_or_else(|| ObserveHandle::new());
+            if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
+                warn!("log backup failed to schedule start observe."; "err" => %err);
+            }
+        });
     }
 
     async fn refresh_resolver(&self, region: &Region) {
@@ -626,16 +665,11 @@ where
                 .inc();
             return Ok(false);
         }
-        let tx = self.messenger.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(backoff_for_start_observe(failure_count)).await;
-            let res = tx.send(ObserveOp::Start { region, handle }).await;
-            if res.is_err() {
-                metrics::SKIP_RETRY
-                    .with_label_values(&["channel-close"])
-                    .inc();
-            }
-        });
+        self.schedule_start_observe(
+            backoff_for_start_observe(failure_count),
+            region,
+            Some(handle),
+        );
         metrics::INITIAL_SCAN_REASON
             .with_label_values(&["retry"])
             .inc();

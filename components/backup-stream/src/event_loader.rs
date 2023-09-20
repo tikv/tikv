@@ -17,6 +17,7 @@ use tikv::storage::{
 };
 use tikv_util::{
     box_err,
+    memory::MemoryQuota,
     time::{Instant, Limiter},
     worker::Scheduler,
 };
@@ -33,6 +34,7 @@ use crate::{
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
+const SLOW_DOWN_INITIAL_SCAN_RATIO: f64 = 0.5;
 
 #[derive(Clone)]
 pub struct PendingMemoryQuota(Arc<Semaphore>);
@@ -69,6 +71,7 @@ pub struct EventLoader<S: Snapshot> {
     scanner: DeltaScanner<S>,
     // pooling the memory.
     entry_batch: EntryBatch,
+    region: Region,
 }
 
 const ENTRY_BATCH_SIZE: usize = 1024;
@@ -97,6 +100,7 @@ impl<S: Snapshot> EventLoader<S> {
 
         Ok(Self {
             scanner,
+            region: region.clone(),
             entry_batch: EntryBatch::with_capacity(ENTRY_BATCH_SIZE),
         })
     }
@@ -144,7 +148,11 @@ impl<S: Snapshot> EventLoader<S> {
                     })?;
                     debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
                     if utils::should_track_lock(&lock) {
-                        resolver.track_phase_one_lock(lock.ts, lock_at);
+                        resolver
+                            .track_phase_one_lock(lock.ts, lock_at)
+                            .map_err(|_| Error::OutOfQuota {
+                                region_id: self.region.id,
+                            })?;
                     }
                 }
                 TxnEntry::Commit { default, write, .. } => {
@@ -180,7 +188,7 @@ pub struct InitialDataLoader<E: KvEngine, H> {
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
 
-    pub(crate) quota: PendingMemoryQuota,
+    pub(crate) quota: Arc<MemoryQuota>,
     pub(crate) limit: Limiter,
     // If there are too many concurrent initial scanning, the limit of disk speed or pending memory
     // quota will probably be triggered. Then the whole scanning will be pretty slow. And when
@@ -202,7 +210,7 @@ where
         sink: Router,
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
-        quota: PendingMemoryQuota,
+        quota: Arc<MemoryQuota>,
         limiter: Limiter,
         cdc_handle: H,
         concurrency_limit: Arc<Semaphore>,
@@ -406,7 +414,11 @@ where
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = self.quota.pending(event_size).await;
+            let permit = Arc::clone(&self.quota)
+                .alloc_guard_owned(event_size)
+                .map_err(|_| Error::OutOfQuota {
+                    region_id: region.id,
+                })?;
             self.limit.consume(disk_read as _).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
@@ -418,6 +430,14 @@ where
                 debug!("apply event done"; "size" => %event_size, "region" => %region_id);
                 drop(permit);
             }));
+
+            if self.quota.used_ratio() > SLOW_DOWN_INITIAL_SCAN_RATIO {
+                futures::future::try_join_all(std::mem::take(join_handles))
+                    .await
+                    .map_err(|err| {
+                        Error::Other(format!("disconnected background task: {err}").into())
+                    })?;
+            }
         }
     }
 

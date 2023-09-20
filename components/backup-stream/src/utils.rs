@@ -280,6 +280,7 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName),
 /// `try_send!(s: Scheduler<T>, task: T)` tries to send a task to the scheduler,
 /// once meet an error, would report it, with the current file and line (so it
 /// is made as a macro). returns whether it success.
+// Note: perhaps we'd better using std::panic::Location.
 #[macro_export]
 macro_rules! try_send {
     ($s:expr, $task:expr) => {
@@ -355,14 +356,17 @@ pub fn record_cf_stat(cf_name: &str, stat: &CfStatistics) {
 /// failure, send a fatal error to the `doom_messenger`.
 pub fn handle_on_event_result(doom_messenger: &Scheduler<Task>, result: Vec<(String, Result<()>)>) {
     for (task, res) in result.into_iter() {
-        if let Err(err) = res {
-            try_send!(
-                doom_messenger,
-                Task::FatalError(
-                    TaskSelector::ByName(task),
-                    Box::new(err.context("failed to record event to local temporary files"))
-                )
-            );
+        match res {
+            Err(err) => {
+                try_send!(
+                    doom_messenger,
+                    Task::FatalError(
+                        TaskSelector::ByName(task),
+                        Box::new(err.context("failed to record event to local temporary files"))
+                    )
+                );
+            }
+            _ => (),
         }
     }
 }

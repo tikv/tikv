@@ -26,9 +26,8 @@ pub enum Error {
     ObserveCanceled(u64, RegionEpoch),
     #[error("Malformed metadata {0}")]
     MalformedMetadata(String),
-
-    #[error("Out of quota {0}")]
-    OutOfQuota(#[from] MemoryQuotaExceeded),
+    #[error("Out of quota for region {region_id}")]
+    OutOfQuota { region_id: u64 },
 
     #[error("gRPC meet error {0}")]
     Grpc(#[from] GrpcError),
@@ -95,7 +94,7 @@ impl ErrorCodeExt for Error {
             Error::Other(_) => OTHER,
             Error::RaftStore(_) => RAFTSTORE,
             Error::ObserveCanceled(..) => OBSERVE_CANCELED,
-            Error::OutOfQuota(_) => OUT_OF_QUOTA,
+            Error::OutOfQuota { .. } => OUT_OF_QUOTA,
             Error::Grpc(_) => GRPC,
         }
     }
