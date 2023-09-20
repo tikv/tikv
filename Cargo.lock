@@ -1198,7 +1198,7 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-epoch 0.9.8",
  "crossbeam-queue",
- "crossbeam-utils 0.8.8",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -1208,7 +1208,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2dd04ddaf88237dc3b8d8f9a3c1004b506b54b3313403944054d23c0870c521"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.8",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -1217,6 +1217,7 @@ version = "0.8.2"
 source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2ebeaf58fe8a193134056#41ed3d948720f26149b2ebeaf58fe8a193134056"
 dependencies = [
  "cfg-if 1.0.0",
+<<<<<<< HEAD
  "crossbeam-epoch 0.9.10",
  "crossbeam-utils 0.8.11",
 ]
@@ -1231,6 +1232,10 @@ dependencies = [
  "lazy_static",
  "memoffset 0.6.4",
  "scopeguard",
+=======
+ "crossbeam-epoch",
+ "crossbeam-utils",
+>>>>>>> ec4a9002f1 (raftstore: upgrade tokio timer to fix insecure issues. (#15622))
 ]
 
 [[package]]
@@ -1241,7 +1246,7 @@ checksum = "1145cf131a2c6ba0615079ab6a638f7e1973ac9c2634fcbeaaad6114246efe8c"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.8",
+ "crossbeam-utils",
  "lazy_static",
  "memoffset 0.6.4",
  "scopeguard",
@@ -1267,7 +1272,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f25d8400f4a7a5778f0e4e52384a48cbd9b5c495d110786187fc750075277a2"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.8",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -1276,13 +1281,19 @@ version = "0.0.0"
 source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "cfg-if 1.0.0",
+<<<<<<< HEAD
  "crossbeam-epoch 0.9.3",
  "crossbeam-utils 0.8.3",
+=======
+ "crossbeam-epoch",
+ "crossbeam-utils",
+>>>>>>> ec4a9002f1 (raftstore: upgrade tokio timer to fix insecure issues. (#15622))
  "scopeguard",
 ]
 
 [[package]]
 name = "crossbeam-utils"
+<<<<<<< HEAD
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3c7c73a2d1e9fc0886a08b93e98eb643461230d5f1925e4036204d5f2e261a8"
@@ -1304,6 +1315,8 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-utils"
+=======
+>>>>>>> ec4a9002f1 (raftstore: upgrade tokio timer to fix insecure issues. (#15622))
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf124c720b7686e3c2663cf54062ab0f68a88af2fb6a030e87e30bf721fcb38"
@@ -1915,7 +1928,7 @@ dependencies = [
  "bcc",
  "collections",
  "crc32fast",
- "crossbeam-utils 0.8.8",
+ "crossbeam-utils",
  "fs2",
  "lazy_static",
  "libc 0.2.139",
@@ -4625,8 +4638,12 @@ checksum = "9ab346ac5921dc62ffa9f89b7a773907511cdfa5490c572ae9be1be33e8afa4a"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-deque",
+<<<<<<< HEAD
  "crossbeam-utils 0.8.8",
  "lazy_static",
+=======
+ "crossbeam-utils",
+>>>>>>> ec4a9002f1 (raftstore: upgrade tokio timer to fix insecure issues. (#15622))
  "num_cpus",
 ]
 
@@ -6761,11 +6778,10 @@ dependencies = [
 
 [[package]]
 name = "tokio-executor"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb2d1b8f4548dbf5e1f7818512e9c406860678f29c300cdf0ebac72d1a3a1671"
+version = "0.1.9"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "futures 0.1.31",
 ]
 
@@ -6826,9 +6842,9 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "futures 0.1.31",
  "slab",
  "tokio-executor",
@@ -7002,7 +7018,7 @@ name = "tracker"
 version = "0.0.1"
 dependencies = [
  "collections",
- "crossbeam-utils 0.8.8",
+ "crossbeam-utils",
  "kvproto",
  "lazy_static",
  "parking_lot 0.12.0",
@@ -7606,6 +7622,11 @@ version = "0.0.1"
 source = "git+https://github.com/tikv/yatp.git?branch=master#39cb495953d40a7e846363c06090755c2eac65fa"
 dependencies = [
  "crossbeam-deque",
+<<<<<<< HEAD
+=======
+ "crossbeam-skiplist",
+ "crossbeam-utils",
+>>>>>>> ec4a9002f1 (raftstore: upgrade tokio timer to fix insecure issues. (#15622))
  "dashmap",
  "fail",
  "lazy_static",

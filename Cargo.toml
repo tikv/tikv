@@ -379,6 +379,12 @@ tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-6.5" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+<<<<<<< HEAD
+=======
+tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+>>>>>>> ec4a9002f1 (raftstore: upgrade tokio timer to fix insecure issues. (#15622))
 
 [profile.dev.package.grpcio-sys]
 debug = false
