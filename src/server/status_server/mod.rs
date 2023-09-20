@@ -11,9 +11,11 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
     time::{Duration, Instant},
+    fmt::Write,
 };
 
 use async_stream::stream;
+use std::env::current_exe;
 use collections::HashMap;
 use flate2::{write::GzEncoder, Compression};
 use futures::{
@@ -306,6 +308,40 @@ where
                 .unwrap(),
             Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
         })
+    }
+
+    // refer to go pprof implementation
+    // https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
+    async fn get_symbols(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+        let body = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+        info!("resolve symbol for pcs: {}", body);
+        let bin_data = std::fs::read(current_exe().unwrap()).unwrap(); // TODO: handle error 
+        let object = object::File::parse(&*bin_data).unwrap();
+        let ctx = addr2line::Context::new(&object).unwrap();
+        let mut text = String::new();
+        // We don't know how many symbols we have, but we
+        // do have symbol information. Pprof only cares whether
+        // this number is 0 (no symbols available) or > 0.
+        write!(text, "num_symbols: 1\n").unwrap();
+        for pc in body.split('+') {
+            let pc = pc.parse::<u64>().unwrap_or(0);
+            if pc == 0 {
+                continue;
+            }
+
+            let f = ctx.find_frames(pc);
+            let func = f.skip_all_loads().unwrap().next().unwrap().unwrap().function; // TODO: handle error
+            text.push_str(format!("{:#x} {}\n", pc, func.unwrap().demangle().unwrap()).as_str()); // TODO: handle error
+        }
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
     }
 
     async fn update_config(
@@ -677,6 +713,7 @@ where
                             (Method::GET, "/debug/pprof/heap") => {
                                 Self::dump_heap_prof_to_resp(req).await
                             }
+                            (Method::POST, "/debug/pprof/symbol") => Self::get_symbols(req).await,
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }
