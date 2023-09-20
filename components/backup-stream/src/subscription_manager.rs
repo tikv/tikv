@@ -256,10 +256,17 @@ fn spawn_executors(
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
-    pool.spawn(async move {
+    let handle = pool.handle().clone();
+    handle.spawn(async move {
         scan_executor_loop(init, rx, self_channel).await;
+        // The behavior of log backup is undefined while TiKV shutting down.
+        // (Recording the logs doesn't require any local persisted information.)
+        // So it is OK to make works in the pool fully asynchronous (i.e. We
+        // don't syncing it with shutting down.). This trick allows us get rid
+        // of the long long panic information during testing.
+        tokio::task::block_in_place(move || drop(pool));
     });
-    ScanPoolHandle { tx, _pool: pool }
+    ScanPoolHandle { tx }
 }
 
 struct ScanPoolHandle {
@@ -267,8 +274,6 @@ struct ScanPoolHandle {
     // thread. But that will make `SubscribeManager` holds a reference to the implementation of
     // `InitialScan`, which will get the type information a mass.
     tx: Sender<ScanCmd>,
-
-    _pool: ScanPool,
 }
 
 impl ScanPoolHandle {
@@ -755,6 +760,7 @@ mod test {
         worker::{dummy_future_scheduler, dummy_scheduler},
     };
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
+    use txn_types::TimeStamp;
 
     use super::{spawn_executors, InitialScan, RegionSubscriptionManager};
     use crate::{
@@ -762,22 +768,35 @@ mod test {
         metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
         router::{Router, RouterInner},
         subscription_track::SubscriptionTracer,
-        utils::CallbackWaitGroup,
+        utils::{self, CallbackWaitGroup},
         BackupStreamResolver, ObserveOp,
     };
 
     #[derive(Clone, Copy)]
-    struct NoopInitialScan;
+    struct FuncInitialScan<F>(F)
+    where
+        F: Fn(&Region, TimeStamp, ObserveHandle) -> crate::errors::Result<Statistics>
+            + Clone
+            + Sync
+            + Send
+            + 'static;
 
     #[async_trait::async_trait]
-    impl InitialScan for NoopInitialScan {
+    impl<F> InitialScan for FuncInitialScan<F>
+    where
+        F: Fn(&Region, TimeStamp, ObserveHandle) -> crate::errors::Result<Statistics>
+            + Clone
+            + Sync
+            + Send
+            + 'static,
+    {
         async fn do_initial_scan(
             &self,
-            _region: &Region,
-            _start_ts: txn_types::TimeStamp,
-            _handle: raftstore::coprocessor::ObserveHandle,
+            region: &Region,
+            start_ts: txn_types::TimeStamp,
+            handle: raftstore::coprocessor::ObserveHandle,
         ) -> crate::errors::Result<tikv::storage::Statistics> {
-            Ok(Statistics::default())
+            (self.0)(region, start_ts, handle)
         }
 
         fn handle_fatal_error(&self, region: &Region, err: crate::errors::Error) {
@@ -807,7 +826,11 @@ mod test {
             pool.block_on(tokio::time::timeout(d, rx)).unwrap().unwrap();
         }
 
-        let pool = spawn_executors(NoopInitialScan, 1);
+        let pool = spawn_executors(
+            FuncInitialScan(|_, _, _| Ok(Statistics::default())),
+            1,
+            tx.clone(),
+        );
         let wg = CallbackWaitGroup::new();
         fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {
@@ -865,7 +888,8 @@ mod test {
     }
 
     impl Suite {
-        fn new() -> Self {
+        fn new(init: impl InitialScan) -> Self {
+            let task_name = "test";
             let pool = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(4)
                 .enable_all()
@@ -873,26 +897,34 @@ mod test {
                 .unwrap();
             let regions = MockRegionInfoProvider::new(vec![]);
             let meta_cli = SlashEtcStore::default();
-            let (scheduler, recv) = dummy_scheduler();
+            let meta_cli = MetadataClient::new(meta_cli, 1);
+            let (scheduler, _recv) = dummy_scheduler();
             let subs = SubscriptionTracer::default();
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-            let init = NoopInitialScan;
             let router = RouterInner::new(scheduler.clone(), BackupStreamConfig::default().into());
             let mut task = StreamBackupTaskInfo::new();
-            task.set_name("test".to_owned());
+            task.set_name(task_name.to_owned());
             task.set_storage({
                 let nop = Noop::new();
                 let mut backend = StorageBackend::default();
                 backend.set_noop(nop);
                 backend
             });
+            task.set_start_ts(42);
             let mut task_wrapped = StreamTask::default();
             task_wrapped.info = task;
-            router.register_task(task_wrapped, vec![(vec![], vec![0xff, 0xff])], 1024 * 1024);
+            pool.block_on(meta_cli.insert_task_with_range(&task_wrapped, &[(b"", b"\xFF\xFF")]))
+                .unwrap();
+            pool.block_on(router.register_task(
+                task_wrapped,
+                vec![(vec![], vec![0xff, 0xff])],
+                1024 * 1024,
+            ))
+            .unwrap();
             let subs_mgr = RegionSubscriptionManager {
                 regions,
-                meta_cli: MetadataClient::new(meta_cli, 1),
+                meta_cli,
                 range_router: Router(Arc::new(router)),
                 scheduler,
                 subs,
@@ -954,7 +986,11 @@ mod test {
 
     #[test]
     fn test_oom() {
-        let suite = Suite::new();
+        test_util::init_log_for_test();
+        let suite = Suite::new(FuncInitialScan(|r, _, _| {
+            println!("{:?} is initial scanning!", utils::debug_region(&r));
+            Ok(Statistics::default())
+        }));
         suite.run(ObserveOp::Start {
             region: suite.region(1, 1, 1, b"a", b"b"),
             handle: ObserveHandle::new(),
