@@ -174,14 +174,37 @@ impl<K, V> SizePolicy<K, V> for CountTracker {
     }
 }
 
-pub struct LruCache<K, V, T = CountTracker>
+pub trait GetTailKV<K, V> {
+    fn get_tail_kv(&self) -> Option<(&K, &V)>;
+}
+
+pub trait EvictPolicy<K, V> {
+    fn should_evict(
+        &self,
+        current_size: usize,
+        capacity: usize,
+        get_tail_kv: &impl GetTailKV<K, V>,
+    ) -> bool;
+}
+
+pub struct EvictOnFull;
+
+impl<K, V> EvictPolicy<K, V> for EvictOnFull {
+    fn should_evict(&self, current_size: usize, capacity: usize, _: &impl GetTailKV<K, V>) -> bool {
+        capacity <= current_size
+    }
+}
+
+pub struct LruCache<K, V, T = CountTracker, E = EvictOnFull>
 where
     T: SizePolicy<K, V>,
+    E: EvictPolicy<K, V>,
 {
     map: HashMap<K, ValueEntry<K, V>>,
     trace: Trace<K>,
     capacity: usize,
     size_policy: T,
+    evict_policy: E,
 }
 
 impl<K, V, T> LruCache<K, V, T>
@@ -201,9 +224,16 @@ where
             trace: Trace::new(sample_mask),
             capacity,
             size_policy,
+            evict_policy: EvictOnFull,
         }
     }
+}
 
+impl<K, V, T, E> LruCache<K, V, T, E>
+where
+    T: SizePolicy<K, V>,
+    E: EvictPolicy<K, V>,
+{
     #[inline]
     pub fn size(&self) -> usize {
         self.size_policy.current()
@@ -234,15 +264,19 @@ where
     }
 }
 
-impl<K, V, T> LruCache<K, V, T>
+impl<K, V, T, E> LruCache<K, V, T, E>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
     T: SizePolicy<K, V>,
+    E: EvictPolicy<K, V>,
 {
     #[inline]
     pub fn insert(&mut self, key: K, value: V) {
         let mut old_key = None;
         let current_size = SizePolicy::<K, V>::current(&self.size_policy);
+        let should_evict_on_insert =
+            self.evict_policy
+                .should_evict(current_size, self.capacity, self);
         match self.map.entry(key) {
             HashMapEntry::Occupied(mut e) => {
                 self.size_policy.on_remove(e.key(), &e.get().value);
@@ -252,7 +286,7 @@ where
                 entry.value = value;
             }
             HashMapEntry::Vacant(v) => {
-                let record = if self.capacity <= current_size {
+                let record = if should_evict_on_insert {
                     let res = self.trace.reuse_tail(v.key().clone());
                     old_key = Some(res.0);
                     res.1
@@ -283,7 +317,7 @@ where
             let current_size = self.size_policy.current();
             // Should we keep at least one entry? So our users won't lose their fresh record
             // once it exceeds the capacity.
-            if current_size <= cap || self.map.is_empty() {
+            if !self.evict_policy.should_evict(current_size, cap, self) || self.map.is_empty() {
                 break;
             }
             let key = self.trace.remove_tail();
@@ -311,6 +345,11 @@ where
             }
             None => None,
         }
+    }
+
+    #[inline]
+    pub fn get_no_promote(&self, key: &K) -> Option<&V> {
+        self.map.get(key).map(|v| &v.value)
     }
 
     #[inline]
@@ -355,6 +394,24 @@ where
     }
 }
 
+impl<K, V, T, E> GetTailKV<K, V> for LruCache<K, V, T, E>
+where
+    K: Eq + Hash + Clone + std::fmt::Debug,
+    T: SizePolicy<K, V>,
+    E: EvictPolicy<K, V>,
+{
+    fn get_tail_kv(&self) -> Option<(&K, &V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let k = unsafe { self.trace.tail.as_ref().prev.as_ref().key.assume_init_ref() };
+        self.map
+            .get_key_value(k)
+            .map(|(k, entry)| (k, &entry.value))
+    }
+}
+
 unsafe impl<K, V, T> Send for LruCache<K, V, T>
 where
     K: Send,
@@ -363,9 +420,10 @@ where
 {
 }
 
-impl<K, V, T> Drop for LruCache<K, V, T>
+impl<K, V, T, E> Drop for LruCache<K, V, T, E>
 where
     T: SizePolicy<K, V>,
+    E: EvictPolicy<K, V>,
 {
     fn drop(&mut self) {
         self.clear();
