@@ -1832,19 +1832,7 @@ fn test_concurrent_between_transfer_leader_and_merge() {
     rx2.recv().unwrap();
     fail::remove("on_reject_commit_merge_1");
 
-    let timer = Instant::now();
-    loop {
-        if right.get_region_epoch().get_version()
-            == cluster.get_region_epoch(right.get_id()).get_version()
-        {
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
-                panic!("region {:?} is still not merged.", right);
-            }
-        } else {
-            break;
-        }
-        sleep_ms(10);
-    }
+    wait_region_epoch_change(&cluster, &right, Duration::from_secs(5));
 
     let region = pd_client.get_region(b"k1").unwrap();
     assert_eq!(region.get_id(), right.get_id());
@@ -1949,12 +1937,25 @@ fn test_restart_may_lose_merging_state() {
     .unwrap();
 
     cluster.stop_node(1);
-    fail::remove("on_ask_commit_merge");
-    cluster.run_node(1).unwrap();
-    fail::remove("maybe_propose_compact_log");
+    // Need to avoid propose commit merge, before node 1 becomes leader. Otherwise,
+    // the commit merge will be rejected.
+    let (tx2, rx2) = channel();
+    fail::cfg_callback("on_applied_current_term", move || {
+        tx2.send(()).unwrap();
+    })
+    .unwrap();
 
+    fail::remove("maybe_propose_compact_log");
+    cluster.run_node(1).unwrap();
+
+    // we have two regions.
+    rx2.recv().unwrap();
+    rx2.recv().unwrap();
+    fail::remove("on_ask_commit_merge");
     // wait node 2 to apply commit merge
     rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+    wait_region_epoch_change(&cluster, &target, Duration::from_secs(5));
 
     let region = cluster.get_region(b"k1");
     assert_eq!(region.get_id(), target.get_id());
