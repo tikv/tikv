@@ -75,8 +75,6 @@ dependencies = [
 ]
 
 [[package]]
-<<<<<<< HEAD
-=======
 name = "allocator-api2"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -98,7 +96,6 @@ dependencies = [
 ]
 
 [[package]]
->>>>>>> 6971a4635b (upgrade flatbuffers from 2.1.2 to 23.5.26 to address security issue (#15628))
 name = "ansi_term"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
