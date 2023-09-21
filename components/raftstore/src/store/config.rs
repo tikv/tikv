@@ -1064,6 +1064,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["leader_transfer_max_log_lag"])
             .set(self.leader_transfer_max_log_lag as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["gc_peer_check_interval"])
+            .set(self.gc_peer_check_interval.as_secs_f64());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])
