@@ -231,6 +231,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             unsafe_recovery_state: None,
         };
 
+        if let Some(ref state) = peer.merge_context {
+            peer.proposal_control
+                .enter_prepare_merge(state.prepare_merge_index().unwrap());
+        }
+
         // If this region has only one peer and I am the one, campaign directly.
         let region = peer.region();
         if region.get_peers().len() == 1

@@ -261,6 +261,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) {
+        fail::fail_point!("on_ask_commit_merge", |_| {});
         let expected_epoch = req.get_header().get_region_epoch();
         let merge = req.get_admin_request().get_commit_merge();
         assert!(merge.has_source_state() && merge.get_source_state().has_merge_state());
@@ -738,6 +739,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut res: CommitMergeResult,
     ) {
+        fail::fail_point!(
+            "on_apply_res_commit_merge_2",
+            self.peer().store_id == 2,
+            |_| {}
+        );
+
         let region = res.region_state.get_region();
         assert!(
             res.source.get_end_key() == region.get_end_key()
