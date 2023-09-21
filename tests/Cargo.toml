@@ -41,7 +41,7 @@ path = "benches/deadlock_detector/mod.rs"
 
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
-failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
+failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints", "raft_log_engine/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
