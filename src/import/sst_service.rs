@@ -12,6 +12,7 @@ use std::{
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
+use futures_executor::block_on;
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -641,11 +642,7 @@ fn check_local_region_stale(
         .map_err(|e| {
             Error::Engine(format!("failed to find region {} err {:?}", region_id, e).into())
         })?;
-
-    let result = async move {
-        f.await?
-    };
-    match result {
+    match block_on(f)? {
         Some(local_region_info) => {
             let local_region_epoch = local_region_info.region.region_epoch.unwrap();
 
