@@ -71,6 +71,7 @@ use crate::storage::{
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
+    txn_status_cache::TxnStatusCache,
     types::{
         MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
@@ -573,6 +574,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
     pub raw_ext: Option<RawExt>, // use for apiv2
+    pub txn_status_cache: &'a TxnStatusCache,
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {

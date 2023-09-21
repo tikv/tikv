@@ -234,6 +234,19 @@ where
     T: SizePolicy<K, V>,
     E: EvictPolicy<K, V>,
 {
+    pub fn new(mut capacity: usize, sample_mask: usize, size_policy: T, evict_policy: E) -> Self {
+        if capacity == 0 {
+            capacity = 1;
+        }
+        Self {
+            map: HashMap::default(),
+            trace: Trace::new(sample_mask),
+            capacity,
+            size_policy,
+            evict_policy,
+        }
+    }
+
     #[inline]
     pub fn size(&self) -> usize {
         self.size_policy.current()
@@ -271,7 +284,7 @@ where
     E: EvictPolicy<K, V>,
 {
     #[inline]
-    pub fn insert(&mut self, key: K, value: V) {
+    fn insert_impl(&mut self, key: K, value: V, replace: bool) {
         let mut old_key = None;
         let current_size = SizePolicy::<K, V>::current(&self.size_policy);
         let should_evict_on_insert =
@@ -279,11 +292,13 @@ where
                 .should_evict(current_size, self.capacity, self);
         match self.map.entry(key) {
             HashMapEntry::Occupied(mut e) => {
-                self.size_policy.on_remove(e.key(), &e.get().value);
-                self.size_policy.on_insert(e.key(), &value);
-                let entry = e.get_mut();
-                self.trace.promote(entry.record);
-                entry.value = value;
+                if replace {
+                    self.size_policy.on_remove(e.key(), &e.get().value);
+                    self.size_policy.on_insert(e.key(), &value);
+                    let entry = e.get_mut();
+                    self.trace.promote(entry.record);
+                    entry.value = value;
+                }
             }
             HashMapEntry::Vacant(v) => {
                 let record = if should_evict_on_insert {
@@ -324,6 +339,16 @@ where
             let val = self.map.remove(&key).unwrap();
             self.size_policy.on_remove(&key, &val.value);
         }
+    }
+
+    #[inline]
+    pub fn insert(&mut self, key: K, value: V) {
+        self.insert_impl(key, value, true);
+    }
+
+    #[inline]
+    pub fn insert_if_not_exist(&mut self, key: K, value: V) {
+        self.insert_impl(key, value, false);
     }
 
     #[inline]
