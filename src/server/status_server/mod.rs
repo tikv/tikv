@@ -3,7 +3,7 @@
 /// Provides profilers for TiKV.
 mod profile;
 use std::{
-    env::current_exe,
+    env::{args, current_exe},
     error::Error as StdError,
     net::SocketAddr,
     path::PathBuf,
@@ -308,6 +308,20 @@ where
                 .unwrap(),
             Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
         })
+    }
+
+    async fn get_cmdline(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let args = args().into_iter().fold(String::new(), |mut a, b| {
+            a.push_str(&b);
+            a.push_str("\x00");
+            a
+        });
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .body(args.into())
+            .unwrap();
+        Ok(response)
     }
 
     // The request and response format follows pprof remote server https://gperftools.github.io/gperftools/pprof_remote_servers.html
@@ -731,6 +745,7 @@ where
                             (Method::GET, "/debug/pprof/heap") => {
                                 Self::dump_heap_prof_to_resp(req).await
                             }
+                            (Method::GET, "/debug/pprof/cmdline") => Self::get_cmdline(req).await,
                             (Method::GET, "/debug/pprof/symbol") => Self::get_symbol(req).await,
                             (Method::POST, "/debug/pprof/symbol") => Self::get_symbol(req).await,
                             (Method::GET, "/config") => {
