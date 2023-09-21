@@ -31,7 +31,7 @@ use crate::{
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
     metrics,
     router::{Router, TaskSelector},
-    subscription_track::{CheckpointType, ResolveResult, SubscriptionTracer},
+    subscription_track::{CheckpointType, Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, Work},
     Task,
@@ -418,11 +418,20 @@ where
                     let err = match err {
                         None => {
                             self.failure_count.remove(&handle.id);
+                            let sub = self.subs.get_subscription_of(region.id);
+                            if let Some(mut sub) = sub {
+                                if sub.value().handle.id == handle.id {
+                                    sub.value_mut().resolver.phase_one_done();
+                                }
+                            }
                             continue;
                         }
                         Some(err) => {
                             if !should_retry(&err) {
                                 self.failure_count.remove(&handle.id);
+                                self.subs.deregister_region_if(&region, |sub, _| {
+                                    sub.handle.id == handle.id
+                                });
                                 continue;
                             }
                             err
@@ -740,8 +749,13 @@ where
 #[cfg(test)]
 mod test {
     use std::{
-        sync::{Arc, Mutex},
-        time::Duration,
+        cell::Cell,
+        collections::HashMap,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        },
+        time::{Duration, Instant},
     };
 
     use engine_test::kv::KvTestEngine;
@@ -750,14 +764,19 @@ mod test {
         metapb::{Region, RegionEpoch},
     };
     use raftstore::{
-        coprocessor::{region_info_accessor::MockRegionInfoProvider, ObserveHandle},
+        coprocessor::{
+            region_info_accessor::MockRegionInfoProvider, ObserveHandle, RegionInfoCallback,
+            RegionInfoProvider,
+        },
         router::CdcRaftRouter,
+        store::Callback,
+        RegionInfo, RegionInfoAccessor,
     };
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{config::BackupStreamConfig, storage::Statistics};
     use tikv_util::{
         memory::MemoryQuota,
-        worker::{dummy_future_scheduler, dummy_scheduler},
+        worker::{dummy_future_scheduler, dummy_scheduler, ReceiverWrapper},
     };
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
@@ -765,11 +784,12 @@ mod test {
     use super::{spawn_executors, InitialScan, RegionSubscriptionManager};
     use crate::{
         checkpoint_manager::SubscriptionManager,
+        errors::Error,
         metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
         router::{Router, RouterInner},
-        subscription_track::SubscriptionTracer,
+        subscription_track::{CheckpointType, SubscriptionTracer},
         utils::{self, CallbackWaitGroup},
-        BackupStreamResolver, ObserveOp,
+        BackupStreamResolver, ObserveOp, Task,
     };
 
     #[derive(Clone, Copy)]
@@ -883,22 +903,43 @@ mod test {
         rt: tokio::runtime::Runtime,
 
         events: Arc<Mutex<Vec<String>>>,
+        task_start_ts: TimeStamp,
         handle: Sender<ObserveOp>,
-        wait: JoinHandle<()>,
+        regions: RegionMem,
+    }
+
+    #[derive(Clone, Default)]
+    struct RegionMem {
+        regions: Arc<Mutex<HashMap<u64, RegionInfo>>>,
+    }
+
+    impl RegionInfoProvider for RegionMem {
+        fn find_region_by_id(
+            &self,
+            region_id: u64,
+            callback: RegionInfoCallback<Option<RegionInfo>>,
+        ) -> raftstore::coprocessor::Result<()> {
+            let rs = self.regions.lock().unwrap();
+            let info = rs.get(&region_id).cloned();
+            drop(rs);
+            callback(info);
+            Ok(())
+        }
     }
 
     impl Suite {
         fn new(init: impl InitialScan) -> Self {
             let task_name = "test";
+            let task_start_ts = TimeStamp::new(42);
             let pool = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(4)
                 .enable_all()
                 .build()
                 .unwrap();
-            let regions = MockRegionInfoProvider::new(vec![]);
+            let regions = RegionMem::default();
             let meta_cli = SlashEtcStore::default();
             let meta_cli = MetadataClient::new(meta_cli, 1);
-            let (scheduler, _recv) = dummy_scheduler();
+            let (scheduler, mut output) = dummy_scheduler();
             let subs = SubscriptionTracer::default();
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
@@ -911,7 +952,7 @@ mod test {
                 backend.set_noop(nop);
                 backend
             });
-            task.set_start_ts(42);
+            task.set_start_ts(task_start_ts.into_inner());
             let mut task_wrapped = StreamTask::default();
             task_wrapped.info = task;
             pool.block_on(meta_cli.insert_task_with_range(&task_wrapped, &[(b"", b"\xFF\xFF")]))
@@ -923,7 +964,7 @@ mod test {
             ))
             .unwrap();
             let subs_mgr = RegionSubscriptionManager {
-                regions,
+                regions: regions.clone(),
                 meta_cli,
                 range_router: Router(Arc::new(router)),
                 scheduler,
@@ -943,7 +984,21 @@ mod test {
                     ob_tx.send(item).await.unwrap();
                 }
             });
-            let h = pool.spawn(
+            let self_tx = tx.clone();
+            pool.spawn_blocking(move || {
+                while let Some(item) = output.recv() {
+                    match item {
+                        Task::ModifyObserve(ob) => tokio::runtime::Handle::current()
+                            .block_on(self_tx.send(ob))
+                            .unwrap(),
+                        Task::FatalError(select, err) => {
+                            panic!("Background handler received fatal error {err} for {select:?}!")
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            pool.spawn(
                 subs_mgr.region_operator_loop::<KvTestEngine, CdcRaftRouter<MockRaftStoreRouter>>(
                     ob_rx,
                     BackupStreamResolver::Nop,
@@ -953,13 +1008,29 @@ mod test {
             Self {
                 rt: pool,
                 events,
-                wait: h,
+                regions,
                 handle: tx,
+                task_start_ts,
             }
         }
 
         fn run(&self, op: ObserveOp) {
             self.rt.block_on(self.handle.send(op)).unwrap()
+        }
+
+        fn start_region(&self, region: Region) {
+            self.regions.regions.lock().unwrap().insert(
+                region.id,
+                RegionInfo {
+                    region: region.clone(),
+                    role: raft::StateRole::Leader,
+                    buckets: 0,
+                },
+            );
+            self.run(ObserveOp::Start {
+                region,
+                handle: ObserveHandle::new(),
+            });
         }
 
         fn region(
@@ -982,20 +1053,48 @@ mod test {
             region.set_end_key(end_key.to_vec());
             region
         }
+
+        #[track_caller]
+        fn wait_initial_scan_all_finish(&self) {
+            let finished = Arc::new(AtomicBool::new(false));
+            let max_wait = Duration::from_secs(1);
+            let start = Instant::now();
+            while !finished.load(Ordering::SeqCst) {
+                if start.elapsed() > max_wait {
+                    panic!(
+                        "wait initial scan takes too long! events = {:?}",
+                        self.events
+                    );
+                }
+                let finished = finished.clone();
+                self.run(ObserveOp::ResolveRegions {
+                    callback: Box::new(move |result| {
+                        if result
+                            .items
+                            .iter()
+                            .all(|r| r.checkpoint_type != CheckpointType::StartTsOfInitialScan)
+                        {
+                            finished.store(true, Ordering::SeqCst);
+                        }
+                    }),
+                    min_ts: self.task_start_ts.next(),
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
     }
 
     #[test]
     fn test_oom() {
-        test_util::init_log_for_test();
         let suite = Suite::new(FuncInitialScan(|r, _, _| {
             println!("{:?} is initial scanning!", utils::debug_region(&r));
-            Ok(Statistics::default())
+            Err(Error::OutOfQuota { region_id: r.id })
         }));
         suite.run(ObserveOp::Start {
             region: suite.region(1, 1, 1, b"a", b"b"),
             handle: ObserveHandle::new(),
         });
-        std::thread::sleep(Duration::from_secs(1));
+        suite.wait_initial_scan_all_finish();
         println!("{:?}", suite.events);
     }
 }

@@ -449,9 +449,6 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
-        let tr = self.tracing.clone();
-        let region_id = region.get_id();
-
         let mut join_handles = Vec::with_capacity(8);
 
         let permit = self
@@ -469,15 +466,6 @@ where
         futures::future::try_join_all(join_handles)
             .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
-
-        Self::with_resolver_by(&tr, region, &handle, |r| {
-            r.phase_one_done();
-            Ok(())
-        })
-        .context(format_args!(
-            "failed to finish phase 1 for region {:?}",
-            region_id
-        ))?;
 
         Ok(stats)
     }

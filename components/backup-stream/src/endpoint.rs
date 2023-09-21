@@ -1301,7 +1301,7 @@ impl std::fmt::Debug for ObserveOp {
                 handle,
                 err,
             } => f
-                .debug_struct("NotifyFailToStartObserve")
+                .debug_struct("NotifyStartObserveResult")
                 .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
