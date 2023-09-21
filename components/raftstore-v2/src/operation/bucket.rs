@@ -31,6 +31,8 @@ pub struct BucketStatsInfo {
     // the report bucket stat records the increment stats after last report pd.
     // it will be reset after report pd.
     report_bucket_stat: Option<BucketStat>,
+    // avoid the version roll back, it record the last bucket version if bucket stat isn't none.
+    last_bucket_version: u64,
 }
 
 impl BucketStatsInfo {
@@ -61,6 +63,7 @@ impl BucketStatsInfo {
         self.bucket_stat
             .as_ref()
             .map(|b| b.meta.version)
+            .or(Some(self.last_bucket_version))
             .unwrap_or_default()
     }
 
@@ -80,6 +83,7 @@ impl BucketStatsInfo {
     pub fn set_bucket_stat(&mut self, buckets: Option<BucketStat>) {
         self.bucket_stat = buckets.clone();
         if let Some(new_buckets) = buckets {
+            self.last_bucket_version = new_buckets.meta.version;
             let mut new_report_buckets = BucketStat::from_meta(new_buckets.meta);
             if let Some(old) = &mut self.report_bucket_stat {
                 new_report_buckets.merge(old);
@@ -471,6 +475,22 @@ mod tests {
             bucket_ranges.clone(),
         );
         bucket_stats_info
+    }
+
+    #[test]
+    pub fn test_version() {
+        let mut bucket_stats_info = mock_bucket_stats_info();
+        assert_eq!(1, bucket_stats_info.version());
+        bucket_stats_info.set_bucket_stat(None);
+        assert_eq!(1, bucket_stats_info.version());
+
+        let mut meta = BucketMeta::default();
+        meta.version = 2;
+        meta.keys.push(vec![]);
+        meta.keys.push(vec![]);
+        let bucket_stat = BucketStat::from_meta(Arc::new(meta));
+        bucket_stats_info.set_bucket_stat(Some(bucket_stat));
+        assert_eq!(2, bucket_stats_info.version());
     }
 
     #[test]
