@@ -1931,6 +1931,15 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
                         cf_change.insert(name, value);
                     }
                 }
+                if let Some(f) = cf_change.remove("write_buffer_limit") {
+                    if cf_name != CF_LOCK {
+                        return Err(
+                            "cf write buffer manager is only supportted for lock cf now".into()
+                        );
+                    }
+                    let size: ReadableSize = f.into();
+                    self.db.set_cf_flush_size(cf_name, size.0 as usize)?;
+                }
                 if !cf_change.is_empty() {
                     let cf_change = config_value_to_string(cf_change.into_iter().collect());
                     let cf_change_slice = config_to_slice(&cf_change);
@@ -4954,6 +4963,7 @@ mod tests {
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.rocksdb.rate_limiter_auto_tuned = false;
+        cfg.rocksdb.lockcf.write_buffer_limit = Some(ReadableSize::mb(1));
         cfg.validate().unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
@@ -4988,6 +4998,43 @@ mod tests {
             ReadableSize::mb(128).0 as i64
         );
 
+<<<<<<< HEAD
+=======
+        cfg_controller
+            .update_config("rocksdb.write-buffer-limit", "10MB")
+            .unwrap();
+        let flush_size = db.get_db_options().get_flush_size().unwrap();
+        assert_eq!(flush_size, ReadableSize::mb(10).0);
+
+        cfg_controller
+            .update_config("rocksdb.lockcf.write-buffer-limit", "22MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("lock").unwrap();
+        let flush_size = cf_opt.get_flush_size().unwrap();
+        assert_eq!(flush_size, ReadableSize::mb(22).0);
+
+        cfg_controller
+            .update_config("rocksdb.lockcf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("lock").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
+
+        cfg_controller
+            .update_config("rocksdb.writecf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("write").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
+
+        cfg_controller
+            .update_config("rocksdb.defaultcf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("default").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
+
+>>>>>>> 241b8f53d3 (raftstore-v2: support online change lock write buffer limit (#15632))
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);

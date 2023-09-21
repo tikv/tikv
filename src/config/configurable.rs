@@ -14,6 +14,12 @@ pub trait ConfigurableDb {
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> ConfigRes;
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> ConfigRes;
     fn set_rate_limiter_auto_tuned(&self, auto_tuned: bool) -> ConfigRes;
+<<<<<<< HEAD
+=======
+    fn set_flush_size(&self, f: usize) -> ConfigRes;
+    fn set_cf_flush_size(&self, cf: &str, f: usize) -> ConfigRes;
+    fn set_flush_oldest_first(&self, f: bool) -> ConfigRes;
+>>>>>>> 241b8f53d3 (raftstore-v2: support online change lock write buffer limit (#15632))
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes;
 }
 
@@ -49,6 +55,24 @@ impl ConfigurableDb for RocksEngine {
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn set_flush_size(&self, f: usize) -> ConfigRes {
+        let mut opt = self.get_db_options();
+        opt.set_flush_size(f).map_err(Box::from)
+    }
+
+    fn set_cf_flush_size(&self, cf: &str, f: usize) -> ConfigRes {
+        let mut cf_option = self.get_options_cf(cf)?;
+        cf_option.set_flush_size(f).map_err(Box::from)
+    }
+
+    fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
+        let mut opt = self.get_db_options();
+        opt.set_flush_oldest_first(f).map_err(Box::from)
+    }
+
+>>>>>>> 241b8f53d3 (raftstore-v2: support online change lock write buffer limit (#15632))
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes {
         let opt = self.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
         opt.set_block_cache_capacity(capacity as u64)
@@ -122,7 +146,47 @@ impl ConfigurableDb for TabletRegistry<RocksEngine> {
     fn set_rate_limiter_auto_tuned(&self, auto_tuned: bool) -> ConfigRes {
         loop_registry(self, |cache| {
             if let Some(latest) = cache.latest() {
+<<<<<<< HEAD
                 latest.set_rate_limiter_auto_tuned(auto_tuned)?
+=======
+                latest.set_rate_limiter_auto_tuned(auto_tuned)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        })
+    }
+
+    fn set_flush_size(&self, f: usize) -> ConfigRes {
+        loop_registry(self, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_flush_size(f)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        })
+    }
+
+    fn set_cf_flush_size(&self, cf: &str, f: usize) -> ConfigRes {
+        loop_registry(self, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_cf_flush_size(cf, f)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        })
+    }
+
+    fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
+        loop_registry(self, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_flush_oldest_first(f)?;
+                Ok(false)
+            } else {
+                Ok(true)
+>>>>>>> 241b8f53d3 (raftstore-v2: support online change lock write buffer limit (#15632))
             }
             Ok(true)
         })
