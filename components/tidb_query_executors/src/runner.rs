@@ -137,31 +137,31 @@ impl BatchExecutorsRunner<()> {
                         .map_err(|e| other_err!("BatchProjectionExecutor: {}", e))?;
                 }
                 ExecType::TypeJoin => {
-                    return Err(other_err!("Join executor not implemented"));
+                    other_err!("Join executor not implemented");
                 }
                 ExecType::TypeKill => {
-                    return Err(other_err!("Kill executor not implemented"));
+                    other_err!("Kill executor not implemented");
                 }
                 ExecType::TypeExchangeSender => {
-                    return Err(other_err!("ExchangeSender executor not implemented"));
+                    other_err!("ExchangeSender executor not implemented");
                 }
                 ExecType::TypeExchangeReceiver => {
-                    return Err(other_err!("ExchangeReceiver executor not implemented"));
+                    other_err!("ExchangeReceiver executor not implemented");
                 }
                 ExecType::TypePartitionTableScan => {
-                    return Err(other_err!("PartitionTableScan executor not implemented"));
+                    other_err!("PartitionTableScan executor not implemented");
                 }
                 ExecType::TypeSort => {
-                    return Err(other_err!("Sort executor not implemented"));
+                    other_err!("Sort executor not implemented");
                 }
                 ExecType::TypeWindow => {
-                    return Err(other_err!("Window executor not implemented"));
+                    other_err!("Window executor not implemented");
                 }
                 ExecType::TypeExpand => {
-                    return Err(other_err!("Expand executor not implemented"));
+                    other_err!("Expand executor not implemented");
                 }
                 ExecType::TypeExpand2 => {
-                    return Err(other_err!("Expand2 executor not implemented"));
+                    other_err!("Expand2 executor not implemented");
                 }
             }
         }

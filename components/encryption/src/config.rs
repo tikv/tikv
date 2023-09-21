@@ -134,12 +134,11 @@ impl KmsConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 pub enum MasterKeyConfig {
     // Store encryption metadata as plaintext. Data still get encrypted. Not allowed to use if
     // encryption is enabled. (i.e. when encryption_config.method != Plaintext).
-    #[default]
     Plaintext,
 
     // Pass master key from a file, with key encoded as a readable hex string. The file should end
@@ -155,6 +154,12 @@ pub enum MasterKeyConfig {
         #[serde(flatten)]
         config: KmsConfig,
     },
+}
+
+impl Default for MasterKeyConfig {
+    fn default() -> Self {
+        MasterKeyConfig::Plaintext
+    }
 }
 
 mod encryption_method_serde {

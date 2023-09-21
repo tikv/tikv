@@ -889,6 +889,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
 
         let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
+        let ctx = Arc::new(ctx);
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let copr = self.copr.clone();

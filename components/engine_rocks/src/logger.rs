@@ -3,6 +3,7 @@ use rocksdb::{DBInfoLogLevel as InfoLogLevel, Logger};
 use tikv_util::{crit, debug, error, info, warn};
 
 // TODO(yiwu): abstract the Logger interface.
+#[derive(Default)]
 pub struct RocksdbLogger;
 
 impl Logger for RocksdbLogger {
@@ -43,6 +44,7 @@ impl Logger for TabletLogger {
     }
 }
 
+#[derive(Default)]
 pub struct RaftDbLogger;
 
 impl Logger for RaftDbLogger {

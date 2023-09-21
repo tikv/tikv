@@ -420,7 +420,6 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     fail::remove("mock_collect_tick_interval");
 }
 
-#[allow(clippy::extra_unused_type_parameters)]
 fn raw_put<F: KvFormat>(
     _cluster: &Cluster<ServerCluster>,
     client: &TikvClient,

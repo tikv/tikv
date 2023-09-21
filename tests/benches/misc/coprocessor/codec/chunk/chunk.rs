@@ -79,7 +79,7 @@ impl ChunkBuilder {
     pub fn build(self, tps: &[FieldType]) -> Chunk {
         let mut fields = Vec::with_capacity(tps.len());
         let mut arrays: Vec<Arc<dyn array::Array>> = Vec::with_capacity(tps.len());
-        for (field_type, column) in tps.iter().zip(self.columns) {
+        for (field_type, column) in tps.iter().zip(self.columns.into_iter()) {
             match field_type.as_accessor().tp() {
                 FieldTypeTp::Tiny
                 | FieldTypeTp::Short

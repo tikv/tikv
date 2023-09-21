@@ -343,9 +343,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 entry.get_data(),
                 entry.get_index(),
                 entry.get_term(),
-            ) else {
-                continue;
-            };
+            ) else { continue };
             let cmd_type = cmd.get_admin_request().get_cmd_type();
             match cmd_type {
                 AdminCmdType::TransferLeader
