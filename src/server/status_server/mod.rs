@@ -3,6 +3,7 @@
 /// Provides profilers for TiKV.
 mod profile;
 use std::{
+    env::current_exe,
     error::Error as StdError,
     net::SocketAddr,
     path::PathBuf,
@@ -11,11 +12,9 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
     time::{Duration, Instant},
-    fmt::Write,
 };
 
 use async_stream::stream;
-use std::env::current_exe;
 use collections::HashMap;
 use flate2::{write::GzEncoder, Compression};
 use futures::{
@@ -35,6 +34,7 @@ use hyper::{
     Body, Method, Request, Response, Server, StatusCode,
 };
 use kvproto::resource_manager::ResourceGroup;
+use object::Object;
 use online_config::OnlineConfig;
 use openssl::{
     ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
@@ -310,30 +310,48 @@ where
         })
     }
 
-    // refer to go pprof implementation
-    // https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
-    async fn get_symbols(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
-        let body = String::from_utf8(body_bytes.to_vec()).unwrap();
-
-        info!("resolve symbol for pcs: {}", body);
+    // The request and response format follows pprof remote server https://gperftools.github.io/gperftools/pprof_remote_servers.html
+    // Here is the go pprof implementation https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
+    async fn get_symbol(req: Request<Body>) -> hyper::Result<Response<Body>> {
         let bin_data = std::fs::read(current_exe().unwrap()).unwrap(); // TODO: handle error 
         let object = object::File::parse(&*bin_data).unwrap();
-        let ctx = addr2line::Context::new(&object).unwrap();
         let mut text = String::new();
-        // We don't know how many symbols we have, but we
-        // do have symbol information. Pprof only cares whether
-        // this number is 0 (no symbols available) or > 0.
-        write!(text, "num_symbols: 1\n").unwrap();
-        for pc in body.split('+') {
-            let pc = pc.parse::<u64>().unwrap_or(0);
-            if pc == 0 {
-                continue;
-            }
 
-            let f = ctx.find_frames(pc);
-            let func = f.skip_all_loads().unwrap().next().unwrap().unwrap().function; // TODO: handle error
-            text.push_str(format!("{:#x} {}\n", pc, func.unwrap().demangle().unwrap()).as_str()); // TODO: handle error
+        if req.method() == Method::GET {
+            // We don't know how many symbols we have, but we
+            // do have symbol information. Pprof only cares whether
+            // this number is 0 (no symbols available) or > 0.
+            if object.has_debug_symbols() {
+                text.push_str("num_symbols: 1\n");
+            } else {
+                text.push_str("num_symbols: 0\n");
+            }
+        } else {
+            let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let body = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+            info!("resolve symbol for pcs: {}", body);
+            let ctx = addr2line::Context::new(&object).unwrap();
+
+            for pc in body.split('+') {
+                let pc = pc.parse::<u64>().unwrap_or(0);
+                if pc == 0 {
+                    continue;
+                }
+                // Look up the function name for the address.
+                let f = ctx.find_frames(pc);
+                let func = f
+                    .skip_all_loads()
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .unwrap()
+                    .function; // TODO: handle error
+                // should be "<hex address> <function name>"
+                text.push_str(
+                    format!("{:#x} {}\n", pc, func.unwrap().demangle().unwrap()).as_str(),
+                ); // TODO: handle error
+            }
         }
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
@@ -713,7 +731,8 @@ where
                             (Method::GET, "/debug/pprof/heap") => {
                                 Self::dump_heap_prof_to_resp(req).await
                             }
-                            (Method::POST, "/debug/pprof/symbol") => Self::get_symbols(req).await,
+                            (Method::GET, "/debug/pprof/symbol") => Self::get_symbol(req).await,
+                            (Method::POST, "/debug/pprof/symbol") => Self::get_symbol(req).await,
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }
