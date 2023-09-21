@@ -2385,16 +2385,12 @@ mod tests {
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = Arc::new(RouterInner::new(
+            tmp.clone(),
             tx,
-            Config {
-                prefix: tmp.clone(),
-                // disable auto flush.
-                temp_file_size_limit: 1000,
-                temp_file_memory_quota: 2,
-                max_flush_interval: Duration::from_secs(300),
-            },
+            // disable auto flush.
+            1000,
+            Duration::from_secs(300),
         ));
-
         let (task, _path) = task("race".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
         router
