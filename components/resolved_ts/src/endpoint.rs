@@ -42,7 +42,7 @@ use crate::{
     metrics::*,
     resolver::{LastAttempt, Resolver},
     scanner::{ScanEntries, ScanTask, ScannerPool},
-    Error, Result, TsSource, ON_DROP_WARN_HEAP_SIZE,
+    Error, Result, TsSource, TxnLocks, ON_DROP_WARN_HEAP_SIZE,
 };
 
 /// grace period for identifying identifying slow resolved-ts and safe-ts.
@@ -388,11 +388,11 @@ where
     E: KvEngine,
     S: StoreRegionMeta,
 {
-    fn is_leader(&self, store_id: Option<u64>, leader_store_id: Option<u64>) -> bool {
-        store_id.is_some() && store_id == leader_store_id
-    }
-
     fn collect_stats(&mut self) -> Stats {
+        fn is_leader(store_id: Option<u64>, leader_store_id: Option<u64>) -> bool {
+            store_id.is_some() && store_id == leader_store_id
+        }
+
         let store_id = self.get_or_init_store_id();
         let mut stats = Stats::default();
         self.region_read_progress.with(|registry| {
@@ -407,10 +407,10 @@ where
                     continue;
                 }
 
-                if self.is_leader(store_id, leader_store_id) {
+                if is_leader(store_id, leader_store_id) {
                     // leader resolved-ts
                     if resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
-                        let resolver = self.regions.get(region_id).map(|x| &x.resolver);
+                        let resolver = self.regions.get_mut(region_id).map(|x| &mut x.resolver);
                         stats
                             .min_leader_resolved_ts
                             .set(*region_id, resolver, &core, &leader_info);
@@ -1186,7 +1186,7 @@ struct LeaderStats {
     last_resolve_attempt: Option<LastAttempt>,
     applied_index: u64,
     // min lock in LOCK CF
-    min_lock: Option<(TimeStamp, Key)>,
+    min_lock: Option<(TimeStamp, TxnLocks)>,
     lock_num: Option<u64>,
     txn_num: Option<u64>,
 }
@@ -1211,7 +1211,7 @@ impl LeaderStats {
     fn set(
         &mut self,
         region_id: u64,
-        resolver: Option<&Resolver>,
+        mut resolver: Option<&mut Resolver>,
         region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
         leader_info: &LeaderInfo,
     ) {
@@ -1222,21 +1222,13 @@ impl LeaderStats {
             duration_to_last_update_ms: region_read_progress
                 .last_instant_of_update_ts()
                 .map(|i| i.saturating_elapsed().as_millis() as u64),
-            last_resolve_attempt: resolver.and_then(|r| r.last_attempt.clone()),
-            min_lock: resolver.and_then(|r| {
-                r.oldest_transaction().map(|(ts, keys)| {
-                    (
-                        *ts,
-                        keys.iter()
-                            .next()
-                            .map(|k| Key::from_encoded_slice(k.as_ref()))
-                            .unwrap_or_else(|| Key::from_encoded_slice("no_keys_found".as_ref())),
-                    )
-                })
-            }),
+            last_resolve_attempt: resolver.as_mut().and_then(|r| r.take_last_attempt()),
+            min_lock: resolver
+                .as_ref()
+                .and_then(|r| r.oldest_transaction().map(|(t, tk)| (*t, tk.clone()))),
             applied_index: region_read_progress.applied_index(),
-            lock_num: resolver.map(|r| r.num_locks()),
-            txn_num: resolver.map(|r| r.num_transactions()),
+            lock_num: resolver.as_ref().map(|r| r.num_locks()),
+            txn_num: resolver.as_ref().map(|r| r.num_transactions()),
         };
     }
 }

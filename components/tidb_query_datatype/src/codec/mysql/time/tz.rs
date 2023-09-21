@@ -120,6 +120,7 @@ impl TimeZone for Tz {
         }
     }
 
+    #[allow(deprecated)]
     fn from_local_date(&self, local: &NaiveDate) -> LocalResult<Date<Self>> {
         match *self {
             Tz::Local(ref offset) => offset
@@ -134,6 +135,7 @@ impl TimeZone for Tz {
         }
     }
 
+    #[allow(deprecated)]
     fn from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<DateTime<Self>> {
         match *self {
             Tz::Local(ref offset) => offset
@@ -148,6 +150,7 @@ impl TimeZone for Tz {
         }
     }
 
+    #[allow(deprecated)]
     fn from_utc_date(&self, utc: &NaiveDate) -> Date<Self> {
         match *self {
             Tz::Local(ref offset) => {
@@ -165,6 +168,7 @@ impl TimeZone for Tz {
         }
     }
 
+    #[allow(deprecated)]
     fn from_utc_datetime(&self, utc: &NaiveDateTime) -> DateTime<Self> {
         match *self {
             Tz::Local(ref offset) => {
