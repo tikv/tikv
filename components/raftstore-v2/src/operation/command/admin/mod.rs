@@ -163,7 +163,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         // `PRE_FLUSH_FINISHED` flag.
                         if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
                             .contains(WriteBatchFlags::PRE_FLUSH_FINISHED)
-                        {
+                        { 
                             let mailbox = match ctx.router.mailbox(self.region_id()) {
                                 Some(mailbox) => mailbox,
                                 None => {

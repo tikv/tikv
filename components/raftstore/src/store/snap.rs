@@ -2162,7 +2162,7 @@ impl TabletSnapManager {
             .stats
             .lock()
             .unwrap()
-            .drain_filter(|_, (_, stat)| stat.get_region_id() > 0)
+            .extract_if(|_, (_, stat)| stat.get_region_id() > 0)
             .map(|(_, (_, stat))| stat)
             .filter(|stat| stat.get_total_duration_sec() > 1)
             .collect();
