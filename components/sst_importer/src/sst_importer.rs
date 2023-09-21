@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fs::File,
-    io::{self, BufReader, Read},
+    io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
     sync::{
@@ -291,6 +291,23 @@ impl SstImporter {
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
         let path = self.dir.join(meta).unwrap();
         path.save
+    }
+
+    pub fn get_total_size(&self) -> Result<u64> {
+        let mut total_size = 0;
+        for entry in file_system::read_dir(self.dir.get_root_dir())? {
+            match entry.and_then(|e| e.metadata().map(|m| (e, m))) {
+                Ok((_, m)) => {
+                    if !m.is_file() {
+                        continue;
+                    }
+                    total_size += m.len();
+                }
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+        }
+        Ok(total_size)
     }
 
     pub fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
