@@ -98,8 +98,8 @@ pub fn test_reschedule_coprocessor() {
     ctx.set_resource_group_tag(tag.as_bytes().to_vec());
     ctx.set_request_source("test".to_owned());
     req.set_context(ctx);
-    fail::cfg("check_source_task_name", "return(test)").unwrap();
-    defer!(fail::remove("check_source_task_name"));
+    fail::cfg("only_check_source_task_name", "return(test)").unwrap();
+    defer!(fail::remove("only_check_source_task_name"));
     assert!(
         !block_on(endpoint.parse_and_handle_unary_request(req, None))
             .consume()

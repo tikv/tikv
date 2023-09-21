@@ -239,7 +239,7 @@ impl ResourceGroupManager {
         rg: &str,
         request_source: &str,
     ) -> Option<Arc<ResourceLimiter>> {
-        fail_point!("check_source_task_name", |name| {
+        fail_point!("only_check_source_task_name", |name| {
             assert_eq!(name.clone().unwrap(), request_source.to_string());
             None
         });
