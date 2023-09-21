@@ -2833,6 +2833,7 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    pub initial_scan_concurrency: usize,
 }
 
 impl BackupStreamConfig {
@@ -2859,6 +2860,9 @@ impl BackupStreamConfig {
                 self.min_ts_interval
             )
             .into());
+        }
+        if self.initial_scan_concurrency == 0 {
+            return Err("the `initial_scan_concurrency` shouldn't be zero".into());
         }
         Ok(())
     }
@@ -2887,6 +2891,7 @@ impl Default for BackupStreamConfig {
             file_size_limit,
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            initial_scan_concurrency: 6,
             temp_file_memory_quota: cache_size,
         }
     }
