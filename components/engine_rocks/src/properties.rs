@@ -144,10 +144,7 @@ pub struct RangeProperties {
 
 impl RangeProperties {
     pub fn get(&self, key: &[u8]) -> &RangeOffsets {
-        let idx = self
-            .offsets
-            .binary_search_by_key(&key, |&(ref k, _)| k)
-            .unwrap();
+        let idx = self.offsets.binary_search_by_key(&key, |(k, _)| k).unwrap();
         &self.offsets[idx].1
     }
 
@@ -205,11 +202,11 @@ impl RangeProperties {
         if start == end {
             return (0, 0);
         }
-        let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
+        let start_offset = match self.offsets.binary_search_by_key(&start, |(k, _)| k) {
             Ok(idx) => Some(idx),
             Err(next_idx) => next_idx.checked_sub(1),
         };
-        let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
+        let end_offset = match self.offsets.binary_search_by_key(&end, |(k, _)| k) {
             Ok(idx) => Some(idx),
             Err(next_idx) => next_idx.checked_sub(1),
         };
@@ -227,7 +224,7 @@ impl RangeProperties {
     ) -> Vec<(Vec<u8>, RangeOffsets)> {
         let start_offset = match self
             .offsets
-            .binary_search_by_key(&start_key, |&(ref k, _)| k)
+            .binary_search_by_key(&start_key, |(ref k, _)| k)
         {
             Ok(idx) => {
                 if idx == self.offsets.len() - 1 {
@@ -239,7 +236,7 @@ impl RangeProperties {
             Err(next_idx) => next_idx,
         };
 
-        let end_offset = match self.offsets.binary_search_by_key(&end_key, |&(ref k, _)| k) {
+        let end_offset = match self.offsets.binary_search_by_key(&end_key, |(ref k, _)| k) {
             Ok(idx) => {
                 if idx == 0 {
                     return vec![];
@@ -869,7 +866,7 @@ mod tests {
 
         let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         b.iter(|| {
-            for &(ref k, ref v) in &entries {
+            for (k, v) in &entries {
                 collector.add(k, v, DBEntryType::Put, 0, 0);
             }
         });

@@ -43,7 +43,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
-use pd_client::{Feature, FeatureGate, PdClient};
+use pd_client::{metrics::STORE_SIZE_EVENT_INT_VEC, Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
@@ -2791,6 +2791,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
         let mut validate_ssts = Vec::new();
+        let import_size = box_try!(self.ctx.importer.get_total_size());
+        STORE_SIZE_EVENT_INT_VEC.import_size.set(import_size as i64);
 
         let ssts = box_try!(self.ctx.importer.list_ssts());
         if ssts.is_empty() {

@@ -682,8 +682,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let check_peer_id = check.get_check_peer().get_id();
         let records = self.storage().region_state().get_merged_records();
         let Some(record) = records.iter().find(|r| {
-            r.get_source_peers().iter().any(|p| p.get_id() == check_peer_id)
-        }) else { return };
+            r.get_source_peers()
+                .iter()
+                .any(|p| p.get_id() == check_peer_id)
+        }) else {
+            return;
+        };
         let source_index = record.get_source_index();
         forward_destroy_to_source_peer(msg, |m| {
             let source_checkpoint = super::merge_source_path(

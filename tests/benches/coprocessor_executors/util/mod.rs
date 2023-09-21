@@ -147,7 +147,7 @@ where
     I: 'static,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.get_name().partial_cmp(other.get_name())
+        Some(self.cmp(other))
     }
 }
 

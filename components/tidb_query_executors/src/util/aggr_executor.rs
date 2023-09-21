@@ -641,8 +641,8 @@ pub mod tests {
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
-        let test_paging_size = vec![2, 5, 7];
-        let expect_call_num = vec![1, 3, 4];
+        let test_paging_size = [2, 5, 7];
+        let expect_call_num = [1, 3, 4];
         let expect_row_num = vec![vec![4], vec![0, 0, 5], vec![0, 0, 0, 6]];
         let executor_builders: Vec<Box<dyn Fn(MockExecutor, Option<u64>) -> _>> =
             vec![Box::new(exec_fast), Box::new(exec_slow)];

@@ -455,6 +455,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if is_leader {
             self.retry_pending_prepare_merge(ctx, apply_res.applied_index);
         }
+        if !apply_res.sst_applied_index.is_empty() {
+            self.storage_mut()
+                .apply_trace_mut()
+                .on_sst_ingested(&apply_res.sst_applied_index);
+        }
         self.on_data_modified(apply_res.modifications);
         self.handle_read_on_apply(
             ctx,
@@ -872,6 +877,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.modifications = *self.modifications_mut();
         apply_res.metrics = mem::take(&mut self.metrics);
         apply_res.bucket_stat = self.buckets.clone();
+        apply_res.sst_applied_index = self.take_sst_applied_index();
         let written_bytes = apply_res.metrics.written_bytes;
 
         let skip_report = || -> bool {

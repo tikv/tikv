@@ -629,14 +629,14 @@ impl Eq for Duration {}
 impl PartialOrd for Duration {
     #[inline]
     fn partial_cmp(&self, rhs: &Duration) -> Option<Ordering> {
-        self.nanos.partial_cmp(&rhs.nanos)
+        Some(self.cmp(rhs))
     }
 }
 
 impl Ord for Duration {
     #[inline]
     fn cmp(&self, rhs: &Duration) -> Ordering {
-        self.partial_cmp(rhs).unwrap()
+        self.nanos.partial_cmp(&rhs.nanos).unwrap()
     }
 }
 
