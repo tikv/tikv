@@ -41,7 +41,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::thread::StdThreadBuildWrapper,
+    sys::{thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -225,6 +225,8 @@ pub struct StoreStat {
     pub store_cpu_usages: RecordPairVec,
     pub store_read_io_rates: RecordPairVec,
     pub store_write_io_rates: RecordPairVec,
+
+    pub total_memory: u64,
 }
 
 impl Default for StoreStat {
@@ -249,6 +251,7 @@ impl Default for StoreStat {
             store_cpu_usages: RecordPairVec::default(),
             store_read_io_rates: RecordPairVec::default(),
             store_write_io_rates: RecordPairVec::default(),
+            total_memory: SysQuota::memory_limit_in_bytes(),
         }
     }
 }
@@ -1308,13 +1311,19 @@ where
             )
         };
 
+        // Disk stats.
         stats.set_capacity(capacity);
         stats.set_used_size(used_size);
-
         if available == 0 {
             warn!("no available space");
         }
         stats.set_available(available);
+
+        // Memory stats.
+        stats.set_total_memory(self.store_stat.total_memory);
+        info!("dbg report memory"; "total_memory" => self.store_stat.total_memory);
+
+        // Read stats.
         stats.set_bytes_read(
             self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
         );
