@@ -31,9 +31,16 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
+<<<<<<< HEAD
 use raftstore::router::CdcRaftRouter;
 use resolved_ts::LeadershipResolver;
 use tempdir::TempDir;
+=======
+use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
+use resolved_ts::LeadershipResolver;
+use tempdir::TempDir;
+use test_pd_client::TestPdClient;
+>>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
@@ -49,6 +56,16 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
 
+<<<<<<< HEAD
+=======
+pub type TestEndpoint = Endpoint<
+    ErrorStore<SlashEtcStore>,
+    RegionInfoAccessor,
+    engine_test::kv::KvTestEngine,
+    TestPdClient,
+>;
+
+>>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
 pub fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
     mutation_op(k, v, Op::Put)
 }
