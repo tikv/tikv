@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
+use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -1866,9 +1866,9 @@ impl Filter for MsgVoteFilter {
     }
 }
 
-// Before this fix, after prepare merge, raft cmd can still be proposed if
-// restart is involved. If the proposed raft cmd is CompactLog, panic can occur
-// during fetch entries: see issue https://github.com/tikv/tikv/issues/15633.
+// Before the fix of this PR (#15649), after prepare merge, raft cmd can still
+// be proposed if restart is involved. If the proposed raft cmd is CompactLog,
+// panic can occur during fetch entries: see issue https://github.com/tikv/tikv/issues/15633.
 // Consider the case:
 // 1. node-1 apply PrepareMerge (assume log index 30), so it's in is_merging
 //    status which reject all proposals except for Rollback Merge
@@ -1892,6 +1892,7 @@ fn test_restart_may_lose_merging_state() {
 
     cluster.run();
     fail::cfg("maybe_propose_compact_log", "return").unwrap();
+    fail::cfg("on_ask_commit_merge", "return").unwrap();
     fail::cfg("flush_before_cluse_threshold", "return(0)").unwrap();
 
     let (tx, rx) = channel();
@@ -1936,35 +1937,24 @@ fn test_restart_may_lose_merging_state() {
 
     rx.recv().unwrap();
     let router = cluster.get_router(1).unwrap();
-    let (tx2, rx2) = sync_channel(1);
-    let msg = PeerMsg::FlushBeforeClose { tx: tx2 };
+    let (tx, rx) = sync_channel(1);
+    let msg = PeerMsg::FlushBeforeClose { tx };
     router.force_send(source.id, msg).unwrap();
-    rx2.recv().unwrap();
+    rx.recv().unwrap();
+
+    let (tx, rx) = channel();
+    fail::cfg_callback("on_apply_res_commit_merge_2", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
 
     cluster.stop_node(1);
-    std::thread::sleep(Duration::from_secs(1));
+    fail::remove("on_ask_commit_merge");
     cluster.run_node(1).unwrap();
     fail::remove("maybe_propose_compact_log");
 
-    // wait node 2 to complete merge
-    let timer = Instant::now();
-    let raft_engine_2 = cluster.get_raft_engine(2);
-    loop {
-        let state = raft_engine_2
-            .get_region_state(target.get_id(), u64::MAX)
-            .unwrap()
-            .unwrap();
-        if target.get_region_epoch().get_version()
-            == state.get_region().get_region_epoch().get_version()
-        {
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
-                panic!("region {:?} is still not merged.", target);
-            }
-        } else {
-            break;
-        }
-        sleep_ms(10);
-    }
+    // wait node 2 to apply commit merge
+    rx.recv_timeout(Duration::from_secs(10)).unwrap();
 
     let region = cluster.get_region(b"k1");
     assert_eq!(region.get_id(), target.get_id());
