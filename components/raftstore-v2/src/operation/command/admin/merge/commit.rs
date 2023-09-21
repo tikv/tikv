@@ -319,7 +319,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 region
             );
             assert!(!self.storage().has_dirty_data());
-            if self.is_leader() {
+            if self.is_leader() && !self.leader_transferring() {
                 let index = commit_of_merge(req.get_admin_request().get_commit_merge());
                 if self.proposal_control().is_merging() {
                     // `on_admin_command` may delay our request indefinitely. It's better to check
@@ -341,12 +341,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             "res" => ?res,
                         );
                     } else {
+                        fail::fail_point!("on_propose_commit_merge_success");
                         return;
                     }
                 }
                 let _ = store_ctx
                     .router
                     .force_send(source_id, PeerMsg::RejectCommitMerge { index });
+            } else if self.leader_transferring() {
+                info!(
+                    self.logger,
+                    "not to propose commit merge when transferring leader";
+                    "transferee" => self.leader_transferee(),
+                );
             }
         } else {
             info!(
@@ -362,6 +369,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
+        (|| fail::fail_point!("propose_commit_merge_1", store_ctx.store_id == 1, |_| {}))();
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::COMMIT_MERGE);
         let data = req.write_to_bytes().unwrap();
