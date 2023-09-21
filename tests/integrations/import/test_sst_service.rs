@@ -608,7 +608,7 @@ fn test_suspend_import() {
             .already_suspended
     );
     let write_res = write(sst_range);
-    assert_to_string_contains!(write_res.unwrap_err(), "Denied");
+    write_res.unwrap();
     let ingest_res = ingest(&sst);
     assert_to_string_contains!(ingest_res.unwrap_err(), "Denied");
     let multi_ingest_res = multi_ingest(&[sst.clone()]);
@@ -635,7 +635,17 @@ fn test_suspend_import() {
     );
     let sst_range = (10, 20);
     let write_res = write(sst_range);
-    assert_to_string_contains!(write_res.unwrap_err(), "Denied");
+    let sst = write_res.unwrap().metas;
+    let res = multi_ingest(&sst);
+    assert_to_string_contains!(res.unwrap_err(), "Denied");
     std::thread::sleep(Duration::from_secs(1));
-    write(sst_range).unwrap();
+    multi_ingest(&sst).unwrap();
+
+    // check an insane value should be rejected.
+    import
+        .suspend_import_rpc(&suspendctl(u64::MAX - 42))
+        .unwrap_err();
+    let sst_range = (20, 30);
+    let ssts = write(sst_range).unwrap();
+    multi_ingest(&ssts.get_metas()).unwrap();
 }

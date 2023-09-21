@@ -85,6 +85,9 @@ const WIRE_EXTRA_BYTES: usize = 12;
 /// [`raft_writer::ThrottledTlsEngineWriter`]. There aren't too many items held
 /// in the writer. So we can run the GC less frequently.
 const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
+/// The max time of suspending requests.
+/// This may save us from some client sending insane value to the server.
+const SUSPEND_REQUEST_MAX_SECS: u64 = /* 6h */ 6 * 60 * 60;
 
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
@@ -677,7 +680,7 @@ macro_rules! impl_write {
     ($fn:ident, $req_ty:ident, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident) => {
         fn $fn(
             &mut self,
-            ctx: RpcContext<'_>,
+            _ctx: RpcContext<'_>,
             stream: RequestStream<$req_ty>,
             sink: ClientStreamingSink<$resp_ty>,
         ) {
@@ -689,10 +692,6 @@ macro_rules! impl_write {
 
             let timer = Instant::now_coarse();
             let label = stringify!($fn);
-            if let Err(err) = self.check_suspend() {
-                ctx.spawn(async move { $crate::send_rpc_response!(Err(err), sink, label, timer) });
-                return;
-            }
             let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
                 let res = async move {
@@ -957,7 +956,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     /// Downloads the file and performs key-rewrite for later ingesting.
     fn download(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         req: DownloadRequest,
         sink: UnarySink<DownloadResponse>,
     ) {
@@ -976,10 +975,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 req.get_context().get_request_source(),
             )
         });
-        if let Err(err) = self.check_suspend() {
-            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
-            return;
-        }
 
         let handle_task = async move {
             // Records how long the download task waits to be scheduled.
@@ -1316,6 +1311,16 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "suspend_import_rpc";
         let timer = Instant::now_coarse();
+
+        if req.should_suspend_imports && req.get_duration_in_secs() > SUSPEND_REQUEST_MAX_SECS {
+            ctx.spawn(async move {
+                send_rpc_response!(Err(Error::Io(
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, 
+                        format!("you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)", 
+                        req.get_duration_in_secs(), SUSPEND_REQUEST_MAX_SECS)))), sink, label, timer);
+            });
+            return;
+        }
 
         let suspended = if req.should_suspend_imports {
             info!("suspend incoming import RPCs."; "for_second" => req.get_duration_in_secs(), "caller" => req.get_caller());
