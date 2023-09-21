@@ -4,6 +4,7 @@ use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
+use tikv_util::time::Instant;
 use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
@@ -359,7 +360,7 @@ mod tests {
 
         // Trigger aggressive shrink.
         resolver.last_aggressive_shrink_time = Instant::now_coarse() - Duration::from_secs(600);
-        resolver.resolve(TimeStamp::new(0), None);
+        resolver.resolve(TimeStamp::new(0));
         assert!(
             resolver.locks_by_key.capacity() == 0,
             "{}, {}",
