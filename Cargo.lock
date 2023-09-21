@@ -1494,18 +1494,6 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3",
- "lazy_static",
- "memoffset 0.6.4",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-epoch"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1145cf131a2c6ba0615079ab6a638f7e1973ac9c2634fcbeaaad6114246efe8c"
@@ -1543,34 +1531,14 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-skiplist"
-version = "0.0.0"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.3",
- "crossbeam-utils 0.8.3",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.7.2"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3c7c73a2d1e9fc0886a08b93e98eb643461230d5f1925e4036204d5f2e261a8"
+checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
 dependencies = [
- "autocfg",
- "cfg-if 0.1.10",
- "lazy_static",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
-dependencies = [
- "autocfg",
  "cfg-if 1.0.0",
- "lazy_static",
+ "crossbeam-epoch 0.9.8",
+ "crossbeam-utils 0.8.8",
+ "scopeguard",
 ]
 
 [[package]]
@@ -7158,11 +7126,10 @@ dependencies = [
 
 [[package]]
 name = "tokio-executor"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb2d1b8f4548dbf5e1f7818512e9c406860678f29c300cdf0ebac72d1a3a1671"
+version = "0.1.9"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils 0.8.8",
  "futures 0.1.31",
 ]
 
@@ -7223,9 +7190,9 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils 0.8.8",
  "futures 0.1.31",
  "slab",
  "tokio-executor",
