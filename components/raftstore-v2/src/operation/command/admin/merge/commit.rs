@@ -199,7 +199,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 Ok(ents) => ents,
                 Err(e) => slog_panic!(
                     self.logger,
-                    "failed to get merge entires";
+                    "failed to get merge entries";
                     "err" => ?e,
                     "low" => low,
                     "commit" => state.get_commit()
