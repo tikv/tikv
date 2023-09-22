@@ -138,15 +138,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             };
             let cids = encoder.cids.clone();
             let (data, chs) = encoder.encode();
+
+            let last_index = self.raft_group().raft.raft_log.last_index();
             let res = self.propose(ctx, data);
+            let current_index = self.raft_group().raft.raft_log.last_index();
             fail_point!("after_propose_pending_writes");
 
-            if let Ok(index) = res && cids.is_empty() {
-                info!(
-                    self.logger,
-                    "propose write";
-                    "index" => index,
-                );
+            if cids.is_empty() {
+                match res {
+                    Ok(index) => {
+                        info!(
+                            self.logger,
+                            "propose write";
+                            "index" => index,
+                        );
+                    }
+                    Err(ref e) => {
+                        info!(
+                            self.logger,
+                            "propose write failed";
+                            "last_index" => last_index,
+                            "current_index" => current_index,
+                            "err" => ?e,
+                        );
+                    }
+                }
             }
 
             for cid in cids {
@@ -164,6 +180,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             self.logger,
                             "propose write failed";
                             "cid" => cid,
+                            "last_index" => last_index,
+                            "current_index" => current_index,
                             "err" => ?e,
                         );
                     }
