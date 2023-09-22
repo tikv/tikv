@@ -404,7 +404,8 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
                 if i == 0 {
                     batch_commands(&ctx, &client, coprocessor, &start_key);
                 }
-                // here cannot read any data, so expect is 0. may need fix. here mainly used to verify the request source is as expect.
+                // here cannot read any data, so expect is 0. may need fix. here mainly used to
+                // verify the request source is as expect.
                 if check_query_num_read(cluster, store_id, region_id, QueryKind::Coprocessor, 0) {
                     flag = true;
                     break;
